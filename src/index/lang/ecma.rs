@@ -450,6 +450,44 @@ impl Ecma {
     }
 }
 
+fn parameter_name(name: String) -> LocalName {
+    LocalName {
+        name,
+        type_name: None,
+        value_start: None,
+        is_parameter: true,
+        element: false,
+        result_index: None,
+        visible: None,
+    }
+}
+
+/// Adds each name that a parameter pattern binds: `{a, b: c, ...d}`, `[e]`, `f = 1`.
+fn pattern_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+    match node.kind() {
+        IDENTIFIER | "shorthand_property_identifier_pattern" => {
+            out.push(parameter_name(context.text(node)));
+        }
+        "pair_pattern" => {
+            if let Some(value) = node.child_by_field_name("value") {
+                pattern_names(value, context, out);
+            }
+        }
+        "assignment_pattern" | "object_assignment_pattern" => {
+            if let Some(left) = node.child_by_field_name("left") {
+                pattern_names(left, context, out);
+            }
+        }
+        "object_pattern" | "array_pattern" | "rest_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                pattern_names(child, context, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 impl LanguageSpec for Ecma {
     fn block_kinds(&self) -> Vec<&'static str> {
         vec!["statement_block"]
@@ -471,7 +509,7 @@ impl LanguageSpec for Ecma {
 
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
-        kinds.extend([FORMAL_PARAMETERS, FOR_IN_STATEMENT]);
+        kinds.extend([FORMAL_PARAMETERS, FOR_IN_STATEMENT, ARROW_FUNCTION]);
         kinds
     }
 
@@ -502,23 +540,30 @@ impl LanguageSpec for Ecma {
             }
             return;
         }
+        if node.kind() == ARROW_FUNCTION {
+            // `name => body` has one parameter without parentheses.
+            if let Some(name) = node
+                .child_by_field_name("parameter")
+                .filter(|name| name.kind() == IDENTIFIER)
+            {
+                out.push(parameter_name(context.text(name)));
+            }
+            return;
+        }
+        if [REQUIRED_PARAMETER, "optional_parameter"].contains(&node.kind()) {
+            self.call_syntax().locals(node, context, out);
+            if let Some(pattern) = node.child_by_field_name("pattern") {
+                pattern_names(pattern, context, out);
+            }
+            return;
+        }
         if node.kind() != FORMAL_PARAMETERS {
             self.call_syntax().locals(node, context, out);
             return;
         }
         let mut cursor = node.walk();
         for parameter in node.named_children(&mut cursor) {
-            if parameter.kind() == IDENTIFIER {
-                out.push(LocalName {
-                    name: context.text(parameter),
-                    type_name: None,
-                    value_start: None,
-                    is_parameter: true,
-                    element: false,
-                    result_index: None,
-                    visible: None,
-                });
-            }
+            pattern_names(parameter, context, out);
         }
     }
 

@@ -16,8 +16,8 @@
 //! The lists are small and static. Change `LIST_VERSION` when a list changes.
 
 use super::{
-    is_callable, segments, split_type, Id, ImportBinding, ImportTarget, Local, Outcome, Receiver,
-    ReferenceKind, Resolver, Status, SymbolKind,
+    is_callable, segments, split_type, Id, ImportBinding, ImportKind, ImportTarget, Local, Outcome,
+    Receiver, ReferenceKind, Resolver, Status, SymbolKind,
 };
 use crate::core::Language;
 use crate::index::calls::required_type;
@@ -597,6 +597,7 @@ impl<'a> Resolver<'a> {
                 (None, Some(qualifier)) => {
                     self.external_qualifier(scope, qualifier, rules)
                         && !self.can_extend_external_type(name, file)
+                        && !self.unbound_qualifier_can_name(scope, qualifier, name)
                 }
                 (None, None) => !name.starts_with('$') && self.external_bare(scope, name, rules),
                 _ => false,
@@ -620,9 +621,27 @@ impl<'a> Resolver<'a> {
         self.local(scope.chain, scope.file, name, Some(scope.start))
     }
 
-    /// No symbol of the repository and no import of the file has the name.
+    /// A wildcard import of the file names a module of the repository. The
+    /// module can bind any name, also with an assignment that is not a symbol.
+    fn has_repository_wildcard(&self, file: usize) -> bool {
+        self.files[file].imports.iter().any(|binding| {
+            binding.kind == ImportKind::Wildcard && !self.is_external_binding(binding)
+        })
+    }
+
+    /// A function or a method of the repository, in the language family of
+    /// the file, has the name.
+    fn has_callable_named(&self, name: &str, file: usize) -> bool {
+        self.named(name, file)
+            .any(|id| is_callable(self.symbol(id)))
+    }
+
+    /// No symbol of the repository and no import of the file has the name,
+    /// and no wildcard import of the repository can bind it.
     fn is_free_type_name(&self, file: usize, name: &str) -> bool {
-        !self.by_name.contains_key(name) && self.binding_of(file, name).is_none()
+        !self.by_name.contains_key(name)
+            && self.binding_of(file, name).is_none()
+            && !self.has_repository_wildcard(file)
     }
 
     /// No symbol of the repository, no local name that the call sees, and no
@@ -679,7 +698,18 @@ impl<'a> Resolver<'a> {
                     || RUST_RECEIVERS.contains(&head)
                     || self.is_unbound_crate_name(head));
         }
-        rules.receivers.contains(head) || self.is_provided(scope.file, head, rules)
+        !self.has_repository_wildcard(scope.file)
+            && (rules.receivers.contains(head) || self.is_provided(scope.file, head, rules))
+    }
+
+    /// The head of the qualifier has no import, and a function or a method of
+    /// the repository has the name of the call. A Rust path is exempt: a
+    /// repository type has methods that a prelude type does not have.
+    fn unbound_qualifier_can_name(&self, scope: Scope<'_>, qualifier: &str, name: &str) -> bool {
+        let head = segments(qualifier).first().copied().unwrap_or_default();
+        self.files[scope.file].language != Language::Rust
+            && self.binding_of(scope.file, head).is_none()
+            && self.has_callable_named(name, scope.file)
     }
 
     /// A Rust path that starts with a lower case name that nothing in the
@@ -714,7 +744,10 @@ impl<'a> Resolver<'a> {
         if let Some((text, text_file)) = self.own_field(scope.file, scope.chain, receiver) {
             return self.is_external_type(text_file, text, name, rules);
         }
-        self.is_external_name(scope, receiver, rules)
+        self.binding_of(scope.file, receiver)
+            .is_some_and(|binding| self.is_external_binding(binding))
+            || (self.is_external_name(scope, receiver, rules)
+                && !self.has_callable_named(name, scope.file))
     }
 
     /// A member of the repository with the name `call` can belong to a type
@@ -1136,6 +1169,67 @@ mod tests {
     fn test_rust_value_chain_is_not_a_crate_path() {
         let main = "fn run() {\n    items.iter().for_each(|m| m.status.is_ready());\n}\n";
         assert!(!external(&[("main.rs", main)], "main.rs", "is_ready"));
+    }
+
+    #[test]
+    fn test_ecma_object_pattern_parameter_is_a_local_name() {
+        for (file, app) in [
+            ("a.js", "function run({Math}) { return Math.max(1); }\n"),
+            ("a.jsx", "function run({Math}) { return Math.max(1); }\n"),
+            (
+                "a.ts",
+                "function run({Math}: {Math: any}) { return Math.max(1); }\n",
+            ),
+            (
+                "a.tsx",
+                "function run({Math}: {Math: any}) { return Math.max(1); }\n",
+            ),
+            ("b.js", "function run([Math]) { return Math.max(1); }\n"),
+            ("c.js", "const run = ({value: Math}) => Math.max(1);\n"),
+        ] {
+            assert!(!external(&[(file, app)], file, "max"), "{file}");
+        }
+    }
+
+    #[test]
+    fn test_java_inferred_lambda_parameter_is_a_local_name() {
+        let main = "class Main {\n    void run() {\n        java.util.function.Function<Object, Integer> f = Math -> Math.max();\n    }\n}\n";
+        assert!(!external(&[("Main.java", main)], "Main.java", "max"));
+    }
+
+    #[test]
+    fn test_csharp_implicit_lambda_parameter_is_a_local_name() {
+        let program = "using System;\nclass Program {\n    static void Run() {\n        Func<string, int> f = Math => Math.Max();\n    }\n}\n";
+        assert!(!external(&[("Program.cs", program)], "Program.cs", "Max"));
+    }
+
+    #[test]
+    fn test_a_wildcard_import_of_the_repository_can_bind_the_name() {
+        let util =
+            "class Repo:\n    def append(self, value):\n        return value\n\nlist = Repo()\n";
+        let app = "from util import *\n\ndef main():\n    list.append(1)\n    len([1])\n";
+        let files = [("util.py", util), ("app.py", app)];
+        assert!(!external(&files, "app.py", "append"));
+        assert!(!external(&files, "app.py", "len"));
+        let external_wildcard = [(
+            "app.py",
+            "from os.path import *\n\ndef main():\n    len([1])\n",
+        )];
+        assert!(external(&external_wildcard, "app.py", "len"));
+    }
+
+    #[test]
+    fn test_java_wildcard_of_a_repository_package_can_bind_the_name() {
+        let main = "import shop.*;\nclass Main {\n    void run() {\n        Integer.parseInt(\"1\");\n    }\n}\n";
+        let shop = "package shop;\npublic class Integer {\n    public static int parseInt(String text) { return 1; }\n}\n";
+        let files = [("Main.java", main), ("shop/Integer.java", shop)];
+        assert!(!external(&files, "Main.java", "parseInt"));
+    }
+
+    #[test]
+    fn test_a_receiver_without_a_binding_abstains_when_a_repository_method_has_the_call_name() {
+        let app = "function run() { return Math.max(1); }\nclass Repo { max() { return 1; } }\n";
+        assert!(!external(&[("a.ts", app)], "a.ts", "max"));
     }
 
     #[test]

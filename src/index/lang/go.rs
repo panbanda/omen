@@ -558,7 +558,7 @@ mod tests {
                 "17 run>apply UniqueCandidate SameFile [main.go#apply]",
                 "17 run>local UniqueCandidate SameFile [main.go#local]",
                 "19 run>add UniqueCandidate LexicalScope [main.go#run.add]",
-                "19 run>len External - []",
+                "19 run>len Unresolved - []",
             ]
         );
     }

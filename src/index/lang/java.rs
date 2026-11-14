@@ -179,6 +179,7 @@ impl LanguageSpec for Java {
             LOCAL_VARIABLE_DECLARATION,
             ENHANCED_FOR_STATEMENT,
             SPREAD_PARAMETER,
+            LAMBDA_EXPRESSION,
         ]);
         kinds
     }
@@ -205,6 +206,35 @@ impl LanguageSpec for Java {
                     value_start: Some(values.start_byte()),
                     is_parameter: false,
                     element: true,
+                    result_index: None,
+                    visible: None,
+                });
+            }
+            return;
+        }
+        if node.kind() == LAMBDA_EXPRESSION {
+            // `name -> body` and `(a, b) -> body` give the types by inference.
+            let parameters = node.child_by_field_name("parameters");
+            let mut names: Vec<Node<'_>> = Vec::new();
+            if let Some(parameters) = parameters {
+                if parameters.kind() == IDENTIFIER {
+                    names.push(parameters);
+                } else if parameters.kind() == "inferred_parameters" {
+                    let mut cursor = parameters.walk();
+                    names.extend(
+                        parameters
+                            .named_children(&mut cursor)
+                            .filter(|child| child.kind() == IDENTIFIER),
+                    );
+                }
+            }
+            for name in names {
+                out.push(LocalName {
+                    name: context.text(name),
+                    type_name: None,
+                    value_start: None,
+                    is_parameter: true,
+                    element: false,
                     result_index: None,
                     visible: None,
                 });
@@ -610,7 +640,7 @@ mod tests {
                 "32 Main.shadow>helper UniqueCandidate ImportedName [shop/util/Util.java#Util.helper]",
                 "36 Main.tally>counter.next UniqueCandidate ReceiverDeclaredType [Main.java#Main.Counter.next]",
                 "36 Main.tally>(..).next UniqueCandidate ReceiverDeclaredType [Main.java#Main.Counter.next]",
-                "36 Main.tally>Math.max External - []",
+                "36 Main.tally>Math.max Unresolved - []",
                 "36 Main.tally>missing Unresolved - []",
             ]
         );

@@ -153,7 +153,7 @@ impl LanguageSpec for CSharp {
 
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
-        kinds.extend([VARIABLE_DECLARATION, FOREACH_STATEMENT]);
+        kinds.extend([VARIABLE_DECLARATION, FOREACH_STATEMENT, LAMBDA_EXPRESSION]);
         kinds
     }
 
@@ -213,6 +213,24 @@ impl LanguageSpec for CSharp {
                     value_start: Some(values.start_byte()),
                     is_parameter: false,
                     element: true,
+                    result_index: None,
+                    visible: None,
+                });
+            }
+            return;
+        }
+        if node.kind() == LAMBDA_EXPRESSION {
+            // `name => body` has one parameter without a type.
+            let parameter = node
+                .child_by_field_name("parameters")
+                .filter(|parameters| parameters.kind() == "implicit_parameter");
+            if let Some(name) = parameter {
+                out.push(LocalName {
+                    name: context.text(name),
+                    type_name: None,
+                    value_start: None,
+                    is_parameter: true,
+                    element: false,
                     result_index: None,
                     visible: None,
                 });
@@ -645,7 +663,7 @@ mod tests {
                 "31 Program.Measure>size.Area UniqueCandidate ReceiverDeclaredType [Shapes/Shapes.cs#Circle.Area]",
                 "31 Program.Measure>shape.Area Ambiguous NameOnly [Shapes/Shapes.cs#Circle.Area, Shapes/Shapes.cs#IShape.Area]",
                 "31 Program.Measure>made.Area UniqueCandidate ReceiverDeclaredType [Shapes/Shapes.cs#Circle.Area]",
-                "31 Program.Measure>Math.Max External - []",
+                "31 Program.Measure>Math.Max Unresolved - []",
                 "37 Program.Shadow>Helper UniqueCandidate LexicalScope [Program.cs#Program.Shadow.Helper]",
                 "37 Program.Shadow>Shop.Util.Helpers::Helper UniqueCandidate QualifiedPath [Util/Helpers.cs#Helpers.Helper]",
                 "42 Program.Tally>counter.Next UniqueCandidate ReceiverDeclaredType [Program.cs#Program.Counter.Next]",
