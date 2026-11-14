@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::index::extract::FileSymbols;
 use crate::index::model::{Exported, Receiver, Reference, ResolutionStatus, Symbol, SymbolKind};
-use crate::index::security::entry::find_entry_points;
+use crate::index::security::entry::find_entry_points_with;
 use crate::parser::{self, Parser};
 
 /// Dead code analyzer.
@@ -113,12 +113,14 @@ impl AnalyzerTrait for Analyzer {
                 file_results.push(data);
             }
         }
-        // An entry point is alive, and its callees are reachable.
+        // An entry point is alive, and its callees are reachable. The entry points are those
+        // of the security analysis, with the rows of the configuration.
+        let entry_rules = crate::analyzers::security::options_of(&ctx.config.security)?.entry_rules;
         let entry_keys: HashSet<String> = if parsed_facts.len() == index.files.len() {
-            find_entry_points(&trees, &index.files)
+            find_entry_points_with(&trees, &index.files, &entry_rules)
         } else {
             let facts: Vec<FileSymbols> = parsed_facts.into_iter().cloned().collect();
-            find_entry_points(&trees, &facts)
+            find_entry_points_with(&trees, &facts, &entry_rules)
         }
         .into_iter()
         .filter_map(|entry| entry.symbol)
@@ -3612,6 +3614,44 @@ mod index_tests {
             dead: &[],
         },
     ];
+
+    #[test]
+    fn test_a_configured_entry_point_is_alive_in_deadcode() {
+        use crate::config::{Config, SecurityEntryConfig};
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let source = "def _helper():\n    return 1\n\n\ndef _handle_request():\n    return _helper()\n\n\ndef _unused():\n    return 2\n";
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("app.py"), source).unwrap();
+        let files = FileSet::from_files(
+            directory.path().to_path_buf(),
+            vec![PathBuf::from("app.py")],
+        );
+        let dead = |config: &Config| {
+            let ctx = AnalysisContext::new(&files, config, Some(directory.path()));
+            let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+            result
+                .items
+                .iter()
+                .map(|item| item.name.clone())
+                .collect::<Vec<String>>()
+        };
+        let without = dead(&Config::default());
+        assert!(
+            without.contains(&"_handle_request".to_string()),
+            "{without:?}"
+        );
+        let mut config = Config::default();
+        config.security.entry_points.push(SecurityEntryConfig {
+            kind: "http_handler".to_string(),
+            framework: "acme-web".to_string(),
+            languages: vec!["python".to_string()],
+            symbols: vec!["_handle_request".to_string()],
+        });
+        let with = dead(&config);
+        assert_eq!(with, ["_unused"], "{with:?}");
+    }
 
     #[test]
     fn test_a_function_named_in_a_serde_attribute_string_is_alive() {
