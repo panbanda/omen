@@ -1,7 +1,7 @@
 //! Omen CLI - Multi-language code analysis for AI assistants.
 
 use std::io::stdout;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -12,22 +12,31 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::analyzers::impact::Direction;
+use omen::cli::GateMode;
 use omen::cli::{
-    AnalyzerArgs, Cli, Command, ComplexityArgs, GateMode, GateSeverity, ImpactDirection,
-    McpSubcommand, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand, SearchSubcommand,
-    StubsArgs,
+    Cli, Command, ImpactDirection, McpSubcommand, OutputFormat, ReportSubcommand, ScoreSubcommand,
+    SearchSubcommand,
 };
 #[cfg(feature = "mutation")]
 use omen::cli::{MutationArgs, MutationSubcommand, MutationTrainArgs};
 use omen::commands;
+use omen::commands::analyzers::{
+    self, since_flag_days, ChurnRequest, ClonesRequest, DeadcodeRequest, FlagsRequest, Plain,
+    WindowRequest, WindowedRequest,
+};
 use omen::commands::benchmark::BenchmarkRequest;
+use omen::commands::complexity::ComplexityRequest;
 use omen::commands::context::ContextRequest;
+use omen::commands::diff::DiffRequest;
 use omen::commands::eval::EvalRequest;
+use omen::commands::gate::{gate_dispatch, resolve_gate_mode};
 use omen::commands::impact::ImpactRequest;
 use omen::commands::outline::OutlineRequest;
 #[cfg(feature = "mutation")]
 use omen::commands::scope::write_report_file;
 use omen::commands::scope::{build_context, filtered_file_set, Scope};
+use omen::commands::score::{ScoreRequest, TrendRequest};
+use omen::commands::stubs::StubsRequest;
 use omen::commands::symbol::SymbolRequest;
 use omen::config::Config;
 use omen::core::progress::is_tty;
@@ -35,44 +44,13 @@ use omen::core::{AnalysisContext, Analyzer, FileSet};
 use omen::git::{clone_remote, is_remote_repo, CloneOptions};
 use omen::mcp::McpServer;
 use omen::output::{format_with_limits, Format};
-
 fn logging_filter(verbose: bool, rust_log: Option<&str>) -> EnvFilter {
     let directive = rust_log.unwrap_or(if verbose { "debug" } else { "off" });
     EnvFilter::new(directive)
 }
 
-/// Resolve the gate mode of a gated command. The `--gate` flag overrides the
-/// `gate` value in the configuration.
-fn resolve_gate_mode(flag: Option<GateMode>, configured: GateMode) -> GateMode {
-    flag.unwrap_or(configured)
-}
-
-/// The number of results that `churn` and `hotspot` give if `--top` is absent.
-const DEFAULT_TOP: usize = 20;
-
 /// The number of results that `search query` gives if `--top` is absent.
 const DEFAULT_SEARCH_RESULTS: usize = 10;
-
-/// Shared gate verdict dispatch used by `complexity`, `score`,
-/// `mutation`, and `stubs`. Callers detect the threshold violation themselves
-/// (each analyzer's report shape differs) and hand the resulting
-/// `Error::ThresholdViolation` to this function only when a violation
-/// occurred; this function decides what to do with it:
-///
-/// - `off`   -- report only, never called with a violation (callers should
-///   skip the gate check entirely when the resolved mode is `Off`).
-/// - `warn`  -- print a one-line summary to stderr, exit 0 (`Ok`).
-/// - `error` -- return the violation, which `main` maps to exit code 2.
-fn gate_dispatch(gate: GateMode, violation: omen::core::Error) -> omen::core::Result<()> {
-    match gate {
-        GateMode::Off => Ok(()),
-        GateMode::Warn => {
-            eprintln!("\nGate mode 'warn': not failing the build.");
-            Ok(())
-        }
-        GateMode::Error => Err(violation),
-    }
-}
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -99,24 +77,6 @@ fn main() -> ExitCode {
 
 /// Resolve the repository path, cloning if it's a remote reference.
 /// Returns (resolved_path, cleanup_path) where cleanup_path is Some if we cloned a temp repo.
-/// Resolve the churn window for `defect`/`hotspot`, erroring on input that is
-/// neither a duration nor "all" rather than silently widening to all history.
-fn resolve_churn_window(
-    args: &omen::cli::ChurnWindowArgs,
-    config_days: u32,
-) -> omen::core::Result<u32> {
-    omen::cli::ChurnWindow::resolve(args.since.as_deref(), args.days, config_days)
-        .map(|window| window.as_days())
-        .map_err(omen::core::Error::config)
-}
-
-/// The days of a `--since` value. Text that is not a time window is an error,
-/// not all the history.
-fn since_flag_days(since: &str) -> omen::core::Result<u32> {
-    omen::git::since_to_days(since)
-        .map_err(|error| omen::core::Error::InvalidArgument(format!("--since: {error}")))
-}
-
 fn resolve_repo_path(cli: &Cli) -> omen::core::Result<(PathBuf, Option<PathBuf>)> {
     let path_str = cli.path.to_string_lossy();
 
@@ -285,388 +245,185 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             }
         }
         Command::Complexity(args) => {
-            let result = run_analyzer::<omen::analyzers::complexity::Analyzer>(
-                path,
-                &config,
-                format,
-                Some(&args.common),
-            )?;
-            let gate = resolve_gate_mode(args.gate.mode, config.complexity.gate);
-            apply_complexity_gate(&result, &config, args, gate)?;
+            let request = ComplexityRequest {
+                scope: Scope::from(&args.common),
+                gate: args.gate.mode,
+                max_cyclomatic: args.max_cyclomatic,
+                max_cognitive: args.max_cognitive,
+            };
+            commands::complexity::run(path, &config, &request, format, &mut stdout())?;
         }
         Command::Stubs(args) => {
-            run_stubs(path, &config, args, format)?;
+            let request = StubsRequest {
+                scope: Scope::from(&args.common),
+                gate: args.gate.mode,
+                gate_severity: args.gate_severity,
+            };
+            commands::stubs::run(path, &config, &request, format, &mut stdout())?;
         }
         Command::Diff(args) => {
-            if matches!(format, Format::Markdown) {
-                run_diff_comment(path, &config, args)?;
-            } else {
-                run_diff_analyzer(
-                    path,
-                    args.target.as_deref(),
-                    format,
-                    args.pagination.top,
-                    args.pagination.offset,
-                )?;
-            }
+            let request = DiffRequest {
+                target: args.target.clone(),
+                top: args.pagination.top,
+                offset: args.pagination.offset,
+                max_bytes: args.max_bytes,
+                max_nodes: args.max_nodes,
+            };
+            commands::diff::run(path, &config, &request, format, &mut stdout())?;
         }
         Command::Changes(args) => {
-            run_changes_analyzer(path, &config, format, args)?;
+            analyzers::run_changes(path, &config, format, &Scope::from(args), &mut stdout())?;
         }
         Command::Deadcode(args) => {
-            run_analyzer_instance(
+            let request = DeadcodeRequest {
+                scope: Scope::from(&args.common),
+                cargo_check: args.cargo_check,
+            };
+            analyzers::run_deadcode(path, &config, format, &request, &mut stdout())?;
+        }
+        Command::Satd(args) => {
+            analyzers::run_satd(path, &config, format, &Scope::from(args), &mut stdout())?;
+        }
+        Command::Clones(args) => {
+            let request = ClonesRequest {
+                scope: Scope::from(&args.common),
+                include_tests: args.include_tests,
+            };
+            analyzers::run_clones(path, &config, format, &request, &mut stdout())?;
+        }
+        Command::Defect(args) => {
+            let request = WindowedRequest {
+                scope: Scope::from(&args.common),
+                window: WindowRequest {
+                    since: args.window.since.clone(),
+                    days: args.window.days,
+                },
+            };
+            analyzers::run_defect(path, &config, format, &request, &mut stdout())?;
+        }
+        Command::Hotspot(args) => {
+            let request = WindowedRequest {
+                scope: Scope::from(&args.common),
+                window: WindowRequest {
+                    since: args.window.since.clone(),
+                    days: args.window.days,
+                },
+            };
+            analyzers::run_hotspot(path, &config, format, &request, &mut stdout())?;
+        }
+        Command::Tdg(args) => {
+            analyzers::run_plain(
+                Plain::Tdg,
                 path,
                 &config,
                 format,
-                Some(&args.common),
-                omen::analyzers::deadcode::Analyzer::new().with_cargo_check(args.cargo_check),
+                &Scope::from(args),
+                &mut stdout(),
             )?;
         }
-        Command::Satd(_)
-        | Command::Clones(_)
-        | Command::Defect(_)
-        | Command::Tdg(_)
-        | Command::Graph(_)
-        | Command::Hotspot(_)
-        | Command::Temporal(_)
-        | Command::Ownership(_)
-        | Command::Cohesion(_)
-        | Command::Repomap(_)
-        | Command::Smells(_) => {
-            dispatch_analyzer(&cli.command, path, &config, format)?;
+        Command::Graph(args) => {
+            analyzers::run_plain(
+                Plain::Graph,
+                path,
+                &config,
+                format,
+                &Scope::from(args),
+                &mut stdout(),
+            )?;
+        }
+        Command::Temporal(args) => {
+            analyzers::run_plain(
+                Plain::Temporal,
+                path,
+                &config,
+                format,
+                &Scope::from(args),
+                &mut stdout(),
+            )?;
+        }
+        Command::Ownership(args) => {
+            analyzers::run_plain(
+                Plain::Ownership,
+                path,
+                &config,
+                format,
+                &Scope::from(args),
+                &mut stdout(),
+            )?;
+        }
+        Command::Cohesion(args) => {
+            analyzers::run_plain(
+                Plain::Cohesion,
+                path,
+                &config,
+                format,
+                &Scope::from(args),
+                &mut stdout(),
+            )?;
+        }
+        Command::Repomap(args) => {
+            analyzers::run_plain(
+                Plain::Repomap,
+                path,
+                &config,
+                format,
+                &Scope::from(args),
+                &mut stdout(),
+            )?;
+        }
+        Command::Smells(args) => {
+            analyzers::run_plain(
+                Plain::Smells,
+                path,
+                &config,
+                format,
+                &Scope::from(args),
+                &mut stdout(),
+            )?;
         }
         Command::Churn(args) => {
-            // --since is canonical; --days is a documented alias for the same
-            // window. If both are given, --since wins. Note "all"/"forever"
-            // parse to `None` (unlimited), so `--since` must be checked as a
-            // whole branch rather than folded into `--days` via `.or(..)` --
-            // otherwise an explicit `--since all` would fall through to
-            // `--days`/config instead of meaning "no limit".
-            let days = if let Some(ref since) = args.since {
-                since_flag_days(since)?
-            } else if let Some(days) = args.days {
-                days
-            } else {
-                config.churn.since.days()
+            let request = ChurnRequest {
+                scope: Scope::from(&args.common),
+                window: WindowRequest {
+                    since: args.since.clone(),
+                    days: args.days,
+                },
             };
-            run_churn_analyzer(path, &config, format, days, &args.common)?;
+            analyzers::run_churn(path, &config, format, &request, &mut stdout())?;
         }
         Command::Flags(args) => {
-            // Merge CLI --provider option into config
-            let mut config = config.clone();
-            if let Some(ref provider) = args.provider {
-                config.feature_flags.providers = vec![provider.clone()];
-            }
-            if let Some(stale_days) = args.stale_days {
-                config.feature_flags.stale_days = stale_days;
-            }
-            run_analyzer::<omen::analyzers::flags::Analyzer>(
-                path,
-                &config,
-                format,
-                Some(&args.common),
-            )?;
+            let request = FlagsRequest {
+                scope: Scope::from(&args.common),
+                provider: args.provider.clone(),
+                stale_days: args.stale_days,
+            };
+            analyzers::run_flags(path, &config, format, &request, &mut stdout())?;
         }
-        Command::Score(cmd) => {
+        Command::Score(cmd) => match &cmd.subcommand {
             // The gate belongs to the bare `score` command. A subcommand has no gate.
-            let gate = if cmd.subcommand.is_some() {
+            Some(ScoreSubcommand::Trend(args)) => {
                 if cmd.args.gate.mode.is_some() {
                     return Err(omen::core::Error::InvalidArgument(
                         "`score trend` has no gate. Remove the `--gate` flag.".to_string(),
                     ));
                 }
-                GateMode::Off
-            } else {
-                resolve_gate_mode(cmd.args.gate.mode, config.score.gate)
-            };
-            {
-                match &cmd.subcommand {
-                    Some(ScoreSubcommand::Trend(args)) => {
-                        // Score trend analysis
-                        let trend_data = omen::score::analyze_trend(
-                            path,
-                            &config,
-                            &args.since,
-                            args.period,
-                            args.samples,
-                        )?;
-                        match format {
-                            Format::Json | Format::JsonCompact => {
-                                format.format(&trend_data, &mut stdout())?;
-                            }
-                            Format::Markdown => {
-                                println!("# Score Trend Analysis\n");
-                                println!(
-                                    "**Period**: {} ({})",
-                                    args.since,
-                                    format!("{:?}", args.period).to_lowercase()
-                                );
-                                println!("**Data Points**: {}\n", trend_data.points.len());
-
-                                if !trend_data.points.is_empty() {
-                                    println!("## Overall Trend\n");
-                                    println!("- **Start Score**: {}", trend_data.start_score);
-                                    println!("- **End Score**: {}", trend_data.end_score);
-                                    println!(
-                                        "- **Change**: {:+}",
-                                        trend_data.end_score - trend_data.start_score
-                                    );
-                                    println!("- **Slope**: {:.2} points/period", trend_data.slope);
-                                    println!("- **R-squared**: {:.3}\n", trend_data.r_squared);
-
-                                    if !trend_data.component_trends.is_empty() {
-                                        println!("## Component Trends\n");
-                                        println!("| Component | Slope | Correlation |");
-                                        println!("|-----------|-------|-------------|");
-                                        let mut component_trends: Vec<_> =
-                                            trend_data.component_trends.iter().collect();
-                                        component_trends.sort_by_key(|(name, _)| *name);
-                                        for (name, stats) in component_trends {
-                                            println!(
-                                                "| {} | {:.2} | {:.3} |",
-                                                name, stats.slope, stats.correlation
-                                            );
-                                        }
-                                        println!();
-                                    }
-
-                                    println!("## History\n");
-                                    println!("| Date | Score |");
-                                    println!("|------|-------|");
-                                    for point in &trend_data.points {
-                                        println!("| {} | {} |", point.date, point.score);
-                                    }
-                                } else {
-                                    println!(
-                                        "No historical data available for the specified period."
-                                    );
-                                }
-                            }
-                            Format::Text => {
-                                println!(
-                                    "Score Trend: {} - {}",
-                                    trend_data.start_score, trend_data.end_score
-                                );
-                                println!(
-                                    "Change: {:+}",
-                                    trend_data.end_score - trend_data.start_score
-                                );
-                                println!("Slope: {:.2}", trend_data.slope);
-                            }
-                            Format::Sarif => format.format(&trend_data, &mut stdout())?,
-                        }
-                    }
-                    None => {
-                        let result = run_analyzer_instance(
-                            path,
-                            &config,
-                            format,
-                            None,
-                            omen::score::Analyzer::from_config(&config),
-                        )?;
-                        apply_score_gate(&result, &config, &cmd.args, gate)?;
-                    }
-                }
+                let request = TrendRequest {
+                    since: args.since.clone(),
+                    period: args.period,
+                    samples: args.samples,
+                };
+                commands::score::run_trend(path, &config, &request, format, &mut stdout())?;
             }
-        }
+            None => {
+                let request = ScoreRequest {
+                    gate: cmd.args.gate.mode,
+                    fail_under: cmd.args.fail_under,
+                };
+                commands::score::run(path, &config, &request, format, &mut stdout())?;
+            }
+        },
         Command::All(args) => {
-            use serde_json::{json, Value};
-
-            fn collected_result<T: serde::de::DeserializeOwned>(
-                results: &[Value],
-                name: &str,
-            ) -> Option<T> {
-                let value = results
-                    .iter()
-                    .find(|entry| entry.get("analyzer").and_then(Value::as_str) == Some(name))?
-                    .get("result")?
-                    .clone();
-                match serde_json::from_value(value) {
-                    Ok(result) => Some(result),
-                    Err(error) => {
-                        tracing::warn!(analyzer = name, %error, "Failed to parse collected analyzer result");
-                        None
-                    }
-                }
-            }
-
-            let file_set = filtered_file_set(path, &config, Some(args))?;
-            let git_root = omen::git::GitRepo::open(path)
-                .ok()
-                .map(|r| r.root().to_path_buf());
-            let ctx = AnalysisContext::new(&file_set, &config, Some(path));
-            let ctx = if let Some(ref git_path) = git_root {
-                ctx.with_git_path(git_path)
-            } else {
-                ctx
-            };
-
-            macro_rules! run_and_collect {
-                ($ctx:expr, $analyzer:ty, $name:expr) => {{
-                    let a = <$analyzer>::default();
-                    match a.analyze($ctx) {
-                        Ok(result) => match serde_json::to_value(&result) {
-                            Ok(v) => json!({ "analyzer": $name, "result": v }),
-                            Err(e) => json!({ "analyzer": $name, "error": format!("serialization failed: {e}") }),
-                        },
-                        Err(e) => {
-                            json!({ "analyzer": $name, "error": e.to_string() })
-                        }
-                    }
-                }};
-            }
-
-            macro_rules! run_instance_and_collect {
-                ($ctx:expr, $analyzer:expr, $name:expr) => {{
-                    let a = $analyzer;
-                    match a.analyze($ctx) {
-                        Ok(result) => match serde_json::to_value(&result) {
-                            Ok(v) => json!({ "analyzer": $name, "result": v }),
-                            Err(e) => json!({ "analyzer": $name, "error": format!("serialization failed: {e}") }),
-                        },
-                        Err(e) => json!({ "analyzer": $name, "error": e.to_string() }),
-                    }
-                }};
-            }
-
-            // Run analyzers in parallel using std::thread::scope.
-            //
-            // Group A: file-based analyzers (no git dependency)
-            // Group B: git-based analyzers
-            // These two groups run concurrently. After both complete,
-            // Group C (analyzers that internally depend on git + file data)
-            // and score run sequentially.
-            let (group_a, group_b) = std::thread::scope(|s| {
-                let handle_a = s.spawn(|| -> Vec<Value> {
-                    vec![
-                        run_and_collect!(&ctx, omen::analyzers::complexity::Analyzer, "complexity"),
-                        run_and_collect!(&ctx, omen::analyzers::satd::Analyzer, "satd"),
-                        run_and_collect!(&ctx, omen::analyzers::stubs::Analyzer, "stubs"),
-                        run_and_collect!(&ctx, omen::analyzers::deadcode::Analyzer, "deadcode"),
-                        run_and_collect!(&ctx, omen::analyzers::cohesion::Analyzer, "cohesion"),
-                        run_and_collect!(&ctx, omen::analyzers::graph::Analyzer, "graph"),
-                        run_and_collect!(&ctx, omen::analyzers::repomap::Analyzer, "repomap"),
-                        run_and_collect!(&ctx, omen::analyzers::smells::Analyzer, "smells"),
-                        run_and_collect!(&ctx, omen::analyzers::flags::Analyzer, "flags"),
-                        run_and_collect!(&ctx, omen::analyzers::duplicates::Analyzer, "clones"),
-                    ]
-                });
-
-                let handle_b = s.spawn(|| -> Vec<Value> {
-                    vec![
-                        run_and_collect!(&ctx, omen::analyzers::churn::Analyzer, "churn"),
-                        run_and_collect!(&ctx, omen::analyzers::temporal::Analyzer, "temporal"),
-                        run_and_collect!(&ctx, omen::analyzers::ownership::Analyzer, "ownership"),
-                    ]
-                });
-
-                (
-                    handle_a.join().unwrap_or_default(),
-                    handle_b.join().unwrap_or_default(),
-                )
-            });
-
-            let mut results: Vec<Value> = Vec::with_capacity(17);
-            results.extend(group_a);
-            results.extend(group_b);
-
-            // Group C: analyzers that internally depend on both file and git data.
-            // Run after groups A and B to benefit from warm OS page cache.
-            let mut hotspot_analyzer = omen::analyzers::hotspot::Analyzer::from_config(&config);
-            if let Some(complexity) = collected_result(&results, "complexity") {
-                hotspot_analyzer = hotspot_analyzer.with_precomputed_complexity(complexity);
-            }
-            results.push(run_instance_and_collect!(&ctx, hotspot_analyzer, "hotspot"));
-            let mut tdg_analyzer = omen::analyzers::tdg::Analyzer::default();
-            if let Some(hotspot) = collected_result(&results, "hotspot") {
-                tdg_analyzer = tdg_analyzer.with_precomputed_hotspot(hotspot);
-            }
-            if let Some(temporal) = collected_result(&results, "temporal") {
-                tdg_analyzer = tdg_analyzer.with_precomputed_temporal(temporal);
-            }
-            results.push(run_instance_and_collect!(&ctx, tdg_analyzer, "tdg"));
-            let mut defect_analyzer = omen::analyzers::defect::Analyzer::from_config(&config);
-            if let Some(complexity) = collected_result(&results, "complexity") {
-                defect_analyzer = defect_analyzer.with_precomputed_complexity(complexity);
-            }
-            if let Some(duplicates) = collected_result(&results, "clones") {
-                defect_analyzer = defect_analyzer.with_precomputed_duplicates(duplicates);
-            }
-            if let Some(graph) = collected_result(&results, "graph") {
-                defect_analyzer = defect_analyzer.with_precomputed_graph(graph);
-            }
-            results.push(run_instance_and_collect!(&ctx, defect_analyzer, "defect"));
-            results.push(run_and_collect!(
-                &ctx,
-                omen::analyzers::changes::Analyzer,
-                "changes"
-            ));
-
-            let complexity = collected_result(&results, "complexity");
-            let satd = collected_result(&results, "satd");
-            let stubs = collected_result(&results, "stubs");
-            let duplicates = collected_result(&results, "clones");
-            let cohesion = collected_result(&results, "cohesion");
-            let tdg = collected_result(&results, "tdg");
-            let graph = collected_result(&results, "graph");
-            let smells = collected_result(&results, "smells");
-            let components = omen::score::Components {
-                complexity: complexity.as_ref(),
-                satd: satd.as_ref(),
-                stubs: stubs.as_ref(),
-                duplicates: duplicates.as_ref(),
-                cohesion: cohesion.as_ref(),
-                tdg: tdg.as_ref(),
-                graph: graph.as_ref(),
-                smells: smells.as_ref(),
-            };
-            let score = match omen::score::compute_from_components(
-                &components,
-                ctx.files.files().len(),
-            ) {
-                Ok(result) => match serde_json::to_value(&result) {
-                    Ok(value) => json!({ "analyzer": "score", "result": value }),
-                    Err(error) => {
-                        json!({ "analyzer": "score", "error": format!("serialization failed: {error}") })
-                    }
-                },
-                Err(error) => json!({ "analyzer": "score", "error": error.to_string() }),
-            };
-            results.push(score);
-
-            // `--top` and `--offset` apply to each section as they apply to the
-            // single command. SARIF keeps each finding.
-            let top = args.pagination.top.unwrap_or(0);
-            let offset = args.pagination.offset.unwrap_or(0);
-            if !matches!(format, Format::Sarif) {
-                for entry in &mut results {
-                    if let Some(result) = entry.get_mut("result") {
-                        omen::output::truncate_lists(result, top, offset);
-                    }
-                }
-            }
-
-            let combined = match format {
-                Format::Json | Format::JsonCompact | Format::Sarif => {
-                    json!({ "analyzers": results })
-                }
-                // One object with a key for each analyzer gives one section for
-                // each analyzer.
-                Format::Markdown | Format::Text => Value::Object(
-                    results
-                        .into_iter()
-                        .filter_map(|mut entry| {
-                            let name = entry.get("analyzer")?.as_str()?.to_string();
-                            let section = match entry.get_mut("result") {
-                                Some(result) => result.take(),
-                                None => json!({ "error": entry.get("error") }),
-                            };
-                            Some((name, section))
-                        })
-                        .collect(),
-                ),
-            };
-            format_with_limits(combined, format, None, None, &mut stdout())?;
+            commands::all::run(path, &config, &Scope::from(args), format, &mut stdout())?;
         }
         Command::Context(args) => {
             let request = ContextRequest {
@@ -748,393 +505,6 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
 
     Ok(())
 }
-
-/// Dispatch a command variant to its corresponding analyzer. This consolidates
-/// the 15 command arms that all follow the same `run_analyzer::<T>` pattern.
-fn dispatch_analyzer(
-    command: &Command,
-    path: &PathBuf,
-    config: &Config,
-    format: Format,
-) -> omen::core::Result<()> {
-    // Each arm gives a different result type. The caller needs none of them.
-    match command {
-        Command::Satd(args) => run_analyzer_instance(
-            path,
-            config,
-            format,
-            Some(args),
-            omen::analyzers::satd::Analyzer::new().with_custom_markers(&config.satd.markers),
-        )
-        .map(drop),
-        Command::Clones(args) => run_analyzer_instance(
-            path,
-            config,
-            format,
-            Some(&args.common),
-            omen::analyzers::duplicates::Analyzer::new()
-                .with_min_tokens(config.duplicates.min_tokens)
-                .with_similarity_threshold(config.duplicates.min_similarity)
-                .with_exclude_tests(!args.include_tests && config.exclude_tests),
-        )
-        .map(drop),
-        Command::Defect(args) => {
-            let window = resolve_churn_window(&args.window, config.defect.since.days())?;
-            run_analyzer_instance(
-                path,
-                config,
-                format,
-                Some(&args.common),
-                omen::analyzers::defect::Analyzer::new().with_churn_days(window),
-            )
-            .map(drop)
-        }
-        Command::Tdg(args) => {
-            run_analyzer::<omen::analyzers::tdg::Analyzer>(path, config, format, Some(args))
-                .map(drop)
-        }
-        Command::Graph(args) => {
-            run_analyzer::<omen::analyzers::graph::Analyzer>(path, config, format, Some(args))
-                .map(drop)
-        }
-        Command::Hotspot(args) => {
-            let window = resolve_churn_window(&args.window, config.hotspot.since.days())?;
-            run_analyzer_instance(
-                path,
-                config,
-                format,
-                Some(&args.common),
-                omen::analyzers::hotspot::Analyzer::new().with_days(window),
-            )
-            .map(drop)
-        }
-        Command::Temporal(args) => {
-            run_analyzer::<omen::analyzers::temporal::Analyzer>(path, config, format, Some(args))
-                .map(drop)
-        }
-        Command::Ownership(args) => {
-            run_analyzer::<omen::analyzers::ownership::Analyzer>(path, config, format, Some(args))
-                .map(drop)
-        }
-        Command::Cohesion(args) => {
-            run_analyzer::<omen::analyzers::cohesion::Analyzer>(path, config, format, Some(args))
-                .map(drop)
-        }
-        Command::Repomap(args) => {
-            run_analyzer::<omen::analyzers::repomap::Analyzer>(path, config, format, Some(args))
-                .map(drop)
-        }
-        Command::Smells(args) => {
-            run_analyzer::<omen::analyzers::smells::Analyzer>(path, config, format, Some(args))
-                .map(drop)
-        }
-        _ => unreachable!("dispatch_analyzer called with non-dispatched command"),
-    }
-}
-
-fn run_analyzer<A: Analyzer + Default>(
-    path: &PathBuf,
-    config: &Config,
-    format: Format,
-    args: Option<&AnalyzerArgs>,
-) -> omen::core::Result<A::Output> {
-    run_analyzer_instance(path, config, format, args, A::default())
-}
-
-fn run_analyzer_instance<A: Analyzer>(
-    path: &PathBuf,
-    config: &Config,
-    format: Format,
-    args: Option<&AnalyzerArgs>,
-    analyzer: A,
-) -> omen::core::Result<A::Output> {
-    let file_set = filtered_file_set(path, config, args)?;
-
-    // Show analysis progress
-    let spinner = if is_tty() {
-        let s = ProgressBar::new_spinner();
-        s.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} {msg}")
-                .expect("valid template"),
-        );
-        s.enable_steady_tick(std::time::Duration::from_millis(100));
-        Some(s)
-    } else {
-        None
-    };
-
-    if let Some(ref s) = spinner {
-        s.set_message(format!("Analyzing {} files...", file_set.len()));
-    }
-
-    let mut ctx = build_context(path, &file_set, config);
-
-    // Add progress callback for analyzers that support it
-    let progress_counter = Arc::new(AtomicUsize::new(0));
-    let total_files = file_set.len();
-    let spinner_clone = spinner.clone();
-    let counter_clone = progress_counter.clone();
-    ctx = ctx.with_progress(move |current, _total| {
-        counter_clone.store(current, Ordering::Relaxed);
-        if let Some(ref s) = spinner_clone {
-            s.set_message(format!("Analyzing... {}/{} files", current, total_files));
-        }
-    });
-
-    let analyzer_name = analyzer.name();
-    let result = analyzer.analyze(&ctx)?;
-
-    if let Some(s) = spinner {
-        s.finish_and_clear();
-    }
-
-    let top = args
-        .and_then(|a| a.pagination.top)
-        .or_else(|| (analyzer_name == "hotspot").then_some(DEFAULT_TOP));
-    let offset = args.and_then(|a| a.pagination.offset);
-    let value = serde_json::to_value(&result)?;
-    format_with_limits(value, format, top, offset, &mut stdout())?;
-    Ok(result)
-}
-
-fn run_diff_analyzer(
-    path: &Path,
-    target: Option<&str>,
-    format: Format,
-    top: Option<usize>,
-    offset: Option<usize>,
-) -> omen::core::Result<()> {
-    let analyzer = omen::analyzers::changes::Analyzer::default();
-    let result = analyzer.analyze_diff(path, target)?;
-    let value = serde_json::to_value(&result)?;
-    format_with_limits(value, format, top, offset, &mut stdout())?;
-    Ok(())
-}
-
-/// Writes the pull-request comment. `--top` and `--offset` do not apply: the
-/// byte budget cuts the sections.
-fn run_diff_comment(
-    path: &Path,
-    config: &Config,
-    args: &omen::cli::DiffArgs,
-) -> omen::core::Result<()> {
-    use std::io::Write;
-
-    let changes = omen::changeset::build::compute(path, args.target.as_deref(), config)?;
-    let options = omen::changeset::markdown::CommentOptions {
-        max_bytes: args.max_bytes,
-        max_nodes: args.max_nodes,
-    };
-    let text = omen::changeset::markdown::render(&changes, &options, &[])?;
-    stdout().write_all(text.as_bytes())?;
-    Ok(())
-}
-
-fn run_changes_analyzer(
-    path: &Path,
-    config: &Config,
-    format: Format,
-    args: &AnalyzerArgs,
-) -> omen::core::Result<()> {
-    let path_buf = path.to_path_buf();
-    let file_set = filtered_file_set(&path_buf, config, Some(args))?;
-    let ctx = build_context(&path_buf, &file_set, config);
-    let analyzer = omen::analyzers::changes::Analyzer::new().with_days(config.changes.since.days());
-    let result = analyzer.analyze(&ctx)?;
-    let value = serde_json::to_value(&result)?;
-    format_with_limits(
-        value,
-        format,
-        args.pagination.top,
-        args.pagination.offset,
-        &mut stdout(),
-    )?;
-    Ok(())
-}
-
-/// Apply the gate of `complexity` to a result. The caller wrote the report to
-/// stdout before this call. The verdict goes to stderr, so stdout stays one
-/// document in each format.
-fn apply_complexity_gate(
-    result: &omen::analyzers::complexity::Analysis,
-    config: &Config,
-    args: &ComplexityArgs,
-    gate: GateMode,
-) -> omen::core::Result<()> {
-    if gate == GateMode::Off {
-        return Ok(());
-    }
-
-    let max_cyclomatic = args
-        .max_cyclomatic
-        .unwrap_or(config.complexity.cyclomatic_max);
-    let max_cognitive = args
-        .max_cognitive
-        .unwrap_or(config.complexity.cognitive_max);
-
-    match result.check_thresholds(max_cyclomatic, max_cognitive) {
-        Ok(()) => {
-            eprintln!(
-                "All {} functions within thresholds (cyclomatic <= {}, cognitive <= {})",
-                result.summary.total_functions, max_cyclomatic, max_cognitive
-            );
-            Ok(())
-        }
-        Err(violations) => {
-            eprintln!(
-                "Complexity threshold exceeded in {} function(s):\n",
-                violations.len()
-            );
-            for v in &violations {
-                eprintln!(
-                    "  {}:{} - {}: cyclomatic={}, cognitive={}",
-                    v.file, v.line, v.name, v.cyclomatic, v.cognitive
-                );
-            }
-            eprintln!(
-                "\nThresholds: cyclomatic <= {}, cognitive <= {}",
-                max_cyclomatic, max_cognitive
-            );
-            gate_dispatch(
-                gate,
-                omen::core::Error::threshold_violation(
-                    format!(
-                        "{} function(s) exceed complexity thresholds",
-                        violations.len()
-                    ),
-                    violations.len() as f64,
-                ),
-            )
-        }
-    }
-}
-
-/// Run the `stubs` analyzer, then apply `--gate` (off/warn/error).
-///
-/// The JSON/markdown/text report is always emitted to stdout before the gate
-/// is evaluated, so `-f json --gate error` still gives callers the full
-/// finding list on stdout; the gate verdict goes to stderr, matching how
-/// `complexity --gate` behaves.
-fn run_stubs(
-    path: &PathBuf,
-    config: &Config,
-    args: &StubsArgs,
-    format: Format,
-) -> omen::core::Result<()> {
-    let file_set = filtered_file_set(path, config, Some(&args.common))?;
-    let ctx = build_context(path, &file_set, config);
-
-    let analyzer = omen::analyzers::stubs::Analyzer::new();
-    let result = analyzer.analyze(&ctx)?;
-
-    let value = serde_json::to_value(&result)?;
-    format_with_limits(
-        value,
-        format,
-        args.common.pagination.top,
-        args.common.pagination.offset,
-        &mut stdout(),
-    )?;
-
-    let gate = resolve_gate_mode(args.gate.mode, config.stubs.gate);
-    if gate == GateMode::Off {
-        return Ok(());
-    }
-
-    let gate_severity = match args.gate_severity {
-        GateSeverity::Low => omen::analyzers::stubs::Severity::Low,
-        GateSeverity::Medium => omen::analyzers::stubs::Severity::Medium,
-        GateSeverity::High => omen::analyzers::stubs::Severity::High,
-    };
-
-    let violations: Vec<_> = result
-        .stubs
-        .iter()
-        .filter(|s| s.severity >= gate_severity)
-        .collect();
-
-    if violations.is_empty() {
-        eprintln!(
-            "No stubs at or above severity '{}' found ({} total stub(s))",
-            gate_severity, result.summary.total_stubs
-        );
-        return Ok(());
-    }
-
-    eprintln!(
-        "Found {} stub(s) at or above severity '{}':\n",
-        violations.len(),
-        gate_severity
-    );
-    for v in &violations {
-        eprintln!("  {}:{} [{}] {}", v.file, v.line, v.severity, v.snippet);
-    }
-
-    gate_dispatch(
-        gate,
-        omen::core::Error::threshold_violation(
-            format!(
-                "{} stub(s) at or above severity '{}'",
-                violations.len(),
-                gate_severity
-            ),
-            violations.len() as f64,
-        ),
-    )
-}
-
-/// Apply the gate of `score` to a result. The caller wrote the report to
-/// stdout before this call. The verdict goes to stderr.
-fn apply_score_gate(
-    result: &omen::score::Analysis,
-    config: &Config,
-    args: &ScoreArgs,
-    gate: GateMode,
-) -> omen::core::Result<()> {
-    if gate == GateMode::Off {
-        return Ok(());
-    }
-
-    let min_score = args.fail_under.unwrap_or(config.score.min);
-
-    match result.check_threshold(min_score) {
-        Ok(()) => {
-            eprintln!(
-                "Score {:.1} ({}) meets minimum {:.1}",
-                result.overall_score, result.grade, min_score
-            );
-            Ok(())
-        }
-        Err(violation) => {
-            eprintln!("{violation}");
-            gate_dispatch(gate, violation)
-        }
-    }
-}
-
-fn run_churn_analyzer(
-    path: &PathBuf,
-    config: &Config,
-    format: Format,
-    days: u32,
-    args: &AnalyzerArgs,
-) -> omen::core::Result<()> {
-    let file_set = filtered_file_set(path, config, Some(args))?;
-    let ctx = build_context(path, &file_set, config);
-    let analyzer = omen::analyzers::churn::Analyzer::new().with_days(days);
-    let result = analyzer.analyze(&ctx)?;
-    let value = serde_json::to_value(&result)?;
-    format_with_limits(
-        value,
-        format,
-        args.pagination.top.or(Some(DEFAULT_TOP)),
-        args.pagination.offset,
-        &mut stdout(),
-    )?;
-    Ok(())
-}
-
 fn run_report(
     path: &PathBuf,
     config: &Config,
@@ -2075,49 +1445,5 @@ mod tests {
         assert_eq!(logging_filter(true, None).to_string(), "debug");
         assert_eq!(logging_filter(false, None).to_string(), "off");
         assert_eq!(logging_filter(true, Some("warn")).to_string(), "warn");
-    }
-
-    #[test]
-    fn resolve_gate_mode_uses_the_configuration_without_a_flag() {
-        assert_eq!(resolve_gate_mode(None, GateMode::Off), GateMode::Off);
-        assert_eq!(resolve_gate_mode(None, GateMode::Error), GateMode::Error);
-    }
-
-    #[test]
-    fn resolve_gate_mode_flag_overrides_the_configuration() {
-        assert_eq!(
-            resolve_gate_mode(Some(GateMode::Off), GateMode::Error),
-            GateMode::Off
-        );
-        assert_eq!(
-            resolve_gate_mode(Some(GateMode::Warn), GateMode::Off),
-            GateMode::Warn
-        );
-        assert_eq!(
-            resolve_gate_mode(Some(GateMode::Error), GateMode::Off),
-            GateMode::Error
-        );
-    }
-
-    #[test]
-    fn gate_dispatch_off_never_fails() {
-        let violation = omen::core::Error::threshold_violation("violated", 0.0);
-        assert!(gate_dispatch(GateMode::Off, violation).is_ok());
-    }
-
-    #[test]
-    fn gate_dispatch_warn_returns_ok() {
-        let violation = omen::core::Error::threshold_violation("violated", 0.0);
-        assert!(gate_dispatch(GateMode::Warn, violation).is_ok());
-    }
-
-    #[test]
-    fn gate_dispatch_error_returns_the_violation() {
-        let violation = omen::core::Error::threshold_violation("violated", 42.0);
-        let result = gate_dispatch(GateMode::Error, violation);
-        assert!(matches!(
-            result,
-            Err(omen::core::Error::ThresholdViolation { score, .. }) if score == 42.0
-        ));
     }
 }

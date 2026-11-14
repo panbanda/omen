@@ -34,8 +34,7 @@ pub(super) static SATD: ToolSpec = ToolSpec {
     handler: |server, arguments| {
         server.analyze(
             arguments,
-            crate::analyzers::satd::Analyzer::new()
-                .with_custom_markers(&server.config.satd.markers),
+            crate::commands::analyzers::satd_analyzer(&server.config),
         )
     },
 };
@@ -70,13 +69,10 @@ pub(super) static CHURN: ToolSpec = ToolSpec {
     ],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
-        let days = arguments
-            .count_u32("days")
-            .unwrap_or(server.config.churn.since.days());
-        server.analyze(
-            arguments,
-            crate::analyzers::churn::Analyzer::new().with_days(days),
-        )
+        let days = arguments.count_u32("days").unwrap_or(
+            crate::commands::analyzers::configured_churn_days(&server.config),
+        );
+        server.analyze(arguments, crate::commands::analyzers::churn_analyzer(days))
     },
 };
 
@@ -108,22 +104,15 @@ pub(super) static CLONES: ToolSpec = ToolSpec {
     ],
     paginated: Pagination::Field("clones"),
     handler: |server, arguments| {
-        let configured = &server.config.duplicates;
         let include_tests = arguments.boolean("include_tests").unwrap_or(false);
         server.analyze(
             arguments,
-            crate::analyzers::duplicates::Analyzer::new()
-                .with_min_tokens(
-                    arguments
-                        .count("min_tokens")
-                        .unwrap_or(configured.min_tokens),
-                )
-                .with_similarity_threshold(
-                    arguments
-                        .number("similarity")
-                        .unwrap_or(configured.min_similarity),
-                )
-                .with_exclude_tests(!include_tests && server.config.exclude_tests),
+            crate::commands::analyzers::clones_analyzer(
+                &server.config,
+                arguments.count("min_tokens"),
+                arguments.number("similarity"),
+                include_tests,
+            ),
         )
     },
 };
@@ -141,10 +130,7 @@ pub(super) static DEFECT: ToolSpec = ToolSpec {
         let days = arguments
             .count_u32("days")
             .unwrap_or(server.config.defect.since.days());
-        server.analyze(
-            arguments,
-            crate::analyzers::defect::Analyzer::new().with_churn_days(days),
-        )
+        server.analyze(arguments, crate::commands::analyzers::defect_analyzer(days))
     },
 };
 
@@ -157,8 +143,7 @@ pub(super) static CHANGES: ToolSpec = ToolSpec {
     handler: |server, arguments| {
         server.analyze(
             arguments,
-            crate::analyzers::changes::Analyzer::new()
-                .with_days(server.config.changes.since.days()),
+            crate::commands::analyzers::changes_analyzer(&server.config),
         )
     },
 };
@@ -183,8 +168,7 @@ pub(super) static DIFF: ToolSpec = ToolSpec {
 fn diff(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     let scope = server.scope(arguments)?;
     let target = arguments.string("base").or(arguments.string("head"));
-    let result =
-        crate::analyzers::changes::Analyzer::default().analyze_diff(&scope.path, target)?;
+    let result = crate::commands::diff::analyze(&scope.path, target)?;
     Ok(ToolOutput::data(serde_json::to_value(&result)?))
 }
 
@@ -224,7 +208,7 @@ pub(super) static HOTSPOT: ToolSpec = ToolSpec {
             .unwrap_or(server.config.hotspot.since.days());
         server.analyze(
             arguments,
-            crate::analyzers::hotspot::Analyzer::new().with_days(days),
+            crate::commands::analyzers::hotspot_analyzer(days),
         )
     },
 };
@@ -341,19 +325,13 @@ pub(super) static FLAGS: ToolSpec = ToolSpec {
 };
 
 fn flags(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
-    let providers: Vec<String> = arguments
-        .string("provider")
-        .map(|provider| vec![provider.to_string()])
-        .unwrap_or_default();
-    let mut config = server.config.clone();
-    if !providers.is_empty() {
-        config.feature_flags.providers = providers;
-    }
-    // The same rule as the `flags` command: the argument, then the
+    // The same function as the `flags` command: the argument, then the
     // configured value.
-    if let Some(stale_days) = arguments.count_u32("stale_days") {
-        config.feature_flags.stale_days = stale_days;
-    }
+    let config = crate::commands::analyzers::flags_config(
+        &server.config,
+        arguments.string("provider"),
+        arguments.count_u32("stale_days"),
+    );
     server.analyze_with_config(
         arguments,
         &config,
@@ -369,7 +347,7 @@ pub(super) static SCORE: ToolSpec = ToolSpec {
     handler: |server, arguments| {
         server.analyze(
             arguments,
-            crate::score::Analyzer::from_config(&server.config),
+            crate::commands::analyzers::score_analyzer(&server.config),
         )
     },
 };
