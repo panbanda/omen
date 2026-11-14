@@ -226,6 +226,10 @@ pub(crate) fn exported(draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported
 }
 
 impl LanguageSpec for C {
+    fn block_kinds(&self) -> Vec<&'static str> {
+        vec!["compound_statement"]
+    }
+
     fn call_syntax(&self) -> CallSyntax {
         CALL_SYNTAX
     }

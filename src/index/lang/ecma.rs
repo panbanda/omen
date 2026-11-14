@@ -451,6 +451,16 @@ impl Ecma {
 }
 
 impl LanguageSpec for Ecma {
+    fn block_kinds(&self) -> Vec<&'static str> {
+        vec!["statement_block"]
+    }
+
+    /// `var` binds a name in the function, not in the block.
+    fn is_block_local(&self, node: Node<'_>) -> bool {
+        node.parent()
+            .is_none_or(|declaration| declaration.kind() != "variable_declaration")
+    }
+
     fn call_syntax(&self) -> CallSyntax {
         if self.typescript {
             TYPESCRIPT_CALLS

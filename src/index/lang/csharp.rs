@@ -137,6 +137,10 @@ fn has_modifier(node: Node<'_>, keywords: &[&str], context: &Context<'_, '_>) ->
 }
 
 impl LanguageSpec for CSharp {
+    fn block_kinds(&self) -> Vec<&'static str> {
+        vec!["block"]
+    }
+
     fn call_syntax(&self) -> CallSyntax {
         CALL_SYNTAX
     }

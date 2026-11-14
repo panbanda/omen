@@ -702,12 +702,21 @@ impl<'a> Resolver<'a> {
             .map_or(&[], Vec::as_slice)
     }
 
-    fn local(&self, chain: &[Id], file: usize, name: &str) -> Option<&'a Local> {
+    /// The local name `name` that a reference at the byte `at` sees. When two
+    /// names of one owner have the name, the one in the nearest block that
+    /// contains `at` hides the others.
+    fn local(&self, chain: &[Id], file: usize, name: &str, at: Option<usize>) -> Option<&'a Local> {
         let owners = chain.iter().map(|id| Some(id.1)).chain([None]);
         for owner in owners {
             let found = self
                 .locals_named(file, name)
-                .find(|local| local.owner == owner);
+                .filter(|local| {
+                    local.owner == owner
+                        && at.is_none_or(|at| {
+                            local.block.as_ref().is_none_or(|block| block.contains(&at))
+                        })
+                })
+                .min_by_key(|local| local.block.as_ref().map_or(usize::MAX, |block| block.len()));
             if found.is_some() {
                 return found;
             }
@@ -744,7 +753,7 @@ impl<'a> Resolver<'a> {
         }
         let path = local.value_path.as_ref()?;
         let chain = self.chain(file, local.owner);
-        self.path_types(file, &chain, path, element, depth + 1)
+        self.path_types(file, &chain, path, element, local.name.value_start, depth + 1)
     }
 
     /// The types that the text of a declared type names in `file`. A slice,
@@ -855,6 +864,7 @@ impl<'a> Resolver<'a> {
         chain: &[Id],
         path: &[String],
         element: bool,
+        at: Option<usize>,
         depth: usize,
     ) -> Option<Vec<Id>> {
         if depth > 4 {
@@ -863,7 +873,7 @@ impl<'a> Resolver<'a> {
         let (root, fields) = path.split_first()?;
         let mut owners: Vec<Id> = if SELF_WORDS.contains(&root.as_str()) {
             self.enclosing_type(chain).into_iter().collect()
-        } else if let Some(local) = self.local(chain, file, root) {
+        } else if let Some(local) = self.local(chain, file, root, at) {
             if fields.is_empty() && element {
                 let declared = local.name.type_name.as_deref()?;
                 return Some(self.types_of_text(declared, file, true));
@@ -1094,6 +1104,7 @@ impl<'a> Resolver<'a> {
         reference: &Reference,
         chain: &[Id],
         x: &str,
+        at: usize,
         depth: usize,
     ) -> Outcome {
         let name = reference.name.as_str();
@@ -1119,7 +1130,7 @@ impl<'a> Resolver<'a> {
         // `const a = require('b')` is an import and a local name of the file.
         // The import gives the files.
         let local = self
-            .local(chain, file, x)
+            .local(chain, file, x, Some(at))
             .filter(|local| binding.is_none() || local.owner.is_some());
         if let Some(local) = local {
             // The members of an object literal have the name of the variable in their key.
@@ -1646,7 +1657,8 @@ impl<'a> Resolver<'a> {
             let known = match argument {
                 Argument::Literal(name) => name.clone(),
                 Argument::Name(name) => {
-                    let declared = self.local(&chain, file, name)?.name.type_name.as_ref()?;
+                    let at = Some(facts.start_byte);
+                    let declared = self.local(&chain, file, name, at)?.name.type_name.as_ref()?;
                     let declared: String = declared.split_whitespace().collect();
                     let declared = declared.trim_start_matches(':').to_string();
                     if ["var", "auto", "let"].contains(&declared.as_str()) {
@@ -1772,7 +1784,14 @@ impl<'a> Resolver<'a> {
                     .unwrap_or_else(|| Outcome::none(Status::Unresolved))
             }
             Some(Receiver::Name(receiver)) => {
-                self.with_receiver(file, reference, &chain, receiver, depth)
+                self.with_receiver(
+                    file,
+                    reference,
+                    &chain,
+                    receiver,
+                    facts.reference_facts[position].start_byte,
+                    depth,
+                )
             }
             Some(Receiver::Expression) => {
                 // A receiver that is a call has the type of the result of that call.
@@ -1793,7 +1812,10 @@ impl<'a> Resolver<'a> {
                         .reference_facts[position]
                         .receiver_path
                         .as_ref()
-                        .and_then(|path| self.path_types(file, &chain, path, true, depth + 1)),
+                        .and_then(|path| {
+                            let at = Some(facts.reference_facts[position].start_byte);
+                            self.path_types(file, &chain, path, true, at, depth + 1)
+                        }),
                     None => match facts.reference_facts[position].receiver_path.as_deref() {
                         // C++ `name.reset()` can call a smart pointer, and the
                         // extraction gives no name for the receiver. A member
@@ -1805,7 +1827,10 @@ impl<'a> Resolver<'a> {
                             .map(|(declared, text_file)| {
                                 self.types_of_text(declared, text_file, false)
                             }),
-                        Some(path) => self.path_types(file, &chain, path, false, depth + 1),
+                        Some(path) => {
+                            let at = Some(facts.reference_facts[position].start_byte);
+                            self.path_types(file, &chain, path, false, at, depth + 1)
+                        }
                         None => None,
                     },
                 };
@@ -1820,15 +1845,16 @@ impl<'a> Resolver<'a> {
                 Some(qualifier) => {
                     // A chain of names that starts at a local name or at the
                     // object is a value, not a path of a module.
+                    let at = Some(facts.reference_facts[position].start_byte);
                     let path = name_path(qualifier).filter(|path| {
                         path.len() > 1
                             && (SELF_WORDS.contains(&path[0].as_str())
-                                || self.local(&chain, file, &path[0]).is_some()
+                                || self.local(&chain, file, &path[0], at).is_some()
                                 || self.own_field(file, &chain, &path[0]).is_some())
                     });
                     match path {
                         Some(path) => {
-                            match self.path_types(file, &chain, &path, false, depth + 1) {
+                            match self.path_types(file, &chain, &path, false, at, depth + 1) {
                                 Some(types) => self.on_types(
                                     &types,
                                     name,
@@ -2548,6 +2574,42 @@ mod false_edge_tests {
             [
                 "14 Main.run>x.method UniqueCandidate ReceiverDeclaredType [Main.java#B.method]",
                 "16 Main.run>x.method UniqueCandidate ReceiverDeclaredType [Main.java#A.method]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_a_local_in_an_inner_block_hides_the_outer_local_csharp() {
+        let source = "class A {\n    public void Method() {}\n}\n\nclass B {\n    public void Method() {}\n}\n\nclass Main {\n    void Run() {\n        A x = new A();\n        {\n            B x = new B();\n            x.Method();\n        }\n        x.Method();\n    }\n}\n";
+        assert_eq!(
+            rows_of(&[("Main.cs", source)], "Main.cs", "Method"),
+            [
+                "14 Main.Run>x.Method UniqueCandidate ReceiverDeclaredType [Main.cs#B.Method]",
+                "16 Main.Run>x.Method UniqueCandidate ReceiverDeclaredType [Main.cs#A.Method]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_a_local_in_an_inner_block_hides_the_outer_local_cpp() {
+        let source = "struct A {\n    void method() {}\n};\n\nstruct B {\n    void method() {}\n};\n\nvoid run() {\n    A x;\n    {\n        B x;\n        x.method();\n    }\n    x.method();\n}\n";
+        assert_eq!(
+            rows_of(&[("a.cpp", source)], "a.cpp", "method"),
+            [
+                "13 run>x.method UniqueCandidate ReceiverDeclaredType [a.cpp#B.method]",
+                "15 run>x.method UniqueCandidate ReceiverDeclaredType [a.cpp#A.method]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_a_local_in_an_inner_block_hides_the_outer_local_typescript() {
+        let source = "class A {\n  method(): void {}\n}\n\nclass B {\n  method(): void {}\n}\n\nfunction run(): void {\n  const x: A = new A();\n  {\n    const x: B = new B();\n    x.method();\n  }\n  x.method();\n}\n";
+        assert_eq!(
+            rows_of(&[("a.ts", source)], "a.ts", "method"),
+            [
+                "13 run>x.method UniqueCandidate ReceiverDeclaredType [a.ts#B.method]",
+                "15 run>x.method UniqueCandidate ReceiverDeclaredType [a.ts#A.method]",
             ]
         );
     }

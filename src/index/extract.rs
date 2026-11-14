@@ -264,6 +264,9 @@ pub struct Local {
     pub owner: Option<usize>,
     /// The names of the first value when it is a chain of member accesses.
     pub value_path: Option<Vec<String>>,
+    /// The bytes of the block that contains the declaration, when the name
+    /// is visible in that block only.
+    pub block: Option<std::ops::Range<usize>>,
 }
 
 /// One symbol and its link facts.
@@ -425,6 +428,18 @@ pub trait LanguageSpec: Sync {
         self.call_syntax().call(node, context)
     }
 
+    /// The node kinds of a block that limits the local names that it
+    /// declares. A language where a function limits its names gives none.
+    fn block_kinds(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    /// Tells if the names that the declaration at `node` binds end with the
+    /// nearest block.
+    fn is_block_local(&self, _node: Node<'_>) -> bool {
+        true
+    }
+
     /// Each node kind for which the walk calls `locals`.
     fn local_kinds(&self) -> Vec<&'static str> {
         self.call_syntax().local_kinds()
@@ -561,7 +576,8 @@ struct Extractor<'a, 'tree> {
     return_type_field: &'static str,
     /// Each call with its start byte, its owner, and its closure flag.
     calls: Vec<RawCall<'tree>>,
-    locals: Vec<(LocalName, Option<usize>)>,
+    locals: Vec<(LocalName, Option<usize>, Option<std::ops::Range<usize>>)>,
+    block_kinds: Vec<&'static str>,
 }
 
 /// What the walk does for the nodes of one kind.
@@ -711,8 +727,13 @@ impl<'tree> Extractor<'_, 'tree> {
             if local {
                 let mut names = Vec::new();
                 self.spec.locals(node, &context, &mut names);
-                self.locals
-                    .extend(names.into_iter().map(|name| (name, owner)));
+                let block = self.block_of(node);
+                self.locals.extend(names.into_iter().map(|name| {
+                    let block = (!name.is_parameter && name.visible.is_none())
+                        .then(|| block.clone())
+                        .flatten();
+                    (name, owner, block)
+                }));
             }
         }
         let definition = rule.and_then(|rule| self.draft(node, &rule));
@@ -759,6 +780,19 @@ impl<'tree> Extractor<'_, 'tree> {
             self.scope_depths.push(depth);
             self.scope_owners.push(owner);
         }
+    }
+
+    /// The bytes of the nearest block that contains the declaration at
+    /// `node`, in a language where a block limits its names.
+    fn block_of(&self, node: Node<'tree>) -> Option<std::ops::Range<usize>> {
+        if self.block_kinds.is_empty() || !self.spec.is_block_local(node) {
+            return None;
+        }
+        self.ancestors
+            .iter()
+            .rev()
+            .find(|ancestor| self.block_kinds.contains(&ancestor.kind()))
+            .map(|block| block.byte_range())
     }
 
     fn leave(&mut self, depth: usize) {
@@ -896,6 +930,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         return_type_field: spec.call_syntax().return_type_field,
         calls: Vec::new(),
         locals: Vec::new(),
+        block_kinds: spec.block_kinds(),
     };
     extractor.walk(parsed.root_node());
 
@@ -912,12 +947,13 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let locals: Vec<Local> = extractor
         .locals
         .into_iter()
-        .map(|(name, owner)| Local {
+        .map(|(name, owner, block)| Local {
             value_path: name
                 .value_start
                 .and_then(|start| value_path(&parsed.source, start)),
             name,
             owner: position_of(owner),
+            block,
         })
         .collect();
     let parents: Vec<Option<usize>> = found

@@ -467,6 +467,10 @@ fn pointer_member(call: Node<'_>, context: &Context<'_, '_>) -> PointerMember {
 }
 
 impl LanguageSpec for Cpp {
+    fn block_kinds(&self) -> Vec<&'static str> {
+        vec!["compound_statement"]
+    }
+
     fn call_syntax(&self) -> CallSyntax {
         CALL_SYNTAX
     }

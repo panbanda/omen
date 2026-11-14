@@ -78,6 +78,10 @@ impl LanguageSpec for Go {
         vec![COMPOSITE_LITERAL, UNARY_EXPRESSION, RANGE_CLAUSE]
     }
 
+    fn block_kinds(&self) -> Vec<&'static str> {
+        vec!["block"]
+    }
+
     fn call_syntax(&self) -> CallSyntax {
         CALL_SYNTAX
     }

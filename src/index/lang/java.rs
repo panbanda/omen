@@ -162,6 +162,10 @@ fn collect_type_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<S
 }
 
 impl LanguageSpec for Java {
+    fn block_kinds(&self) -> Vec<&'static str> {
+        vec!["block"]
+    }
+
     fn call_syntax(&self) -> CallSyntax {
         CALL_SYNTAX
     }

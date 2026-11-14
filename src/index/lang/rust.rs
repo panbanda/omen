@@ -250,6 +250,10 @@ impl LanguageSpec for Rust {
         })
     }
 
+    fn block_kinds(&self) -> Vec<&'static str> {
+        vec!["block"]
+    }
+
     fn call_syntax(&self) -> CallSyntax {
         CALL_SYNTAX
     }
