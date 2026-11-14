@@ -1,6 +1,6 @@
 //! Analyzer trait and common types.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -9,6 +9,7 @@ use serde::Serialize;
 use super::{ContentSource, FileSet, Result};
 use crate::config::Config;
 use crate::git::{Commit, GitLogData, GitRepo};
+use crate::index::build::CodeIndex;
 
 /// Trait implemented by all analyzers.
 pub trait Analyzer: Send + Sync {
@@ -50,6 +51,7 @@ pub struct AnalysisContext<'a> {
     /// Optional content source for reading files (e.g., from git tree).
     pub content_source: Option<Arc<dyn ContentSource>>,
     git_log_data: OnceLock<std::result::Result<Arc<GitLogData>, String>>,
+    code_index: OnceLock<Arc<CodeIndex>>,
 }
 
 impl<'a> AnalysisContext<'a> {
@@ -63,7 +65,40 @@ impl<'a> AnalysisContext<'a> {
             on_progress: None,
             content_source: None,
             git_log_data: OnceLock::new(),
+            code_index: OnceLock::new(),
         }
+    }
+
+    /// Return the index of the symbols, the imports, and the calls of the
+    /// files. The context builds it one time, and each analyzer uses the same
+    /// index. The content of each file and the manifest files come from the
+    /// content source, thus an index of a commit reads only that commit.
+    pub fn code_index(&self) -> Result<Arc<CodeIndex>> {
+        let index = self.code_index.get_or_init(|| {
+            let files: Vec<PathBuf> = self.files.iter().cloned().collect();
+            let read = |path: &Path| self.read_file(path);
+            let list = |directory: &Path| self.list_directory(directory);
+            Arc::new(CodeIndex::build(self.root, &files, &read, &list))
+        });
+        Ok(Arc::clone(index))
+    }
+
+    /// The files of one directory, from the content source if available,
+    /// otherwise from the filesystem. A path has the form of `directory`.
+    fn list_directory(&self, directory: &Path) -> Vec<PathBuf> {
+        if let Some(source) = &self.content_source {
+            return source.list_directory(directory).unwrap_or_default();
+        }
+        let Ok(entries) = std::fs::read_dir(self.root.join(directory)) else {
+            return Vec::new();
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_dir()))
+            .map(|entry| directory.join(entry.file_name()))
+            .collect();
+        files.sort();
+        files
     }
 
     /// Add git repository path to context.
@@ -225,6 +260,61 @@ mod duration_serde {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// A content source that has two Ruby files and one gem specification.
+    /// No file is on the disk.
+    struct Memory;
+
+    const MEMORY: &[(&str, &str)] = &[
+        (
+            "shop.gemspec",
+            "Gem::Specification.new do |spec|\n  spec.require_paths = [\"src\"]\nend\n",
+        ),
+        ("src/shop/util.rb", "def helper\nend\n"),
+        (
+            "bin/run.rb",
+            "require 'shop/util'\n\ndef run\n  helper()\nend\n",
+        ),
+    ];
+
+    impl ContentSource for Memory {
+        fn read(&self, path: &Path) -> Result<Vec<u8>> {
+            MEMORY
+                .iter()
+                .find(|(name, _)| Path::new(name) == path)
+                .map(|(_, text)| text.as_bytes().to_vec())
+                .ok_or_else(|| crate::core::Error::git("no such file".to_string()))
+        }
+
+        fn list_directory(&self, directory: &Path) -> Result<Vec<std::path::PathBuf>> {
+            Ok(MEMORY
+                .iter()
+                .map(|(name, _)| std::path::PathBuf::from(name))
+                .filter(|path| path.parent() == Some(directory))
+                .collect())
+        }
+    }
+
+    #[test]
+    fn test_code_index_reads_through_the_content_source_one_time() {
+        let files = FileSet::from_files(
+            std::path::PathBuf::from("."),
+            vec!["bin/run.rb".into(), "src/shop/util.rb".into()],
+        );
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&files, &config, None).with_content_source(Arc::new(Memory));
+
+        let index = ctx.code_index().unwrap();
+        let again = ctx.code_index().unwrap();
+
+        assert!(Arc::ptr_eq(&index, &again));
+        let paths: Vec<&str> = index.files.iter().map(|file| file.file.as_str()).collect();
+        assert_eq!(paths, ["bin/run.rb", "src/shop/util.rb"]);
+        // The manifest gives the load root `src`, thus the call has its edge.
+        let call = &index.files[0].references[1];
+        assert_eq!(call.name, "helper");
+        assert_eq!(call.resolution.candidates, ["src/shop/util.rb#helper"]);
+    }
 
     #[test]
     fn test_summary_new() {

@@ -22,7 +22,7 @@
 //!
 //! Then examine the diff. Do not change `expected` in a corpus to remove an entry.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use omen::analyzers::repomap::build_index;
@@ -31,12 +31,16 @@ use omen::benchmark::truth::{
 };
 use omen::benchmark::{load_cases, materialize};
 use omen::core::FileSet;
+use omen::index::build::CodeIndex;
+use omen::index::model::ResolutionStatus;
 use serde_json::Value;
 
 /// `real.json` is not in this list. Its cases need checkouts of other
 /// repositories, and this test does not use the network.
 const CORPORA: [&str; 2] = ["corpus", "scoped"];
 const LEDGER_FILE: &str = "expected_failures.json";
+/// The ledger of the checks that fail with the shared index and its resolver.
+const INDEX_LEDGER_FILE: &str = "expected_failures_index.json";
 const BLESS_TRACKING: &str = "phase-2-shared-index";
 /// The paired harness uses the same query when a case does not give one.
 const DEFAULT_QUERY: &str = "caller";
@@ -210,7 +214,60 @@ fn observe(root: &Path, query: &str) -> Option<Observation> {
     })
 }
 
-fn run_corpus(corpus: &str) -> Vec<Assertion> {
+/// Collect the same files, then read the callees of the first symbol with the
+/// name of the query from the shared index and its resolver.
+///
+/// A corpus names a callee as `<file>:<name>`.
+fn observe_index(root: &Path, query: &str) -> Option<Observation> {
+    let file_set = FileSet::from_path_default(root).expect("file set");
+    let files: Vec<PathBuf> = file_set.iter().map(|path| root.join(path)).collect();
+    let index = CodeIndex::from_files(root, &files);
+    let names: BTreeMap<&str, String> = index
+        .files
+        .iter()
+        .flat_map(|file| {
+            file.symbols.iter().map(|symbol| {
+                (
+                    symbol.key.as_str(),
+                    format!("{}:{}", file.file, symbol.name),
+                )
+            })
+        })
+        .collect();
+    let caller = index
+        .files
+        .iter()
+        .flat_map(|file| &file.symbols)
+        .find(|symbol| symbol.name == query)?;
+    let mut observation = Observation::default();
+    let calls = index
+        .files
+        .iter()
+        .flat_map(|file| &file.references)
+        .filter(|reference| reference.enclosing.as_deref() == Some(caller.key.as_str()));
+    for call in calls {
+        let resolution = &call.resolution;
+        let offered = resolution.candidates.iter().chain(&resolution.superseded);
+        observation
+            .candidates
+            .extend(offered.map(|key| names[key.as_str()].clone()));
+        let edge = matches!(
+            resolution.status,
+            ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
+        );
+        if edge {
+            observation.edges.extend(
+                resolution
+                    .candidates
+                    .iter()
+                    .map(|key| names[key.as_str()].clone()),
+            );
+        }
+    }
+    Some(observation)
+}
+
+fn run_corpus(corpus: &str, observe: fn(&Path, &str) -> Option<Observation>) -> Vec<Assertion> {
     let cases = load_corpus(&quality_root(), corpus);
     let mut assertions = Vec::new();
     for case in &cases {
@@ -236,22 +293,40 @@ fn load_corpus(root: &Path, corpus: &str) -> Vec<Value> {
     load_cases(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
-fn load_ledger(root: &Path) -> Vec<LedgerEntry> {
-    match std::fs::read_to_string(root.join(LEDGER_FILE)) {
+fn load_ledger_file(root: &Path, file: &str) -> Vec<LedgerEntry> {
+    match std::fs::read_to_string(root.join(file)) {
         Ok(text) => serde_json::from_str(&text).expect("the ledger must be valid JSON"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => panic!("{LEDGER_FILE}: {error}"),
+        Err(error) => panic!("{file}: {error}"),
     }
+}
+
+fn load_ledger(root: &Path) -> Vec<LedgerEntry> {
+    load_ledger_file(root, LEDGER_FILE)
 }
 
 #[test]
 fn corpus_expectations_agree_with_omen_or_the_ledger() {
+    check_corpora("commands", observe, LEDGER_FILE);
+}
+
+/// The same corpora and the same three rules for the shared index. The
+/// commands do not use this index until the two ledgers are examined.
+#[test]
+fn corpus_expectations_agree_with_the_index_or_its_ledger() {
+    check_corpora("index", observe_index, INDEX_LEDGER_FILE);
+}
+
+fn check_corpora(source: &str, observe: fn(&Path, &str) -> Option<Observation>, ledger_file: &str) {
     let mut assertions = Vec::new();
     for corpus in CORPORA {
-        let found = run_corpus(corpus);
+        let found = run_corpus(corpus, observe);
         assert!(!found.is_empty(), "no checks in {corpus}.json");
         // One table for each corpus. Do not add the corpora together.
-        println!("corpus: {corpus}\n{}", render_table(&summarize(&found)));
+        println!(
+            "source: {source}, corpus: {corpus}\n{}",
+            render_table(&summarize(&found))
+        );
         assertions.extend(found);
     }
 
@@ -265,13 +340,15 @@ fn corpus_expectations_agree_with_omen_or_the_ledger() {
     }
 
     if std::env::var_os("OMEN_TRUTH_BLESS").is_some() {
-        let blessed = bless(&assertions, &load_ledger(&quality_root()), BLESS_TRACKING);
+        let ledger = load_ledger_file(&quality_root(), ledger_file);
+        let blessed = bless(&assertions, &ledger, BLESS_TRACKING);
         let mut text = serde_json::to_string_pretty(&blessed).unwrap();
         text.push('\n');
-        std::fs::write(quality_root().join(LEDGER_FILE), text).unwrap();
+        std::fs::write(quality_root().join(ledger_file), text).unwrap();
     }
 
-    let violations = check_ledger(&assertions, &load_ledger(&quality_root()));
+    let ledger = load_ledger_file(&quality_root(), ledger_file);
+    let violations = check_ledger(&assertions, &ledger);
     let report: Vec<String> = violations.iter().map(ToString::to_string).collect();
     assert!(
         violations.is_empty(),

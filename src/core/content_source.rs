@@ -15,6 +15,10 @@ use super::Result;
 pub trait ContentSource: Send + Sync {
     /// Read the contents of a file at the given path.
     fn read(&self, path: &Path) -> Result<Vec<u8>>;
+
+    /// The files of one directory, in path order, without the files of the
+    /// directories in it. A directory that does not exist has no files.
+    fn list_directory(&self, directory: &Path) -> Result<Vec<PathBuf>>;
 }
 
 /// Reads file contents from the filesystem.
@@ -33,6 +37,19 @@ impl ContentSource for FilesystemSource {
     fn read(&self, path: &Path) -> Result<Vec<u8>> {
         let full_path = self.root.join(path);
         std::fs::read(&full_path).map_err(super::Error::Io)
+    }
+
+    fn list_directory(&self, directory: &Path) -> Result<Vec<PathBuf>> {
+        let Ok(entries) = std::fs::read_dir(self.root.join(directory)) else {
+            return Ok(Vec::new());
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_dir()))
+            .map(|entry| directory.join(entry.file_name()))
+            .collect();
+        files.sort();
+        Ok(files)
     }
 }
 
@@ -170,6 +187,40 @@ impl ContentSource for TreeSource {
             .map_err(|_| super::Error::git(format!("Not a blob: {path_str}")))?;
 
         Ok(blob.data.to_vec())
+    }
+
+    fn list_directory(&self, directory: &Path) -> Result<Vec<PathBuf>> {
+        let repo = self.repo.to_thread_local();
+        let tree_oid = gix::ObjectId::from_bytes_or_panic(&self.tree_id);
+        let mut tree = repo
+            .find_object(tree_oid)
+            .map_err(|e| super::Error::git(format!("Failed to find tree: {e}")))?
+            .try_into_tree()
+            .map_err(|e| super::Error::git(format!("Not a tree: {e}")))?;
+        if !directory.as_os_str().is_empty() {
+            let path = directory.to_string_lossy();
+            let entry = tree
+                .lookup_entry_by_path(path.as_ref())
+                .map_err(|e| super::Error::git(format!("Failed to lookup {path}: {e}")))?;
+            let subtree = entry
+                .filter(|entry| entry.mode().is_tree())
+                .and_then(|entry| entry.object().ok())
+                .and_then(|object| object.try_into_tree().ok());
+            let Some(subtree) = subtree else {
+                return Ok(Vec::new());
+            };
+            tree = subtree;
+        }
+        let mut files = Vec::new();
+        for entry in tree.iter() {
+            let entry =
+                entry.map_err(|e| super::Error::git(format!("Failed to read entry: {e}")))?;
+            if entry.mode().is_blob() {
+                files.push(directory.join(entry.filename().to_string()));
+            }
+        }
+        files.sort();
+        Ok(files)
     }
 }
 
@@ -337,6 +388,43 @@ mod tests {
         let content = source.read(Path::new("src/lib/main.rs")).unwrap();
 
         assert_eq!(content, b"fn main() {}");
+    }
+
+    #[test]
+    fn test_sources_list_the_files_of_one_directory() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        init_git_repo(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("gem/lib")).unwrap();
+        commit_file(
+            temp_dir.path(),
+            "gem/shop.gemspec",
+            b"",
+            "Add specification",
+        );
+        commit_file(temp_dir.path(), "gem/lib/shop.rb", b"", "Add library");
+        let sha = commit_file(temp_dir.path(), "top.rb", b"", "Add top");
+        std::fs::write(temp_dir.path().join("gem/later.gemspec"), b"").unwrap();
+
+        let tree = TreeSource::new(temp_dir.path(), &sha).unwrap();
+        let disk = FilesystemSource::new(temp_dir.path());
+
+        assert_eq!(
+            tree.list_directory(Path::new("gem")).unwrap(),
+            [PathBuf::from("gem/shop.gemspec")]
+        );
+        assert_eq!(
+            tree.list_directory(Path::new("")).unwrap(),
+            [PathBuf::from("top.rb")]
+        );
+        assert!(tree.list_directory(Path::new("none")).unwrap().is_empty());
+        assert_eq!(
+            disk.list_directory(Path::new("gem")).unwrap(),
+            [
+                PathBuf::from("gem/later.gemspec"),
+                PathBuf::from("gem/shop.gemspec")
+            ]
+        );
+        assert!(disk.list_directory(Path::new("none")).unwrap().is_empty());
     }
 
     #[test]

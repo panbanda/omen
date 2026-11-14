@@ -61,7 +61,13 @@ expression: "shape(&response, &dynamic_key_objects)"
           "returned": "number",
           "tool": "string",
           "total_items": "number",
-          "truncated": []
+          "truncated": [
+            {
+              "path": "string",
+              "returned": "number",
+              "total": "number"
+            }
+          ]
         },
         "type": "string"
       }

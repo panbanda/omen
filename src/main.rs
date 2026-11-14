@@ -684,10 +684,10 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_outline(path, &config, args, format)?;
         }
         Command::Impact(args) => {
-            run_impact(path, &config, args, format)?;
+            run_impact(path, &config, args, format, local_ref(cli))?;
         }
         Command::Symbol(args) => {
-            run_symbol(path, &config, args, format)?;
+            run_symbol(path, &config, args, format, local_ref(cli))?;
         }
         Command::Eval(args) => {
             run_eval(args, format)?;
@@ -821,9 +821,19 @@ fn filtered_file_set(
 }
 
 fn changed_files_since(path: &Path, base: &str) -> omen::core::Result<Vec<PathBuf>> {
+    changed_files_between(path, base, None)
+}
+
+/// The files that changed between `base` and `target`. Without a target, the
+/// files that changed between `base` and the working tree.
+fn changed_files_between(
+    path: &Path,
+    base: &str,
+    target: Option<&str>,
+) -> omen::core::Result<Vec<PathBuf>> {
     use std::process::Command;
 
-    if base.starts_with('-') {
+    if base.starts_with('-') || target.is_some_and(|target| target.starts_with('-')) {
         return Err(omen::core::Error::git(
             "changed-since reference must not start with '-'",
         ));
@@ -835,9 +845,10 @@ fn changed_files_since(path: &Path, base: &str) -> omen::core::Result<Vec<PathBu
             "--name-only",
             "--diff-filter=ACMR",
             "--end-of-options",
-            base,
-            "--",
         ])
+        .arg(base)
+        .args(target)
+        .arg("--")
         .current_dir(path)
         .output()
         .map_err(omen::core::Error::Io)?;
@@ -2058,17 +2069,59 @@ fn run_outline(
     Ok(())
 }
 
+/// The value of `--ref` for a repository on the disk. A remote repository is
+/// a clone at that commit, thus its files on the disk are the commit.
+fn local_ref(cli: &Cli) -> Option<&str> {
+    cli.git_ref
+        .as_deref()
+        .filter(|_| !is_remote_repo(&cli.path.to_string_lossy()))
+}
+
+/// The files of `symbol` and `impact`, and the source of their content. With
+/// `--ref`, the files and their content come from that commit.
+fn index_scope(
+    path: &PathBuf,
+    config: &Config,
+    common: &AnalyzerArgs,
+    git_ref: Option<&str>,
+) -> omen::core::Result<(
+    FileSet,
+    Option<std::sync::Arc<dyn omen::core::ContentSource>>,
+)> {
+    let Some(reference) = git_ref else {
+        return Ok((filtered_file_set(path, config, Some(common))?, None));
+    };
+    let tree = omen::core::TreeSource::new(path, reference)?;
+    let mut file_set = FileSet::from_tree_source(&tree, config)?;
+    if let Some(base) = &common.changed_since {
+        let changed_files = changed_files_between(path, base, Some(reference))?;
+        file_set = file_set.filter_by_paths(&changed_files);
+    }
+    if let Some(glob) = &common.glob {
+        file_set = file_set.filter_by_glob(glob);
+    }
+    for exclude in &common.exclude {
+        file_set = file_set.exclude_by_glob(exclude);
+    }
+    Ok((file_set, Some(std::sync::Arc::new(tree))))
+}
+
 fn run_impact(
     path: &PathBuf,
     config: &Config,
     args: &ImpactArgs,
     format: Format,
+    git_ref: Option<&str>,
 ) -> omen::core::Result<()> {
-    use omen::analyzers::impact::{analyze, Direction};
+    use omen::analyzers::impact::{analyze_view, Direction};
     use omen::cli::ImpactDirection;
 
-    let file_set = filtered_file_set(path, config, Some(&args.common))?;
-    let files: Vec<PathBuf> = file_set.iter().map(|p| path.join(p)).collect();
+    let (file_set, source) = index_scope(path, config, &args.common, git_ref)?;
+    let mut ctx = omen::core::AnalysisContext::new(&file_set, config, Some(path));
+    if let Some(source) = source {
+        ctx = ctx.with_content_source(source);
+    }
+    let view = omen::index::view::CallView::from_index(&*ctx.code_index()?);
 
     let direction = match args.direction {
         ImpactDirection::Callers => Direction::Callers,
@@ -2076,7 +2129,7 @@ fn run_impact(
         ImpactDirection::Both => Direction::Both,
     };
 
-    let report = analyze(path, &files, &args.symbol, args.depth, direction)?;
+    let report = analyze_view(&view, &args.symbol, args.depth, direction, args.min_basis);
     let value = serde_json::to_value(&report)?;
     format_with_limits(
         value,
@@ -2093,26 +2146,38 @@ fn run_symbol(
     config: &Config,
     args: &SymbolArgs,
     format: Format,
+    git_ref: Option<&str>,
 ) -> omen::core::Result<()> {
-    use omen::symbol::{get_symbol, SymbolOptions};
+    use omen::symbol::{report_with_reader, SymbolOptions};
 
-    let file_set = filtered_file_set(path, config, Some(&args.common))?;
-    let files: Vec<PathBuf> = file_set.iter().map(|p| path.join(p)).collect();
+    let (file_set, source) = index_scope(path, config, &args.common, git_ref)?;
+    let mut ctx = omen::core::AnalysisContext::new(&file_set, config, Some(path));
+    if let Some(source) = source {
+        ctx = ctx.with_content_source(source);
+    }
+    let view = omen::index::view::CallView::from_index(&*ctx.code_index()?);
 
     let opts = SymbolOptions {
         include_source: !args.no_source,
         max_source_lines: args.max_source_lines,
+        min_basis: args.min_basis,
     };
 
-    let report = get_symbol(path, &files, &args.name, &opts)?;
-    let value = serde_json::to_value(&report)?;
-    format_with_limits(
-        value,
-        format,
-        args.common.pagination.top,
-        args.common.pagination.offset,
-        &mut std::io::stdout(),
-    )?;
+    let read = |file: &std::path::Path| ctx.read_file(file);
+    let report = report_with_reader(&view, &args.name, &opts, None, &read)?;
+    let mut value = serde_json::to_value(&report)?;
+    // `--top` and `--offset` page only the callers, as the MCP tool does.
+    let pagination = &args.common.pagination;
+    if !matches!(format, Format::Sarif) && (pagination.top.is_some() || pagination.offset.is_some())
+    {
+        omen::output::truncate_field(
+            &mut value,
+            "callers",
+            pagination.top.unwrap_or(0),
+            pagination.offset.unwrap_or(0),
+        );
+    }
+    format.format_value(&value, &mut std::io::stdout())?;
     Ok(())
 }
 

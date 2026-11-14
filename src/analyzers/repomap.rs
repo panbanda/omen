@@ -16,6 +16,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
+use crate::index::graph::{pagerank, PageRankOptions};
 use crate::parser::{extract_functions, extract_imports, ImportKind, Parser};
 
 mod bindings;
@@ -134,7 +135,6 @@ pub struct CallGraphIndex {
     pub by_name: HashMap<String, Vec<usize>>,
     pub(crate) node_indices: HashMap<usize, NodeIndex>,
     pub call_resolutions: Vec<CallResolution>,
-    pub(crate) call_resolution_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl CallGraphIndex {
@@ -143,6 +143,20 @@ impl CallGraphIndex {
     /// Qualified queries preserve same-file duplicates; bare queries return all
     /// matches. Results are ordered by file, name, and source position.
     pub fn resolve(&self, name: &str) -> Vec<usize> {
+        // A key of the shared index, `file#Container.name`, names a file and
+        // a name. The tools of the shared index give this form.
+        if let Some((file, path)) = name.split_once('#') {
+            let path = path.split('~').next().unwrap_or(path);
+            let bare = path.rsplit('.').next().unwrap_or(path);
+            return self
+                .by_name
+                .get(bare)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&idx| self.symbols[idx].file == file)
+                .collect();
+        }
         if let Some((file, bare)) = name.rsplit_once(':') {
             return self
                 .by_name
@@ -385,11 +399,9 @@ pub(crate) fn build_index_with_parser(
     }
 
     let mut call_resolutions = Vec::new();
-    let mut call_resolution_ranges = Vec::with_capacity(symbols.len());
     // Only unambiguous name candidates become edges. Preserve uncertainty.
     for (caller_idx, symbol) in symbols.iter().enumerate() {
         let caller_node = node_indices[&caller_idx];
-        let start = call_resolutions.len();
 
         for call in &symbol.calls {
             let (receiver, bare_call) = call
@@ -516,7 +528,6 @@ pub(crate) fn build_index_with_parser(
                     .collect(),
             });
         }
-        call_resolution_ranges.push(start..call_resolutions.len());
     }
 
     Ok(CallGraphIndex {
@@ -526,7 +537,6 @@ pub(crate) fn build_index_with_parser(
         by_name,
         node_indices,
         call_resolutions,
-        call_resolution_ranges,
     })
 }
 
@@ -658,7 +668,14 @@ impl Analyzer {
         let index = build_index(repo_path, files)?;
 
         // Phase 5: Calculate PageRank
-        let pagerank = self.calculate_pagerank(&index.graph);
+        let scores = pagerank(
+            &index.graph,
+            &PageRankOptions {
+                damping: self.config.damping,
+                max_iterations: self.config.max_iterations,
+                tolerance: self.config.tolerance,
+            },
+        );
 
         // Phase 6: Build output symbols with metrics
         let mut output_symbols: Vec<SymbolEntry> = index
@@ -667,7 +684,7 @@ impl Analyzer {
             .enumerate()
             .map(|(idx, sym)| {
                 let node_idx = index.node_indices[&idx];
-                let pr = pagerank.get(&node_idx).copied().unwrap_or(0.0);
+                let pr = scores[node_idx.index()];
                 let in_degree = index
                     .graph
                     .edges_directed(node_idx, Direction::Incoming)
@@ -710,60 +727,6 @@ impl Analyzer {
             symbols: output_symbols,
             summary,
         })
-    }
-
-    /// Calculate PageRank for all nodes in the graph.
-    ///
-    /// Note: Dangling nodes (no outgoing edges) are effectively treated as
-    /// having self-loops rather than redistributing rank uniformly.
-    fn calculate_pagerank(&self, graph: &DiGraph<usize, ()>) -> HashMap<NodeIndex, f64> {
-        let n = graph.node_count();
-        if n == 0 {
-            return HashMap::new();
-        }
-
-        let d = self.config.damping;
-        let initial_rank = 1.0 / n as f64;
-        let mut rank = vec![initial_rank; n];
-        let mut new_rank = vec![0.0; n];
-        let out_degrees: Vec<usize> = graph
-            .node_indices()
-            .map(|node| graph.edges_directed(node, Direction::Outgoing).count())
-            .collect();
-
-        for _ in 0..self.config.max_iterations {
-            let mut diff = 0.0;
-
-            for node in graph.node_indices() {
-                let incoming: f64 = graph
-                    .edges_directed(node, Direction::Incoming)
-                    .map(|e| {
-                        let source = e.source();
-                        let out_deg = out_degrees[source.index()];
-                        if out_deg > 0 {
-                            rank[source.index()] / out_deg as f64
-                        } else {
-                            0.0
-                        }
-                    })
-                    .sum();
-
-                let new_score = (1.0 - d) / n as f64 + d * incoming;
-                diff += (new_score - rank[node.index()]).abs();
-                new_rank[node.index()] = new_score;
-            }
-
-            std::mem::swap(&mut rank, &mut new_rank);
-
-            if diff < self.config.tolerance {
-                break;
-            }
-        }
-
-        graph
-            .node_indices()
-            .map(|node| (node, rank[node.index()]))
-            .collect()
     }
 }
 
@@ -1272,47 +1235,6 @@ fn bar() {}
     }
 
     #[test]
-    fn test_pagerank_star() {
-        let analyzer = Analyzer::new();
-        let mut graph: DiGraph<usize, ()> = DiGraph::new();
-
-        // Hub with multiple nodes pointing to it
-        let hub = graph.add_node(0);
-        let a = graph.add_node(1);
-        let b = graph.add_node(2);
-        let c = graph.add_node(3);
-
-        graph.add_edge(a, hub, ());
-        graph.add_edge(b, hub, ());
-        graph.add_edge(c, hub, ());
-
-        let pagerank = analyzer.calculate_pagerank(&graph);
-
-        // Hub should have highest rank
-        assert!(pagerank[&hub] > pagerank[&a]);
-        assert!(pagerank[&hub] > pagerank[&b]);
-        assert!(pagerank[&hub] > pagerank[&c]);
-    }
-
-    #[test]
-    fn test_pagerank_pins_asymmetric_fixture_scores() {
-        let analyzer = Analyzer::new();
-        let mut graph: DiGraph<usize, ()> = DiGraph::new();
-        let a = graph.add_node(0);
-        let b = graph.add_node(1);
-        let c = graph.add_node(2);
-        graph.add_edge(a, b, ());
-        graph.add_edge(a, c, ());
-        graph.add_edge(b, c, ());
-
-        let ranks = analyzer.calculate_pagerank(&graph);
-
-        assert!((ranks[&a] - 0.05).abs() < 1e-12);
-        assert!((ranks[&b] - 0.07125).abs() < 1e-12);
-        assert!((ranks[&c] - 0.1318125).abs() < 1e-12);
-    }
-
-    #[test]
     fn test_analysis_serialization() {
         let analysis = Analysis {
             generated_at: "2024-01-01T00:00:00Z".to_string(),
@@ -1344,77 +1266,6 @@ fn bar() {}
         assert_eq!(parsed.symbols.len(), 1);
         assert_eq!(parsed.symbols[0].name, "test");
         assert_eq!(parsed.symbols[0].qualified_name, "test.rs:test");
-    }
-
-    #[test]
-    fn test_pagerank_cycle() {
-        let analyzer = Analyzer::new();
-        let mut graph: DiGraph<usize, ()> = DiGraph::new();
-
-        // A -> B -> C -> A (circular dependency)
-        let a = graph.add_node(0);
-        let b = graph.add_node(1);
-        let c = graph.add_node(2);
-
-        graph.add_edge(a, b, ());
-        graph.add_edge(b, c, ());
-        graph.add_edge(c, a, ());
-
-        let pagerank = analyzer.calculate_pagerank(&graph);
-        assert_eq!(pagerank.len(), 3);
-
-        // All nodes should have equal rank in a symmetric cycle
-        let ranks: Vec<f64> = vec![pagerank[&a], pagerank[&b], pagerank[&c]];
-        let max_diff = ranks
-            .iter()
-            .map(|r| (r - ranks[0]).abs())
-            .fold(0.0f64, f64::max);
-        assert!(
-            max_diff < 0.01,
-            "Nodes in a symmetric cycle should have roughly equal rank, diff={}",
-            max_diff
-        );
-    }
-
-    #[test]
-    fn test_pagerank_self_loop() {
-        let analyzer = Analyzer::new();
-        let mut graph: DiGraph<usize, ()> = DiGraph::new();
-
-        // A -> A (self-reference), B -> A
-        let a = graph.add_node(0);
-        let b = graph.add_node(1);
-
-        graph.add_edge(a, a, ());
-        graph.add_edge(b, a, ());
-
-        let pagerank = analyzer.calculate_pagerank(&graph);
-        assert_eq!(pagerank.len(), 2);
-        // A should have higher rank than B (A receives from both self and B)
-        assert!(pagerank[&a] > pagerank[&b]);
-    }
-
-    #[test]
-    fn test_pagerank_disconnected_components() {
-        let analyzer = Analyzer::new();
-        let mut graph: DiGraph<usize, ()> = DiGraph::new();
-
-        // Component 1: A -> B
-        let a = graph.add_node(0);
-        let b = graph.add_node(1);
-        graph.add_edge(a, b, ());
-
-        // Component 2: C -> D (disconnected from component 1)
-        let c = graph.add_node(2);
-        let d = graph.add_node(3);
-        graph.add_edge(c, d, ());
-
-        let pagerank = analyzer.calculate_pagerank(&graph);
-        assert_eq!(pagerank.len(), 4);
-
-        // Symmetric structure: A and C should have similar ranks, B and D similar
-        assert!((pagerank[&a] - pagerank[&c]).abs() < 0.01);
-        assert!((pagerank[&b] - pagerank[&d]).abs() < 0.01);
     }
 
     #[test]

@@ -52,3 +52,23 @@ def describe():
 
 def _hidden():
     return 7
+
+
+class Pair:
+    lead: "Circle"
+
+    def __init__(self):
+        self.spare = Circle(1.0)
+        self.rest: list[Circle] = []
+
+    def lead_area(self):
+        return self.lead.area()
+
+    def spare_area(self):
+        return self.spare.area()
+
+    def rest_area(self):
+        total = 0.0
+        for member in self.rest:
+            total += member.area()
+        return total

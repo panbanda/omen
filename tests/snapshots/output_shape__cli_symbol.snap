@@ -5,7 +5,12 @@ expression: "shape(&output, case.dynamic_key_objects)"
 {
   "call_resolutions": [
     {
-      "basis": "string",
+      "basis": {
+        "<one of>": [
+          "null",
+          "string"
+        ]
+      },
       "call": "string",
       "caller": {
         "end_line": "number",
@@ -21,6 +26,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "qualified_name": "string"
         }
       ],
+      "line": "number",
       "status": "string"
     }
   ],
@@ -31,7 +37,13 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "qualified_name": "string"
     }
   ],
-  "callers": [],
+  "callers": [
+    {
+      "file": "string",
+      "line": "number",
+      "qualified_name": "string"
+    }
+  ],
   "candidates": [],
   "cognitive": "number",
   "cyclomatic": "number",

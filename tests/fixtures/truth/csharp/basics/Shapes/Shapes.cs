@@ -105,3 +105,41 @@ public record Size(double Width, double Height)
         return Width * Height;
     }
 }
+
+internal class Pair
+{
+    private Circle lead;
+    private Circle[] rest = new Circle[0];
+    private Pair next;
+    internal Circle Spare { get; set; }
+
+    public Pair(Circle lead)
+    {
+        this.lead = lead;
+    }
+
+    internal double LeadArea()
+    {
+        return this.lead.Area();
+    }
+
+    internal double NextArea()
+    {
+        return next.lead.Area();
+    }
+
+    internal double SpareArea()
+    {
+        return Spare.Area();
+    }
+
+    internal double RestArea()
+    {
+        double total = 0;
+        foreach (var member in rest)
+        {
+            total += member.Area();
+        }
+        return total;
+    }
+}

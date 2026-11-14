@@ -30,6 +30,11 @@
     {"label": "square_constructor", "category": "constructor", "file": "shapes.hpp", "name": "Square", "kind": "constructor", "container": "Square", "start_line": 43, "end_line": 44, "exported": true},
     {"label": "square_area", "category": "same_name_methods", "file": "shapes.hpp", "name": "area", "kind": "method", "container": "Square", "start_line": 45, "end_line": 47, "exported": true},
     {"label": "describe_decl", "category": "declaration", "file": "shapes.hpp", "name": "describe", "kind": "function", "container": null, "start_line": 53, "end_line": 53, "exported": true},
+    {"label": "pair", "category": "type", "file": "shapes.hpp", "name": "Pair", "kind": "class", "container": null, "start_line": 55, "end_line": 77, "exported": true},
+    {"label": "pair_constructor", "category": "constructor", "file": "shapes.hpp", "name": "Pair", "kind": "constructor", "container": "Pair", "start_line": 57, "end_line": 58, "exported": true},
+    {"label": "pair_lead_area", "category": "method", "file": "shapes.hpp", "name": "lead_area", "kind": "method", "container": "Pair", "start_line": 59, "end_line": 61, "exported": true},
+    {"label": "pair_next_area", "category": "method", "file": "shapes.hpp", "name": "next_area", "kind": "method", "container": "Pair", "start_line": 62, "end_line": 64, "exported": true},
+    {"label": "pair_rest_area", "category": "method", "file": "shapes.hpp", "name": "rest_area", "kind": "method", "container": "Pair", "start_line": 65, "end_line": 71, "exported": true},
     {"label": "circle_constructor", "category": "constructor", "file": "shapes.cpp", "name": "Circle", "kind": "constructor", "container": "Circle", "start_line": 3, "end_line": 4, "exported": true},
     {"label": "circle_destructor", "category": "out_of_line_method", "file": "shapes.cpp", "name": "~Circle", "kind": "method", "container": "Circle", "start_line": 6, "end_line": 7, "exported": true},
     {"label": "circle_area", "category": "same_name_methods", "file": "shapes.cpp", "name": "area", "kind": "method", "container": "Circle", "start_line": 9, "end_line": 11, "exported": true},
@@ -106,7 +111,10 @@
     {"label": "same_name_in_python", "category": "foreign_language", "caller": "main", "line": 103, "callee_text": "external", "expected": ["external"]},
     {"label": "template_call", "category": "template_call", "caller": "main", "line": 106, "callee_text": "util::largest", "expected": ["largest"]},
     {"label": "this_receiver", "category": "self_receiver", "caller": "circle_area", "line": 10, "callee_text": "this->scaled", "expected": ["circle_scaled"]},
-    {"label": "implicit_this", "category": "self_receiver", "caller": "circle_area_factor", "line": 14, "callee_text": "scaled", "expected": ["circle_scaled"]}
+    {"label": "implicit_this", "category": "self_receiver", "caller": "circle_area_factor", "line": 14, "callee_text": "scaled", "expected": ["circle_scaled"]},
+    {"label": "member_receiver_implicit_this", "category": "field_receiver", "caller": "pair_lead_area", "line": 60, "callee_text": "lead_->area", "expected": ["circle_area"]},
+    {"label": "member_chain", "category": "field_receiver", "caller": "pair_next_area", "line": 63, "callee_text": "this->next_->lead_->area", "expected": ["circle_area"]},
+    {"label": "member_element", "category": "field_receiver", "caller": "pair_rest_area", "line": 68, "callee_text": "member->area", "expected": ["circle_area"]}
   ],
   "imports": [
     {"label": "algorithm", "category": "external", "file": "main.cpp", "line": 1, "path": "algorithm", "names": [], "required_file": null},

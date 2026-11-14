@@ -157,6 +157,14 @@ fn detect_entry_points(root: &Path, files: &FileSet) -> Vec<EntryPoint> {
     entry_points
 }
 
+/// The lengths of the lists of a context before `max_symbols` and
+/// `max_risks` cut them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListTotals {
+    pub top_symbols: usize,
+    pub risks: usize,
+}
+
 pub fn build_context(
     root: &Path,
     files: &FileSet,
@@ -164,6 +172,18 @@ pub fn build_context(
     max_symbols: Option<usize>,
     max_risks: Option<usize>,
 ) -> Result<Context> {
+    build_context_with_totals(root, files, config, max_symbols, max_risks)
+        .map(|(context, _)| context)
+}
+
+/// Builds the context, and gives the lengths of the lists before the limits.
+pub fn build_context_with_totals(
+    root: &Path,
+    files: &FileSet,
+    config: &Config,
+    max_symbols: Option<usize>,
+    max_risks: Option<usize>,
+) -> Result<(Context, ListTotals)> {
     let ctx = AnalysisContext::new(files, config, Some(root));
     let repository = root
         .canonicalize()
@@ -192,19 +212,26 @@ pub fn build_context(
         })
         .collect();
 
-    let risks = summarize_risks(&ctx, risk_limit);
+    let (risks, total_risks) = summarize_risks(&ctx, risk_limit);
     let hints = build_hints(files, &languages, &risks);
+    let totals = ListTotals {
+        top_symbols: repomap.symbols.len(),
+        risks: total_risks,
+    };
 
-    Ok(Context {
-        repository,
-        file_count: files.len(),
-        languages,
-        tree,
-        entry_points,
-        top_symbols,
-        risks,
-        hints,
-    })
+    Ok((
+        Context {
+            repository,
+            file_count: files.len(),
+            languages,
+            tree,
+            entry_points,
+            top_symbols,
+            risks,
+            hints,
+        },
+        totals,
+    ))
 }
 
 /// Apply a token budget to a context, trimming in priority order:
@@ -360,10 +387,13 @@ fn summarize_languages(files: &FileSet) -> Vec<LanguageSummary> {
         .collect()
 }
 
-fn summarize_risks(ctx: &AnalysisContext<'_>, limit: usize) -> Vec<RiskSummary> {
+/// The risks up to `limit`, and the number of risks without the limit.
+fn summarize_risks(ctx: &AnalysisContext<'_>, limit: usize) -> (Vec<RiskSummary>, usize) {
     let mut risks = Vec::new();
+    let mut total = 0;
 
     if let Ok(satd) = satd::Analyzer::default().analyze(ctx) {
+        total += satd.items.len();
         risks.extend(satd.items.into_iter().map(|item| RiskSummary {
             kind: "satd".to_string(),
             file: item.file,
@@ -385,6 +415,10 @@ fn summarize_risks(ctx: &AnalysisContext<'_>, limit: usize) -> Vec<RiskSummary> 
             })
             .collect();
         functions.sort_by_key(|(_, func)| std::cmp::Reverse(func.metrics.cognitive));
+        total += functions
+            .iter()
+            .filter(|(_, func)| func.metrics.cognitive >= 15 || func.metrics.cyclomatic >= 10)
+            .count();
         risks.extend(
             functions
                 .into_iter()
@@ -414,7 +448,7 @@ fn summarize_risks(ctx: &AnalysisContext<'_>, limit: usize) -> Vec<RiskSummary> 
     }
 
     risks.truncate(limit);
-    risks
+    (risks, total)
 }
 
 fn build_hints(

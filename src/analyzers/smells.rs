@@ -17,7 +17,6 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use petgraph::algo::tarjan_scc;
 use petgraph::Direction;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +24,7 @@ use crate::analyzers::import_resolver::{
     build_dependency_graph, extract_resolved_imports, ImportIndex,
 };
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
+use crate::index::graph::cyclic_components;
 
 /// Detection thresholds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,33 +150,29 @@ impl Analyzer {
 
         // 1. Detect cyclic dependencies using Tarjan's SCC
         // Also detect self-loops (files importing themselves)
-        let sccs = tarjan_scc(&graph);
-        for scc in sccs {
-            let is_cycle = scc.len() > 1 || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]));
-            if is_cycle {
-                // The traversal gives the members in no useful order.
-                let mut component_names: Vec<String> =
-                    scc.iter().map(|&idx| graph[idx].clone()).collect();
-                component_names.sort();
+        for scc in cyclic_components(&graph) {
+            // The traversal gives the members in no useful order.
+            let mut component_names: Vec<String> =
+                scc.iter().map(|&idx| graph[idx].clone()).collect();
+            component_names.sort();
 
-                smells.push(Smell {
-                    smell_type: SmellType::CyclicDependency,
-                    severity: Severity::Critical,
-                    components: component_names.clone(),
-                    description: format!(
-                        "Cyclic dependency detected between {} components: {}",
-                        scc.len(),
-                        format_component_list(&component_names)
-                    ),
-                    suggestion: "Break the cycle by introducing an interface or restructuring the dependency direction".to_string(),
-                    metrics: SmellMetrics {
-                        fan_in: None,
-                        fan_out: None,
-                        instability: None,
-                        cycle_length: Some(scc.len()),
-                    },
-                });
-            }
+            smells.push(Smell {
+                smell_type: SmellType::CyclicDependency,
+                severity: Severity::Critical,
+                components: component_names.clone(),
+                description: format!(
+                    "Cyclic dependency detected between {} components: {}",
+                    scc.len(),
+                    format_component_list(&component_names)
+                ),
+                suggestion: "Break the cycle by introducing an interface or restructuring the dependency direction".to_string(),
+                metrics: SmellMetrics {
+                    fan_in: None,
+                    fan_out: None,
+                    instability: None,
+                    cycle_length: Some(scc.len()),
+                },
+            });
         }
 
         // 2. Detect hub-like dependencies
@@ -715,54 +711,6 @@ mod tests {
             is_central_connector: false,
         };
         assert_eq!(unstable.instability, 1.0);
-    }
-
-    #[test]
-    fn test_self_loop_cycle_detection() {
-        // A file importing itself should be flagged as cyclic
-        use petgraph::graph::DiGraph;
-
-        let mut graph: DiGraph<String, ()> = DiGraph::new();
-        let node = graph.add_node("self_loop.rs".to_string());
-        graph.add_edge(node, node, ()); // Self-loop
-
-        let sccs = tarjan_scc(&graph);
-
-        // Verify self-loop detection logic
-        let mut found_cycle = false;
-        for scc in sccs {
-            let is_cycle = scc.len() > 1 || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]));
-            if is_cycle {
-                found_cycle = true;
-                assert_eq!(scc.len(), 1);
-                assert_eq!(graph[scc[0]], "self_loop.rs");
-            }
-        }
-        assert!(found_cycle, "Self-loop should be detected as a cycle");
-    }
-
-    #[test]
-    fn test_multi_node_cycle_detection() {
-        // Traditional cycle: A -> B -> A
-        use petgraph::graph::DiGraph;
-
-        let mut graph: DiGraph<String, ()> = DiGraph::new();
-        let a = graph.add_node("a.rs".to_string());
-        let b = graph.add_node("b.rs".to_string());
-        graph.add_edge(a, b, ());
-        graph.add_edge(b, a, ());
-
-        let sccs = tarjan_scc(&graph);
-
-        let mut found_cycle = false;
-        for scc in sccs {
-            let is_cycle = scc.len() > 1 || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]));
-            if is_cycle {
-                found_cycle = true;
-                assert_eq!(scc.len(), 2);
-            }
-        }
-        assert!(found_cycle, "Multi-node cycle should be detected");
     }
 
     /// Write files (relative path -> content) into a fresh temp dir and run

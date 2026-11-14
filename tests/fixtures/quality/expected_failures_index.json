@@ -1,0 +1,52 @@
+[
+  {
+    "id": "go/corpus.go_parameter_shadow/edges/required/caller->z/helper.go:Helper",
+    "reason": "omen reports no edge to z/helper.go:Helper",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/corpus.go_parameter_shadow/offers/required/caller->z/helper.go:Helper",
+    "reason": "omen does not offer z/helper.go:Helper as a candidate",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "ruby/corpus.ruby_alias/edges/required/caller->z.rb:helper",
+    "reason": "omen reports no edge to z.rb:helper",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "ruby/corpus.ruby_alias/offers/required/caller->z.rb:helper",
+    "reason": "omen does not offer z.rb:helper as a candidate",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "ruby/corpus.ruby_parameter_shadow/edges/required/caller->z.rb:helper",
+    "reason": "omen reports no edge to z.rb:helper",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "ruby/corpus.ruby_parameter_shadow/offers/required/caller->z.rb:helper",
+    "reason": "omen does not offer z.rb:helper as a candidate",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/corpus.rust_parameter_shadow/edges/required/caller->z.rs:helper",
+    "reason": "omen reports no edge to z.rs:helper",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/corpus.rust_parameter_shadow/offers/required/caller->z.rs:helper",
+    "reason": "omen does not offer z.rs:helper as a candidate",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "typescript/corpus.typescript_parameter_shadow/edges/required/caller->z.ts:helper",
+    "reason": "omen reports no edge to z.ts:helper",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "typescript/corpus.typescript_parameter_shadow/offers/required/caller->z.ts:helper",
+    "reason": "omen does not offer z.ts:helper as a candidate",
+    "tracking": "phase-2-shared-index"
+  }
+]

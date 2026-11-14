@@ -31,6 +31,7 @@ pub mod context;
 pub mod core;
 pub mod eval;
 pub mod git;
+pub mod index;
 pub mod mcp;
 pub mod output;
 pub mod parser;

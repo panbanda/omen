@@ -33,7 +33,7 @@ expression: body
     },
     {
       "code": "unknown_argument",
-      "expected": "one of: symbol, depth, direction, path, compact, limit, offset",
+      "expected": "one of: symbol, depth, direction, min_basis, path, compact, limit, offset",
       "message": "The tool `impact` has no argument `symbl`.",
       "next": "Use a name from `suggestions`.",
       "param": "symbl",

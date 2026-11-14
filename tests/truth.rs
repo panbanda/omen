@@ -17,15 +17,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use omen::analyzers::import_resolver::ImportIndex;
-use omen::analyzers::repomap::{build_index, ResolutionStatus};
 use omen::benchmark::truth::{
     bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth, render_table,
     summarize, Assertion, ImportedName, Kind, Labels, LedgerEntry, Location, Observed,
     ObservedCall, ObservedImport, ObservedSymbol,
 };
 use omen::core::Language;
-use omen::parser::{extract_classes, extract_imports, ImportKind, Parser};
+use omen::index::extract::{extract_file, link_files, FileSymbols};
+use omen::index::imports::{resolve_imports, Manifests};
+use omen::index::model::{
+    Exported, ImportBinding, ImportKind as IndexImportKind, ImportTarget, ResolutionStatus, Symbol,
+    SymbolKind,
+};
+use omen::index::resolve::resolve_references;
+use omen::parser::Parser;
 
 const LABELS_FILE: &str = "labels.json";
 const LEDGER_FILE: &str = "expected_failures.json";
@@ -120,114 +125,180 @@ fn relative(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// The label model has no kind for a field, a constant, a variable, or a macro.
+fn label_kind(kind: SymbolKind) -> Option<Kind> {
+    match kind {
+        SymbolKind::Function => Some(Kind::Function),
+        SymbolKind::Method => Some(Kind::Method),
+        SymbolKind::Constructor => Some(Kind::Constructor),
+        SymbolKind::Class => Some(Kind::Class),
+        SymbolKind::Struct => Some(Kind::Struct),
+        SymbolKind::Interface => Some(Kind::Interface),
+        SymbolKind::Trait => Some(Kind::Trait),
+        SymbolKind::Enum => Some(Kind::Enum),
+        SymbolKind::Module => Some(Kind::Module),
+        SymbolKind::TypeAlias => Some(Kind::TypeAlias),
+        SymbolKind::Field | SymbolKind::Constant | SymbolKind::Variable | SymbolKind::Macro => None,
+    }
+}
+
+fn observed_symbol(file: &str, symbol: Symbol) -> Option<ObservedSymbol> {
+    Some(ObservedSymbol {
+        kind: Some(label_kind(symbol.kind)?),
+        location: Location {
+            file: file.to_string(),
+            name: symbol.name,
+            start_line: symbol.range.start_line,
+        },
+        container: symbol.container,
+        end_line: symbol.range.end_line,
+        exported: match symbol.exported {
+            Exported::Exported => Some(true),
+            Exported::NotExported => Some(false),
+            Exported::Unknown(_) => None,
+        },
+    })
+}
+
+/// Reads each `go.mod` file and each `.gemspec` file below `dir`.
+fn read_manifests(root: &Path, dir: &Path, manifests: &mut Manifests) {
+    for path in sorted_entries(dir) {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        if path.is_dir() {
+            read_manifests(root, &path, manifests);
+        } else if name == "go.mod" || name.ends_with(".gemspec") {
+            let text = std::fs::read_to_string(&path).unwrap();
+            manifests.add(&relative(root, &path), &text);
+        }
+    }
+}
+
+/// A label describes one import statement and one path. Thus the adapter
+/// puts the bindings with the same line and the same path in one import.
+fn observed_imports(bindings: &[ImportBinding]) -> Vec<ObservedImport> {
+    let mut imports: Vec<ObservedImport> = Vec::new();
+    for binding in bindings {
+        // A Rust `mod name;` declares a module. The labels have no category for it.
+        if binding.kind == IndexImportKind::ModuleDeclaration {
+            continue;
+        }
+        let line = binding.range.start_line;
+        let position = imports
+            .iter()
+            .position(|import| import.line == line && import.path == binding.module_path);
+        let position = position.unwrap_or_else(|| {
+            imports.push(ObservedImport {
+                file: binding.file.clone(),
+                line,
+                path: binding.module_path.clone(),
+                names: Vec::new(),
+                resolved_files: Vec::new(),
+            });
+            imports.len() - 1
+        });
+        // Each binding can target a different file.
+        let targets = match &binding.target_file {
+            ImportTarget::Resolved(file) => vec![file.clone()],
+            ImportTarget::Package(files) | ImportTarget::Ambiguous(files) => files.clone(),
+            ImportTarget::External | ImportTarget::Unresolved => Vec::new(),
+        };
+        for target in targets {
+            if !imports[position].resolved_files.contains(&target) {
+                imports[position].resolved_files.push(target);
+            }
+        }
+        if let Some(name) = &binding.imported_name {
+            imports[position].names.push(ImportedName {
+                name: name.clone(),
+                alias: binding.local_name.clone().filter(|local| local != name),
+            });
+        }
+    }
+    imports
+}
+
+/// The calls of the shared index. A call without an enclosing definition has
+/// no caller, and the labels do not describe it. An edge exists only for one
+/// candidate that the rules selected.
+fn observed_calls(files: &[FileSymbols]) -> Vec<ObservedCall> {
+    let locations: BTreeMap<&str, Location> = files
+        .iter()
+        .flat_map(|file| {
+            file.symbols.iter().map(|symbol| {
+                let location = Location {
+                    file: file.file.clone(),
+                    name: symbol.name.clone(),
+                    start_line: symbol.range.start_line,
+                };
+                (symbol.key.as_str(), location)
+            })
+        })
+        .collect();
+    let mut calls = Vec::new();
+    for reference in files.iter().flat_map(|file| &file.references) {
+        let Some(caller) = reference.enclosing.as_deref() else {
+            continue;
+        };
+        let candidates: Vec<Location> = reference
+            .resolution
+            .candidates
+            .iter()
+            .map(|key| locations[key.as_str()].clone())
+            .collect();
+        let edge = matches!(
+            reference.resolution.status,
+            ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
+        );
+        let edges = if edge { candidates.clone() } else { Vec::new() };
+        // A definition that a later definition replaces is a candidate, but not an edge.
+        let superseded = &reference.resolution.superseded;
+        let offered = candidates
+            .into_iter()
+            .chain(superseded.iter().map(|key| locations[key.as_str()].clone()))
+            .collect();
+        calls.push(ObservedCall {
+            caller: locations[caller].clone(),
+            call: reference.name.clone(),
+            edges,
+            candidates: offered,
+        });
+    }
+    calls
+}
+
 /// Convert the facts that omen reports for one case into the label model.
 ///
-/// This adapter uses the same functions as the `symbol`, `impact`, `repomap`,
-/// `outline`, and `graph` commands. If omen does not report a fact, the adapter
-/// gives `None`. It does not calculate a value that omen does not report.
+/// The symbols, the imports, and the calls come from the shared index.
+///
+/// If omen does not report a fact, the adapter gives `None`. It does not
+/// calculate a value that omen does not report.
 fn observe(dir: &Path) -> Observed {
     let mut files = Vec::new();
     source_files(dir, &mut files);
-    let index = build_index(dir, &files).expect("build_index");
-
-    let mut symbols: Vec<ObservedSymbol> = index
-        .symbols
-        .iter()
-        .map(|symbol| ObservedSymbol {
-            location: Location {
-                file: symbol.file.replace('\\', "/"),
-                name: symbol.name.clone(),
-                start_line: symbol.line,
-            },
-            // The index gives the kind `function` to each symbol.
-            kind: Some(Kind::Function),
-            container: symbol.owner.clone(),
-            end_line: symbol.end_line,
-            exported: Some(symbol.is_exported),
-        })
-        .collect();
-
-    let names: BTreeMap<(&str, u32, &str), &str> = index
-        .symbols
-        .iter()
-        .map(|symbol| {
-            (
-                (
-                    symbol.file.as_str(),
-                    symbol.line,
-                    symbol.qualified_name.as_str(),
-                ),
-                symbol.name.as_str(),
-            )
-        })
-        .collect();
-    let locate = |location: &omen::analyzers::repomap::SymbolLocation| Location {
-        file: location.file.replace('\\', "/"),
-        name: names[&(
-            location.file.as_str(),
-            location.line,
-            location.qualified_name.as_str(),
-        )]
-            .to_string(),
-        start_line: location.line,
-    };
-    let calls = index
-        .call_resolutions
-        .iter()
-        .map(|resolution| {
-            let candidates: Vec<Location> = resolution.candidates.iter().map(locate).collect();
-            ObservedCall {
-                caller: locate(&resolution.caller),
-                call: resolution.call.clone(),
-                edges: if resolution.status == ResolutionStatus::UniqueCandidate {
-                    candidates.clone()
-                } else {
-                    Vec::new()
-                },
-                candidates,
-            }
-        })
-        .collect();
-
-    let import_index = ImportIndex::new(&files, dir);
     let mut imports = Vec::new();
+    let mut index_files = Vec::new();
     for path in &files {
         let file = relative(dir, path);
         let parsed = Parser::new().parse_file(path).expect("parse");
-        for class in extract_classes(&parsed) {
-            symbols.push(ObservedSymbol {
-                location: Location {
-                    file: file.clone(),
-                    name: class.name,
-                    start_line: class.start_line,
-                },
-                // The parser does not report which type-like kind this is.
-                kind: None,
-                container: None,
-                end_line: class.end_line,
-                exported: Some(class.is_exported),
-            });
-        }
-        for import in extract_imports(&parsed) {
-            if import.kind != ImportKind::Use {
-                continue;
-            }
-            imports.push(ObservedImport {
-                file: file.clone(),
-                line: import.line,
-                names: import
-                    .names
-                    .into_iter()
-                    .map(|name| ImportedName { name, alias: None })
-                    .collect(),
-                resolved_files: import_index
-                    .find_match(&import.path, Path::new(&file))
-                    .into_iter()
-                    .map(|target| target.replace('\\', "/"))
-                    .collect(),
-                path: import.path,
-            });
-        }
+        index_files.push(extract_file(&parsed, &file));
+    }
+
+    link_files(&mut index_files);
+    let mut manifests = Manifests::default();
+    read_manifests(dir, dir, &mut manifests);
+    resolve_imports(&mut index_files, &manifests);
+    resolve_references(&mut index_files);
+    let calls = observed_calls(&index_files);
+    let mut symbols = Vec::new();
+    for index_file in index_files {
+        imports.extend(observed_imports(&index_file.imports));
+        let file = index_file.file;
+        symbols.extend(
+            index_file
+                .symbols
+                .into_iter()
+                .filter_map(|symbol| observed_symbol(&file, symbol)),
+        );
     }
 
     Observed {
@@ -404,4 +475,37 @@ fn ledger_never_grows() {
         "these facts were correct on the base branch and are now in the ledger:\n{}",
         grown.join("\n")
     );
+}
+
+/// `from pkg import left, right` has one import statement and two bindings. A
+/// binding can target a different file. The import keeps each target.
+#[test]
+fn observed_imports_keep_each_target_of_a_grouped_import() {
+    let span = omen::index::model::Span {
+        start_byte: 0,
+        end_byte: 0,
+        start_line: 1,
+        start_column: 0,
+        end_line: 1,
+        end_column: 0,
+    };
+    let binding = |name: &str, target: &str| ImportBinding {
+        file: "main.py".to_string(),
+        range: span,
+        module_path: "pkg".to_string(),
+        kind: IndexImportKind::Named,
+        imported_name: Some(name.to_string()),
+        local_name: Some(name.to_string()),
+        target_file: ImportTarget::Resolved(target.to_string()),
+        target_symbol: None,
+    };
+    let bindings = [
+        binding("left", "pkg/left.py"),
+        binding("right", "pkg/right.py"),
+        binding("again", "pkg/right.py"),
+    ];
+    let imports = observed_imports(&bindings);
+    assert_eq!(imports.len(), 1);
+    assert_eq!(imports[0].resolved_files, ["pkg/left.py", "pkg/right.py"]);
+    assert_eq!(imports[0].names.len(), 3);
 }

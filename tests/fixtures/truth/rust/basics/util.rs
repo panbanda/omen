@@ -5,3 +5,8 @@ pub fn helper() -> u32 {
 pub fn twice(value: u32) -> u32 {
     value * 2
 }
+
+pub fn shadowed() -> u32 {
+    let helper = helper();
+    helper
+}

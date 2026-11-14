@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use super::{get_function_node_types, get_tree_sitter_language, queries};
 use crate::analyzers::{cohesion, repomap};
 use crate::core::Language;
+use crate::index::extract::{language_spec, NameRule};
 use crate::semantic::chunking;
 
 const LANGUAGES: [Language; 14] = [
@@ -71,7 +72,34 @@ const KNOWN_UNKNOWN_KINDS: &[&str] = &[
     "nesting/CSharp/enhanced_for_statement",
 ];
 
+/// The node kinds of the symbol extraction of the shared index.
+fn index_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {
+    let spec = language_spec(language);
+    vec![
+        (
+            "index_definition",
+            spec.definitions()
+                .iter()
+                .map(|rule| rule.node_kind)
+                .collect(),
+        ),
+        ("index_hook", spec.hook_kinds()),
+        ("index_import", spec.import_kinds()),
+        ("index_import_hook", spec.import_hook_kinds()),
+        ("index_module", spec.module_kinds()),
+        ("index_call", spec.call_syntax().kinds()),
+        ("index_call_hook", spec.call_hook_kinds()),
+        ("index_comment", spec.comment_kinds().to_vec()),
+    ]
+}
+
 fn tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {
+    let mut tables = analyzer_tables(language);
+    tables.extend(index_tables(language));
+    tables
+}
+
+fn analyzer_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {
     vec![
         (
             "decision",
@@ -145,6 +173,26 @@ fn each_table_kind_is_a_kind_of_the_grammar() {
     assert!(
         corrected.is_empty(),
         "these kinds are now correct, remove them from KNOWN_UNKNOWN_KINDS:\n{corrected:#?}"
+    );
+}
+
+#[test]
+fn each_name_field_of_the_index_is_a_field_of_the_grammar() {
+    let mut unknown = BTreeSet::new();
+    for language in LANGUAGES {
+        let spec = language_spec(language);
+        let grammar = get_tree_sitter_language(language).unwrap();
+        for rule in spec.definitions() {
+            if let NameRule::Field(field) = rule.name {
+                if grammar.field_id_for_name(field).is_none() {
+                    unknown.insert(format!("{language:?}/{}/{field}", rule.node_kind));
+                }
+            }
+        }
+    }
+    assert!(
+        unknown.is_empty(),
+        "the grammar does not have these fields:\n{unknown:#?}"
     );
 }
 

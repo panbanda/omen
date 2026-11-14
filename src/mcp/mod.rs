@@ -92,6 +92,8 @@ pub struct McpServer {
     root_path: PathBuf,
     allow_external_paths: bool,
     index_cache: std::sync::Mutex<crate::task_context::cache::IndexCache>,
+    /// The view of the shared index for `get_symbol` and `impact`.
+    view_cache: std::sync::Mutex<crate::index::view::ViewCache>,
 }
 
 impl McpServer {
@@ -109,6 +111,7 @@ impl McpServer {
             root_path,
             allow_external_paths,
             index_cache: std::sync::Mutex::new(crate::task_context::cache::IndexCache::default()),
+            view_cache: std::sync::Mutex::new(crate::index::view::ViewCache::default()),
         }
     }
 
@@ -409,6 +412,18 @@ impl McpServer {
             .map_err(|_| ToolError::internal("The lock of the index cache is poisoned."))?;
         Ok(cache.load(root, files)?)
     }
+
+    fn load_view(
+        &self,
+        root: &Path,
+        files: &[PathBuf],
+    ) -> std::result::Result<std::sync::Arc<crate::index::view::CallView>, ToolError> {
+        let mut cache = self
+            .view_cache
+            .lock()
+            .map_err(|_| ToolError::internal("The lock of the view cache is poisoned."))?;
+        Ok(cache.load(root, files)?)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -494,8 +509,8 @@ mod tests {
         assert_eq!(
             ambiguous["error"]["suggestions"],
             json!([
-                {"name": "same.rb:helper", "start_line": 2, "signature": "def helper"},
-                {"name": "same.rb:helper", "start_line": 7, "signature": "def helper"}
+                {"name": "same.rb#A.helper", "start_line": 2, "signature": "def helper"},
+                {"name": "same.rb#B.helper", "start_line": 7, "signature": "def helper"}
             ])
         );
         assert!(ambiguous.get("result").is_none());
@@ -667,6 +682,38 @@ mod tests {
     }
 
     #[test]
+    fn context_reports_the_lists_that_max_symbols_and_max_risks_cut() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 6);
+        std::fs::write(
+            dir.path().join("notes.rs"),
+            "// TODO: first\n// TODO: second\n// TODO: third\nfn noted() {}\n",
+        )
+        .unwrap();
+        let whole = envelope_of(
+            &server,
+            "context",
+            json!({"max_symbols": 1000, "max_risks": 1000, "max_tokens": 1_000_000, "limit": 0}),
+        );
+        assert_eq!(whole["truncated"], json!([]));
+        let symbols = whole["result"]["top_symbols"].as_array().unwrap().len();
+        let risks = whole["result"]["risks"].as_array().unwrap().len();
+        assert!(symbols > 2 && risks > 1, "{whole}");
+        let cut = envelope_of(
+            &server,
+            "context",
+            json!({"max_symbols": 2, "max_risks": 1, "max_tokens": 1_000_000, "limit": 0}),
+        );
+        assert_eq!(
+            cut["truncated"],
+            json!([
+                {"path": "/risks", "total": risks, "returned": 1},
+                {"path": "/top_symbols", "total": symbols, "returned": 2}
+            ])
+        );
+    }
+
+    #[test]
     fn context_reports_the_lists_that_its_token_budget_cut() {
         let (server, dir) = create_test_server();
         for directory in 0..12 {
@@ -682,7 +729,7 @@ mod tests {
                 .collect()
         };
         let arguments =
-            |max_tokens: u64| json!({"max_symbols": 40, "max_tokens": max_tokens, "limit": 0});
+            |max_tokens: u64| json!({"max_symbols": 1000, "max_tokens": max_tokens, "limit": 0});
         let complete = envelope_of(&server, "context", arguments(1_000_000));
         assert_eq!(complete["truncated"], json!([]));
         let cut = envelope_of(&server, "context", arguments(300));
@@ -981,7 +1028,7 @@ mod tests {
                 "get_symbol",
                 json!({"path": project, "name": name, "start_line": result["start_line"]}),
             );
-            assert_eq!(symbol["result"]["qualified_name"], name);
+            assert_eq!(symbol["result"]["name"], result["symbol_name"]);
             assert_eq!(symbol["result"]["file"], file);
 
             let complexity = envelope_of(
@@ -1080,7 +1127,8 @@ mod tests {
 
         // `get_symbol` identifier -> `get_symbol`, `impact`, `task_context`.
         let identifier = symbol["result"]["qualified_name"].as_str().unwrap();
-        assert_eq!(identifier, qualified);
+        // The identifier is the key of the symbol in the shared index.
+        assert_eq!(identifier, format!("{file_path}#{function}"));
         for (tool, param) in [
             ("get_symbol", "name"),
             ("impact", "symbol"),
@@ -1107,9 +1155,19 @@ mod tests {
         let related = context["result"]["symbols"][1]["location"]["qualified_name"]
             .as_str()
             .unwrap();
+        // An identifier has the form `file:name` or the form of a key,
+        // `file#Container.name`. The two forms name one definition.
+        let identity = |identifier: &str| -> String {
+            let (file, path) = identifier
+                .split_once('#')
+                .or_else(|| identifier.rsplit_once(':'))
+                .unwrap();
+            format!("{file}:{}", path.rsplit('.').next().unwrap())
+        };
         for identifier in [caller, affected, ranked, related] {
             let found = ok("get_symbol", json!({"name": identifier}));
-            assert_eq!(found["result"]["qualified_name"], identifier);
+            let found = found["result"]["qualified_name"].as_str().unwrap();
+            assert_eq!(identity(found), identity(identifier));
         }
         let affected_file = impact["result"]["files_affected"][0].as_str().unwrap();
         ok("outline", json!({"file": affected_file}));
@@ -1133,7 +1191,8 @@ mod tests {
             "get_symbol",
             json!({"name": name, "start_line": result["start_line"]}),
         );
-        assert_eq!(found["result"]["qualified_name"], name);
+        let found = found["result"]["qualified_name"].as_str().unwrap();
+        assert_eq!(identity(found), name);
     }
 
     #[test]
@@ -1153,6 +1212,28 @@ mod tests {
         assert_eq!(second["returned"], 2);
         assert_eq!(second["has_more"], false);
         assert!(second["next_offset"].is_null());
+    }
+
+    /// The depth and the limit both cut the callees. One entry of `truncated`
+    /// gives the total before the two cuts and the count after them.
+    #[test]
+    fn impact_gives_one_truncation_for_the_depth_and_the_limit() {
+        let (server, dir) = create_test_server();
+        std::fs::write(
+            dir.path().join("graph.rs"),
+            "fn leaf() {}\nfn mid() { leaf(); }\nfn other() {}\nfn start() { mid(); other(); }\n",
+        )
+        .unwrap();
+        let cut = envelope_of(
+            &server,
+            "impact",
+            json!({"symbol": "start", "direction": "callees", "depth": 1, "limit": 1}),
+        );
+        assert_eq!(cut["returned"], 1);
+        assert_eq!(
+            cut["truncated"],
+            json!([{"path": "/callees/*/symbols", "total": 3, "returned": 1}])
+        );
     }
 
     #[test]
@@ -1427,6 +1508,33 @@ mod tests {
         assert_eq!(body["error"]["code"], "not_found");
         assert_eq!(body["error"]["param"], "symbol");
         assert_eq!(body["error"]["suggestions"], json!(["known_symbol"]));
+    }
+
+    #[test]
+    fn impact_tells_that_the_depth_cut_the_callers() {
+        let (server, dir) = create_test_server();
+        std::fs::write(
+            dir.path().join("chain.py"),
+            "def top():\n    return middle()\n\n\ndef middle():\n    return leaf()\n\n\ndef leaf():\n    return 1\n",
+        )
+        .unwrap();
+        let cut = envelope_of(
+            &server,
+            "impact",
+            json!({"symbol": "leaf", "depth": 1, "direction": "callers"}),
+        );
+        assert_eq!(cut["result"]["total_callers"], 1);
+        assert_eq!(
+            cut["truncated"],
+            json!([{"path": "/callers/*/symbols", "total": 2, "returned": 1}])
+        );
+        let whole = envelope_of(
+            &server,
+            "impact",
+            json!({"symbol": "leaf", "depth": 4, "direction": "callers"}),
+        );
+        assert_eq!(whole["result"]["total_callers"], 2);
+        assert_eq!(whole["truncated"], json!([]));
     }
 
     #[test]
@@ -2451,6 +2559,13 @@ mod tests {
         let envelope: Value =
             serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
         assert!(envelope["result"]["symbols"].as_array().unwrap().len() <= 1);
+        // The envelope tells that `max_symbols` cut the list.
+        assert_eq!(
+            envelope["truncated"],
+            json!([{"path": "/symbols", "total": 3, "returned": 1}])
+        );
+        let whole = envelope_of(&server, "repomap", json!({"max_symbols": 3, "limit": 0}));
+        assert_eq!(whole["truncated"], json!([]));
     }
 
     #[test]

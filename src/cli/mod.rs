@@ -716,6 +716,18 @@ pub struct OutlineArgs {
     pub common: AnalyzerArgs,
 }
 
+/// Reads the name of a basis, for example `name_only`.
+fn parse_min_basis(name: &str) -> Result<crate::index::model::ResolutionBasis, String> {
+    use crate::index::model::ResolutionBasis;
+    ResolutionBasis::from_name(name).ok_or_else(|| {
+        let names: Vec<&str> = ResolutionBasis::RANKED
+            .iter()
+            .map(|basis| basis.name())
+            .collect();
+        format!("one of: {}", names.join(", "))
+    })
+}
+
 /// Direction for impact analysis.
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum ImpactDirection {
@@ -738,6 +750,11 @@ pub struct ImpactArgs {
     /// Direction of traversal
     #[arg(long, value_enum, default_value = "both")]
     pub direction: ImpactDirection,
+
+    /// Weakest basis of a call that gives an edge (name_only adds a call
+    /// whose one candidate has only the name)
+    #[arg(long, default_value = "same_package", value_parser = parse_min_basis)]
+    pub min_basis: crate::index::model::ResolutionBasis,
 
     #[command(flatten)]
     pub common: AnalyzerArgs,
@@ -812,6 +829,11 @@ pub struct SymbolArgs {
     /// Maximum source lines to include (excess triggers truncation flag)
     #[arg(long, default_value = "200")]
     pub max_source_lines: usize,
+
+    /// Weakest basis of a call that gives a caller or a callee (name_only
+    /// adds a call whose one candidate has only the name)
+    #[arg(long, default_value = "same_package", value_parser = parse_min_basis)]
+    pub min_basis: crate::index::model::ResolutionBasis,
 
     #[command(flatten)]
     pub common: AnalyzerArgs,

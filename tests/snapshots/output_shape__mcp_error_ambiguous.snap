@@ -6,19 +6,24 @@ expression: body
   "error": {
     "code": "ambiguous",
     "expected": "a name and a start line that select one definition",
-    "message": "2 definitions agree with the symbol `helper`. The tool did not select one.",
+    "message": "3 definitions agree with the symbol `helper`. The tool did not select one.",
     "next": "Call `get_symbol` again with the `name` and the `start_line` of one suggestion.",
     "param": "name",
     "received": "helper",
     "suggestions": [
       {
-        "name": "other.rs:helper",
-        "signature": "pub fn helper() -> u32 {",
+        "name": "main.rs#shadow.helper",
+        "signature": "helper = ||",
+        "start_line": 38
+      },
+      {
+        "name": "other.rs#helper",
+        "signature": "pub fn helper() -> u32",
         "start_line": 1
       },
       {
-        "name": "util.rs:helper",
-        "signature": "pub fn helper() -> u32 {",
+        "name": "util.rs#helper",
+        "signature": "pub fn helper() -> u32",
         "start_line": 1
       }
     ]

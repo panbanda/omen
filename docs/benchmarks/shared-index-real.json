@@ -1,0 +1,2954 @@
+{
+  "baseline": {
+    "label": "main-a233332",
+    "sha256": "ee88271550d1d3245b9772bc422f15dd666d179bf91cb6d2e2ebe67b9e1094ae"
+  },
+  "broad_improvement_proven": false,
+  "candidate": {
+    "label": "shared-index",
+    "sha256": "34052e59068db8ff40c6375236f1c848b9da63e3878ad0797397c42ecdb91bb8"
+  },
+  "cases": [
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          36.978667,
+          38.949709,
+          34.62875
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          825,
+          825,
+          825
+        ],
+        "p50_ms": 36.7892295,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "405cc5f82892610298258760d70a613ad26a90216c390e5decc60e268ede3272",
+          "405cc5f82892610298258760d70a613ad26a90216c390e5decc60e268ede3272",
+          "405cc5f82892610298258760d70a613ad26a90216c390e5decc60e268ede3272"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          48.570625,
+          49.462375,
+          49.018625
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1105,
+          1105,
+          1105
+        ],
+        "p50_ms": 49.2405,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "3cd7bb32b78372665b5dde6647ab194d8f3556c614245e32d3f38b10c29cf6be",
+          "3cd7bb32b78372665b5dde6647ab194d8f3556c614245e32d3f38b10c29cf6be",
+          "3cd7bb32b78372665b5dde6647ab194d8f3556c614245e32d3f38b10c29cf6be"
+        ]
+      },
+      "id": "rack_escape_path",
+      "language": "ruby",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          39.00525,
+          38.015584,
+          38.199999999999996
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2199,
+          2199,
+          2199
+        ],
+        "p50_ms": 38.107791999999996,
+        "predicted": [
+          "lib/rack/utils.rb:escape"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "eed77499f0b008280a42ea2e50a3a16cb5705e182496abeff25ac8722be9898a",
+          "eed77499f0b008280a42ea2e50a3a16cb5705e182496abeff25ac8722be9898a",
+          "eed77499f0b008280a42ea2e50a3a16cb5705e182496abeff25ac8722be9898a"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          50.225583,
+          49.058083,
+          51.66275
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          4893,
+          4893,
+          4893
+        ],
+        "p50_ms": 50.3604165,
+        "predicted": [
+          "lib/rack/utils.rb:escape"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "d75044912e99a9ffb1db884211eefca00c43ac76bce91e8490751c851208e9ae",
+          "d75044912e99a9ffb1db884211eefca00c43ac76bce91e8490751c851208e9ae",
+          "d75044912e99a9ffb1db884211eefca00c43ac76bce91e8490751c851208e9ae"
+        ]
+      },
+      "id": "rack_build_query",
+      "language": "ruby",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          90.246958,
+          95.61233299999999,
+          84.81212500000001
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1416,
+          1416,
+          1416
+        ],
+        "p50_ms": 90.21222900000001,
+        "predicted": [
+          "packages/zod/src/v4/core/util.ts:base64ToUint8Array"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "9886ca7e7fd129d3caec18c2ef7ea726507194465524e2dea70d7bd710dbbb83",
+          "9886ca7e7fd129d3caec18c2ef7ea726507194465524e2dea70d7bd710dbbb83",
+          "9886ca7e7fd129d3caec18c2ef7ea726507194465524e2dea70d7bd710dbbb83"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          109.875709,
+          106.485417,
+          113.333
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1688,
+          1688,
+          1688
+        ],
+        "p50_ms": 109.9092085,
+        "predicted": [
+          "packages/zod/src/v4/core/util.ts:base64ToUint8Array"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "cde6890f22b92d1cd06078f5b50baf3d94f7718bdbabad77e56bde6af2edbe51",
+          "cde6890f22b92d1cd06078f5b50baf3d94f7718bdbabad77e56bde6af2edbe51",
+          "cde6890f22b92d1cd06078f5b50baf3d94f7718bdbabad77e56bde6af2edbe51"
+        ]
+      },
+      "id": "zod_base64url",
+      "language": "typescript",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          92.976958,
+          95.719292,
+          88.912209
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          836,
+          836,
+          836
+        ],
+        "p50_ms": 92.31575050000001,
+        "predicted": [
+          "packages/zod/src/v4/core/util.ts:own"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "f65dd3b327f9c4ac22c1bd8047946d48cddae83e5e6c096fe36b0ff4322668fe",
+          "f65dd3b327f9c4ac22c1bd8047946d48cddae83e5e6c096fe36b0ff4322668fe",
+          "f65dd3b327f9c4ac22c1bd8047946d48cddae83e5e6c096fe36b0ff4322668fe"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          115.322083,
+          115.9905,
+          105.382791
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          841,
+          841,
+          841
+        ],
+        "p50_ms": 110.6866455,
+        "predicted": [
+          "packages/zod/src/v4/core/util.ts:own"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "b5045916134778170d11d092d426f9df4e60562321d757d3e8d83300dbe02bd3",
+          "b5045916134778170d11d092d426f9df4e60562321d757d3e8d83300dbe02bd3",
+          "b5045916134778170d11d092d426f9df4e60562321d757d3e8d83300dbe02bd3"
+        ]
+      },
+      "id": "zod_hide",
+      "language": "typescript",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          57.828458999999995,
+          57.588042,
+          63.570792000000004
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1119,
+          1119,
+          1119
+        ],
+        "p50_ms": 60.57941700000001,
+        "predicted": [
+          "crates/globset/src/lib.rs:is_match_candidate"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "b505fc3744a19d62c6296c070eeb9ebaa9f1829171dfc56bffaeffc98080d762",
+          "b505fc3744a19d62c6296c070eeb9ebaa9f1829171dfc56bffaeffc98080d762",
+          "b505fc3744a19d62c6296c070eeb9ebaa9f1829171dfc56bffaeffc98080d762"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          117.52525,
+          121.850208,
+          116.866917
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2133,
+          2133,
+          2133
+        ],
+        "p50_ms": 119.3585625,
+        "predicted": [
+          "crates/globset/src/lib.rs:is_match_candidate",
+          "crates/globset/src/lib.rs:new"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "95240fbfbf4dc7e0beed25802ec8ce62c841899f71a88a19644491eb1dacff51",
+          "95240fbfbf4dc7e0beed25802ec8ce62c841899f71a88a19644491eb1dacff51",
+          "95240fbfbf4dc7e0beed25802ec8ce62c841899f71a88a19644491eb1dacff51"
+        ]
+      },
+      "id": "ripgrep_is_match",
+      "language": "rust",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          30.57375,
+          33.098417,
+          35.855834
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1397,
+          1397,
+          1397
+        ],
+        "p50_ms": 34.4771255,
+        "predicted": [
+          "args.go:ExactArgs",
+          "args.go:MatchAll"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "fd108a4bdd83dc21d7a4005ecd3e80bed96e5c81aba54d2407a4958d63be5d5e",
+          "fd108a4bdd83dc21d7a4005ecd3e80bed96e5c81aba54d2407a4958d63be5d5e",
+          "fd108a4bdd83dc21d7a4005ecd3e80bed96e5c81aba54d2407a4958d63be5d5e"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          31.966542,
+          28.340041,
+          28.117165999999997
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1407,
+          1407,
+          1407
+        ],
+        "p50_ms": 28.2286035,
+        "predicted": [
+          "args.go:ExactArgs",
+          "args.go:MatchAll"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "428ba9612f018924f5174fc48733caa6821aa2a423b0a12e6fe1329f4a47fe3e",
+          "428ba9612f018924f5174fc48733caa6821aa2a423b0a12e6fe1329f4a47fe3e",
+          "428ba9612f018924f5174fc48733caa6821aa2a423b0a12e6fe1329f4a47fe3e"
+        ]
+      },
+      "id": "cobra_exact_valid",
+      "language": "go",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "lib/rack/auth/abstract/handler.rb:unauthorized",
+            "lib/rack/auth/abstract/handler.rb:bad_request"
+          ]
+        },
+        "elapsed_ms": [
+          32.72975,
+          31.825375000000005,
+          30.709542
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1490,
+          1490,
+          1490
+        ],
+        "p50_ms": 31.267458500000004,
+        "predicted": [
+          "lib/rack/auth/basic.rb:valid?"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "9945a8f01849e65c04bd7828459e70670403f93e16b79166d3efddf0f1f80fab",
+          "9945a8f01849e65c04bd7828459e70670403f93e16b79166d3efddf0f1f80fab",
+          "9945a8f01849e65c04bd7828459e70670403f93e16b79166d3efddf0f1f80fab"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          48.090083,
+          46.040917,
+          43.27725
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          10078,
+          10078,
+          10078
+        ],
+        "p50_ms": 44.6590835,
+        "predicted": [
+          "lib/rack/auth/abstract/handler.rb:bad_request",
+          "lib/rack/auth/abstract/handler.rb:unauthorized",
+          "lib/rack/auth/abstract/request.rb:initialize",
+          "lib/rack/auth/abstract/request.rb:provided?",
+          "lib/rack/auth/basic.rb:valid?"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "8fcd2b336338bf03dfd6d3ce80df4bd7ba25b2907ffa12e5c88390c5699e3f7b",
+          "8fcd2b336338bf03dfd6d3ce80df4bd7ba25b2907ffa12e5c88390c5699e3f7b",
+          "8fcd2b336338bf03dfd6d3ce80df4bd7ba25b2907ffa12e5c88390c5699e3f7b"
+        ]
+      },
+      "id": "rack_basic_call_receiver",
+      "language": "ruby",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "lib/rack/files.rb:fail",
+            "lib/rack/builder.rb:app"
+          ],
+          "missing": []
+        },
+        "elapsed_ms": [
+          34.604584,
+          32.239416,
+          35.825750000000006
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2944,
+          2944,
+          2944
+        ],
+        "p50_ms": 34.032583,
+        "predicted": [
+          "lib/rack/builder.rb:app",
+          "lib/rack/builder.rb:call",
+          "lib/rack/builder.rb:generate_map",
+          "lib/rack/files.rb:fail"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "ee94d7a583deeab4295aff42112a426b5083d1b60f96925d01317144fbba4823",
+          "ee94d7a583deeab4295aff42112a426b5083d1b60f96925d01317144fbba4823",
+          "ee94d7a583deeab4295aff42112a426b5083d1b60f96925d01317144fbba4823"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          46.564042,
+          49.398667,
+          49.045084
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          9116,
+          9116,
+          9116
+        ],
+        "p50_ms": 49.2218755,
+        "predicted": [
+          "lib/rack/builder.rb:generate_map"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "fe694efa17a94805753b42861b649247d62c305f9a10301d655f751eb47ec8d6",
+          "fe694efa17a94805753b42861b649247d62c305f9a10301d655f751eb47ec8d6",
+          "fe694efa17a94805753b42861b649247d62c305f9a10301d655f751eb47ec8d6"
+        ]
+      },
+      "id": "rack_to_app_kernel_fail",
+      "language": "ruby",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "lib/rack/auth/abstract/request.rb:request"
+          ],
+          "missing": [
+            "lib/rack/request.rb:get_header"
+          ]
+        },
+        "elapsed_ms": [
+          32.35675,
+          35.71675,
+          39.051375
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          3949,
+          3949,
+          3949
+        ],
+        "p50_ms": 37.3840625,
+        "predicted": [
+          "lib/rack/auth/abstract/request.rb:request",
+          "lib/rack/common_logger.rb:extract_content_length",
+          "lib/rack/request.rb:logger"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "421ab8095c122ca110940e1f936e5e27d15c6eb2397fa9db643e1a50f440abc1",
+          "421ab8095c122ca110940e1f936e5e27d15c6eb2397fa9db643e1a50f440abc1",
+          "421ab8095c122ca110940e1f936e5e27d15c6eb2397fa9db643e1a50f440abc1"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          46.644999999999996,
+          50.391125,
+          49.994958
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          14154,
+          14154,
+          14154
+        ],
+        "p50_ms": 50.1930415,
+        "predicted": [
+          "lib/rack/common_logger.rb:extract_content_length",
+          "lib/rack/request.rb:get_header",
+          "lib/rack/request.rb:initialize",
+          "lib/rack/request.rb:ip",
+          "lib/rack/request.rb:path_info",
+          "lib/rack/request.rb:query_string",
+          "lib/rack/request.rb:request_method",
+          "lib/rack/request.rb:script_name"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "e0cc30c863492462472b206521facc030753e57491c29f2351982cf0a182877e",
+          "e0cc30c863492462472b206521facc030753e57491c29f2351982cf0a182877e",
+          "e0cc30c863492462472b206521facc030753e57491c29f2351982cf0a182877e"
+        ]
+      },
+      "id": "rack_common_logger_request",
+      "language": "ruby",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "lib/rack/request.rb:initialize"
+          ]
+        },
+        "elapsed_ms": [
+          34.495166,
+          35.251917,
+          41.897625
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          982,
+          982,
+          982
+        ],
+        "p50_ms": 38.574771,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "872e41331776c4ea3dca76b9f8aee140527983f4531f2d38124e0ae5f73ebca1",
+          "872e41331776c4ea3dca76b9f8aee140527983f4531f2d38124e0ae5f73ebca1",
+          "872e41331776c4ea3dca76b9f8aee140527983f4531f2d38124e0ae5f73ebca1"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          44.454292,
+          44.265625,
+          46.58525
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          839,
+          839,
+          839
+        ],
+        "p50_ms": 45.4254375,
+        "predicted": [
+          "lib/rack/request.rb:initialize"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "ddf7eb46670e20bbb2356db5c5aa78acc07df22f6736988f5f89b088ec70eb02",
+          "ddf7eb46670e20bbb2356db5c5aa78acc07df22f6736988f5f89b088ec70eb02",
+          "ddf7eb46670e20bbb2356db5c5aa78acc07df22f6736988f5f89b088ec70eb02"
+        ]
+      },
+      "id": "rack_abstract_request_new",
+      "language": "ruby",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "lib/rack/auth/basic.rb:call"
+          ],
+          "missing": []
+        },
+        "elapsed_ms": [
+          55.168375,
+          50.469209,
+          62.416042
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          984,
+          984,
+          984
+        ],
+        "p50_ms": 56.4426255,
+        "predicted": [
+          "lib/rack/auth/basic.rb:call"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "628483d68fa55846c0f7ef815e95fc892f6915e897e24a49cf0233953c7e0a0e",
+          "628483d68fa55846c0f7ef815e95fc892f6915e897e24a49cf0233953c7e0a0e",
+          "628483d68fa55846c0f7ef815e95fc892f6915e897e24a49cf0233953c7e0a0e"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          69.31474999999999,
+          73.75029099999999,
+          78.594375
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          5876,
+          5876,
+          5876
+        ],
+        "p50_ms": 76.172333,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "3fe10bb9758db738ea530a24ecfd0095413d7ca52688aba1068d17e5b48c37ba",
+          "3fe10bb9758db738ea530a24ecfd0095413d7ca52688aba1068d17e5b48c37ba",
+          "3fe10bb9758db738ea530a24ecfd0095413d7ca52688aba1068d17e5b48c37ba"
+        ]
+      },
+      "id": "rack_valid_authenticator_call",
+      "language": "ruby",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          33.92675,
+          33.367374999999996,
+          32.70399999999999
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1686,
+          1686,
+          1686
+        ],
+        "p50_ms": 33.035687499999995,
+        "predicted": [
+          "lib/rack/builder.rb:to_app"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "7deea859da4316ee1682381e1441d8003cbe9eb3772d1aef9bd58b1811511ffa",
+          "7deea859da4316ee1682381e1441d8003cbe9eb3772d1aef9bd58b1811511ffa",
+          "7deea859da4316ee1682381e1441d8003cbe9eb3772d1aef9bd58b1811511ffa"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          62.285124999999994,
+          47.864667,
+          45.937958
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          5789,
+          5789,
+          5789
+        ],
+        "p50_ms": 46.9013125,
+        "predicted": [
+          "lib/rack/builder.rb:initialize",
+          "lib/rack/builder.rb:to_app",
+          "lib/rack/urlmap.rb:initialize"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "f9b939eee5a83e1fbaa0474055f5d956ad9193a151e54b575a277b9865ba4e94",
+          "f9b939eee5a83e1fbaa0474055f5d956ad9193a151e54b575a277b9865ba4e94",
+          "f9b939eee5a83e1fbaa0474055f5d956ad9193a151e54b575a277b9865ba4e94"
+        ]
+      },
+      "id": "rack_generate_map_class_new",
+      "language": "ruby",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          41.349999999999994,
+          39.518916000000004,
+          41.546583
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          685,
+          685,
+          685
+        ],
+        "p50_ms": 40.5327495,
+        "predicted": [
+          "command.go:Name"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "4947bb3a3a9abc9722b089099be437e2e383461e31837025699c7192af33a01b",
+          "4947bb3a3a9abc9722b089099be437e2e383461e31837025699c7192af33a01b",
+          "4947bb3a3a9abc9722b089099be437e2e383461e31837025699c7192af33a01b"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          36.640625,
+          39.257958,
+          37.044624999999996
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1043,
+          1043,
+          1043
+        ],
+        "p50_ms": 38.1512915,
+        "predicted": [
+          "command.go:Name"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "2274d20097a90e9c8c3626b37865506078676e9886421aaba924416e3ec38fb9",
+          "2274d20097a90e9c8c3626b37865506078676e9886421aaba924416e3ec38fb9",
+          "2274d20097a90e9c8c3626b37865506078676e9886421aaba924416e3ec38fb9"
+        ]
+      },
+      "id": "cobra_less_index_receiver",
+      "language": "go",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          41.884499999999996,
+          42.433958000000004,
+          41.453959
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          3048,
+          3048,
+          3048
+        ],
+        "p50_ms": 41.9439585,
+        "predicted": [
+          "command.go:CommandPath",
+          "command.go:DisplayName",
+          "command.go:HasAvailableFlags",
+          "command.go:HasParent",
+          "command.go:Name"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "1707ea0f95c39d15eba19aeb47d9a9a5f6f78fb9ba60233ccdc98816327e33df",
+          "1707ea0f95c39d15eba19aeb47d9a9a5f6f78fb9ba60233ccdc98816327e33df",
+          "1707ea0f95c39d15eba19aeb47d9a9a5f6f78fb9ba60233ccdc98816327e33df"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          35.2945,
+          40.879875000000006,
+          36.428291
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          3247,
+          3247,
+          3247
+        ],
+        "p50_ms": 38.654083,
+        "predicted": [
+          "command.go:CommandPath",
+          "command.go:DisplayName",
+          "command.go:HasAvailableFlags",
+          "command.go:HasParent",
+          "command.go:Name"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "8eddc592060af0bd0820b2076278af38ec01b532fde03a0237826941ae10d39d",
+          "8eddc592060af0bd0820b2076278af38ec01b532fde03a0237826941ae10d39d",
+          "8eddc592060af0bd0820b2076278af38ec01b532fde03a0237826941ae10d39d"
+        ]
+      },
+      "id": "cobra_use_line_parent_field",
+      "language": "go",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "completions.go:Error"
+          ],
+          "missing": []
+        },
+        "elapsed_ms": [
+          36.918667,
+          42.765,
+          42.914708000000005
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1342,
+          1342,
+          1342
+        ],
+        "p50_ms": 42.839854,
+        "predicted": [
+          "completions.go:Error"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "21a1949be9502f07087d724a751d27f4bacb449959a1e26634e91402f69f63ac",
+          "21a1949be9502f07087d724a751d27f4bacb449959a1e26634e91402f69f63ac",
+          "21a1949be9502f07087d724a751d27f4bacb449959a1e26634e91402f69f63ac"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          30.287499999999998,
+          29.814792,
+          32.749083999999996
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1187,
+          1187,
+          1187
+        ],
+        "p50_ms": 31.281937999999997,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "bb22dbf61d4c66d96270bc632871f9a225e5de35305abb7cdb63943b574b3d6c",
+          "bb22dbf61d4c66d96270bc632871f9a225e5de35305abb7cdb63943b574b3d6c",
+          "bb22dbf61d4c66d96270bc632871f9a225e5de35305abb7cdb63943b574b3d6c"
+        ]
+      },
+      "id": "cobra_error_method_of_error",
+      "language": "go",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          41.806917,
+          38.928791999999994,
+          42.083333
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1082,
+          1082,
+          1082
+        ],
+        "p50_ms": 40.5060625,
+        "predicted": [
+          "command.go:HasParent"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "319cdfe21df127fa61a4f54f876265a970804fd5aebd10c77b278346d3aee49a",
+          "319cdfe21df127fa61a4f54f876265a970804fd5aebd10c77b278346d3aee49a",
+          "319cdfe21df127fa61a4f54f876265a970804fd5aebd10c77b278346d3aee49a"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          36.864084,
+          35.619625,
+          35.266958
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1192,
+          1192,
+          1192
+        ],
+        "p50_ms": 35.4432915,
+        "predicted": [
+          "command.go:HasParent"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "6b626f2ba7c24d00305df9605fc3fbd385dcc617eefb60252fcf1e846cd424b0",
+          "6b626f2ba7c24d00305df9605fc3fbd385dcc617eefb60252fcf1e846cd424b0",
+          "6b626f2ba7c24d00305df9605fc3fbd385dcc617eefb60252fcf1e846cd424b0"
+        ]
+      },
+      "id": "cobra_get_out_parent_field",
+      "language": "go",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "active_help.go:AppendActiveHelp"
+          ]
+        },
+        "elapsed_ms": [
+          33.112458999999994,
+          35.586708,
+          31.584374999999998
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1760,
+          1760,
+          1760
+        ],
+        "p50_ms": 33.5855415,
+        "predicted": [
+          "command.go:AddCommand",
+          "command_test.go:executeCommand"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "09b39467275a32adf27d16fd4b5a1f86a5ecba373449e46d23322bd836f558af",
+          "09b39467275a32adf27d16fd4b5a1f86a5ecba373449e46d23322bd836f558af",
+          "09b39467275a32adf27d16fd4b5a1f86a5ecba373449e46d23322bd836f558af"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          30.535,
+          29.594666,
+          30.066917
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          5906,
+          5906,
+          5906
+        ],
+        "p50_ms": 29.8307915,
+        "predicted": [
+          "active_help.go:AppendActiveHelp",
+          "command.go:AddCommand",
+          "command_test.go:executeCommand"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "91129f6d2f93256428f183ea8bac8ab58ff79cf1e8bfb0f20485854a9e27621a",
+          "91129f6d2f93256428f183ea8bac8ab58ff79cf1e8bfb0f20485854a9e27621a",
+          "91129f6d2f93256428f183ea8bac8ab58ff79cf1e8bfb0f20485854a9e27621a"
+        ]
+      },
+      "id": "cobra_same_package_helper",
+      "language": "go",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          42.049042,
+          40.973916,
+          40.725667
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2156,
+          2156,
+          2156
+        ],
+        "p50_ms": 40.8497915,
+        "predicted": [
+          "command.go:Flags",
+          "command.go:PersistentFlags"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "43dfc4e82afbc489aed95cbba5f5de0ff528abc497039eada58166e21fdff7b6",
+          "43dfc4e82afbc489aed95cbba5f5de0ff528abc497039eada58166e21fdff7b6",
+          "43dfc4e82afbc489aed95cbba5f5de0ff528abc497039eada58166e21fdff7b6"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          35.448125,
+          35.959875000000004,
+          37.426625
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2535,
+          2535,
+          2535
+        ],
+        "p50_ms": 36.693250000000006,
+        "predicted": [
+          "command.go:Flags",
+          "command.go:PersistentFlags"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "9eddd76722c314f0a5e5e138d9922773f37a29b67cb7bf0a17589a08b6395147",
+          "9eddd76722c314f0a5e5e138d9922773f37a29b67cb7bf0a17589a08b6395147",
+          "9eddd76722c314f0a5e5e138d9922773f37a29b67cb7bf0a17589a08b6395147"
+        ]
+      },
+      "id": "cobra_normalization_recursion",
+      "language": "go",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "crates/cli/src/process.rs:drop"
+          ],
+          "missing": [
+            "crates/cli/src/process.rs:read_to_end",
+            "crates/cli/src/process.rs:is_empty"
+          ]
+        },
+        "elapsed_ms": [
+          57.771667,
+          54.031083,
+          51.298167
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1345,
+          1345,
+          1345
+        ],
+        "p50_ms": 52.664625,
+        "predicted": [
+          "crates/cli/src/process.rs:drop"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "56b0ef7cfed7d1870ad751a7983a1716f583406f1c642a469216d97f8934d7a5",
+          "56b0ef7cfed7d1870ad751a7983a1716f583406f1c642a469216d97f8934d7a5",
+          "56b0ef7cfed7d1870ad751a7983a1716f583406f1c642a469216d97f8934d7a5"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          108.08170799999999,
+          109.154875,
+          114.043708
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          3524,
+          3524,
+          3524
+        ],
+        "p50_ms": 111.59929149999999,
+        "predicted": [
+          "crates/cli/src/process.rs:is_empty",
+          "crates/cli/src/process.rs:read_to_end"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "fb977057e40b956b7ab0adfe604d4f1ef396af5751caa0190b4a3c2690a57dd6",
+          "fb977057e40b956b7ab0adfe604d4f1ef396af5751caa0190b4a3c2690a57dd6",
+          "fb977057e40b956b7ab0adfe604d4f1ef396af5751caa0190b4a3c2690a57dd6"
+        ]
+      },
+      "id": "ripgrep_close_field_receiver",
+      "language": "rust",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "crates/ignore/src/walk.rs:push"
+          ]
+        },
+        "elapsed_ms": [
+          61.60975,
+          70.228416,
+          67.316459
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          435,
+          435,
+          435
+        ],
+        "p50_ms": 68.7724375,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "bdcd87b49b6236b93594a536da1d8c9aae7ee05510624934dac9bb94d923d114",
+          "bdcd87b49b6236b93594a536da1d8c9aae7ee05510624934dac9bb94d923d114",
+          "bdcd87b49b6236b93594a536da1d8c9aae7ee05510624934dac9bb94d923d114"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          119.082875,
+          120.37504200000001,
+          127.608583
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1128,
+          1128,
+          1128
+        ],
+        "p50_ms": 123.99181250000001,
+        "predicted": [
+          "crates/ignore/src/walk.rs:push"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "3794ccbea35e1acd3deeeff37df9286a2a0337193f152cea6b7ff8dc61bb87fe",
+          "3794ccbea35e1acd3deeeff37df9286a2a0337193f152cea6b7ff8dc61bb87fe",
+          "3794ccbea35e1acd3deeeff37df9286a2a0337193f152cea6b7ff8dc61bb87fe"
+        ]
+      },
+      "id": "ripgrep_walk_send_stack",
+      "language": "rust",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "crates/matcher/src/lib.rs:as_bytes"
+          ]
+        },
+        "elapsed_ms": [
+          72.920791,
+          72.807958,
+          72.211125
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1969,
+          1969,
+          1969
+        ],
+        "p50_ms": 72.5095415,
+        "predicted": [
+          "crates/printer/src/standard.rs:write"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "d478cfda49a8509e8fd06e23813586ba8cc3a3bcd2db7fe1a8ddbb20d53ec107",
+          "d478cfda49a8509e8fd06e23813586ba8cc3a3bcd2db7fe1a8ddbb20d53ec107",
+          "d478cfda49a8509e8fd06e23813586ba8cc3a3bcd2db7fe1a8ddbb20d53ec107"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          127.205167,
+          127.006792,
+          123.38499999999999
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          3240,
+          3240,
+          3240
+        ],
+        "p50_ms": 125.195896,
+        "predicted": [
+          "crates/matcher/src/lib.rs:as_bytes",
+          "crates/printer/src/standard.rs:write",
+          "crates/searcher/src/searcher/mod.rs:line_terminator"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "491373fcc4c0c1685853fd099e1ee3bcff2552f3d4788866d46ec3ee8d3553ab",
+          "491373fcc4c0c1685853fd099e1ee3bcff2552f3d4788866d46ec3ee8d3553ab",
+          "491373fcc4c0c1685853fd099e1ee3bcff2552f3d4788866d46ec3ee8d3553ab"
+        ]
+      },
+      "id": "ripgrep_write_line_term_chain",
+      "language": "rust",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "crates/matcher/src/interpolate.rs:interpolate"
+          ]
+        },
+        "elapsed_ms": [
+          61.073667,
+          54.888041,
+          61.396625
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          669,
+          669,
+          669
+        ],
+        "p50_ms": 58.142333,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "4e12dcd621dab7da50c61b4ca4f6821c749d90aaa5f79bcc65c34651bffd8733",
+          "4e12dcd621dab7da50c61b4ca4f6821c749d90aaa5f79bcc65c34651bffd8733",
+          "4e12dcd621dab7da50c61b4ca4f6821c749d90aaa5f79bcc65c34651bffd8733"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          115.464208,
+          117.95141600000001,
+          116.643167
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1636,
+          1636,
+          1636
+        ],
+        "p50_ms": 117.2972915,
+        "predicted": [
+          "crates/matcher/src/interpolate.rs:interpolate",
+          "crates/matcher/src/lib.rs:get"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "b567da3bdf0836000f7b93e02f75247d98c46f8d91a38d664f0aa4a5cceb8de9",
+          "b567da3bdf0836000f7b93e02f75247d98c46f8d91a38d664f0aa4a5cceb8de9",
+          "b567da3bdf0836000f7b93e02f75247d98c46f8d91a38d664f0aa4a5cceb8de9"
+        ]
+      },
+      "id": "ripgrep_interpolate_import",
+      "language": "rust",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "crates/cli/src/process.rs:drop"
+          ],
+          "missing": []
+        },
+        "elapsed_ms": [
+          66.358584,
+          63.753333999999995,
+          58.444666999999995
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1244,
+          1244,
+          1244
+        ],
+        "p50_ms": 61.099000499999995,
+        "predicted": [
+          "crates/cli/src/process.rs:drop"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "95676b1d82e102ad65490d1e159968b35e22d908b82b94c4084314e7451b0ef2",
+          "95676b1d82e102ad65490d1e159968b35e22d908b82b94c4084314e7451b0ef2",
+          "95676b1d82e102ad65490d1e159968b35e22d908b82b94c4084314e7451b0ef2"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          118.834041,
+          110.967834,
+          109.94924999999999
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          11570,
+          11570,
+          11570
+        ],
+        "p50_ms": 110.458542,
+        "predicted": [
+          "crates/core/flags/hiargs.rs:haystack_builder",
+          "crates/core/flags/hiargs.rs:path_printer_builder",
+          "crates/core/flags/hiargs.rs:quit_after_match",
+          "crates/core/flags/hiargs.rs:stdout",
+          "crates/core/flags/hiargs.rs:walk_builder",
+          "crates/core/haystack.rs:build_from_result",
+          "crates/printer/src/path.rs:build",
+          "crates/printer/src/path.rs:write"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "f41868a514c54cf09f1396edb59b2812eb0194acb3a11a8c387fc61eda53f6d8",
+          "f41868a514c54cf09f1396edb59b2812eb0194acb3a11a8c387fc61eda53f6d8",
+          "f41868a514c54cf09f1396edb59b2812eb0194acb3a11a8c387fc61eda53f6d8"
+        ]
+      },
+      "id": "ripgrep_files_parallel_drop",
+      "language": "rust",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          57.411375,
+          60.278958,
+          59.028334
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1906,
+          1906,
+          1906
+        ],
+        "p50_ms": 59.653646,
+        "predicted": [
+          "crates/index/src/literal.rs:and",
+          "crates/index/src/literal.rs:or"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "23ef8134256a762cee4dcded384759d4e844af1a0aba94f5991f77f5c32de99f",
+          "23ef8134256a762cee4dcded384759d4e844af1a0aba94f5991f77f5c32de99f",
+          "23ef8134256a762cee4dcded384759d4e844af1a0aba94f5991f77f5c32de99f"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          107.662416,
+          107.54925,
+          110.635667
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          15137,
+          15137,
+          15137
+        ],
+        "p50_ms": 109.09245849999999,
+        "predicted": [
+          "crates/index/src/literal.rs:and",
+          "crates/index/src/literal.rs:factor",
+          "crates/index/src/literal.rs:from_set_and",
+          "crates/index/src/literal.rs:is_empty",
+          "crates/index/src/literal.rs:nothing",
+          "crates/index/src/literal.rs:or"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "0669b385ab56ab204258b84ffd36a938cba57896d9d0512825f325ec693a3619",
+          "0669b385ab56ab204258b84ffd36a938cba57896d9d0512825f325ec693a3619",
+          "0669b385ab56ab204258b84ffd36a938cba57896d9d0512825f325ec693a3619"
+        ]
+      },
+      "id": "ripgrep_literal_union_alias",
+      "language": "rust",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "packages/zod/src/v3/types.ts:isFinite"
+          ],
+          "missing": []
+        },
+        "elapsed_ms": [
+          74.325,
+          77.13875,
+          83.624333
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1522,
+          1522,
+          1522
+        ],
+        "p50_ms": 80.3815415,
+        "predicted": [
+          "packages/zod/src/v3/types.ts:isFinite"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "38dce918186764b0eb27d68e470748a48885aad72ee2441c4b730a162b3c9f8c",
+          "38dce918186764b0eb27d68e470748a48885aad72ee2441c4b730a162b3c9f8c",
+          "38dce918186764b0eb27d68e470748a48885aad72ee2441c4b730a162b3c9f8c"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          102.355417,
+          104.998041,
+          108.998833
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1797,
+          1797,
+          1797
+        ],
+        "p50_ms": 106.998437,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "b35e782dcb101859491914f17b7b20ff2954998e2a9dc5e3d8990ba173e9a681",
+          "b35e782dcb101859491914f17b7b20ff2954998e2a9dc5e3d8990ba173e9a681",
+          "b35e782dcb101859491914f17b7b20ff2954998e2a9dc5e3d8990ba173e9a681"
+        ]
+      },
+      "id": "zod_validate_input_builtin",
+      "language": "typescript",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          98.495458,
+          94.079125,
+          81.44862499999999
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2683,
+          2683,
+          2683
+        ],
+        "p50_ms": 87.763875,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "f7ab0dc237b13e1a5359035dee1f1d718467f22fd89126a82141cacc2a83c0ea",
+          "f7ab0dc237b13e1a5359035dee1f1d718467f22fd89126a82141cacc2a83c0ea",
+          "f7ab0dc237b13e1a5359035dee1f1d718467f22fd89126a82141cacc2a83c0ea"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          115.930375,
+          112.494459,
+          100.93529099999999
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1378,
+          1378,
+          1378
+        ],
+        "p50_ms": 106.714875,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "44b199e87feddcd3dbdd6e697bc83a89865ff89152f4275624667724a9afb32b",
+          "44b199e87feddcd3dbdd6e697bc83a89865ff89152f4275624667724a9afb32b",
+          "44b199e87feddcd3dbdd6e697bc83a89865ff89152f4275624667724a9afb32b"
+        ]
+      },
+      "id": "zod_timed_parameter_call",
+      "language": "typescript",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "packages/bench/benchUtil.ts:toFixed"
+          ],
+          "missing": []
+        },
+        "elapsed_ms": [
+          87.037875,
+          88.21025,
+          85.523583
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          874,
+          874,
+          874
+        ],
+        "p50_ms": 86.8669165,
+        "predicted": [
+          "packages/bench/benchUtil.ts:toFixed"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "503fe1011f4cb4e1133790849d025deade9ebdcd35b050bf47fcf78716a86883",
+          "503fe1011f4cb4e1133790849d025deade9ebdcd35b050bf47fcf78716a86883",
+          "503fe1011f4cb4e1133790849d025deade9ebdcd35b050bf47fcf78716a86883"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          109.503,
+          117.188625,
+          104.602667
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1102,
+          1102,
+          1102
+        ],
+        "p50_ms": 110.895646,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "fd31cef0e51f227146f6f58f31be3a923bd0f6ba074cb257f2e6c4c01d11e1cb",
+          "fd31cef0e51f227146f6f58f31be3a923bd0f6ba074cb257f2e6c4c01d11e1cb",
+          "fd31cef0e51f227146f6f58f31be3a923bd0f6ba074cb257f2e6c4c01d11e1cb"
+        ]
+      },
+      "id": "zod_fmt_number_method",
+      "language": "typescript",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "packages/zod/src/v4/classic/schemas.ts:discriminatedUnion",
+            "packages/zod/src/v4/classic/schemas.ts:object"
+          ]
+        },
+        "elapsed_ms": [
+          91.4035,
+          88.943083,
+          84.559125
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1053,
+          1053,
+          1053
+        ],
+        "p50_ms": 86.751104,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "73cf8c9a574e38e344942b1fa2343a24da3f45899a91e458d8a9c442da66f2cb",
+          "73cf8c9a574e38e344942b1fa2343a24da3f45899a91e458d8a9c442da66f2cb",
+          "73cf8c9a574e38e344942b1fa2343a24da3f45899a91e458d8a9c442da66f2cb"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          105.067916,
+          103.51391699999999,
+          103.97925
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2602,
+          2602,
+          2602
+        ],
+        "p50_ms": 103.74658349999999,
+        "predicted": [
+          "packages/zod/src/v4/classic/schemas.ts:discriminatedUnion",
+          "packages/zod/src/v4/classic/schemas.ts:literal",
+          "packages/zod/src/v4/classic/schemas.ts:number",
+          "packages/zod/src/v4/classic/schemas.ts:object"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "a149fbc3bd78a6ec2fc51d0e71a44dd514141468334637539947e1a30e00a674",
+          "a149fbc3bd78a6ec2fc51d0e71a44dd514141468334637539947e1a30e00a674",
+          "a149fbc3bd78a6ec2fc51d0e71a44dd514141468334637539947e1a30e00a674"
+        ]
+      },
+      "id": "zod_workspace_package_import",
+      "language": "typescript",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "packages/zod/src/v4/classic/schemas.ts:strictObject"
+          ]
+        },
+        "elapsed_ms": [
+          80.663583,
+          76.708917,
+          89.301333
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          11238,
+          11238,
+          11238
+        ],
+        "p50_ms": 83.00512499999999,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "6c2231e2d1cf9ec12cfddd77fb17ba02b29e689bc88394acec3fda232bc44974",
+          "6c2231e2d1cf9ec12cfddd77fb17ba02b29e689bc88394acec3fda232bc44974",
+          "6c2231e2d1cf9ec12cfddd77fb17ba02b29e689bc88394acec3fda232bc44974"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          105.783,
+          103.20325,
+          95.510833
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          6277,
+          6277,
+          6277
+        ],
+        "p50_ms": 99.35704150000001,
+        "predicted": [
+          "packages/zod/src/v4/classic/schemas.ts:boolean",
+          "packages/zod/src/v4/classic/schemas.ts:number",
+          "packages/zod/src/v4/classic/schemas.ts:strictObject",
+          "packages/zod/src/v4/classic/schemas.ts:string"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "c15186cd48d942a0989370502b26725277e35baa7cda414708852c546cfd0155",
+          "c15186cd48d942a0989370502b26725277e35baa7cda414708852c546cfd0155",
+          "c15186cd48d942a0989370502b26725277e35baa7cda414708852c546cfd0155"
+        ]
+      },
+      "id": "zod_namespace_import_strict_object",
+      "language": "typescript",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          82.20445799999999,
+          81.536417,
+          79.059083
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          876,
+          876,
+          876
+        ],
+        "p50_ms": 80.29775000000001,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "5b6c4d9dfd68e8786318a9f016165598ba4818a87fc63f7e1cf0a637b4f23a48",
+          "5b6c4d9dfd68e8786318a9f016165598ba4818a87fc63f7e1cf0a637b4f23a48",
+          "5b6c4d9dfd68e8786318a9f016165598ba4818a87fc63f7e1cf0a637b4f23a48"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          98.24920800000001,
+          99.991166,
+          95.971917
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          628,
+          628,
+          628
+        ],
+        "p50_ms": 97.9815415,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "771a3c38c5467627ae7b91d120f19c919333ffd23f0648474b0c3913303b2e0d",
+          "771a3c38c5467627ae7b91d120f19c919333ffd23f0648474b0c3913303b2e0d",
+          "771a3c38c5467627ae7b91d120f19c919333ffd23f0648474b0c3913303b2e0d"
+        ]
+      },
+      "id": "zod_set_has_builtin",
+      "language": "typescript",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "litellm/_uuid.py:uuid4"
+          ],
+          "missing": []
+        },
+        "elapsed_ms": [
+          5845.872334,
+          6403.192375,
+          5828.050791
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          889,
+          889,
+          889
+        ],
+        "p50_ms": 6115.621583,
+        "predicted": [
+          "litellm/_uuid.py:uuid4"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "70c71783d2305a2eee76b559db8b678793f51f195d8338e912bacbfd9f243a6b",
+          "70c71783d2305a2eee76b559db8b678793f51f195d8338e912bacbfd9f243a6b",
+          "70c71783d2305a2eee76b559db8b678793f51f195d8338e912bacbfd9f243a6b"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          4327.4742909999995,
+          5380.584625,
+          4083.1702920000002
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          142173,
+          142173,
+          142173
+        ],
+        "p50_ms": 4731.8774585,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "3dadecfdc37f8cae1252ae80f7485551a69baf2b9e062d3fb05cd5eaee5dbc9d",
+          "3dadecfdc37f8cae1252ae80f7485551a69baf2b9e062d3fb05cd5eaee5dbc9d",
+          "3dadecfdc37f8cae1252ae80f7485551a69baf2b9e062d3fb05cd5eaee5dbc9d"
+        ]
+      },
+      "id": "litellm_uuid4_standard_library",
+      "language": "python",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "tests/integration/management/test_team_delete_chaos.py:partial"
+          ],
+          "missing": []
+        },
+        "elapsed_ms": [
+          6347.311957999999,
+          7701.706917,
+          5916.1876250000005
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2027,
+          2027,
+          2027
+        ],
+        "p50_ms": 6808.947271000001,
+        "predicted": [
+          "litellm/litellm_core_utils/exception_mapping_utils.py:exception_type",
+          "litellm/litellm_core_utils/get_llm_provider_logic.py:get_llm_provider",
+          "tests/integration/management/test_team_delete_chaos.py:partial"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "d41e9cd37fae0bf2fbdb7e76668bac8f4bd31dba5da9056447d003bb58d4a46c",
+          "d41e9cd37fae0bf2fbdb7e76668bac8f4bd31dba5da9056447d003bb58d4a46c",
+          "d41e9cd37fae0bf2fbdb7e76668bac8f4bd31dba5da9056447d003bb58d4a46c"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          4110.644292,
+          4457.133833,
+          5656.2895419999995
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          3117,
+          3117,
+          3117
+        ],
+        "p50_ms": 5056.711687499999,
+        "predicted": [
+          "litellm/litellm_core_utils/get_llm_provider_logic.py:get_llm_provider"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "a9e12c3e76b64476fe6173b07bb8fbad57b431be4a8fe823d2c581bd8464284d",
+          "a9e12c3e76b64476fe6173b07bb8fbad57b431be4a8fe823d2c581bd8464284d",
+          "a9e12c3e76b64476fe6173b07bb8fbad57b431be4a8fe823d2c581bd8464284d"
+        ]
+      },
+      "id": "litellm_functools_partial",
+      "language": "python",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "litellm/integrations/dynamodb.py:Table"
+          ],
+          "missing": [
+            "litellm/litellm_core_utils/sensitive_data_masker.py:__init__"
+          ]
+        },
+        "elapsed_ms": [
+          5945.516083,
+          7858.379834,
+          6706.614042
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          3405,
+          3405,
+          3405
+        ],
+        "p50_ms": 7282.496938,
+        "predicted": [
+          "litellm/_redis.py:_mask_for_display",
+          "litellm/_redis.py:_redis_kwargs_for_logging",
+          "litellm/integrations/dynamodb.py:Table"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "9a3c87bec949708eb9a133a206c0e82586c96a3b1cc8f4bcd2911178508aef1b",
+          "9a3c87bec949708eb9a133a206c0e82586c96a3b1cc8f4bcd2911178508aef1b",
+          "9a3c87bec949708eb9a133a206c0e82586c96a3b1cc8f4bcd2911178508aef1b"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          4052.7943750000004,
+          4446.179,
+          4217.163417
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          8993,
+          8993,
+          8993
+        ],
+        "p50_ms": 4331.6712085,
+        "predicted": [
+          "litellm/_redis.py:_mask_for_display",
+          "litellm/_redis.py:_redis_kwargs_for_logging",
+          "litellm/litellm_core_utils/sensitive_data_masker.py:__init__"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "4fe3bdc73635c29083f08e11386734dc166715b8ae8825b0a28b3bbc933a7946",
+          "4fe3bdc73635c29083f08e11386734dc166715b8ae8825b0a28b3bbc933a7946",
+          "4fe3bdc73635c29083f08e11386734dc166715b8ae8825b0a28b3bbc933a7946"
+        ]
+      },
+      "id": "litellm_rich_table",
+      "language": "python",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "litellm/litellm_core_utils/sensitive_data_masker.py:mask_dict"
+          ]
+        },
+        "elapsed_ms": [
+          6551.995042,
+          6203.384666,
+          6797.310042
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          522,
+          522,
+          522
+        ],
+        "p50_ms": 6500.3473539999995,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "8e110ecc63d529ab14fb0add5779f31a2ada3c3f6bb76f109dbfa7604487ada4",
+          "8e110ecc63d529ab14fb0add5779f31a2ada3c3f6bb76f109dbfa7604487ada4",
+          "8e110ecc63d529ab14fb0add5779f31a2ada3c3f6bb76f109dbfa7604487ada4"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          4886.6910419999995,
+          4483.449708,
+          4258.598875
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1119,
+          1119,
+          1119
+        ],
+        "p50_ms": 4371.0242915,
+        "predicted": [
+          "litellm/litellm_core_utils/sensitive_data_masker.py:mask_dict"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "8b2fce7eb4d71a43f25a66ae6f6f1d8bdc0875151f9b3d0bb238d39c22f97efd",
+          "8b2fce7eb4d71a43f25a66ae6f6f1d8bdc0875151f9b3d0bb238d39c22f97efd",
+          "8b2fce7eb4d71a43f25a66ae6f6f1d8bdc0875151f9b3d0bb238d39c22f97efd"
+        ]
+      },
+      "id": "litellm_typed_parameter_receiver",
+      "language": "python",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "litellm/llms/custom_httpx/http_handler.py:get_async_httpx_client"
+          ]
+        },
+        "elapsed_ms": [
+          6166.369875,
+          6555.742209,
+          6338.442542
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1394,
+          1394,
+          1394
+        ],
+        "p50_ms": 6447.0923755,
+        "predicted": [
+          "litellm/_lazy_imports.py:_request_timeout"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "eac86a542a285362cc4ef1d9be58b59f96a49cdddb61bd45a756ed3a62a70347",
+          "eac86a542a285362cc4ef1d9be58b59f96a49cdddb61bd45a756ed3a62a70347",
+          "eac86a542a285362cc4ef1d9be58b59f96a49cdddb61bd45a756ed3a62a70347"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          6140.5313750000005,
+          3953.676666,
+          4694.398083
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1388,
+          1388,
+          1388
+        ],
+        "p50_ms": 4324.0373745,
+        "predicted": [
+          "litellm/_lazy_imports.py:_request_timeout",
+          "litellm/llms/custom_httpx/http_handler.py:get_async_httpx_client"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "7c3239b407e256559c34ea1e3adc5c9c79b10bb5bac90cab8524d1c475ee64fe",
+          "7c3239b407e256559c34ea1e3adc5c9c79b10bb5bac90cab8524d1c475ee64fe",
+          "7c3239b407e256559c34ea1e3adc5c9c79b10bb5bac90cab8524d1c475ee64fe"
+        ]
+      },
+      "id": "litellm_import_in_function",
+      "language": "python",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          6073.2665,
+          6042.688166999999,
+          6160.24925
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          6059,
+          6059,
+          6059
+        ],
+        "p50_ms": 6101.4687085,
+        "predicted": [
+          "litellm/rust_bridge/_native.pyi:native_redis_breaker_states"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "3b0579853cec6cbc76daaea5ec06c3ec5eeeb79de0ab7e4fe2eaded1dc80de10",
+          "3b0579853cec6cbc76daaea5ec06c3ec5eeeb79de0ab7e4fe2eaded1dc80de10",
+          "3b0579853cec6cbc76daaea5ec06c3ec5eeeb79de0ab7e4fe2eaded1dc80de10"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          4548.757709,
+          4166.693665999999,
+          5384.9421250000005
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2587,
+          2587,
+          2587
+        ],
+        "p50_ms": 4775.8178955,
+        "predicted": [
+          "litellm/rust_bridge/_native.pyi:native_redis_breaker_states"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "9c0977f55e58d1807c30e69bd5dfaff2a4520e7699a7e3d7cf7b55b10abc813e",
+          "9c0977f55e58d1807c30e69bd5dfaff2a4520e7699a7e3d7cf7b55b10abc813e",
+          "9c0977f55e58d1807c30e69bd5dfaff2a4520e7699a7e3d7cf7b55b10abc813e"
+        ]
+      },
+      "id": "litellm_native_stub_module",
+      "language": "python",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "litellm/integrations/datadog/datadog.py:__init__"
+          ]
+        },
+        "elapsed_ms": [
+          6271.54125,
+          7473.82025,
+          6672.611833999999
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          843,
+          843,
+          843
+        ],
+        "p50_ms": 7073.216042,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "b25c173a0496c211d5e612bcb56e3ea2e445e2941d6e05655111d92e4cc03962",
+          "b25c173a0496c211d5e612bcb56e3ea2e445e2941d6e05655111d92e4cc03962",
+          "b25c173a0496c211d5e612bcb56e3ea2e445e2941d6e05655111d92e4cc03962"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          4278.059542,
+          4769.829333,
+          4582.440125
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1485,
+          1485,
+          1485
+        ],
+        "p50_ms": 4676.134728999999,
+        "predicted": [
+          "litellm/integrations/datadog/datadog.py:__init__"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "4551c1207a5d318d0cc050925fc3da124718e96944718417f2817ffeccb86a40",
+          "4551c1207a5d318d0cc050925fc3da124718e96944718417f2817ffeccb86a40",
+          "4551c1207a5d318d0cc050925fc3da124718e96944718417f2817ffeccb86a40"
+        ]
+      },
+      "id": "litellm_annotated_attribute",
+      "language": "python",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "litellm/a2a_protocol/exception_mapping_utils.py:is_localhost_url",
+            "litellm/a2a_protocol/exception_mapping_utils.py:is_connection_error",
+            "litellm/a2a_protocol/exception_mapping_utils.py:is_agent_card_error"
+          ]
+        },
+        "elapsed_ms": [
+          10993.687082999999,
+          8984.374375,
+          6118.7919170000005
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1957,
+          1957,
+          1957
+        ],
+        "p50_ms": 7551.583146,
+        "predicted": [],
+        "reliable": true,
+        "report_sha256": [
+          "9173a83596f58fa2d53832453f7f32a28c371e6f05b08d3ae79faddef4e68a83",
+          "9173a83596f58fa2d53832453f7f32a28c371e6f05b08d3ae79faddef4e68a83",
+          "9173a83596f58fa2d53832453f7f32a28c371e6f05b08d3ae79faddef4e68a83"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          4610.852375,
+          4234.584124999999,
+          4227.127667000001
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          5844,
+          5844,
+          5844
+        ],
+        "p50_ms": 4230.855896,
+        "predicted": [
+          "litellm/a2a_protocol/exception_mapping_utils.py:is_agent_card_error",
+          "litellm/a2a_protocol/exception_mapping_utils.py:is_connection_error",
+          "litellm/a2a_protocol/exception_mapping_utils.py:is_localhost_url",
+          "litellm/a2a_protocol/exceptions.py:__init__"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "b3ddb5ce0daf670295159c6bfd9e55a5bf4ff68489a2ed071f605e6b286b060e",
+          "b3ddb5ce0daf670295159c6bfd9e55a5bf4ff68489a2ed071f605e6b286b060e",
+          "b3ddb5ce0daf670295159c6bfd9e55a5bf4ff68489a2ed071f605e6b286b060e"
+        ]
+      },
+      "id": "litellm_static_methods_of_class",
+      "language": "python",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "litellm/a2a_protocol/client.py:_get_client"
+          ]
+        },
+        "elapsed_ms": [
+          6008.409125,
+          6456.33925,
+          6229.9313329999995
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          879,
+          879,
+          879
+        ],
+        "p50_ms": 6343.1352915,
+        "predicted": [
+          "litellm/a2a_protocol/main.py:asend_message"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "11bc02ef97915edd2a69f9f687c6a654952c35b506323e371a1cac6615d598cd",
+          "11bc02ef97915edd2a69f9f687c6a654952c35b506323e371a1cac6615d598cd",
+          "11bc02ef97915edd2a69f9f687c6a654952c35b506323e371a1cac6615d598cd"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          4511.053666999999,
+          4909.351291,
+          4071.1549160000004
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1427,
+          1427,
+          1427
+        ],
+        "p50_ms": 4490.2531035,
+        "predicted": [
+          "litellm/a2a_protocol/client.py:_get_client",
+          "litellm/a2a_protocol/main.py:asend_message"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "97087ca135eeeff796182f5d159dadac40e50ba31cc56a23050b895223b45a46",
+          "97087ca135eeeff796182f5d159dadac40e50ba31cc56a23050b895223b45a46",
+          "97087ca135eeeff796182f5d159dadac40e50ba31cc56a23050b895223b45a46"
+        ]
+      },
+      "id": "litellm_await_self_method",
+      "language": "python",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "litellm/litellm_core_utils/litellm_logging.py:get_hidden_params"
+          ],
+          "missing": [
+            "litellm/litellm_core_utils/hidden_params.py:get_hidden_params"
+          ]
+        },
+        "elapsed_ms": [
+          5886.2515,
+          6248.475541999999,
+          6560.499916999999
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2172,
+          2172,
+          2172
+        ],
+        "p50_ms": 6404.487729499999,
+        "predicted": [
+          "litellm/litellm_core_utils/litellm_logging.py:get_hidden_params"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "5134f0f46023079177d187a870c114456acc731d37a8644478658b53d4d99c7c",
+          "5134f0f46023079177d187a870c114456acc731d37a8644478658b53d4d99c7c",
+          "5134f0f46023079177d187a870c114456acc731d37a8644478658b53d4d99c7c"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          4281.036249999999,
+          4594.132874999999,
+          4211.1672499999995
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2454,
+          2454,
+          2454
+        ],
+        "p50_ms": 4402.650062499999,
+        "predicted": [
+          "litellm/litellm_core_utils/hidden_params.py:get_hidden_params",
+          "litellm/litellm_core_utils/hidden_params.py:served_from_cache"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "9dfc70a821a813f0aff575004b9bc72cb5478f8111fc86953022ece7cc3283c4",
+          "9dfc70a821a813f0aff575004b9bc72cb5478f8111fc86953022ece7cc3283c4",
+          "9dfc70a821a813f0aff575004b9bc72cb5478f8111fc86953022ece7cc3283c4"
+        ]
+      },
+      "id": "litellm_imported_name_not_method",
+      "language": "python",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [
+            "tests/unit/proxy/test_proxy_server_endpoints_and_startup.py:connect"
+          ],
+          "missing": [
+            "litellm/redis/stores/connection.py:connect"
+          ]
+        },
+        "elapsed_ms": [
+          5983.839040999999,
+          5854.543167,
+          6291.5361250000005
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2077,
+          2077,
+          2077
+        ],
+        "p50_ms": 6073.039646,
+        "predicted": [
+          "litellm/proxy/proxy_server.py:get_current_spend",
+          "tests/unit/proxy/test_proxy_server_endpoints_and_startup.py:connect"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "d98be7471f9549fe0707bfb270a70748d60857a25d422842989847b73eb0c2cd",
+          "d98be7471f9549fe0707bfb270a70748d60857a25d422842989847b73eb0c2cd",
+          "d98be7471f9549fe0707bfb270a70748d60857a25d422842989847b73eb0c2cd"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          4996.8700420000005,
+          4328.56425,
+          4397.818292
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          3698,
+          3698,
+          3698
+        ],
+        "p50_ms": 4363.191271,
+        "predicted": [
+          "litellm/proxy/proxy_server.py:get_current_spend",
+          "litellm/redis/stores/connection.py:connect",
+          "litellm/redis/stores/connection.py:spend_counters",
+          "litellm/redis/stores/spend_counters/__init__.py:__init__",
+          "litellm/redis/stores/spend_counters/__init__.py:set_local"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "30b79180073cda3411982a42302479b76265d4dab430995013bc0f9ba40bc5f5",
+          "30b79180073cda3411982a42302479b76265d4dab430995013bc0f9ba40bc5f5",
+          "30b79180073cda3411982a42302479b76265d4dab430995013bc0f9ba40bc5f5"
+        ]
+      },
+      "id": "litellm_import_over_same_name_in_file",
+      "language": "python",
+      "non_regression": true
+    },
+    {
+      "baseline": {
+        "checks": {
+          "forbidden": [],
+          "missing": [
+            "litellm/repositories/accounting_delivery_repository.py:backlog"
+          ]
+        },
+        "elapsed_ms": [
+          6700.5655,
+          6887.6365829999995,
+          6901.292916
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2233,
+          2233,
+          2233
+        ],
+        "p50_ms": 6894.4647495,
+        "predicted": [
+          "litellm/accounting/metrics.py:record_backlog",
+          "litellm/accounting/metrics.py:record_storage",
+          "litellm/accounting/worker.py:_alert"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "c8b54c628b8923ddbee4a9dac100baba6aca3d51751eb9e440deb4f3f0ca53f8",
+          "c8b54c628b8923ddbee4a9dac100baba6aca3d51751eb9e440deb4f3f0ca53f8",
+          "c8b54c628b8923ddbee4a9dac100baba6aca3d51751eb9e440deb4f3f0ca53f8"
+        ]
+      },
+      "candidate": {
+        "checks": {
+          "forbidden": [],
+          "missing": []
+        },
+        "elapsed_ms": [
+          4277.741542000001,
+          5110.480042,
+          4393.330334
+        ],
+        "errors": [
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          5803,
+          5803,
+          5803
+        ],
+        "p50_ms": 4751.905188000001,
+        "predicted": [
+          "litellm/accounting/metrics.py:due",
+          "litellm/accounting/metrics.py:record_backlog",
+          "litellm/accounting/metrics.py:record_storage",
+          "litellm/accounting/worker.py:_alert",
+          "litellm/repositories/accounting_delivery_repository.py:backlog",
+          "litellm/repositories/accounting_delivery_repository.py:storage"
+        ],
+        "reliable": true,
+        "report_sha256": [
+          "04228300402e2b815c61e88d29124ae3ce0ea72f83723a5f4d46f443828ae4f4",
+          "04228300402e2b815c61e88d29124ae3ce0ea72f83723a5f4d46f443828ae4f4",
+          "04228300402e2b815c61e88d29124ae3ce0ea72f83723a5f4d46f443828ae4f4"
+        ]
+      },
+      "id": "litellm_await_typed_parameter",
+      "language": "python",
+      "non_regression": true
+    }
+  ],
+  "corpus_sha256": "0c15abdb3125cb0083967588f5fb1c2f08bcb832bc5644e4b5648c006ba3e9bd",
+  "non_regression": true,
+  "order": "alternating",
+  "repetitions": 2,
+  "standard": "omen-improvement-v1",
+  "unmeasured": [
+    "model editing",
+    "actual tokens/cost",
+    "peak RSS",
+    "release performance",
+    "compiler binding",
+    "held-out generalization"
+  ],
+  "warmups": 1
+}

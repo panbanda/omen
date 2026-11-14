@@ -393,7 +393,7 @@
   },
   {
     "id": "go/n-map-slice",
-    "rank": 1
+    "rank": 2
   },
   {
     "id": "go/n-text-length",
@@ -960,7 +960,7 @@
     "rank": null
   },
   {
-    "id": "rust/i-only-here",
+    "id": "rust/i-only-here-both",
     "rank": 1
   },
   {

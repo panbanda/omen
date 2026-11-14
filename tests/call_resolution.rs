@@ -22,13 +22,16 @@ fn fixture(files: &[(&str, &str)]) -> (TempDir, Vec<std::path::PathBuf>) {
 fn ambiguous_names_are_not_asserted_edges() {
     let (dir, paths) = fixture(&[
         ("main.rs", "fn caller(){helper(); external();}"),
-        ("a.rs", "fn helper(){}"),
-        ("z.rs", "fn helper(){}"),
+        ("a.rs", "pub fn helper(){}"),
+        ("z.rs", "pub fn helper(){}"),
     ]);
     let report = get_symbol(dir.path(), &paths, "caller", &SymbolOptions::default()).unwrap();
     assert!(report.callees.is_empty());
     let json = serde_json::to_value(report).unwrap();
+    // No import gives `helper`. The two public definitions with the name
+    // stay visible as candidates, and no one of them is an edge.
     assert_eq!(json["call_resolutions"][0]["status"], "ambiguous");
+    assert_eq!(json["call_resolutions"][0]["basis"], "name_only");
     assert_eq!(
         json["call_resolutions"][0]["candidates"]
             .as_array()
@@ -57,12 +60,12 @@ fn qualified_lookup_preserves_duplicates() {
 #[test]
 fn foreign_language_is_not_a_candidate() {
     let (dir, paths) = fixture(&[
-        ("main.rs", "fn caller(){helper();}"),
+        ("main.rs", "mod z;\nuse z::helper;\nfn caller(){helper();}"),
         ("a.rb", "def helper\nend\n"),
-        ("z.rs", "fn helper(){}"),
+        ("z.rs", "pub fn helper(){}"),
     ]);
     let report = get_symbol(dir.path(), &paths, "caller", &SymbolOptions::default()).unwrap();
-    assert_eq!(report.callees[0].qualified_name, "z.rs:helper");
+    assert_eq!(report.callees[0].qualified_name, "z.rs#helper");
 }
 
 #[test]
@@ -210,8 +213,8 @@ fn javascript_family_remains_connected() {
 fn impact_reports_input_wide_uncertainty() {
     let (dir, paths) = fixture(&[
         ("main.rs", "fn caller(){helper(); external();}"),
-        ("a.rs", "fn helper(){}"),
-        ("z.rs", "fn helper(){}"),
+        ("a.rs", "pub fn helper(){}"),
+        ("z.rs", "pub fn helper(){}"),
     ]);
     let report = omen::analyzers::impact::analyze(
         dir.path(),
@@ -292,6 +295,8 @@ fn imported_module_disambiguates_name_candidates() {
             format!("z.{ext}")
         };
         let (dir, paths) = fixture(&[(&main_name, main), (&a_name, a), (&z_name, z)]);
+        // The module path of the import comes from `go.mod`.
+        std::fs::write(dir.path().join("go.mod"), "module quality.local/case\n").unwrap();
         let report = get_symbol(dir.path(), &paths, "caller", &SymbolOptions::default()).unwrap();
         assert_eq!(
             report.callees.len(),
@@ -313,6 +318,6 @@ fn unmatched_constant_receiver_does_not_fall_back_to_local_method() {
     assert!(report.callees.is_empty());
     assert_eq!(
         report.call_resolutions[0].status,
-        omen::analyzers::repomap::ResolutionStatus::Unresolved
+        omen::index::model::ResolutionStatus::Unresolved
     );
 }

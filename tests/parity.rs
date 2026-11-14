@@ -91,12 +91,19 @@ const MIRRORS: &[Mirror] = &[
         .not_paged()
         .arguments(r#"{"query": "helper"}"#)
         .option(&["--min-score", "0"], r#"{"min_score": 0}"#),
+    // `same_file` removes the imported callees of `run`.
     mirror("get_symbol", &["symbol", "run"])
         .arguments(r#"{"name": "run"}"#)
-        .option(&["--max-source-lines", "2"], r#"{"max_source_lines": 2}"#),
+        .option(
+            &["--max-source-lines", "2", "--min-basis", "same_file"],
+            r#"{"max_source_lines": 2, "min_basis": "same_file"}"#,
+        ),
     mirror("impact", &["impact", "run"])
         .arguments(r#"{"symbol": "run"}"#)
-        .option(&["--depth", "1"], r#"{"depth": 1}"#),
+        .option(
+            &["--depth", "1", "--min-basis", "same_file"],
+            r#"{"depth": 1, "min_basis": "same_file"}"#,
+        ),
 ];
 
 /// The tools that have no CLI command, each with the reason.
@@ -443,6 +450,84 @@ fn cli_and_mcp_give_the_same_result_with_a_configuration_file() {
     assert_no_differences(compare_all(directory.path(), "configuration"));
 }
 
+/// One call with a limit that cuts the paged list on the fixture.
+struct CutCase {
+    tool: &'static str,
+    command: &'static [&'static str],
+    arguments: &'static str,
+    /// True when the limit cuts the paged list.
+    cuts: bool,
+}
+
+/// `run` has one caller and nine callees. `helper` in `util.rs` has three
+/// callers. The limit cuts only the paged list: `callers` of `get_symbol`,
+/// and the levels of `impact`.
+const CUT_CASES: &[CutCase] = &[
+    CutCase {
+        tool: "get_symbol",
+        command: &["symbol", "run", "--top", "1"],
+        arguments: r#"{"name": "run", "limit": 1}"#,
+        cuts: false,
+    },
+    CutCase {
+        tool: "get_symbol",
+        command: &["symbol", "util.rs:helper", "--top", "1", "--offset", "1"],
+        arguments: r#"{"name": "util.rs:helper", "limit": 1, "offset": 1}"#,
+        cuts: true,
+    },
+    CutCase {
+        tool: "impact",
+        command: &["impact", "run", "--top", "1", "--offset", "1"],
+        arguments: r#"{"symbol": "run", "limit": 1, "offset": 1}"#,
+        cuts: true,
+    },
+];
+
+/// The CLI tells the number of omitted items in `<list>_omitted`. The MCP
+/// envelope tells it in `truncated`. The other content must be equal.
+#[test]
+fn a_limit_cuts_the_same_lists_on_the_two_sides() {
+    let directory = fixture_repository();
+    let repository = directory.path();
+    let requests: Vec<Value> = CUT_CASES
+        .iter()
+        .enumerate()
+        .map(|(id, case)| {
+            let arguments: Value = serde_json::from_str(case.arguments).expect("arguments");
+            json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": {"name": case.tool, "arguments": arguments}
+            })
+        })
+        .collect();
+    let responses = mcp_responses(repository, &requests);
+    let mut found = Vec::new();
+    for (case, response) in CUT_CASES.iter().zip(responses) {
+        let name = case.command.join(" ");
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("text");
+        let envelope: Value = serde_json::from_str(text).expect("JSON envelope");
+        let cut = envelope["truncated"]
+            .as_array()
+            .is_some_and(|cuts| !cuts.is_empty());
+        if cut != case.cuts {
+            found.push(format!(
+                "{name}: the limit cuts a list: {cut}, expected: {}",
+                case.cuts
+            ));
+        }
+        let mut cli = cli_json(repository, case.command);
+        if let Some(map) = cli.as_object_mut() {
+            map.retain(|key, _| !key.ends_with("_omitted"));
+        }
+        let mut places = Vec::new();
+        differences("", &cli, &envelope["result"], &mut places);
+        found.extend(places.into_iter().map(|place| format!("{name}: {place}")));
+    }
+    assert_no_differences(found);
+}
+
 /// One tool parameter and the CLI flag that has the same effect. The flag is
 /// the identifier of the clap argument.
 const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
@@ -464,9 +549,11 @@ const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
     // The flag is the opposite of the parameter.
     (("get_symbol", "include_source"), "no_source"),
     (("get_symbol", "max_source_lines"), "max_source_lines"),
+    (("get_symbol", "min_basis"), "min_basis"),
     (("impact", "symbol"), "symbol"),
     (("impact", "depth"), "depth"),
     (("impact", "direction"), "direction"),
+    (("impact", "min_basis"), "min_basis"),
 ];
 
 /// The parameters that each paged tool has, with the flag of the command.

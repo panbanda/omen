@@ -1,7 +1,7 @@
 {
   "version": 1,
   "split": "development",
-  "oracle": "Partial source-reviewed relationships, not exhaustive labels or independent held-out evaluation",
+  "oracle": "Partial source-reviewed relationships, not exhaustive labels or independent held-out evaluation. Each label comes from the source at the pinned revision, not from the output of an index. The set has cases on which the old index and the shared index differ, in the two directions.",
   "cases": [
     {
       "id": "rack_escape_path",
@@ -65,7 +65,9 @@
       "required": [
         "crates/globset/src/lib.rs:is_match_candidate"
       ],
-      "forbidden": ["crates/globset/src/glob.rs:as_ref"],
+      "forbidden": [
+        "crates/globset/src/glob.rs:as_ref"
+      ],
       "oracle": "First is_match declaration, lines 342-344: self.is_match_candidate(...). Generic path.as_ref() is not glob.rs:as_ref (that implementation returns Glob, not Path). Query is ambiguous across impls; check applies to reported primary only. Other edges unreviewed."
     },
     {
@@ -83,6 +85,500 @@
         "args.go:OnlyValidArgs"
       ],
       "oracle": "Lines 142-144 invoke ExactArgs and MatchAll. OnlyValidArgs is passed as a function value, not directly called by this function."
+    },
+    {
+      "id": "rack_basic_call_receiver",
+      "language": "ruby",
+      "repository": "rack/rack",
+      "directory": "real-rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "query": "lib/rack/auth/basic.rb:call",
+      "required": [
+        "lib/rack/auth/abstract/handler.rb:unauthorized",
+        "lib/rack/auth/abstract/handler.rb:bad_request"
+      ],
+      "forbidden": [
+        "lib/rack/auth/basic.rb:call"
+      ],
+      "oracle": "Label from the source. Lines 15-29: bare `unauthorized` and `bad_request` are methods of the parent class AbstractHandler. `@app.call(env)` calls the wrapped application, not this method."
+    },
+    {
+      "id": "rack_to_app_kernel_fail",
+      "language": "ruby",
+      "repository": "rack/rack",
+      "directory": "real-rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "query": "lib/rack/builder.rb:to_app",
+      "required": [
+        "lib/rack/builder.rb:generate_map"
+      ],
+      "forbidden": [
+        "lib/rack/files.rb:fail",
+        "lib/rack/builder.rb:app"
+      ],
+      "oracle": "Label from the source. Lines 267-274: `generate_map(@run, @map)` is a method of Builder. `fail \"...\"` is Kernel#fail, not Rack::Files#fail. `app` is a local variable, not the class method `Builder.app`."
+    },
+    {
+      "id": "rack_common_logger_request",
+      "language": "ruby",
+      "repository": "rack/rack",
+      "directory": "real-rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "query": "lib/rack/common_logger.rb:log",
+      "required": [
+        "lib/rack/request.rb:get_header"
+      ],
+      "forbidden": [
+        "lib/rack/auth/abstract/request.rb:request"
+      ],
+      "oracle": "Label from the source. Lines 52-58: `request = Rack::Request.new(env)`, then `request.get_header(\"REMOTE_USER\")`. `request` is a local variable, not AbstractRequest#request."
+    },
+    {
+      "id": "rack_abstract_request_new",
+      "language": "ruby",
+      "repository": "rack/rack",
+      "directory": "real-rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "query": "lib/rack/auth/abstract/request.rb:request",
+      "required": [
+        "lib/rack/request.rb:initialize"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Lines 13-15 in Rack::Auth::AbstractRequest: `Request.new(@env)`. The constant lookup from Rack::Auth gives Rack::Request, whose constructor is lib/rack/request.rb `initialize`."
+    },
+    {
+      "id": "rack_valid_authenticator_call",
+      "language": "ruby",
+      "repository": "rack/rack",
+      "directory": "real-rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "query": "lib/rack/auth/basic.rb:valid?",
+      "required": [],
+      "forbidden": [
+        "lib/rack/auth/basic.rb:call"
+      ],
+      "oracle": "Label from the source. `valid?` calls `@authenticator.call(*auth.credentials)`. The authenticator is a block that the user gives, not Basic#call."
+    },
+    {
+      "id": "rack_generate_map_class_new",
+      "language": "ruby",
+      "repository": "rack/rack",
+      "directory": "real-rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "query": "lib/rack/builder.rb:generate_map",
+      "required": [
+        "lib/rack/builder.rb:to_app"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. `self.class.new(default_app, &block).to_app` makes a Builder and calls Builder#to_app."
+    },
+    {
+      "id": "cobra_less_index_receiver",
+      "language": "go",
+      "repository": "spf13/cobra",
+      "directory": "real-cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "query": "command.go:Less",
+      "required": [
+        "command.go:Name"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Line 1329: `c[i].Name() < c[j].Name()` with `c commandSorterByName`, which is `[]*Command`. The receiver is an index expression."
+    },
+    {
+      "id": "cobra_use_line_parent_field",
+      "language": "go",
+      "repository": "spf13/cobra",
+      "directory": "real-cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "query": "command.go:UseLine",
+      "required": [
+        "command.go:CommandPath",
+        "command.go:Name",
+        "command.go:HasParent"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Lines 1482-1486: `c.Name()`, `c.HasParent()`, and `c.parent.CommandPath()`. `parent` is a field with the declared type `*Command`."
+    },
+    {
+      "id": "cobra_error_method_of_error",
+      "language": "go",
+      "repository": "spf13/cobra",
+      "directory": "real-cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "query": "args_test.go:noArgsWithArgs",
+      "required": [],
+      "forbidden": [
+        "completions.go:Error"
+      ],
+      "oracle": "Label from the source. The function calls `err.Error()` on a value of the interface `error`. `completions.go` `Error` is a method of a different type."
+    },
+    {
+      "id": "cobra_get_out_parent_field",
+      "language": "go",
+      "repository": "spf13/cobra",
+      "directory": "real-cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "query": "command.go:getOut",
+      "required": [
+        "command.go:HasParent"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. `getOut` returns `c.parent.getOut(def)` when `c.HasParent()`. The recursive call through the field `parent *Command` is not in the label, because the report of `symbol` does not list a definition as its own callee."
+    },
+    {
+      "id": "cobra_same_package_helper",
+      "language": "go",
+      "repository": "spf13/cobra",
+      "directory": "real-cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "query": "active_help_test.go:TestActiveHelpWithComps",
+      "required": [
+        "active_help.go:AppendActiveHelp"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Line 100 in the test calls `AppendActiveHelp`, a function of the same package in active_help.go."
+    },
+    {
+      "id": "cobra_normalization_recursion",
+      "language": "go",
+      "repository": "spf13/cobra",
+      "directory": "real-cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "query": "command.go:SetGlobalNormalizationFunc",
+      "required": [
+        "command.go:Flags",
+        "command.go:PersistentFlags"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. The method calls `c.Flags()` and `c.PersistentFlags()`. It also calls itself for each `command` of `range c.commands`. That call is not in the label, because the report of `symbol` does not list a definition as its own callee."
+    },
+    {
+      "id": "ripgrep_close_field_receiver",
+      "language": "rust",
+      "repository": "BurntSushi/ripgrep",
+      "directory": "real-ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "query": "crates/cli/src/process.rs:close",
+      "required": [
+        "crates/cli/src/process.rs:read_to_end",
+        "crates/cli/src/process.rs:is_empty"
+      ],
+      "forbidden": [
+        "crates/cli/src/process.rs:drop"
+      ],
+      "oracle": "Label from the source. Lines 218-240: `drop(stdout)` is std::mem::drop, not the Drop implementation in this file. `self.stderr.read_to_end()` calls StderrReader::read_to_end through the field `stderr`, and `err.is_empty()` calls CommandError::is_empty on its result."
+    },
+    {
+      "id": "ripgrep_walk_send_stack",
+      "language": "rust",
+      "repository": "BurntSushi/ripgrep",
+      "directory": "real-ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "query": "crates/ignore/src/walk.rs:send",
+      "required": [
+        "crates/ignore/src/walk.rs:push"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Lines 2005-2007: `self.stack.push(Message::Work(work))`. The field `stack` has the declared type `Stack`, and `Stack::push` is at line 1692."
+    },
+    {
+      "id": "ripgrep_write_line_term_chain",
+      "language": "rust",
+      "repository": "BurntSushi/ripgrep",
+      "directory": "real-ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "query": "crates/printer/src/standard.rs:write_line_term",
+      "required": [
+        "crates/matcher/src/lib.rs:as_bytes"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Line 1430: `self.searcher.line_terminator().as_bytes()`. `searcher` is a field with the type `&Searcher`, `line_terminator` returns `LineTerminator`, and `LineTerminator::as_bytes` is in crates/matcher/src/lib.rs."
+    },
+    {
+      "id": "ripgrep_interpolate_import",
+      "language": "rust",
+      "repository": "BurntSushi/ripgrep",
+      "directory": "real-ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "query": "crates/matcher/src/lib.rs:interpolate",
+      "required": [
+        "crates/matcher/src/interpolate.rs:interpolate"
+      ],
+      "forbidden": [
+        "crates/matcher/src/lib.rs:interpolate"
+      ],
+      "oracle": "Label from the source. Line 39: `use crate::interpolate::interpolate;`. The method at line 441 calls that free function at line 450, not itself."
+    },
+    {
+      "id": "ripgrep_files_parallel_drop",
+      "language": "rust",
+      "repository": "BurntSushi/ripgrep",
+      "directory": "real-ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "query": "crates/core/main.rs:files_parallel",
+      "required": [],
+      "forbidden": [
+        "crates/cli/src/process.rs:drop"
+      ],
+      "oracle": "Label from the source. The function calls `drop(tx)`, which is std::mem::drop, not the Drop implementation of a reader in crates/cli."
+    },
+    {
+      "id": "ripgrep_literal_union_alias",
+      "language": "rust",
+      "repository": "BurntSushi/ripgrep",
+      "directory": "real-ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "query": "crates/index/src/literal.rs:union",
+      "required": [
+        "crates/index/src/literal.rs:or",
+        "crates/index/src/literal.rs:and"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Line 156: `let (or, and) = (GramQuery::or, GramQuery::and);`. The calls `or(...)` and `and(...)` after it go to those two associated functions."
+    },
+    {
+      "id": "zod_validate_input_builtin",
+      "language": "typescript",
+      "repository": "colinhacks/zod",
+      "directory": "real-zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "query": "packages/bench/compile-codec-direction.ts:validateInput",
+      "required": [],
+      "forbidden": [
+        "packages/zod/src/v3/types.ts:isFinite"
+      ],
+      "oracle": "Label from the source. The function calls the global `Number.isFinite`, not a getter of a zod v3 class."
+    },
+    {
+      "id": "zod_timed_parameter_call",
+      "language": "typescript",
+      "repository": "colinhacks/zod",
+      "directory": "real-zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "query": "packages/bench/compile-matrix.ts:timed",
+      "required": [],
+      "forbidden": [
+        "packages/zod/src/v4/classic/tests/custom.test.ts:fn"
+      ],
+      "oracle": "Label from the source. `fn` is a parameter of `timed`. The call `fn()` calls the function that the caller gives, not a function in a test file."
+    },
+    {
+      "id": "zod_fmt_number_method",
+      "language": "typescript",
+      "repository": "colinhacks/zod",
+      "directory": "real-zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "query": "packages/bench/compile-matrix.ts:fmt",
+      "required": [],
+      "forbidden": [
+        "packages/bench/benchUtil.ts:toFixed"
+      ],
+      "oracle": "Label from the source. `toFixed` is a method of a number, not a function of benchUtil.ts."
+    },
+    {
+      "id": "zod_workspace_package_import",
+      "language": "typescript",
+      "repository": "colinhacks/zod",
+      "directory": "real-zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "query": "packages/bench/compile-matrix.ts:du",
+      "required": [
+        "packages/zod/src/v4/classic/schemas.ts:discriminatedUnion",
+        "packages/zod/src/v4/classic/schemas.ts:object"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. The file imports the workspace package `zod`, whose package.json exports the source entry. `z.discriminatedUnion` and `z.object` are functions of the classic schemas module."
+    },
+    {
+      "id": "zod_namespace_import_strict_object",
+      "language": "typescript",
+      "repository": "colinhacks/zod",
+      "directory": "real-zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "query": "packages/bench/init.ts:zod4",
+      "required": [
+        "packages/zod/src/v4/classic/schemas.ts:strictObject"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Line 1: `import * as z4 from \"zod\"`. The method `zod4` at line 66 calls `z4.strictObject(...)`. The package exports `src/index.ts`, which exports the classic module again, and `strictObject` is at line 1745 of classic/schemas.ts."
+    },
+    {
+      "id": "zod_set_has_builtin",
+      "language": "typescript",
+      "repository": "colinhacks/zod",
+      "directory": "real-zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "query": "packages/bench/compile-output.ts:stripDelete",
+      "required": [],
+      "forbidden": [
+        "packages/zod/src/v4/core/registries.ts:has"
+      ],
+      "oracle": "Label from the source. `has` is a method of a built-in Set or Map in this function, not $ZodRegistry.has."
+    },
+    {
+      "id": "litellm_uuid4_standard_library",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "litellm/a2a_protocol/litellm_completion_bridge/transformation.py:create_task_event",
+      "required": [],
+      "forbidden": [
+        "litellm/_uuid.py:uuid4"
+      ],
+      "oracle": "Label from the source. Line 23: `from uuid import uuid4`. The call is to the standard library, not to litellm/_uuid.py."
+    },
+    {
+      "id": "litellm_functools_partial",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "litellm/assistants/main.py:aget_assistants",
+      "required": [],
+      "forbidden": [
+        "tests/integration/management/test_team_delete_chaos.py:partial"
+      ],
+      "oracle": "Label from the source. Line 7: `from functools import partial`. Line 65 calls it. A function with the same name in a test file is not the callee."
+    },
+    {
+      "id": "litellm_rich_table",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "litellm/_redis.py:_pretty_print_redis_config",
+      "required": [
+        "litellm/litellm_core_utils/sensitive_data_masker.py:__init__"
+      ],
+      "forbidden": [
+        "litellm/integrations/dynamodb.py:Table"
+      ],
+      "oracle": "Label from the source. Line 988: `from rich.table import Table`. Line 997: `masker = SensitiveDataMasker()`, a class that line 38 imports from sensitive_data_masker.py."
+    },
+    {
+      "id": "litellm_typed_parameter_receiver",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "litellm/_redis.py:_mask_for_display",
+      "required": [
+        "litellm/litellm_core_utils/sensitive_data_masker.py:mask_dict"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Lines 965-966: the parameter `masker: SensitiveDataMasker`, then `masker.mask_dict(redis_kwargs)`."
+    },
+    {
+      "id": "litellm_import_in_function",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "litellm/_lazy_imports.py:_module_level_aclient",
+      "required": [
+        "litellm/llms/custom_httpx/http_handler.py:get_async_httpx_client"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Lines 93-95: an import in the body of the function, then a call of the imported name."
+    },
+    {
+      "id": "litellm_native_stub_module",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "litellm/caching/redis_cache.py:redis_breaker_state_counts",
+      "required": [
+        "litellm/rust_bridge/_native.pyi:native_redis_breaker_states"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Lines 359-361: `from litellm.rust_bridge._native import native_redis_breaker_states`. The module is an extension module. The repository has its stub `_native.pyi` and no `_native.py`."
+    },
+    {
+      "id": "litellm_annotated_attribute",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "litellm/_service_logger.py:init_datadog_logger_if_none",
+      "required": [
+        "litellm/integrations/datadog/datadog.py:__init__"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Lines 299-302: `from litellm.integrations.datadog.datadog import DataDogLogger`, then `self.dd_logger: DataDogLogger = DataDogLogger()`. The file datadog.py has one `__init__`."
+    },
+    {
+      "id": "litellm_static_methods_of_class",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "litellm/a2a_protocol/exception_mapping_utils.py:map_a2a_exception",
+      "required": [
+        "litellm/a2a_protocol/exception_mapping_utils.py:is_localhost_url",
+        "litellm/a2a_protocol/exception_mapping_utils.py:is_connection_error",
+        "litellm/a2a_protocol/exception_mapping_utils.py:is_agent_card_error"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Lines 134-153: `A2AExceptionCheckers.is_localhost_url(...)`, `.is_connection_error(...)`, and `.is_agent_card_error(...)`, static methods of a class of the same file."
+    },
+    {
+      "id": "litellm_await_self_method",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "litellm/a2a_protocol/client.py:send_message",
+      "required": [
+        "litellm/a2a_protocol/client.py:_get_client"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Line 95: `await self._get_client()` in an async method."
+    },
+    {
+      "id": "litellm_imported_name_not_method",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "litellm/litellm_core_utils/litellm_logging.py:_served_from_cache_at_no_charge",
+      "required": [
+        "litellm/litellm_core_utils/hidden_params.py:get_hidden_params"
+      ],
+      "forbidden": [
+        "litellm/litellm_core_utils/litellm_logging.py:get_hidden_params"
+      ],
+      "oracle": "Label from the source. Line 125 imports `get_hidden_params` from hidden_params.py. Line 7922 calls it as a bare name. The method with the same name at line 7504 needs a receiver."
+    },
+    {
+      "id": "litellm_import_over_same_name_in_file",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "tests/unit/proxy/test_proxy_server_endpoints_and_startup.py:test_get_current_spend_fallback_to_in_memory",
+      "required": [
+        "litellm/redis/stores/connection.py:connect"
+      ],
+      "forbidden": [
+        "tests/unit/proxy/test_proxy_server_endpoints_and_startup.py:connect"
+      ],
+      "oracle": "Label from the source. Line 58: `from litellm.redis.stores.connection import connect`. Line 8952 calls `connect(None)` as a bare name. The method `connect` of a class at line 1669 of the test file needs a receiver."
+    },
+    {
+      "id": "litellm_await_typed_parameter",
+      "language": "python",
+      "repository": "BerriAI/litellm",
+      "directory": "real-litellm",
+      "revision": "0a78ce9cc59dcc91e184f5897146de1492fc84a9",
+      "query": "litellm/accounting/worker.py:_report",
+      "required": [
+        "litellm/repositories/accounting_delivery_repository.py:backlog"
+      ],
+      "forbidden": [],
+      "oracle": "Label from the source. Lines 110-116: the parameter `repository: AccountingDeliveryRepository`, then `await repository.backlog()`."
     }
   ]
 }

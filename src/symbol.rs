@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::analyzers::impact::ImpactSymbol;
-use crate::analyzers::repomap::build_index;
 use crate::core::Result;
+use crate::index::build::CodeIndex;
+use crate::index::view::{CallEvidence, CallView};
 
 /// A full symbol report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,9 +28,10 @@ pub struct SymbolReport {
     pub callers: Vec<ImpactSymbol>,
     /// Direct callees (depth=1).
     pub callees: Vec<ImpactSymbol>,
-    /// Evidence for name-based calls; unique candidates are not proven bindings.
+    /// Each call site in the body of the symbol, with the result of its
+    /// resolution. Only a call with one candidate is an edge.
     #[serde(default)]
-    pub call_resolutions: Vec<crate::analyzers::repomap::CallResolution>,
+    pub call_resolutions: Vec<CallEvidence>,
     /// Cyclomatic complexity of the symbol (None if unavailable).
     pub cyclomatic: Option<u32>,
     /// Cognitive complexity of the symbol (None if unavailable).
@@ -44,6 +46,8 @@ pub struct SymbolOptions {
     pub include_source: bool,
     /// Maximum source lines to return (excess triggers source_truncated=true).
     pub max_source_lines: usize,
+    /// The weakest basis that gives a caller or a callee.
+    pub min_basis: crate::index::model::ResolutionBasis,
 }
 
 impl Default for SymbolOptions {
@@ -51,6 +55,7 @@ impl Default for SymbolOptions {
         Self {
             include_source: true,
             max_source_lines: 200,
+            min_basis: crate::index::view::DEFAULT_MIN_BASIS,
         }
     }
 }
@@ -76,16 +81,30 @@ pub fn get_symbol_at_line(
     opts: &SymbolOptions,
     start_line: Option<u32>,
 ) -> Result<SymbolReport> {
-    let index = build_index(root, files)?;
+    let index = CallView::from_index(&CodeIndex::from_files(root, files));
     report_from_index(root, &index, name, opts, start_line)
 }
 
-pub(crate) fn report_from_index(
+pub fn report_from_index(
     root: &Path,
-    index: &crate::analyzers::repomap::CallGraphIndex,
+    index: &CallView,
     name: &str,
     opts: &SymbolOptions,
     start_line: Option<u32>,
+) -> Result<SymbolReport> {
+    let read = |path: &Path| Ok(std::fs::read(root.join(path))?);
+    report_with_reader(index, name, opts, start_line, &read)
+}
+
+/// Makes the report with `read` as the source of the content of a file. The
+/// path that `read` gets is relative to the root of the repository. A report
+/// for a commit reads the files of that commit.
+pub fn report_with_reader(
+    index: &CallView,
+    name: &str,
+    opts: &SymbolOptions,
+    start_line: Option<u32>,
+    read: &dyn Fn(&Path) -> Result<Vec<u8>>,
 ) -> Result<SymbolReport> {
     let candidates_idxs: Vec<_> = index
         .resolve(name)
@@ -115,29 +134,37 @@ pub(crate) fn report_from_index(
         .map(|&i| index.symbols[i].qualified_name.clone())
         .collect();
 
+    let content = read(Path::new(&sym.file)).ok();
+
     // Source slice
-    let (source, source_truncated) = if opts.include_source {
-        read_source_slice(
-            root,
-            &sym.file,
+    let (source, source_truncated) = match (&content, opts.include_source) {
+        (Some(content), true) => source_slice(
+            &String::from_utf8_lossy(content),
             sym.line,
             sym.end_line,
             opts.max_source_lines,
-        )
-    } else {
-        (None, false)
+        ),
+        _ => (None, false),
     };
 
     // Complexity from complexity analyzer on the symbol's file
     let (cyclomatic, cognitive) = {
-        let file_path = root.join(&sym.file);
         let complexity_analyzer = crate::analyzers::complexity::Analyzer::new();
-        if let Ok(file_result) = complexity_analyzer.analyze_file(&file_path) {
+        let analyzed = content
+            .ok_or_else(|| crate::core::Error::analysis("the file has no content"))
+            .and_then(|content| complexity_analyzer.analyze_content(Path::new(&sym.file), content));
+        if let Ok(file_result) = analyzed {
             // Find the function matching name + start_line
-            let found = file_result
-                .functions
-                .iter()
-                .find(|f| f.name == sym.name && f.start_line == sym.line);
+            let same_name = || file_result.functions.iter().filter(|f| f.name == sym.name);
+            // A function with the same name can be in a function. The function
+            // that starts at the line of the symbol is the symbol. The
+            // complexity analyzer can start a function at its annotation. Then
+            // the smallest function that contains the line is the symbol.
+            let found = same_name().find(|f| f.start_line == sym.line).or_else(|| {
+                same_name()
+                    .filter(|f| f.start_line <= sym.line && sym.line <= f.end_line)
+                    .min_by_key(|f| f.end_line - f.start_line)
+            });
             if let Some(f) = found {
                 (Some(f.metrics.cyclomatic), Some(f.metrics.cognitive))
             } else {
@@ -149,7 +176,7 @@ pub(crate) fn report_from_index(
     };
 
     // Direct callers/callees using CallGraphIndex
-    let caller_levels = index.callers(&[primary_idx], 1);
+    let caller_levels = index.callers(&[primary_idx], 1, opts.min_basis);
     let callers: Vec<ImpactSymbol> = caller_levels
         .into_iter()
         .flat_map(|level| {
@@ -161,7 +188,7 @@ pub(crate) fn report_from_index(
         })
         .collect();
 
-    let callee_levels = index.callees(&[primary_idx], 1);
+    let callee_levels = index.callees(&[primary_idx], 1, opts.min_basis);
     let callees: Vec<ImpactSymbol> = callee_levels
         .into_iter()
         .flat_map(|level| {
@@ -185,8 +212,7 @@ pub(crate) fn report_from_index(
         source_truncated,
         callers,
         callees,
-        call_resolutions: index.call_resolutions[index.call_resolution_ranges[primary_idx].clone()]
-            .to_vec(),
+        call_resolutions: index.calls_of(primary_idx).to_vec(),
         cyclomatic,
         cognitive,
         candidates,
@@ -194,14 +220,11 @@ pub(crate) fn report_from_index(
 }
 
 pub fn suggest_symbols(root: &Path, files: &[PathBuf], name: &str) -> Result<Vec<String>> {
-    let index = build_index(root, files)?;
+    let index = CallView::from_index(&CodeIndex::from_files(root, files));
     Ok(suggestions_from_index(&index, name))
 }
 
-fn suggestions_from_index(
-    index: &crate::analyzers::repomap::CallGraphIndex,
-    name: &str,
-) -> Vec<String> {
+fn suggestions_from_index(index: &CallView, name: &str) -> Vec<String> {
     let query = name.to_lowercase();
     let mut suggestions: Vec<String> = index
         .by_name
@@ -217,21 +240,14 @@ fn suggestions_from_index(
     suggestions
 }
 
-/// Read lines start_line..=end_line from a file (1-indexed).
-/// Returns (Some(text), truncated) or (None, false) on IO error.
-fn read_source_slice(
-    root: &Path,
-    rel_file: &str,
+/// The lines start_line..=end_line of the content of a file (1-indexed), and
+/// a flag that tells if `max_lines` cut them.
+fn source_slice(
+    content: &str,
     start_line: u32,
     end_line: u32,
     max_lines: usize,
 ) -> (Option<String>, bool) {
-    let path = root.join(rel_file);
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return (None, false),
-    };
-
     let lines: Vec<&str> = content.lines().collect();
     let start = (start_line as usize).saturating_sub(1);
     let end = (end_line as usize).min(lines.len());
@@ -258,13 +274,17 @@ mod tests {
 
     fn make_chain() -> TempDir {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("a.rs"), "fn a() {\n    b();\n}\n").unwrap();
-        fs::write(dir.path().join("b.rs"), "fn b() {}\n").unwrap();
+        fs::write(
+            dir.path().join("main.rs"),
+            "mod b;\nfn a() {\n    b::b();\n}\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("b.rs"), "pub fn b() {}\n").unwrap();
         dir
     }
 
     fn files(dir: &TempDir) -> Vec<PathBuf> {
-        vec!["a.rs", "b.rs"]
+        vec!["main.rs", "b.rs"]
             .into_iter()
             .map(|f| dir.path().join(f))
             .collect()
@@ -276,7 +296,7 @@ mod tests {
         let fs = files(&dir);
         let report = get_symbol(dir.path(), &fs, "a", &SymbolOptions::default()).unwrap();
         assert_eq!(report.name, "a");
-        assert!(report.qualified_name.contains("a.rs:a"));
+        assert!(report.qualified_name.contains("main.rs#a"));
         assert_eq!(report.kind, "Function");
     }
 
@@ -285,7 +305,7 @@ mod tests {
         let dir = make_chain();
         let fs = files(&dir);
         let report = get_symbol(dir.path(), &fs, "a", &SymbolOptions::default()).unwrap();
-        assert!(report.qualified_name.ends_with("a.rs:a"));
+        assert!(report.qualified_name.ends_with("main.rs#a"));
     }
 
     #[test]
@@ -313,6 +333,25 @@ mod tests {
         assert!(src.contains("fn a"), "source should contain function body");
     }
 
+    /// An inner function has the name of the outer function. The report of
+    /// the inner function has the complexity of the inner function.
+    #[test]
+    fn test_nested_function_with_the_name_of_the_outer_function() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("a.py"),
+            "def f(items):\n    for item in items:\n        if item:\n            if item > 1:\n                pass\n\n    def f():\n        return 1\n\n    return f\n",
+        )
+        .unwrap();
+        let files = vec![dir.path().join("a.py")];
+        let outer = get_symbol(dir.path(), &files, "a.py#f", &SymbolOptions::default()).unwrap();
+        let inner = get_symbol(dir.path(), &files, "a.py#f.f", &SymbolOptions::default()).unwrap();
+        assert_eq!(outer.start_line, 1);
+        assert_eq!(inner.start_line, 7);
+        assert!(outer.cyclomatic.unwrap() > 1, "{outer:?}");
+        assert_eq!(inner.cyclomatic, Some(1), "{inner:?}");
+    }
+
     #[test]
     fn test_source_excluded_with_no_source() {
         let dir = make_chain();
@@ -320,6 +359,7 @@ mod tests {
         let opts = SymbolOptions {
             include_source: false,
             max_source_lines: 200,
+            ..SymbolOptions::default()
         };
         let report = get_symbol(dir.path(), &fs, "a", &opts).unwrap();
         assert!(
@@ -344,6 +384,7 @@ mod tests {
         let opts = SymbolOptions {
             include_source: true,
             max_source_lines: 5,
+            ..SymbolOptions::default()
         };
         let report = get_symbol(dir.path(), &files, "bigfn", &opts).unwrap();
         assert!(
@@ -367,7 +408,7 @@ mod tests {
             report
                 .callers
                 .iter()
-                .any(|c| c.qualified_name.contains(":a")),
+                .any(|c| c.qualified_name.ends_with("#a")),
             "a should be a caller of b, got: {:?}",
             report.callers
         );

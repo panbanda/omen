@@ -370,6 +370,11 @@
     "tracking": "phase-4-search"
   },
   {
+    "id": "go/n-map-slice/hit@1",
+    "reason": "expected one of main.go:apply:26 in the first 1, got shapes/shapes.go:Sum:56. A ranking loss: the Go fixture of the shared index added Group.Sum, which loops over a slice and adds areas. It does not apply a given function to each element. Sum scores 0.1465, apply scores 0.1208.",
+    "tracking": "phase-4-search"
+  },
+  {
     "id": "go/n-times-two/hit@1",
     "reason": "expected one of util/util.go:Twice:7, main.go:twiceLocal:34 in the first 1, got no result",
     "tracking": "phase-4-search"

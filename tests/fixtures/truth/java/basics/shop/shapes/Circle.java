@@ -35,3 +35,29 @@ class Ring extends Circle {
         return "ring of " + super.name();
     }
 }
+
+class Pair {
+    private Circle lead;
+    private Circle[] rest = new Circle[0];
+    private Pair next;
+
+    Pair(Circle lead) {
+        this.lead = lead;
+    }
+
+    double leadArea() {
+        return this.lead.area();
+    }
+
+    double nextArea() {
+        return next.lead.area();
+    }
+
+    double restArea() {
+        double total = 0;
+        for (var member : rest) {
+            total += member.area();
+        }
+        return total;
+    }
+}
