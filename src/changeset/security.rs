@@ -491,7 +491,7 @@ impl CommentSection for SecuritySection<'_> {
                 (
                     format!(
                         "\n<details><summary>New path to {}</summary>\n\n```mermaid\n{diagram}```\n\n</details>\n",
-                        path.sink.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+                        cell(&path.sink)
                     ),
                     used,
                 )
@@ -690,6 +690,31 @@ mod tests {
         for budget in [0usize, 100, 400, 800, 1500, 3000] {
             let text = section.render(budget);
             assert!(text.len() <= budget, "{budget}: {}", text.len());
+        }
+    }
+
+    #[test]
+    fn a_sink_key_in_a_diagram_summary_stays_text() {
+        let file = "[link](https://example.com)`*_|<b>.py";
+        let base = analyze_sources(&[(file, BASE)], DEFAULT_MIN_BASIS);
+        let head = analyze_sources(&[(file, HEAD)], DEFAULT_MIN_BASIS);
+        let changed: BTreeSet<String> = [format!("{file}#helper"), format!("{file}#extra")]
+            .into_iter()
+            .collect();
+        let found = diff(&base, &head, &changed);
+        let section = SecuritySection {
+            changes: &found,
+            max_nodes: 40,
+        };
+        let text = section.render(usize::MAX);
+        let summaries: Vec<&str> = text
+            .lines()
+            .filter(|line| line.contains("New path to"))
+            .collect();
+        assert!(!summaries.is_empty(), "{text}");
+        for summary in summaries {
+            assert!(summary.contains(r"\[link\]"), "{summary}");
+            assert!(summary.contains(r"\`\*\_\|&lt;b&gt;"), "{summary}");
         }
     }
 
