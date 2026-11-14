@@ -101,6 +101,21 @@ fn test_go_unexported_type_couples() {
 }
 
 #[test]
+fn test_go_type_with_a_one_character_name_couples() {
+    let source = "package shop\n\ntype w struct{}\n\ntype Shop struct {\n\titem w\n}\n";
+    let analysis = analyze(&[("shop.go", source)]);
+    assert_eq!(class(&analysis, "Shop").coupled_classes, ["w"]);
+    assert_eq!(class(&analysis, "Shop").cbo, 1);
+}
+
+#[test]
+fn test_go_type_parameter_does_not_couple() {
+    let source = "package box\n\ntype Box[T any] struct {\n\tvalue T\n}\n\nfunc (b *Box[T]) Get() T {\n\treturn b.value\n}\n";
+    let analysis = analyze(&[("box.go", source)]);
+    assert_eq!(class(&analysis, "Box").cbo, 0);
+}
+
+#[test]
 fn test_go_methods_in_another_file_of_the_package_belong_to_the_struct() {
     let declaration = "package shop\n\ntype Cart struct {\n\titems int\n}\n";
     let methods = "package shop\n\nfunc (c *Cart) Add() {\n\tc.items++\n}\n\nfunc (c *Cart) Count() int {\n\treturn c.items\n}\n";

@@ -377,6 +377,7 @@ impl<'a, 'v> Classes<'a, 'v> {
                 (symbol.key.as_str(), symbol.name.as_str())
             })
             .collect();
+        let known_names: HashSet<&str> = class_names.values().copied().collect();
         for (view_index, view) in views.iter().enumerate() {
             let facts = view.facts;
             for (position, symbol) in facts.symbols.iter().enumerate() {
@@ -435,6 +436,14 @@ impl<'a, 'v> Classes<'a, 'v> {
                 }
             }
             for reference in &facts.members.references {
+                // A Go name of one character is a type parameter, unless the
+                // repository has a class with that name.
+                let type_parameter = facts.language == Language::Go
+                    && reference.name.len() <= 1
+                    && !known_names.contains(reference.name.as_str());
+                if type_parameter {
+                    continue;
+                }
                 if let Some(found) = self.attribute(view_index, reference.owner as usize) {
                     self.builders[found.class]
                         .coupled

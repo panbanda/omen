@@ -830,7 +830,7 @@ pub fn bases(language: Language, node: Node<'_>, source: &[u8]) -> Vec<String> {
 
 /// A name that a type can have in the metrics of coupling.
 pub fn is_valid_class_reference(name: &str, language: Language) -> bool {
-    if is_primitive_type(name) || name.len() <= 1 {
+    if is_primitive_type(name) || (name.len() <= 1 && language != Language::Go) {
         return false;
     }
     match language {
