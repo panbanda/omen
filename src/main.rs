@@ -381,7 +381,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 sink: args.sink.clone(),
                 min_basis: args.min_basis.clone(),
                 experimental: args.experimental,
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
                 gate: args.gate.mode,
                 gate_categories: args.gate_category.clone(),
                 gate_basis: args.gate_basis.clone(),

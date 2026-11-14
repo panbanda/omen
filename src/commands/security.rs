@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use super::gate::{gate_dispatch, resolve_gate_mode};
-use super::scope::{build_context, scoped_file_set, Scope};
+use super::scope::{build_context, scoped_inputs, Scope};
 use crate::analyzers::security::{
     basis_of, category_of, mermaid, sarif, Analyzer as SecurityAnalyzer, Report, Section,
 };
@@ -78,8 +78,11 @@ pub fn run(
             "`--entry` and `--sink` apply to `omen security paths` only.".to_string(),
         ));
     }
-    let file_set = scoped_file_set(path, config, &request.scope)?;
-    let ctx = build_context(path, &file_set, config);
+    let (file_set, source) = scoped_inputs(path, config, &request.scope)?;
+    let mut ctx = build_context(path, &file_set, config);
+    if let Some(source) = source {
+        ctx = ctx.with_content_source(source);
+    }
     let report = analyzer.analyze(&ctx)?.restricted(
         request.category.as_deref(),
         request.entry.as_deref(),

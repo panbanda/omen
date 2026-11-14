@@ -273,3 +273,38 @@ fn test_a_reference_that_does_not_exist_is_an_error() {
         .unwrap();
     assert!(!output.status.success(), "{output:?}");
 }
+
+#[test]
+fn test_security_reads_the_commit_of_ref() {
+    let directory = TempDir::new().unwrap();
+    let git = |arguments: &[&str]| isolated_git(directory.path(), arguments);
+    git(&["init", "-q"]);
+    std::fs::write(
+        directory.path().join("old_sink.py"),
+        "import os\n\n\ndef run(command):\n    os.system(command)\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "first"]);
+    let first = git(&["rev-parse", "HEAD"]);
+    git(&["rm", "-q", "old_sink.py"]);
+    std::fs::write(
+        directory.path().join("new_only.py"),
+        "def new_only():\n    return 2\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "second"]);
+    let run = |reference: Option<&str>| {
+        let mut command = omen();
+        command.args(["-p", directory.path().to_str().unwrap(), "-f", "json"]);
+        if let Some(reference) = reference {
+            command.args(["--ref", reference]);
+        }
+        command.args(["security", "sinks"]).output().unwrap()
+    };
+    let old = stdout_of(&run(Some(&first)));
+    assert!(old.contains("old_sink.py"), "{old}");
+    let current = stdout_of(&run(None));
+    assert!(!current.contains("old_sink.py"), "{current}");
+}
