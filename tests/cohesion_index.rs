@@ -92,6 +92,15 @@ fn test_go_receiver_name_is_not_guessed_from_its_length() {
 }
 
 #[test]
+fn test_go_unexported_type_couples() {
+    let source = "package shop\n\ntype worker struct{}\n\ntype Shop struct {\n\tw      worker\n\tname   string\n\tfailed error\n\tcode   rune\n}\n";
+    let analysis = analyze(&[("shop.go", source)]);
+    let shop = class(&analysis, "Shop");
+    assert_eq!(shop.coupled_classes, ["worker"]);
+    assert_eq!(shop.cbo, 1);
+}
+
+#[test]
 fn test_go_methods_in_another_file_of_the_package_belong_to_the_struct() {
     let declaration = "package shop\n\ntype Cart struct {\n\titems int\n}\n";
     let methods = "package shop\n\nfunc (c *Cart) Add() {\n\tc.items++\n}\n\nfunc (c *Cart) Count() int {\n\treturn c.items\n}\n";

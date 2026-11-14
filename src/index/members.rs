@@ -810,9 +810,12 @@ pub fn is_valid_class_reference(name: &str, language: Language) -> bool {
                 )
                 && !name.chars().all(|c| c.is_ascii_uppercase() || c == '_')
         }
-        Language::Rust | Language::Go => {
-            name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-        }
+        Language::Rust => name.chars().next().is_some_and(|c| c.is_ascii_uppercase()),
+        // A Go type of the package can have a lower-case name. These names are predeclared types.
+        Language::Go => !matches!(
+            name,
+            "error" | "rune" | "uintptr" | "complex64" | "complex128" | "comparable"
+        ),
         _ => true,
     }
 }
