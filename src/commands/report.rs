@@ -49,13 +49,25 @@ fn generate_window(since: Option<&str>, days: Option<u32>) -> crate::core::Resul
     })
 }
 
-/// Writes the file in one step: the old file stays until the new text is complete.
+/// Writes the file in one step: the old file stays until the new text is complete. The
+/// temporary file has a random name and is new, so a link at a guessed name is not followed.
 fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    let mut pending = path.as_os_str().to_owned();
-    pending.push(".tmp");
-    let pending = std::path::PathBuf::from(pending);
-    std::fs::write(&pending, text)?;
-    std::fs::rename(&pending, path)
+    use std::io::Write;
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let mut pending = tempfile::NamedTempFile::new_in(directory)?;
+    pending.write_all(text.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        pending
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o644))?;
+    }
+    pending.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 /// The data files that `report generate` writes and that `report validate` expects.
@@ -139,9 +151,7 @@ pub fn run(
             let changes_path = args.data.join("diff.json");
             match changes {
                 Some(changes) => {
-                    let pending_path = args.data.join("diff.json.tmp");
-                    std::fs::write(&pending_path, serde_json::to_string_pretty(&changes)?)?;
-                    std::fs::rename(&pending_path, &changes_path)?;
+                    write_atomically(&changes_path, &serde_json::to_string_pretty(&changes)?)?;
                 }
                 None => match std::fs::remove_file(&changes_path) {
                     Err(error) if error.kind() != std::io::ErrorKind::NotFound => {

@@ -183,6 +183,20 @@ fn test_days_alone_gives_the_window_for_every_part() {
     assert_eq!(window.days, 30);
 }
 
+#[cfg(unix)]
+#[test]
+fn test_a_symlink_at_the_old_temporary_path_is_not_followed() {
+    let directory = tempfile::tempdir().expect("directory");
+    let victim = directory.path().join("victim.txt");
+    std::fs::write(&victim, "keep").expect("write");
+    let target = directory.path().join("metadata.json");
+    let old_temporary = directory.path().join("metadata.json.tmp");
+    std::os::unix::fs::symlink(&victim, &old_temporary).expect("symlink");
+    write_atomically(&target, "{}").expect("write");
+    assert_eq!(std::fs::read_to_string(&victim).expect("read"), "keep");
+    assert_eq!(std::fs::read_to_string(&target).expect("read"), "{}");
+}
+
 #[test]
 fn test_no_flag_gives_the_default_window_of_one_year() {
     let window = generate_window(None, None).expect("window");
