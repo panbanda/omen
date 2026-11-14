@@ -211,6 +211,23 @@ fn test_uncommitted_changes_are_named_and_hotspots_are_skipped() {
 }
 
 #[test]
+fn test_untracked_file_that_is_not_ignored_skips_the_hotspots() {
+    let directory = repository();
+    write(directory.path(), "src/recreated.rs", "pub fn back() {}\n");
+    let changes = changes(directory.path());
+    assert_eq!(changes.notes.len(), 1, "{:?}", changes.notes);
+}
+
+#[test]
+fn test_ignored_file_does_not_skip_the_hotspots() {
+    let directory = repository();
+    let exclude = directory.path().join(".git/info/exclude");
+    std::fs::write(exclude, "scratch.log\n").expect("exclude file");
+    write(directory.path(), "scratch.log", "noise\n");
+    assert!(changes(directory.path()).notes.is_empty());
+}
+
+#[test]
 fn test_comment_never_exceeds_the_budget_and_rejects_a_budget_below_the_header() {
     let directory = repository();
     let changes = changes(directory.path());

@@ -41,7 +41,11 @@ pub fn render(graph: &ChangeGraph, max_nodes: usize) -> Option<String> {
     if graph.nodes.is_empty() {
         return None;
     }
-    Some(render_capped(&cap(graph, max_nodes)))
+    let capped = cap(graph, max_nodes);
+    if capped.components.is_empty() {
+        return None;
+    }
+    Some(render_capped(&capped))
 }
 
 fn escape(label: &str) -> String {
@@ -247,7 +251,8 @@ pub(crate) mod tests {
     #[test]
     fn test_render_stays_in_the_subset_when_the_cap_leaves_nodes_out() {
         check_subset(&render(&sample(), 2).unwrap());
-        check_subset(&render(&sample(), 0).unwrap());
+        check_subset(&render(&sample(), 1).unwrap());
+        assert_eq!(render(&sample(), 0), None);
     }
 
     #[test]
@@ -276,11 +281,18 @@ pub(crate) mod tests {
 
     #[test]
     fn test_render_gives_one_more_node_for_each_component_that_lost_nodes() {
-        let text = render(&sample(), 1).unwrap();
+        let text = render(&sample(), 2).unwrap();
         assert!(
             text.contains("[\"+1 more\"]") && text.contains("[\"+3 more\"]"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn test_render_gives_one_more_node_in_all_when_the_components_do_not_fit() {
+        let text = render(&sample(), 1).unwrap();
+        assert_eq!(text.matches("more\"]").count(), 1, "{text}");
+        assert!(text.contains("[\"+4 more\"]"), "{text}");
     }
 
     #[test]

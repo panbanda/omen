@@ -763,7 +763,7 @@ fn has_uncommitted_changes(repository: &Path) -> bool {
     std::process::Command::new("git")
         .arg("-C")
         .arg(repository)
-        .args(["status", "--porcelain", "--untracked-files=no"])
+        .args(["status", "--porcelain", "--untracked-files=normal"])
         .output()
         .map(|output| !output.status.success() || !output.stdout.is_empty())
         .unwrap_or(true)

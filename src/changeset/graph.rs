@@ -6,6 +6,10 @@ use serde::Serialize;
 
 use super::model::{ChangeGraph, ChangeState, GraphEdge, GraphNode};
 
+/// The name of the one component that stands for all components when the
+/// cap is smaller than the number of components.
+pub const ALL_COMPONENTS: &str = "all components";
+
 /// The nodes of one component after the cap.
 #[derive(Debug, PartialEq, Eq)]
 pub struct CappedComponent<'a> {
@@ -28,8 +32,9 @@ pub struct CappedGraph<'a> {
 /// node that gives context. In each group the nodes are in key order, thus
 /// two runs keep the same nodes.
 ///
-/// When even the "more" nodes alone are too many, the result has no node
-/// that is kept and one "more" node for each component.
+/// The limit is hard. When the "more" nodes of the components alone are too
+/// many, the result has one "more" node for all components. When the limit is
+/// 0, the result has no node.
 pub fn cap(graph: &ChangeGraph, max_nodes: usize) -> CappedGraph<'_> {
     let mut ordered: Vec<&GraphNode> = graph.nodes.iter().collect();
     ordered.sort_by(|left, right| {
@@ -44,10 +49,24 @@ pub fn cap(graph: &ChangeGraph, max_nodes: usize) -> CappedGraph<'_> {
             .collect::<BTreeSet<_>>()
             .len()
     };
-    let keep = (0..=ordered.len().min(max_nodes))
+    let Some(keep) = (0..=ordered.len().min(max_nodes))
         .rev()
         .find(|keep| keep + more_nodes(&ordered[*keep..]) <= max_nodes)
-        .unwrap_or(0);
+    else {
+        let components = if max_nodes == 0 {
+            Vec::new()
+        } else {
+            vec![CappedComponent {
+                name: ALL_COMPONENTS,
+                nodes: Vec::new(),
+                omitted: ordered.len(),
+            }]
+        };
+        return CappedGraph {
+            components,
+            edges: Vec::new(),
+        };
+    };
     let (kept, left_out) = ordered.split_at(keep);
     let kept_keys: BTreeSet<&str> = kept.iter().map(|node| node.key.as_str()).collect();
 
@@ -209,10 +228,7 @@ mod tests {
             let capped = cap(&graph, max_nodes);
             let kept: usize = capped.components.iter().map(|c| c.nodes.len()).sum();
             let more = capped.components.iter().filter(|c| c.omitted > 0).count();
-            assert!(
-                kept + more <= max_nodes || kept == 0,
-                "{max_nodes}: {kept} + {more}"
-            );
+            assert!(kept + more <= max_nodes, "{max_nodes}: {kept} + {more}");
         }
     }
 
@@ -225,12 +241,20 @@ mod tests {
     }
 
     #[test]
-    fn test_cap_of_zero_leaves_a_more_node_for_each_component() {
+    fn test_cap_collapses_all_components_into_one_more_node_when_they_do_not_fit() {
+        let graph = sample();
+        let capped = cap(&graph, 1);
+        assert_eq!(capped.components.len(), 1);
+        assert!(capped.components[0].nodes.is_empty());
+        assert_eq!(capped.components[0].omitted, 4);
+        assert!(capped.edges.is_empty());
+    }
+
+    #[test]
+    fn test_cap_of_zero_has_no_node() {
         let graph = sample();
         let capped = cap(&graph, 0);
-        assert!(capped.components.iter().all(|c| c.nodes.is_empty()));
-        let omitted: Vec<usize> = capped.components.iter().map(|c| c.omitted).collect();
-        assert_eq!(omitted, [2, 2]);
+        assert!(capped.components.is_empty());
     }
 
     #[test]

@@ -238,6 +238,24 @@ omen diff --target abc123
 omen -f markdown diff --target main
 ```
 
+**Pull-request comment:**
+
+With `-f markdown`, `omen diff` writes a comment for a pull request. The first line is `<!-- omen:diff -->`, so a CI step can find and replace its own comment. A CI step can pipe the text into `gh pr comment --body-file -`. Omen does not call a forge API.
+
+The comment has a summary table, a table of the changed symbols, a Mermaid call graph, and `<details>` blocks for long lists. Omen builds the index at the merge base and at `HEAD`, and compares the two by symbol key.
+
+| Flag | Default | Meaning |
+| ---- | ------- | ------- |
+| `--max-bytes` | 60000 | Byte budget of the comment. The value 0 removes the limit. A value below the size of the title and the summary is an error. |
+| `--max-nodes` | 30 | Maximum number of nodes in the call graph, with the "+N more" nodes. |
+
+Limits of the comment:
+
+- A symbol that moved to another file, or that has a new name, shows as one removal and one addition. A file that git renamed keeps its symbols.
+- The hotspot data comes from the working tree. When a tracked file has uncommitted changes, or an untracked file is not ignored, omen skips the hotspots and the comment says so.
+
+`omen report generate --ref REF` adds a "Changes since" view to the HTML report.
+
 **Risk Factors:**
 
 The diff analyzer uses the same research-backed weight model as `omen changes` (see above), combining change-scope factors with file-level signals:
