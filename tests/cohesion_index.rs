@@ -540,6 +540,43 @@ fn test_record_is_a_class() {
 }
 
 #[test]
+fn test_csharp_struct_is_measured() {
+    let source =
+        "public struct Meter\n{\n    public int Twice(int value) { return value * 2; }\n}\n";
+    let analysis = analyze(&[("Meter.cs", source)]);
+    let meter = class(&analysis, "Meter");
+    assert_eq!(meter.nom, 1);
+    assert_eq!(meter.wmc, 1);
+}
+
+#[test]
+fn test_java_enum_with_methods_is_measured() {
+    let source = "enum Level {\n    LOW, HIGH;\n\n    private int weight;\n\n    int weight() { return weight; }\n\n    boolean isHigh() { return this == HIGH; }\n}\n";
+    let analysis = analyze(&[("Level.java", source)]);
+    let level = class(&analysis, "Level");
+    assert_eq!(level.nom, 2);
+    assert_eq!(level.nof, 1);
+}
+
+#[test]
+fn test_rust_enum_and_trait_are_measured() {
+    let source = "enum Mode {\n    Fast,\n    Slow,\n}\n\nimpl Mode {\n    fn rank(&self) -> u32 {\n        1\n    }\n}\n\ntrait Shape {\n    fn area(&self) -> u32;\n\n    fn double(&self) -> u32 {\n        self.area() * 2\n    }\n}\n\nstruct Square;\n\nimpl Shape for Square {\n    fn area(&self) -> u32 {\n        4\n    }\n}\n";
+    let analysis = analyze(&[("lib.rs", source)]);
+    assert_eq!(class(&analysis, "Mode").nom, 1);
+    assert_eq!(class(&analysis, "Shape").nom, 2);
+    assert_eq!(class(&analysis, "Square").nom, 1);
+}
+
+#[test]
+fn test_php_trait_is_measured() {
+    let source = "<?php\ntrait Logs {\n    private $lines = [];\n\n    function add($line) { $this->lines[] = $line; }\n\n    function all() { return $this->lines; }\n}\n";
+    let analysis = analyze(&[("Logs.php", source)]);
+    let logs = class(&analysis, "Logs");
+    assert_eq!(logs.nom, 2);
+    assert_eq!(logs.lcom, 1);
+}
+
+#[test]
 fn test_abstract_typescript_class_is_a_class() {
     let source = "abstract class Base {\n  abstract area(): number;\n  describe() {\n    return 'x';\n  }\n}\n";
     let analysis = analyze(&[("base.ts", source)]);

@@ -39,17 +39,17 @@ pub enum ClassModel {
 
 /// The class model of a language.
 pub fn class_model(language: Language) -> ClassModel {
-    use SymbolKind::{Class, Interface, Module, Struct};
+    use SymbolKind::{Class, Enum, Interface, Module, Struct, Trait};
     match language {
         Language::Java => ClassModel::Classes(ClassSyntax {
-            classes: &[Class, Interface],
+            classes: &[Class, Interface, Enum],
             references: &["type_identifier"],
             declarations: &["field_declaration"],
             accesses: &["field_access"],
             implicit: &["identifier"],
         }),
         Language::CSharp => ClassModel::Classes(ClassSyntax {
-            classes: &[Class, Interface],
+            classes: &[Class, Interface, Struct],
             references: &["identifier"],
             declarations: &["field_declaration", "property_declaration", "parameter"],
             accesses: &["member_access_expression"],
@@ -91,14 +91,14 @@ pub fn class_model(language: Language) -> ClassModel {
             implicit: &[],
         }),
         Language::Php => ClassModel::Classes(ClassSyntax {
-            classes: &[Class, Interface],
+            classes: &[Class, Interface, Trait],
             references: &["named_type"],
             declarations: &["property_declaration", "property_promotion_parameter"],
             accesses: &["member_access_expression"],
             implicit: &[],
         }),
         Language::Rust => ClassModel::Classes(ClassSyntax {
-            classes: &[Struct],
+            classes: &[Struct, Enum, Trait],
             references: &["type_identifier", "scoped_identifier"],
             declarations: &["field_declaration"],
             accesses: &["field_expression"],
