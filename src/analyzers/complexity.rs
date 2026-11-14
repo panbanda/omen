@@ -1544,6 +1544,71 @@ def safe_parse(data):
         );
     }
 
+    fn assert_ternary_adds_one(code: &[u8], language: Language, file: &str) {
+        let result = parse_and_analyze(code, language, file);
+        assert_eq!(result.functions.len(), 1, "{language:?}");
+        assert_eq!(
+            result.functions[0].metrics.cyclomatic, 2,
+            "{language:?}: a ternary must add exactly 1 to cyclomatic complexity"
+        );
+    }
+
+    #[test]
+    fn test_ternary_adds_one_per_language() {
+        let cases: [(&[u8], Language, &str); 11] = [
+            (
+                b"class A { int f(int x) { return x > 0 ? 1 : 0; } }",
+                Language::Java,
+                "A.java",
+            ),
+            (b"int f(int x) { return x ? 1 : 0; }", Language::C, "a.c"),
+            (
+                b"int f(int x) { return x ? 1 : 0; }",
+                Language::Cpp,
+                "a.cpp",
+            ),
+            (
+                b"class A { int F(int x) { return x > 0 ? 1 : 0; } }",
+                Language::CSharp,
+                "A.cs",
+            ),
+            (
+                b"function f(x) { return x > 0 ? 1 : 0; }",
+                Language::JavaScript,
+                "a.js",
+            ),
+            (
+                b"function f(x: number) { return x > 0 ? 1 : 0; }",
+                Language::TypeScript,
+                "a.ts",
+            ),
+            (
+                b"function f(x: number) { return x > 0 ? 1 : 0; }",
+                Language::Tsx,
+                "a.tsx",
+            ),
+            (
+                b"<?php\nfunction f($x) { return $x > 0 ? 1 : 0; }\n",
+                Language::Php,
+                "a.php",
+            ),
+            (b"def f(x)\n  x > 0 ? 1 : 0\nend\n", Language::Ruby, "a.rb"),
+            (
+                b"def f(x):\n    return 1 if x > 0 else 0\n",
+                Language::Python,
+                "a.py",
+            ),
+            (
+                b"f() {\n  echo $(( x > 0 ? 1 : 0 ))\n}\n",
+                Language::Bash,
+                "a.sh",
+            ),
+        ];
+        for (code, language, file) in cases {
+            assert_ternary_adds_one(code, language, file);
+        }
+    }
+
     #[test]
     fn test_complexity_python_conditional_expression() {
         let code = br#"
