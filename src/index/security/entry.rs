@@ -404,10 +404,16 @@ impl<'a> Context<'a> {
     /// Tells if the receiver of a registration is a framework object. A receiver is a
     /// framework object when its text has a marker, as `express()` has, when a
     /// declaration or a typed parameter in the file binds its name to a text with a marker,
-    /// or when an import binds its name and the module that the import names is the
-    /// framework itself (one of `modules`), or is a file of the repository that binds
-    /// the name to a text with a marker.
-    fn is_framework_value(&self, receiver: Node<'_>, markers: &[&str], modules: &[&str]) -> bool {
+    /// or when an import binds its name and the import is of one of the `exports` of the
+    /// framework, a module and the names that make a router or an application, or the
+    /// module is a file of the repository that binds the name to a text with a marker.
+    /// Other exports of the framework, such as `request`, are not framework values.
+    fn is_framework_value(
+        &self,
+        receiver: Node<'_>,
+        markers: &[&str],
+        exports: &[(&str, &[&str])],
+    ) -> bool {
         let text = self.text(receiver);
         if markers.iter().any(|marker| text.contains(marker)) {
             return true;
@@ -424,7 +430,7 @@ impl<'a> Context<'a> {
         if !imported.is_empty() {
             return imported
                 .into_iter()
-                .any(|binding| self.import_is_framework_value(binding, markers, modules));
+                .any(|binding| self.import_is_framework_value(binding, markers, exports));
         }
         bound_to_marker(self.parsed.root_node(), self.source, text, markers)
     }
@@ -433,15 +439,18 @@ impl<'a> Context<'a> {
         &self,
         binding: &crate::index::model::ImportBinding,
         markers: &[&str],
-        modules: &[&str],
+        exports: &[(&str, &[&str])],
     ) -> bool {
         use crate::index::model::ImportTarget;
         let path = binding.module_path.replace(['/', '\\', ':'], ".");
-        if modules
+        let is_framework_module = exports
             .iter()
-            .any(|module| path == *module || path.starts_with(&format!("{module}.")))
-        {
-            return true;
+            .any(|(module, _)| path == *module || path.starts_with(&format!("{module}.")));
+        if is_framework_module {
+            return binding
+                .imported_name
+                .as_deref()
+                .is_some_and(|name| exports.iter().any(|(_, names)| names.contains(&name)));
         }
         let targets: &[String] = match &binding.target_file {
             ImportTarget::Resolved(file) => std::slice::from_ref(file),
@@ -798,15 +807,20 @@ impl<'a> Context<'a> {
             if !is_method || !(name == "route" || HTTP_VERBS.contains(&name)) {
                 continue;
             }
-            let (markers, framework_module): (&[&str], &str) = if framework == "fastapi" {
-                (&["FastAPI(", "APIRouter("], "fastapi")
-            } else {
-                (&["Flask(", "Blueprint("], "flask")
-            };
+            let (markers, framework_module, exports): (&[&str], &str, &[&str]) =
+                if framework == "fastapi" {
+                    (
+                        &["FastAPI(", "APIRouter("],
+                        "fastapi",
+                        &["FastAPI", "APIRouter"],
+                    )
+                } else {
+                    (&["Flask(", "Blueprint("], "flask", &["Flask", "Blueprint"])
+                };
             let Some(receiver) = callee.child_by_field_name("object") else {
                 continue;
             };
-            if !self.is_framework_value(receiver, markers, &[framework_module]) {
+            if !self.is_framework_value(receiver, markers, &[(framework_module, exports)]) {
                 continue;
             }
             let Some(path) = arguments
@@ -908,7 +922,7 @@ impl<'a> Context<'a> {
         if !self.is_framework_value(
             receiver,
             &["express(", "express.Router(", "Router("],
-            &["express"],
+            &[("express", &["Router"])],
         ) {
             return;
         }
@@ -1243,7 +1257,7 @@ impl<'a> Context<'a> {
             && self.is_framework_value(
                 receiver,
                 &["gin.", ".Group("],
-                &["github.com.gin-gonic.gin"],
+                &[("github.com.gin-gonic.gin", &["Default", "New"])],
             )
         {
             let guards = arguments[1..arguments.len() - 1]
@@ -1412,7 +1426,7 @@ impl<'a> Context<'a> {
                 return false;
             };
             if value.kind() != "call_expression" {
-                return self.is_framework_value(value, &["Router"], &["axum"]);
+                return self.is_framework_value(value, &["Router"], &[("axum", &["Router"])]);
             }
             let Some(inner) = value.child_by_field_name("function") else {
                 return false;
@@ -1761,6 +1775,23 @@ mod tests {
         assert!(entries(Language::JavaScript, &[("a.js", from_express)])
             .iter()
             .any(|entry| entry.kind == EntryKind::HttpHandler));
+    }
+
+    #[test]
+    fn only_a_constructor_of_the_framework_makes_an_imported_receiver_a_framework_value() {
+        let express = "const { request } = require(\"express\");\n\nfunction audit(user) {\n  eval(user);\n}\n\nrequest.get(\"/x\", audit);\n";
+        assert!(
+            http_frameworks(Language::JavaScript, &[("a.js", express)]).is_empty(),
+            "`request` is not an application"
+        );
+        let flask =
+            "from flask import request\n\n@request.get(\"/x\")\ndef audit():\n    return 1\n";
+        assert!(http_frameworks(Language::Python, &[("a.py", flask)]).is_empty());
+        let router = "const { Router } = require(\"express\");\nconst router = Router();\n\nrouter.get(\"/x\", audit);\n";
+        assert_eq!(
+            http_frameworks(Language::JavaScript, &[("b.js", router)]),
+            ["express"]
+        );
     }
 
     #[test]
