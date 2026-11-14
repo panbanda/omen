@@ -153,8 +153,12 @@ pub trait TreeSource: Sync {
 /// parses a file when a rule asks, and it keeps the tree for the next question.
 pub struct OnDemandTrees<'a> {
     parse_file: &'a (dyn Fn(usize) -> Option<ParseResult> + Sync),
-    parsed: parking_lot::Mutex<std::collections::HashMap<usize, std::sync::Arc<ParseResult>>>,
+    parsed: parking_lot::Mutex<std::collections::HashMap<usize, Cell>>,
 }
+
+/// The one parse of a file. The first thread that asks parses the file, and the other
+/// threads wait for the result. A file that cannot be parsed stays without a tree.
+type Cell = std::sync::Arc<std::sync::OnceLock<Option<std::sync::Arc<ParseResult>>>>;
 
 impl<'a> OnDemandTrees<'a> {
     pub fn new(parse_file: &'a (dyn Fn(usize) -> Option<ParseResult> + Sync)) -> Self {
@@ -167,12 +171,10 @@ impl<'a> OnDemandTrees<'a> {
 
 impl TreeSource for OnDemandTrees<'_> {
     fn tree(&self, position: usize) -> Option<TreeRef<'_>> {
-        if let Some(tree) = self.parsed.lock().get(&position) {
-            return Some(TreeRef::Shared(std::sync::Arc::clone(tree)));
-        }
-        let tree = std::sync::Arc::new((self.parse_file)(position)?);
-        let tree = std::sync::Arc::clone(self.parsed.lock().entry(position).or_insert(tree));
-        Some(TreeRef::Shared(tree))
+        let cell = std::sync::Arc::clone(self.parsed.lock().entry(position).or_default());
+        cell.get_or_init(|| (self.parse_file)(position).map(std::sync::Arc::new))
+            .as_ref()
+            .map(|tree| TreeRef::Shared(std::sync::Arc::clone(tree)))
     }
 }
 
@@ -1759,6 +1761,26 @@ mod tests {
     use crate::index::imports::{resolve_imports, Manifests};
     use crate::index::resolve::resolve_references;
     use crate::parser::Parser;
+
+    #[test]
+    fn concurrent_requests_for_one_file_parse_it_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let parses = AtomicUsize::new(0);
+        let parse_file = |_: usize| {
+            parses.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            Parser::new()
+                .parse(b"x = 1\n", Language::Python, Path::new("a.py"))
+                .ok()
+        };
+        let trees = OnDemandTrees::new(&parse_file);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| assert!(trees.tree(0).is_some()));
+            }
+        });
+        assert_eq!(parses.load(Ordering::SeqCst), 1);
+    }
 
     fn entries(language: Language, files: &[(&str, &str)]) -> Vec<EntryPoint> {
         let parsed: Vec<ParseResult> = files
