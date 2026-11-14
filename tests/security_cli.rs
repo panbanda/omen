@@ -225,6 +225,50 @@ fn test_an_unknown_gate_category_or_basis_is_an_error_that_lists_the_valid_value
 }
 
 #[test]
+fn test_the_gate_counts_an_experimental_finding_when_the_flag_is_set() {
+    let directory = two_commits_of(
+        "def run():\n    return 1\n",
+        "def run():\n    return \"AKIAJ3KD92LQ7MZP5XWB\"\n",
+    );
+    let path = directory.path();
+    let arguments = |experimental: bool| {
+        let mut all = vec![
+            "security",
+            "-t",
+            "main",
+            "--gate",
+            "error",
+            "--gate-category",
+            "hardcoded_credential",
+        ];
+        if experimental {
+            all.push("--experimental");
+        }
+        all
+    };
+    assert!(omen(path, &arguments(false)).status.success());
+    assert_eq!(omen(path, &arguments(true)).status.code(), Some(2));
+}
+
+#[test]
+fn test_the_gate_uses_the_sinks_of_the_configuration() {
+    let directory = two_commits_of(
+        "def run(command):\n    return command\n",
+        "import acme.shell as shell\n\ndef run(command):\n    shell.run_checked(command)\n",
+    );
+    let path = directory.path();
+    std::fs::write(
+        path.join("omen.toml"),
+        "[security]\ngate = \"error\"\n\n[[security.sinks]]\ncategory = \"command_execution\"\nlanguages = [\"python\"]\nmodule = \"acme.shell\"\ncallee = \"run_checked\"\n",
+    )
+    .expect("write");
+    let report = json(path, &["security", "sinks", "--gate", "off"]);
+    assert_eq!(report["summary"]["sinks"], 1, "the normal command finds it");
+    let gate = omen(path, &["security", "-t", "main"]);
+    assert_eq!(gate.status.code(), Some(2), "the gate finds it too");
+}
+
+#[test]
 fn test_the_configuration_rejects_an_unknown_key_in_the_security_section() {
     let directory = project(HEAD);
     std::fs::write(

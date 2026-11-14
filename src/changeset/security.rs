@@ -13,8 +13,8 @@ use super::model::{ChangeSet, ChangeState};
 use crate::config::Config;
 use crate::core::{ContentSource, FileSet, Result, TreeSource};
 use crate::git::GitRepo;
-use crate::index::model::ResolutionBasis;
-use crate::index::security::analysis::{analyze, Analysis};
+use crate::index::build::CodeIndex;
+use crate::index::security::analysis::{analyze_with_index, Analysis, Options};
 use crate::index::security::entry::EntryPoint;
 use crate::index::security::reach::SinkPath;
 use crate::index::security::Sink;
@@ -211,17 +211,21 @@ fn analyze_revision(
     repository: &Path,
     revision: &str,
     config: &Config,
-    min_basis: ResolutionBasis,
+    options: &Options,
 ) -> Result<Analysis> {
     let source = TreeSource::new(repository, revision)?;
     let file_set = FileSet::from_tree_source(&source, config)?;
     let files: Vec<PathBuf> = file_set.iter().cloned().collect();
-    Ok(analyze(
+    let read = |path: &Path| source.read(path);
+    let index = CodeIndex::build(Path::new(""), &files, &read, &|directory| {
+        source.list_directory(directory).unwrap_or_default()
+    });
+    Ok(analyze_with_index(
+        &index,
         Path::new(""),
         &files,
-        &|path| source.read(path),
-        &|directory| source.list_directory(directory).unwrap_or_default(),
-        min_basis,
+        &read,
+        options,
     ))
 }
 
@@ -240,9 +244,9 @@ pub fn compute_with(
     let repo = GitRepo::open(repository)?;
     let base_sha = repo.merge_base(&target, "HEAD")?;
     let head_sha = repo.head_sha()?;
-    let min_basis = crate::analyzers::security::options_of(&config.security)?.min_basis;
-    let base = analyze_revision(repository, &base_sha, config, min_basis)?;
-    let head = analyze_revision(repository, &head_sha, config, min_basis)?;
+    let options = crate::analyzers::security::options_of(&config.security)?;
+    let base = analyze_revision(repository, &base_sha, config, &options)?;
+    let head = analyze_revision(repository, &head_sha, config, &options)?;
     Ok(diff(&base, &head, changed))
 }
 
