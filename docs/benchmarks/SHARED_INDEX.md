@@ -4,9 +4,9 @@ This page gives descriptive numbers from one host. They are not a guarantee
 and not a gate. The host ran other builds during the session, thus a
 difference of a few milliseconds has no meaning.
 
-The old index is `analyzers::repomap::build_index`. The shared index is
-`index::build::CodeIndex`. The commands `symbol` and `impact` and the MCP tools
-`get_symbol` and `impact` read the shared index.
+The old index was `analyzers::repomap::build_index`, which 5.0 removed. The
+measurements below are from before the removal. The shared index is
+`index::build::CodeIndex`. Each command that follows calls reads it.
 
 ## Repositories
 
@@ -26,8 +26,8 @@ unit tests and fixture labels, and no measurement on a real repository.
 
 ## Cost of one index build
 
-The test `cost_of_one_index` in `tests/index_differential.rs` builds one index
-in one process. Each number is from five processes of the release test binary:
+The test `cost_of_one_index` built one index in one process. It was in
+`tests/index_differential.rs`, which 5.0 removed with the old index. Each number is from five processes of the release test binary:
 the median and the maximum of the wall time, and the peak resident memory.
 
 | Repository | Files | Old index | Shared index |

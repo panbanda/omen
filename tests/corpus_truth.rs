@@ -25,7 +25,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use omen::analyzers::repomap::build_index;
 use omen::benchmark::accepted::{check_accepted_facts, load_accepted, AcceptedFact};
 use omen::benchmark::truth::{
     bless, check_ledger, ledger_growth, render_table, summarize, Assertion, LedgerEntry,
@@ -40,8 +39,6 @@ use serde_json::Value;
 /// repositories, and this test does not use the network.
 const CORPORA: [&str; 2] = ["corpus", "scoped"];
 const LEDGER_FILE: &str = "expected_failures.json";
-/// The ledger of the checks that fail with the shared index and its resolver.
-const INDEX_LEDGER_FILE: &str = "expected_failures_index.json";
 const BLESS_TRACKING: &str = "phase-2-shared-index";
 /// The paired harness uses the same query when a case does not give one.
 const DEFAULT_QUERY: &str = "caller";
@@ -187,36 +184,8 @@ fn strings(value: Option<&Value>) -> Vec<String> {
 }
 
 /// Collect the files as the `symbol` command does with the default
-/// configuration, then read the callees of the first symbol that matches.
-fn observe(root: &Path, query: &str) -> Option<Observation> {
-    let file_set = FileSet::from_path_default(root).expect("file set");
-    let files: Vec<PathBuf> = file_set.iter().map(|path| root.join(path)).collect();
-    let index = build_index(root, &files).expect("build_index");
-    let primary = *index.resolve(query).first()?;
-    let symbol = &index.symbols[primary];
-    Some(Observation {
-        edges: index
-            .callees(&[primary], 1)
-            .into_iter()
-            .flatten()
-            .map(|callee| index.symbols[callee].qualified_name.clone())
-            .collect(),
-        candidates: index
-            .call_resolutions
-            .iter()
-            .filter(|resolution| {
-                resolution.caller.qualified_name == symbol.qualified_name
-                    && resolution.caller.file == symbol.file
-                    && resolution.caller.line == symbol.line
-            })
-            .flat_map(|resolution| &resolution.candidates)
-            .map(|candidate| candidate.qualified_name.clone())
-            .collect(),
-    })
-}
-
-/// Collect the same files, then read the callees of the first symbol with the
-/// name of the query from the shared index and its resolver.
+/// configuration, then read the callees of the first symbol with the name of
+/// the query from the shared index and its resolver.
 ///
 /// A corpus names a callee as `<file>:<name>`.
 fn observe_index(root: &Path, query: &str) -> Option<Observation> {
@@ -308,14 +277,7 @@ fn load_ledger(root: &Path) -> Vec<LedgerEntry> {
 
 #[test]
 fn corpus_expectations_agree_with_omen_or_the_ledger() {
-    check_corpora("commands", observe, LEDGER_FILE);
-}
-
-/// The same corpora and the same three rules for the shared index. The
-/// commands do not use this index until the two ledgers are examined.
-#[test]
-fn corpus_expectations_agree_with_the_index_or_its_ledger() {
-    check_corpora("index", observe_index, INDEX_LEDGER_FILE);
+    check_corpora("index", observe_index, LEDGER_FILE);
 }
 
 fn check_corpora(source: &str, observe: fn(&Path, &str) -> Option<Observation>, ledger_file: &str) {

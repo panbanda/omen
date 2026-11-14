@@ -127,8 +127,8 @@ new behaviour, and the necessary change in a client.
 
 ### Symbol identifiers of `symbol` and `impact`
 
-The commands `symbol` and `impact`, and the MCP tools `get_symbol` and
-`impact`, read the shared index. The other commands do not.
+The commands `symbol`, `impact`, `repomap`, `context`, `graph`, and `smells`, and
+the MCP tools that give the same results, read the shared index.
 
 | Area | Before 5.0 | From 5.0 | Change in a client |
 |---|---|---|---|
@@ -142,6 +142,22 @@ The commands `symbol` and `impact`, and the MCP tools `get_symbol` and
 | `truncated` of the MCP tools `context` and `repomap` | Only the cut of the token budget. | Also the cut of `max_symbols` and `max_risks`, with the total before the cut. | Read `truncated`. |
 | `truncated` of the MCP tool `impact` | Always empty. | `/callers/*/symbols` and `/callees/*/symbols` have the number of definitions without the `depth` limit and the number in the result. | Read `truncated` to know that `depth` cut the result. |
 | A key of the shared index as the `name` of `task_context` | Not applicable. The tool did not accept the key. | The tool selects the definition by the file and by the last name of the key. It does not use the container or the `~N` suffix. A file with two definitions of that name gives the `ambiguous` error. | Send the `start_line` of one choice with the `name`. |
+
+### Commands that read the shared index
+
+The commands `repomap`, `context`, `graph`, and `smells`, and the MCP tool
+`task_context`, now read the shared index. The old call resolver and the old
+import resolver do not exist.
+
+| Area | Before 5.0 | From 5.0 | Change in a client |
+|---|---|---|---|
+| `qualified_name` of `repomap`, `context`, and `task_context` | `file:name`. | The key of the symbol: `file#Container.name`. | Give the identifier back as it is. |
+| `kind` of `repomap` symbols | `Function` for each symbol. | `Method` for a method. | Accept `Method`. |
+| `repomap` and `context` edges | A call whose only evidence was the name gave an edge to the one definition with that name. | No edge. The ranking uses the calls that have the basis `same_package` or a stronger basis. | None. Expect lower `in_degree` and `out_degree` for calls without an import. |
+| `--ref` with `repomap`, `context`, `graph`, and `smells` | `repomap` and `context` read the files on the disk. | The commands read the files of that commit. | None. |
+| Test files in `repomap` | The index did not hold them, thus a call from a test file did not exist. | The index holds them, but the map ignores the symbols and the calls of test files unless `skip_test_files` is false. A call that has a test file as the only other definition with a name can now resolve. | None. |
+| Edges of `graph` and `smells` | The old import resolver matched the import path to a file by the stem of the path. | The module map of the shared index resolves the import. An import that more than one file can satisfy gives no edge. A Go import of a package gives an edge to each file of the package. | Expect a different edge count. Both commands still give the same edges and the same cycles. |
+| `call_evidence` of `task_context` | `basis` was always a string. | `basis` can be `null`, and each entry has the `line` of the call. | Read `line`. Accept `null` for `basis`. |
 
 ### MCP server
 

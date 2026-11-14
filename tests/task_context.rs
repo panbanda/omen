@@ -1,6 +1,14 @@
-use omen::analyzers::repomap::build_index;
+use omen::index::build::CodeIndex;
+use omen::index::view::CallView;
 use omen::task_context::{build, cache::IndexCache, Options};
 use tempfile::TempDir;
+
+fn call_resolutions(
+    root: &std::path::Path,
+    paths: &[std::path::PathBuf],
+) -> Vec<omen::index::view::CallEvidence> {
+    CallView::from_index(&CodeIndex::from_files(root, paths)).call_resolutions
+}
 
 #[test]
 fn unchanged_then_same_size_edit_then_delete_matches_fresh_graph() {
@@ -24,7 +32,7 @@ fn unchanged_then_same_size_edit_then_delete_matches_fresh_graph() {
     assert_ne!(edited.fingerprint, first.fingerprint);
     assert_eq!(
         edited.index.call_resolutions,
-        build_index(dir.path(), &paths).unwrap().call_resolutions
+        call_resolutions(dir.path(), &paths)
     );
     std::fs::remove_file(&b).unwrap();
     let deleted = cache.load(dir.path(), std::slice::from_ref(&a)).unwrap();
@@ -33,7 +41,7 @@ fn unchanged_then_same_size_edit_then_delete_matches_fresh_graph() {
     assert_eq!(deleted.index.symbols.len(), 1);
     assert_eq!(
         deleted.index.call_resolutions,
-        build_index(dir.path(), &[a]).unwrap().call_resolutions
+        call_resolutions(dir.path(), &[a])
     );
 }
 

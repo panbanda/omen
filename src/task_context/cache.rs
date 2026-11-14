@@ -1,6 +1,7 @@
 //! Session-local content-addressed syntax cache. No persisted stale indexes.
-use crate::analyzers::repomap::{build_index_with_parser, CallGraphIndex};
 use crate::core::{Error, Language, Result};
+use crate::index::build::{list_directory, CodeIndex};
+use crate::index::view::CallView;
 use crate::parser::{ParseResult, Parser};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -8,7 +9,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Snapshot {
-    pub index: Arc<CallGraphIndex>,
+    pub index: Arc<CallView>,
     pub sources: BTreeMap<PathBuf, Arc<ParseResult>>,
     pub fingerprint: String,
     pub parsed_files: usize,
@@ -77,14 +78,20 @@ impl IndexCache {
             sources.insert(path, parsed);
         }
         let paths: Vec<_> = sources.keys().cloned().collect();
-        let index = build_index_with_parser(&root, &paths, &|path| {
-            sources
-                .get(path)
-                .map(|p| p.as_ref().clone())
-                .ok_or_else(|| Error::analysis("Missing snapshot source"))
-        })?;
+        let index = CodeIndex::build(
+            &root,
+            &paths,
+            &|path| {
+                sources
+                    .get(path)
+                    .map(|parsed| parsed.source.clone())
+                    .ok_or_else(|| Error::analysis("Missing snapshot source"))
+            },
+            &list_directory,
+        );
+        let view = CallView::from_index(&index);
         let snapshot = Snapshot {
-            index: Arc::new(index),
+            index: Arc::new(view),
             fingerprint: hasher.finalize().to_hex().to_string(),
             parsed_files,
             reused_files: paths.len() - parsed_files,

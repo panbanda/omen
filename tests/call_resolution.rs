@@ -1,6 +1,12 @@
-use omen::analyzers::repomap::build_index;
+use omen::index::build::CodeIndex;
+use omen::index::model::ResolutionBasis;
+use omen::index::view::{CallView, DEFAULT_MIN_BASIS};
 use omen::symbol::{get_symbol, SymbolOptions};
 use tempfile::TempDir;
+
+fn view(dir: &TempDir, paths: &[std::path::PathBuf]) -> CallView {
+    CallView::from_index(&CodeIndex::from_files(dir.path(), paths))
+}
 
 fn fixture(files: &[(&str, &str)]) -> (TempDir, Vec<std::path::PathBuf>) {
     let dir = TempDir::new().unwrap();
@@ -48,13 +54,7 @@ fn qualified_lookup_preserves_duplicates() {
         "main.rs",
         "struct A; struct B; impl A {fn helper(){}} impl B {fn helper(){}}",
     )]);
-    assert_eq!(
-        build_index(dir.path(), &paths)
-            .unwrap()
-            .resolve("main.rs:helper")
-            .len(),
-        2
-    );
+    assert_eq!(view(&dir, &paths).resolve("main.rs:helper").len(), 2);
 }
 
 #[test]
@@ -193,8 +193,8 @@ fn invoked_nested_function_keeps_transitive_edge() {
         "main.rs",
         "fn helper(){} fn caller(){fn inner(){helper();} inner();}",
     )]);
-    let index = build_index(dir.path(), &paths).unwrap();
-    let levels = index.callees(&index.resolve("caller"), 2);
+    let index = view(&dir, &paths);
+    let levels = index.callees(&index.resolve("caller"), 2, DEFAULT_MIN_BASIS);
     assert_eq!(index.symbols[levels[0][0]].name, "inner");
     assert_eq!(index.symbols[levels[1][0]].name, "helper");
 }
@@ -203,10 +203,13 @@ fn invoked_nested_function_keeps_transitive_edge() {
 fn javascript_family_remains_connected() {
     let (dir, paths) = fixture(&[
         ("main.ts", "function caller(){helper();}"),
-        ("helper.js", "function helper(){}"),
+        ("helper.js", "export function helper(){}"),
     ]);
-    let index = build_index(dir.path(), &paths).unwrap();
-    assert_eq!(index.callees(&index.resolve("caller"), 1)[0].len(), 1);
+    let index = view(&dir, &paths);
+    assert_eq!(
+        index.callees(&index.resolve("caller"), 1, ResolutionBasis::NameOnly)[0].len(),
+        1
+    );
 }
 
 #[test]

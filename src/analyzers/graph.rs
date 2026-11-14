@@ -33,12 +33,12 @@ use petgraph::Direction;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::analyzers::import_resolver::{
-    build_dependency_graph, extract_resolved_imports, ImportIndex,
+use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
+use crate::index::dependencies::{
+    build_dependency_graph, file_dependencies, file_import_specifiers,
 };
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::index::graph::{cyclic_components, pagerank, PageRankOptions};
-use crate::parser::{extract_imports, ImportKind, Parser};
+use crate::parser::Parser;
 
 /// Graph analyzer configuration.
 #[derive(Debug, Clone)]
@@ -109,39 +109,13 @@ impl Analyzer {
     /// Analyze a set of files and build dependency graph.
     /// Uses ctx.read_file() to support both filesystem and git tree sources.
     pub fn analyze_files(&self, ctx: &AnalysisContext<'_>) -> Result<Analysis> {
-        let files: Vec<_> = ctx.files.iter().collect();
-        let file_paths: Vec<std::path::PathBuf> = files.iter().map(|p| (*p).clone()).collect();
-
-        let file_imports: Vec<(String, Vec<String>)> = if self.config.resolve_imports {
-            // Shared with `smells` (same resolver AND same extraction step)
-            // so the two analyzers can never disagree on the edges they
-            // build for the same input (issue #479).
-            let file_index = ImportIndex::new(&file_paths, ctx.root);
-            extract_resolved_imports(&file_paths, ctx, &file_index, self.config.include_external)
+        let index = ctx.code_index()?;
+        // Shared with `smells`, so the two analyzers cannot disagree on the
+        // edges that they build for the same input.
+        let file_imports = if self.config.resolve_imports {
+            file_dependencies(&index, self.config.include_external)
         } else {
-            // No CLI flag ever sets `resolve_imports = false`; kept for API
-            // completeness. Uses raw unresolved import specifiers as
-            // pseudo-targets instead of resolving them to files.
-            files
-                .par_iter()
-                .filter_map(|file| {
-                    let rel_path = file.strip_prefix(ctx.root).unwrap_or(file);
-                    let path_str = rel_path.to_string_lossy().to_string();
-
-                    let content = ctx.read_file(file).ok()?;
-                    let lang = Language::detect(file)?;
-
-                    let parser = Parser::new();
-                    let result = parser.parse(&content, lang, file).ok()?;
-                    let imports: Vec<String> = extract_imports(&result)
-                        .into_iter()
-                        .filter(|imp| imp.kind == ImportKind::Use)
-                        .map(|imp| imp.path)
-                        .collect();
-
-                    Some((path_str, imports))
-                })
-                .collect()
+            file_import_specifiers(&index)
         };
 
         // Build graph applying the shared edge rules (no self-loops, no
@@ -602,10 +576,10 @@ mod tests {
         // cross-package cycle, a self-import (must not become a self-loop
         // edge in either), and a barrel re-export (`export * from`, the
         // issue #479 monorepo pattern).
-        use crate::analyzers::import_resolver::{build_dependency_graph, extract_resolved_imports};
         use crate::analyzers::smells;
         use crate::config::Config;
         use crate::core::{AnalysisContext, FileSet};
+        use crate::index::dependencies::{build_dependency_graph, file_dependencies};
         use std::collections::HashSet;
 
         let files: &[(&str, &str)] = &[
@@ -659,9 +633,7 @@ mod tests {
         // Independently rebuild the canonical edge set via the exact shared
         // functions both analyzers call, and require graph's public edges
         // to match it exactly.
-        let all_files: Vec<_> = file_set.iter().cloned().collect();
-        let file_index = ImportIndex::new(&all_files, temp_dir.path());
-        let file_imports = extract_resolved_imports(&all_files, &ctx, &file_index, false);
+        let file_imports = file_dependencies(&ctx.code_index().unwrap(), false);
         let (canonical_graph, canonical_indices) = build_dependency_graph(&file_imports, false);
         let canonical_edges: HashSet<(String, String)> = canonical_graph
             .edge_indices()
