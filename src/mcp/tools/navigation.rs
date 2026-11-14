@@ -222,7 +222,6 @@ const MIN_BASIS: Param = Param::choice(
         "same_package",
         "imported_module",
         "qualified_path",
-        "argument_type",
         "receiver_declared_type",
         "enclosing_type",
         "imported_alias",

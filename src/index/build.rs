@@ -38,15 +38,11 @@ fn is_manifest(path: &Path) -> bool {
     })
 }
 
-/// Reads the manifest files in the directories of the source files and in
-/// the directories above them, up to the root. `list` and `read` get the
-/// paths in the form that `files` has: an absolute path stays absolute.
-fn read_manifests(
-    root: &Path,
-    files: &[PathBuf],
-    read: ReadFile<'_>,
-    list: ListDirectory<'_>,
-) -> Manifests {
+/// The manifest files in the directories of the source files and in the
+/// directories above them, up to the root, in the order of the directories.
+/// `list` gets the paths in the form that `files` has: an absolute path
+/// stays absolute.
+pub fn manifest_paths(root: &Path, files: &[PathBuf], list: ListDirectory<'_>) -> Vec<PathBuf> {
     let mut directories = BTreeSet::new();
     for file in files {
         let mut directory = file.parent();
@@ -58,20 +54,44 @@ fn read_manifests(
             directory = current.parent();
         }
     }
-    let mut manifests = Manifests::default();
+    let mut paths = Vec::new();
     for directory in directories {
         let mut candidates: Vec<PathBuf> = list(&directory)
             .into_iter()
             .filter(|path| is_manifest(path))
             .collect();
         candidates.sort();
-        for path in candidates {
-            if let Ok(content) = read(&path) {
-                manifests.add(&relative(root, &path), &String::from_utf8_lossy(&content));
-            }
+        paths.extend(candidates);
+    }
+    paths
+}
+
+/// Reads the manifest files that `manifest_paths` gives.
+fn read_manifests(
+    root: &Path,
+    files: &[PathBuf],
+    read: ReadFile<'_>,
+    list: ListDirectory<'_>,
+) -> Manifests {
+    let mut manifests = Manifests::default();
+    for path in manifest_paths(root, files, list) {
+        if let Ok(content) = read(&path) {
+            manifests.add(&relative(root, &path), &String::from_utf8_lossy(&content));
         }
     }
     manifests
+}
+
+/// The files of one directory of the file system, without the directories.
+pub fn list_directory(directory: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect()
 }
 
 impl CodeIndex {
@@ -107,17 +127,12 @@ impl CodeIndex {
 
     /// Builds the index of `files` from the file system.
     pub fn from_files(root: &Path, files: &[PathBuf]) -> Self {
-        let list = |directory: &Path| -> Vec<PathBuf> {
-            let Ok(entries) = std::fs::read_dir(directory) else {
-                return Vec::new();
-            };
-            entries
-                .filter_map(|entry| entry.ok())
-                .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_dir()))
-                .map(|entry| entry.path())
-                .collect()
-        };
-        Self::build(root, files, &|path| Ok(std::fs::read(path)?), &list)
+        Self::build(
+            root,
+            files,
+            &|path| Ok(std::fs::read(path)?),
+            &list_directory,
+        )
     }
 }
 

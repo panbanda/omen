@@ -647,18 +647,18 @@ mod tests {
         assert_eq!(
             rows(&files, "Util.java"),
             [
-                "12 Util.run>twice UniqueCandidate ArgumentType [Util.java#Util.twice]",
-                "12 Util.run>twice UniqueCandidate ArgumentType [Util.java#Util.twice~2]",
-                "12 Util.run>twice UniqueCandidate ArgumentType [Util.java#Util.twice~2]",
-                "12 Util.run>twice UniqueCandidate ArgumentType [Util.java#Util.twice]",
+                "12 Util.run>twice UniqueCandidate EnclosingType [Util.java#Util.twice]",
+                "12 Util.run>twice UniqueCandidate EnclosingType [Util.java#Util.twice~2]",
+                "12 Util.run>twice UniqueCandidate EnclosingType [Util.java#Util.twice~2]",
+                "12 Util.run>twice UniqueCandidate EnclosingType [Util.java#Util.twice]",
                 "13 Util.run>wide Ambiguous EnclosingType [Util.java#Util.wide, Util.java#Util.wide~2]",
                 "13 Util.run>twice Ambiguous EnclosingType [Util.java#Util.twice, Util.java#Util.twice~2]",
                 "13 Util.run>run UniqueCandidate EnclosingType [Util.java#Util.run]",
                 "13 Util.run>twice Ambiguous EnclosingType [Util.java#Util.twice, Util.java#Util.twice~2]",
                 "13 Util.run>twice Ambiguous EnclosingType [Util.java#Util.twice, Util.java#Util.twice~2]",
-                "14 Util.run>pair UniqueCandidate ArgumentType [Util.java#Util.pair]",
+                "14 Util.run>pair UniqueCandidate EnclosingType [Util.java#Util.pair]",
                 "14 Util.run>run UniqueCandidate EnclosingType [Util.java#Util.run]",
-                "14 Util.run>pair UniqueCandidate ArgumentType [Util.java#Util.pair~2]",
+                "14 Util.run>pair UniqueCandidate EnclosingType [Util.java#Util.pair~2]",
                 "14 Util.run>twice Ambiguous EnclosingType [Util.java#Util.twice, Util.java#Util.twice~2]",
             ]
         );

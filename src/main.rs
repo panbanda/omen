@@ -2150,14 +2150,19 @@ fn run_symbol(
 
     let read = |file: &std::path::Path| ctx.read_file(file);
     let report = report_with_reader(&view, &args.name, &opts, None, &read)?;
-    let value = serde_json::to_value(&report)?;
-    format_with_limits(
-        value,
-        format,
-        args.common.pagination.top,
-        args.common.pagination.offset,
-        &mut std::io::stdout(),
-    )?;
+    let mut value = serde_json::to_value(&report)?;
+    // `--top` and `--offset` page only the callers, as the MCP tool does.
+    let pagination = &args.common.pagination;
+    if !matches!(format, Format::Sarif) && (pagination.top.is_some() || pagination.offset.is_some())
+    {
+        omen::output::truncate_field(
+            &mut value,
+            "callers",
+            pagination.top.unwrap_or(0),
+            pagination.offset.unwrap_or(0),
+        );
+    }
+    format.format_value(&value, &mut std::io::stdout())?;
     Ok(())
 }
 

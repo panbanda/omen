@@ -262,6 +262,28 @@ fn truncate_object_arrays_budget(
 /// formats. SARIF keeps each finding.
 /// `top`: max items per array (None = unlimited). `offset`: skip first N items (None = 0).
 /// When only `offset` is set, truncation is applied with top=0 (unlimited after offset).
+/// Cuts only the array `field` of the object, as the MCP tool with the same
+/// list does. Adds `<field>_omitted` when items are omitted. Returns the
+/// number of omitted items.
+pub fn truncate_field(value: &mut Value, field: &str, top: usize, offset: usize) -> usize {
+    let Some(map) = value.as_object_mut() else {
+        return 0;
+    };
+    let Some(Value::Array(items)) = map.get_mut(field) else {
+        return 0;
+    };
+    let after_offset = items.len().saturating_sub(offset);
+    items.drain(0..offset.min(items.len()));
+    if top > 0 {
+        items.truncate(top);
+    }
+    let omitted = after_offset - items.len();
+    if omitted > 0 {
+        map.insert(format!("{field}_omitted"), Value::Number(omitted.into()));
+    }
+    omitted
+}
+
 pub fn format_with_limits<W: Write>(
     mut value: Value,
     format: Format,
@@ -863,6 +885,18 @@ mod tests {
         let v1: Value = serde_json::from_slice(&buf_pretty).unwrap();
         let v2: Value = serde_json::from_slice(&buf_compact).unwrap();
         assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn test_truncate_field_cuts_only_that_field() {
+        let mut value = json!({"callers": [1, 2, 3], "callees": [4, 5, 6]});
+        assert_eq!(truncate_field(&mut value, "callers", 1, 1), 1);
+        assert_eq!(value["callers"], json!([2]));
+        assert_eq!(value["callers_omitted"], json!(1));
+        assert_eq!(value["callees"], json!([4, 5, 6]));
+        assert_eq!(truncate_field(&mut value, "callees", 0, 5), 0);
+        assert_eq!(value["callees"], json!([]));
+        assert!(value.get("callees_omitted").is_none());
     }
 
     #[test]

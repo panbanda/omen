@@ -49,6 +49,7 @@ const ACCESS_SPECIFIER: &str = "access_specifier";
 const FRIEND_DECLARATION: &str = "friend_declaration";
 const BASE_CLASS_CLAUSE: &str = "base_class_clause";
 const FIELD_DECLARATION_LIST: &str = "field_declaration_list";
+const LINKAGE_SPECIFICATION: &str = "linkage_specification";
 const PARAMETER_KINDS: &[&str] = &[
     "parameter_declaration",
     "optional_parameter_declaration",
@@ -84,6 +85,22 @@ const FUNCTION_NAME_KINDS: &[&str] = &[
 
 fn is_function(node: Node<'_>) -> bool {
     [c::FUNCTION_DEFINITION, c::FUNCTION_DECLARATOR].contains(&node.kind())
+}
+
+/// Tells if `extern "C"` contains the function, as a block or before it.
+fn has_c_linkage(node: Node<'_>, context: &Context<'_, '_>) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == LINKAGE_SPECIFICATION
+            && parent
+                .child_by_field_name("value")
+                .is_some_and(|value| context.text(value) == "\"C\"")
+        {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
 }
 
 /// The scope names of a qualified name, and the node of its last name.
@@ -714,6 +731,7 @@ impl LanguageSpec for Cpp {
         if !is_function(node) {
             return true;
         }
+        draft.c_linkage = has_c_linkage(node, context);
         draft.parameter_count = draft
             .name_node
             .parent()

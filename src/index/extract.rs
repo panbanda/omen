@@ -113,6 +113,8 @@ pub struct Draft<'tree> {
     /// The definition is a function value that a variable holds, in a
     /// language where a variable and a function do not share names.
     pub function_value: bool,
+    /// A C++ function in `extern "C"`. It has the linkage of a C function.
+    pub c_linkage: bool,
 }
 
 /// Facts that only `link_files` and the resolver use. They are not a part of
@@ -131,6 +133,7 @@ pub struct LinkFacts {
     pub trait_implementation: bool,
     pub default_export: bool,
     pub function_value: bool,
+    pub c_linkage: bool,
 }
 
 /// Facts of a reference that only the resolver uses.
@@ -634,6 +637,7 @@ impl<'tree> Extractor<'_, 'tree> {
             trait_implementation: false,
             default_export: false,
             function_value: false,
+            c_linkage: false,
         };
         if draft.kind == SymbolKind::Module {
             draft.role = ScopeRole::Module;
@@ -952,6 +956,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             trait_implementation: draft.trait_implementation,
             default_export: draft.default_export,
             function_value: draft.function_value,
+            c_linkage: draft.c_linkage,
         });
     }
     let mut calls = extractor.calls;

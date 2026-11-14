@@ -75,6 +75,19 @@ pub struct ResolutionSummary {
     pub external: usize,
 }
 
+impl ResolutionSummary {
+    fn count(&mut self, status: ResolutionStatus) {
+        match status {
+            ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate => {
+                self.unique_candidate += 1;
+            }
+            ResolutionStatus::Ambiguous => self.ambiguous += 1,
+            ResolutionStatus::Unresolved => self.unresolved += 1,
+            ResolutionStatus::External => self.external += 1,
+        }
+    }
+}
+
 pub struct CallView {
     /// The definitions, in the order of the file and the position. A field
     /// is not in the view.
@@ -88,6 +101,9 @@ pub struct CallView {
     callers: Vec<Vec<(usize, ResolutionBasis)>>,
     pub call_resolutions: Vec<CallEvidence>,
     call_resolution_ranges: Vec<Range<usize>>,
+    /// The counts of all call sites of the input, also of the calls that
+    /// are not in a definition.
+    summary: ResolutionSummary,
 }
 
 impl CallView {
@@ -122,7 +138,9 @@ impl CallView {
         let mut callers: Vec<BTreeSet<(usize, ResolutionBasis)>> =
             vec![BTreeSet::new(); symbols.len()];
         let mut evidence: Vec<Vec<CallEvidence>> = vec![Vec::new(); symbols.len()];
+        let mut summary = ResolutionSummary::default();
         for reference in index.files.iter().flat_map(|file| &file.references) {
+            summary.count(reference.resolution.status);
             let caller = reference
                 .enclosing
                 .as_deref()
@@ -197,6 +215,7 @@ impl CallView {
                 .collect(),
             call_resolutions,
             call_resolution_ranges,
+            summary,
         }
     }
 
@@ -225,7 +244,13 @@ impl CallView {
                     .split_once('#')
                     .map_or("", |(_, path)| path);
                 // An ordinal after `~` is a part of the key, not of the name.
-                let path = path.split('~').next().unwrap_or(path);
+                // A destructor name also has `~`.
+                let path = path
+                    .rsplit_once('~')
+                    .filter(|(_, ordinal)| {
+                        !ordinal.is_empty() && ordinal.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+                    .map_or(path, |(name, _)| name);
                 file.is_none_or(|file| symbol.file == file)
                     && (path == name || path.ends_with(&format!(".{name}")))
             })
@@ -237,20 +262,9 @@ impl CallView {
         &self.call_resolutions[self.call_resolution_ranges[symbol].clone()]
     }
 
-    /// The number of call sites of each status, for all definitions.
+    /// The number of call sites of each status in all files of the input.
     pub fn resolution_summary(&self) -> ResolutionSummary {
-        let mut summary = ResolutionSummary::default();
-        for call in &self.call_resolutions {
-            match call.status {
-                ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate => {
-                    summary.unique_candidate += 1;
-                }
-                ResolutionStatus::Ambiguous => summary.ambiguous += 1,
-                ResolutionStatus::Unresolved => summary.unresolved += 1,
-                ResolutionStatus::External => summary.external += 1,
-            }
-        }
-        summary
+        self.summary.clone()
     }
 
     /// The callers of `roots`, one list for each level, up to `depth` levels.
@@ -305,11 +319,12 @@ impl CallView {
 }
 
 /// The view of the last set of files of a session. A second request for
-/// files with the same content gets the same view.
+/// files with the same content and the same manifest files gets the same view.
 #[derive(Default)]
 pub struct ViewCache {
     root: PathBuf,
     hashes: BTreeMap<PathBuf, blake3::Hash>,
+    manifests: BTreeMap<PathBuf, blake3::Hash>,
     last: Option<Arc<CallView>>,
 }
 
@@ -327,17 +342,25 @@ impl ViewCache {
             }
             hashes.insert(path.clone(), blake3::hash(&std::fs::read(&path)?));
         }
+        let paths: Vec<PathBuf> = hashes.keys().cloned().collect();
+        let mut manifests = BTreeMap::new();
+        for path in super::build::manifest_paths(&root, &paths, &super::build::list_directory) {
+            // A manifest that cannot be read has no effect on the index.
+            if let Ok(content) = std::fs::read(&path) {
+                manifests.insert(path, blake3::hash(&content));
+            }
+        }
         if let Some(last) = self
             .last
             .as_ref()
-            .filter(|_| self.root == root && self.hashes == hashes)
+            .filter(|_| self.root == root && self.hashes == hashes && self.manifests == manifests)
         {
             return Ok(Arc::clone(last));
         }
-        let paths: Vec<PathBuf> = hashes.keys().cloned().collect();
         let view = Arc::new(CallView::from_index(&CodeIndex::from_files(&root, &paths)));
         self.root = root;
         self.hashes = hashes;
+        self.manifests = manifests;
         self.last = Some(Arc::clone(&view));
         Ok(view)
     }
@@ -432,5 +455,76 @@ mod tests {
         assert_eq!(calls[0].call, "len");
         assert_eq!(calls[0].status, ResolutionStatus::Unresolved);
         assert_eq!(view.resolution_summary().unique_candidate, 3);
+    }
+
+    /// A call outside of each definition is a call site of the input. The
+    /// summary counts it. It has no caller, thus it gives no edge.
+    #[test]
+    fn test_summary_counts_calls_outside_of_definitions() {
+        let view = view(&[("a.py", "def f():\n    pass\n\n\nf()\nmissing()\n")]);
+        let summary = view.resolution_summary();
+        assert_eq!(summary.unique_candidate, 1);
+        assert_eq!(summary.unresolved, 1);
+        assert!(view
+            .callers(&view.resolve("f"), 1, DEFAULT_MIN_BASIS)
+            .is_empty());
+    }
+
+    /// `~` starts a C++ destructor name. Only `~` and digits at the end of a
+    /// key are an ordinal.
+    #[test]
+    fn test_query_forms_name_a_destructor() {
+        let source = "struct X {\n    ~X() {}\n    void run() {}\n    void run(int value) {}\n};\n";
+        let view = view(&[("a.cpp", source)]);
+        let names = |query: &str| -> Vec<&str> {
+            view.resolve(query)
+                .into_iter()
+                .map(|position| view.symbols[position].qualified_name.as_str())
+                .collect()
+        };
+        assert_eq!(names("a.cpp#X.~X"), ["a.cpp#X.~X"]);
+        assert_eq!(names("~X"), ["a.cpp#X.~X"]);
+        assert_eq!(names("X.~X"), ["a.cpp#X.~X"]);
+        assert_eq!(names("a.cpp:~X"), ["a.cpp#X.~X"]);
+        assert_eq!(names("X.run"), ["a.cpp#X.run", "a.cpp#X.run~2"]);
+    }
+
+    /// The index reads the manifest files. A change of a manifest without a
+    /// change of a source file gives a new view.
+    #[test]
+    fn test_cache_reads_the_manifests_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir_all(root.join("lib/src")).unwrap();
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        let manifest = root.join("lib/package.json");
+        std::fs::write(&manifest, r#"{"name": "shop", "exports": "./src/a.js"}"#).unwrap();
+        std::fs::write(root.join("lib/src/a.js"), "export function run() {}\n").unwrap();
+        std::fs::write(root.join("lib/src/b.js"), "export function run() {}\n").unwrap();
+        std::fs::write(
+            root.join("app/main.js"),
+            "import { run } from \"shop\";\n\nexport function go() {\n  run();\n}\n",
+        )
+        .unwrap();
+        let files: Vec<PathBuf> = ["lib/src/a.js", "lib/src/b.js", "app/main.js"]
+            .iter()
+            .map(|file| root.join(file))
+            .collect();
+        let callee = |view: &CallView| -> Vec<String> {
+            let go = view.resolve("go");
+            view.callees(&go, 1, DEFAULT_MIN_BASIS)
+                .into_iter()
+                .flatten()
+                .map(|position| view.symbols[position].qualified_name.clone())
+                .collect()
+        };
+        let mut cache = ViewCache::default();
+        let first = cache.load(root, &files).unwrap();
+        assert_eq!(callee(&first), ["lib/src/a.js#run"]);
+        let again = cache.load(root, &files).unwrap();
+        assert!(Arc::ptr_eq(&first, &again));
+        std::fs::write(&manifest, r#"{"name": "shop", "exports": "./src/b.js"}"#).unwrap();
+        let changed = cache.load(root, &files).unwrap();
+        assert_eq!(callee(&changed), ["lib/src/b.js#run"]);
     }
 }

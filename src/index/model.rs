@@ -204,10 +204,6 @@ pub enum ResolutionBasis {
     ImportedModule,
     EnclosingType,
     ReceiverDeclaredType,
-    /// One overload has exactly the types of the arguments. An argument has a
-    /// known type only when it is a literal or a local name with a declared
-    /// type. A wider type or a conversion does not give this basis.
-    ArgumentType,
     QualifiedPath,
     SamePackage,
     NameOnly,
@@ -215,12 +211,11 @@ pub enum ResolutionBasis {
 
 impl ResolutionBasis {
     /// Each basis, from the weakest evidence to the strongest evidence.
-    pub const RANKED: [Self; 12] = [
+    pub const RANKED: [Self; 11] = [
         Self::NameOnly,
         Self::SamePackage,
         Self::ImportedModule,
         Self::QualifiedPath,
-        Self::ArgumentType,
         Self::ReceiverDeclaredType,
         Self::EnclosingType,
         Self::ImportedAlias,
@@ -245,7 +240,6 @@ impl ResolutionBasis {
             Self::SamePackage => "same_package",
             Self::ImportedModule => "imported_module",
             Self::QualifiedPath => "qualified_path",
-            Self::ArgumentType => "argument_type",
             Self::ReceiverDeclaredType => "receiver_declared_type",
             Self::EnclosingType => "enclosing_type",
             Self::ImportedAlias => "imported_alias",

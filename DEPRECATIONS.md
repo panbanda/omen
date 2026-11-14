@@ -55,7 +55,9 @@ The SARIF format keeps each finding. The `--top` and `--offset` flags do not
 apply to it, also on `search query`.
 
 On `outline`, `--top` and `--offset` page the `files` list in each format. On
-`symbol`, the two flags page each list, for example `callers` and `callees`.
+`symbol`, the two flags page only the `callers` list, as `limit` and `offset`
+of the MCP tool `get_symbol` do. `callees` and `call_resolutions` stay
+complete. Before 5.0, the two flags cut each list.
 
 ### `--top` on `graph`
 
@@ -133,7 +135,7 @@ The commands `symbol` and `impact`, and the MCP tools `get_symbol` and
 | `qualified_name` in the output | `file:name`. Two definitions with one name in one file had the same identifier. | The key of the symbol: `file#Container.name`, with `~2` for a second definition of the name in one container. | Do not parse the identifier. Give it back as it is. The four tools accept the two forms as input, and the other tools accept the new form. |
 | `start_line` | The first line of the node, which could be an annotation. | The line of the declaration, after annotations, attributes, and decorators. | Use `start_line` with the name to select a definition. |
 | `call_resolutions` of `symbol` and `get_symbol` | One entry for each called name. `basis` was always a string. | One entry for each call site, with its `line`. `basis` is `null` when no rule applied. `status` can be `external`. | Read `line`. Accept `null` for `basis`. |
-| `resolution_summary` of `impact` | `unique_candidate`, `ambiguous`, `unresolved`. | Also `external`. | None, unless the client rejects unknown keys. |
+| `resolution_summary` of `impact` | `unique_candidate`, `ambiguous`, `unresolved`. | Also `external`. The counts include each call site of the input files, also a call that is not in a definition. | None, unless the client rejects unknown keys. |
 | A call for which only the name gives a definition | An edge to the one definition with that name in the repository. | No edge. The call has the status `ambiguous` and the basis `name_only`, and it lists each definition with the name that the caller can see. | Read `candidates` of `call_resolutions`. Use `--min-basis name_only`, or the MCP parameter `min_basis`, to get an edge for a call with one such candidate. |
 | `--min-basis` of `symbol` and `impact`, `min_basis` of `get_symbol` and `impact` | Not available. | The weakest basis of a call that gives a caller or a callee. The default is `same_package`, which excludes `name_only`. | None. |
 | `--ref` with `symbol` and `impact` on a local repository | The commands read the files on the disk. | The commands read the files of that commit. | None. |

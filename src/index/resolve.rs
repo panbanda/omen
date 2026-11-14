@@ -407,28 +407,61 @@ impl<'a> Resolver<'a> {
 
     fn types_of_query(&self, name: &str, qualifier: Option<&str>, file: usize) -> Vec<Id> {
         let mut found = self.types_by_name(name, qualifier, file);
+        let Some(path) = qualifier.map(segments).filter(|path| !path.is_empty()) else {
+            return found;
+        };
+        let containers = |id: &Id| -> Vec<&str> {
+            self.facts(*id)
+                .container_path
+                .iter()
+                .flat_map(|container| segments(container))
+                .collect()
+        };
+        // In these languages the syntax gives the complete namespace of a
+        // type. A qualifier that is not an import and that does not end the
+        // namespace of a type names a different type, also when the
+        // repository has only one type with the name.
+        let complete_namespaces = matches!(
+            self.family(file),
+            Family::Java | Family::CSharp | Family::C | Family::Php
+        );
+        if complete_namespaces && !self.is_import_qualifier(qualifier.unwrap_or_default(), file) {
+            found.retain(|id| {
+                let declared = self.files[id.0].modules.iter().any(|module| {
+                    let mut namespace = segments(module);
+                    namespace.extend(containers(id));
+                    namespace.ends_with(&path)
+                });
+                declared || containers(id).ends_with(&path)
+            });
+            return found;
+        }
         // More than one type can have the name. The qualifier selects the
         // types whose containers have the names of the qualifier, or whose
         // file declares the package that the qualifier names.
-        if let Some(path) = qualifier.map(segments).filter(|_| found.len() > 1) {
+        if found.len() > 1 {
             let within = |id: &Id| {
-                let containers: Vec<&str> = self
-                    .facts(*id)
-                    .container_path
-                    .iter()
-                    .flat_map(|container| segments(container))
-                    .collect();
                 let declared = self.files[id.0]
                     .modules
                     .iter()
                     .any(|module| segments(module) == path);
-                declared || containers.ends_with(&path)
+                declared || containers(id).ends_with(&path)
             };
             if found.iter().any(within) {
                 found.retain(within);
             }
         }
         found
+    }
+
+    /// Tells if the last name of `qualifier` is the local name of an import
+    /// of `file`. Then the import selects the files of the type.
+    fn is_import_qualifier(&self, qualifier: &str, file: usize) -> bool {
+        let last = segments(qualifier).last().copied().unwrap_or(qualifier);
+        self.files[file]
+            .imports
+            .iter()
+            .any(|binding| binding.local_name.as_deref() == Some(last))
     }
 
     fn types_by_name(&self, name: &str, qualifier: Option<&str>, file: usize) -> Vec<Id> {
@@ -486,6 +519,13 @@ impl<'a> Resolver<'a> {
         self.named(name, file).filter(is_type).collect()
     }
 
+    /// The container path that a member of the type `owner` has.
+    fn member_path(&self, owner: Id) -> Vec<String> {
+        let mut path = self.facts(owner).container_path.clone();
+        path.push(self.symbol(owner).name.clone());
+        path
+    }
+
     /// The callable members `name` of a type. The search goes to the parent
     /// types when the type has no such member.
     fn members(&self, owner: Id, name: &str, arity: usize, seen: &mut BTreeSet<Id>) -> Vec<Id> {
@@ -494,18 +534,23 @@ impl<'a> Resolver<'a> {
         }
         let type_symbol = self.symbol(owner);
         let namespace = type_symbol.kind == SymbolKind::Module;
+        let owner_path = self.member_path(owner);
         let mut found: Vec<Id> = self
             .named(name, owner.0)
             .filter(|id| {
                 let member = self.symbol(*id);
+                let member_path = &self.facts(*id).container_path;
                 is_callable(member)
                     && member.container.as_deref() == Some(type_symbol.name.as_str())
-                    // Two types can have one name. A member in a different
-                    // file belongs to this type only when that file gives
-                    // this type for the name.
+                    // Two types can have one name. A member in the same file
+                    // belongs to this type when its path is the path of the
+                    // type. A member in a different file belongs to this type
+                    // only when that file gives this type for the name.
                     && (namespace
-                        || id.0 == owner.0
-                        || self.types(&type_symbol.name, None, id.0) == [owner])
+                        || (id.0 == owner.0
+                            && (member_path.is_empty() || *member_path == owner_path))
+                        || (id.0 != owner.0
+                            && self.types(&type_symbol.name, None, id.0) == [owner]))
             })
             .collect();
         found = self.preferred(found, arity);
@@ -579,6 +624,7 @@ impl<'a> Resolver<'a> {
 
     fn own_constructors(&self, owner: Id, arity: usize) -> Vec<Id> {
         let type_symbol = self.symbol(owner);
+        let owner_path = self.member_path(owner);
         let found: Vec<Id> = (0..self.files[owner.0].symbols.len())
             .map(|position| (owner.0, position))
             .chain(
@@ -587,8 +633,10 @@ impl<'a> Resolver<'a> {
             )
             .filter(|id| {
                 let member = self.symbol(*id);
+                let path = &self.facts(*id).container_path;
                 member.kind == SymbolKind::Constructor
                     && member.container.as_deref() == Some(type_symbol.name.as_str())
+                    && (id.0 != owner.0 || path.is_empty() || *path == owner_path)
             })
             .collect();
         self.preferred(found, arity)
@@ -1453,6 +1501,7 @@ impl<'a> Resolver<'a> {
                 continue;
             }
             let path = &self.facts(id).container_path;
+            let declared_in_c = self.files[id.0].language == Language::C;
             let bodies: Vec<Id> = self
                 .named(&symbol.name, file)
                 .filter(|other| {
@@ -1462,6 +1511,7 @@ impl<'a> Resolver<'a> {
                         && self.facts(*other).container_path == *path
                         && (other.0 == file
                             || definition.exported != super::model::Exported::NotExported)
+                        && (!declared_in_c || self.has_c_linkage(*other))
                 })
                 .collect();
             if bodies.is_empty() {
@@ -1473,6 +1523,24 @@ impl<'a> Resolver<'a> {
         result.sort();
         result.dedup();
         self.preferred(result, arity)
+    }
+
+    /// Tells if a function has C linkage: it is C, it is in `extern "C"`, or
+    /// a C++ declaration in `extern "C"` declares it. A C++ declaration in
+    /// a header whose `extern "C"` block is in a preprocessor condition can
+    /// lack the mark, thus the resolver does not use this rule for a C++
+    /// declaration of a C definition.
+    fn has_c_linkage(&self, id: Id) -> bool {
+        if self.files[id.0].language == Language::C || self.facts(id).c_linkage {
+            return true;
+        }
+        let name = &self.symbol(id).name;
+        self.named(name, id.0).any(|other| {
+            self.files[other.0].language == Language::Cpp
+                && self.symbol(other).body_range.is_none()
+                && self.facts(other).c_linkage
+                && self.facts(other).container_path.is_empty()
+        })
     }
 
     /// Selects one overload by the types of the arguments.
@@ -1533,16 +1601,6 @@ impl<'a> Resolver<'a> {
 
     fn resolve(&self, file: usize, position: usize, depth: usize) -> Outcome {
         let mut outcome = self.resolve_by_rules(file, position, depth);
-        if outcome.status == Status::Ambiguous && outcome.basis != Some(Basis::NameOnly) {
-            if let Some(only) = self.overload(file, position, &outcome.candidates) {
-                outcome = Outcome {
-                    status: Status::UniqueCandidate,
-                    basis: Some(Basis::ArgumentType),
-                    candidates: vec![only],
-                    superseded: Vec::new(),
-                };
-            }
-        }
         // A Python or C++ call of a class makes an object. It runs the constructor.
         if matches!(self.family(file), Family::Python | Family::C) {
             let arity = self.files[file].references[position].arity;
@@ -1557,6 +1615,19 @@ impl<'a> Resolver<'a> {
                     }
                 })
                 .collect();
+            outcome.candidates.sort();
+            outcome.candidates.dedup();
+            if outcome.status == Status::UniqueCandidate && outcome.candidates.len() > 1 {
+                outcome.status = Status::Ambiguous;
+            }
+        }
+        // The argument types select one of the overloads that the rule found.
+        // The basis stays the basis of that rule.
+        if outcome.status == Status::Ambiguous && outcome.basis != Some(Basis::NameOnly) {
+            if let Some(only) = self.overload(file, position, &outcome.candidates) {
+                outcome.status = Status::UniqueCandidate;
+                outcome.candidates = vec![only];
+            }
         }
         outcome
     }
@@ -1978,7 +2049,7 @@ mod tests {
             rows(&files, "c/Main.java"),
             [
                 "5 Main.go>shop.b.Tool::run UniqueCandidate QualifiedPath [b/Tool.java#Tool.run]",
-                "5 Main.go>shop.gone.Tool::run Ambiguous NameOnly [a/Tool.java#Tool.run, b/Tool.java#Tool.run]",
+                "5 Main.go>shop.gone.Tool::run Unresolved - []",
             ]
         );
     }
@@ -1994,7 +2065,7 @@ mod tests {
             rows(&files, "c/Main.cs"),
             [
                 "5 Shop.C.Main.Go>Shop.B.Tool::Run UniqueCandidate QualifiedPath [b/Tool.cs#Shop.B.Tool.Run]",
-                "5 Shop.C.Main.Go>Shop.Gone.Tool::Run Ambiguous NameOnly [a/Tool.cs#Shop.A.Tool.Run, b/Tool.cs#Shop.B.Tool.Run]",
+                "5 Shop.C.Main.Go>Shop.Gone.Tool::Run Unresolved - []",
             ]
         );
     }
@@ -2070,6 +2141,112 @@ mod tests {
                 "6 run>tool.Run UniqueCandidate ImportedModule [b/tool.go#Run]",
                 "6 run>gone.Run Unresolved - []",
             ]
+        );
+    }
+
+    /// The constructor call `Widget(1)` first finds the class. The overloads
+    /// of the constructor then select one, or the call is ambiguous.
+    #[test]
+    fn test_constructor_overloads_select_one_or_are_ambiguous_cpp() {
+        let source = "struct Widget {\n    Widget(int value) {}\n    Widget(long value) {}\n};\n\nvoid run(auto unknown) {\n    auto first = Widget(1);\n    auto second = Widget(unknown);\n}\n";
+        assert_eq!(
+            rows(&[("a.cpp", source)], "a.cpp"),
+            [
+                "7 run>Widget UniqueCandidate SameFile [a.cpp#Widget.Widget]",
+                "8 run>Widget Ambiguous SameFile [a.cpp#Widget.Widget, a.cpp#Widget.Widget~2]",
+            ]
+        );
+    }
+
+    /// The selection of an overload by the argument types keeps the basis of
+    /// the rule that found the overloads.
+    #[test]
+    fn test_overload_selection_keeps_the_basis_java() {
+        let source = "class Util {\n    static int parse(int value) { return value; }\n    static int parse(double value) { return 0; }\n\n    static int run() {\n        return parse(1);\n    }\n}\n";
+        assert_eq!(
+            rows(&[("Util.java", source)], "Util.java"),
+            ["6 Util.run>parse UniqueCandidate EnclosingType [Util.java#Util.parse]"]
+        );
+    }
+
+    #[test]
+    fn test_overload_selection_keeps_the_basis_cpp() {
+        let source = "int parse(int value) { return value; }\nint parse(double value) { return 0; }\n\nint run() {\n    return parse(1);\n}\n";
+        assert_eq!(
+            rows(&[("a.cpp", source)], "a.cpp"),
+            ["5 run>parse UniqueCandidate SameFile [a.cpp#parse]"]
+        );
+    }
+
+    /// A qualifier that names a different namespace is not the only type with
+    /// the name. The type of the repository is not the callee.
+    #[test]
+    fn test_qualifier_of_a_different_namespace_gives_no_edge_cpp() {
+        let source = "namespace local {\nstruct Widget {\n    static int run() { return 1; }\n};\n}\n\nint go() {\n    return vendor::Widget::run() + local::Widget::run();\n}\n";
+        assert_eq!(
+            rows(&[("a.cpp", source)], "a.cpp"),
+            [
+                "8 go>vendor::Widget::run Unresolved - []",
+                "8 go>local::Widget::run UniqueCandidate QualifiedPath [a.cpp#local.Widget.run]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_qualifier_of_a_different_package_gives_no_edge_java() {
+        let widget = "package local;\n\npublic class Widget {\n    public static int run() { return 1; }\n}\n";
+        let main = "package app;\n\nclass Main {\n    int go() {\n        return vendor.Widget.run() + local.Widget.run();\n    }\n}\n";
+        assert_eq!(
+            rows(&[("local/Widget.java", widget), ("app/Main.java", main)], "app/Main.java"),
+            [
+                "5 Main.go>vendor.Widget::run Unresolved - []",
+                "5 Main.go>local.Widget::run UniqueCandidate QualifiedPath [local/Widget.java#Widget.run]",
+            ]
+        );
+    }
+
+    /// A C declaration has C linkage. A C++ definition without `extern "C"`
+    /// is a different function, also with the same name.
+    #[test]
+    fn test_c_declaration_does_not_link_to_a_cpp_definition() {
+        let header =
+            "void shared(void);\nvoid exported(void);\nvoid blocked(void);\nvoid declared(void);\n";
+        let caller = "#include \"api.h\"\n\nint main(void) {\n    shared();\n    exported();\n    blocked();\n    declared();\n    return 0;\n}\n";
+        let cpp = "void shared() {}\n\nextern \"C\" void exported() {}\n\nextern \"C\" {\nvoid blocked() {}\n}\n\nextern \"C\" void declared();\n\nvoid declared() {}\n";
+        let files = [("api.h", header), ("main.c", caller), ("impl.cpp", cpp)];
+        assert_eq!(
+            rows(&files, "main.c"),
+            [
+                "4 main>shared UniqueCandidate ImportedModule [api.h#shared]",
+                "5 main>exported UniqueCandidate ImportedModule [impl.cpp#exported]",
+                "6 main>blocked UniqueCandidate ImportedModule [impl.cpp#blocked]",
+                "7 main>declared UniqueCandidate ImportedModule [impl.cpp#declared~2]",
+            ]
+        );
+    }
+
+    /// Two local classes with one name in one file are different classes.
+    /// The constructor of one is not the constructor of the other.
+    #[test]
+    fn test_constructors_of_same_named_local_classes_python() {
+        let source = "def first():\n    class Mock:\n        def __init__(self):\n            pass\n\n    return Mock()\n\n\ndef second():\n    class Mock:\n        def __init__(self):\n            pass\n\n    return Mock()\n";
+        assert_eq!(
+            rows(&[("a.py", source)], "a.py"),
+            [
+                "6 first>Mock UniqueCandidate LexicalScope [a.py#first.Mock.__init__]",
+                "14 second>Mock UniqueCandidate LexicalScope [a.py#second.Mock.__init__]",
+            ]
+        );
+    }
+
+    /// Two types with one name in one file are different types. A member of
+    /// one is not a member of the other.
+    #[test]
+    fn test_members_of_same_named_types_in_one_file_cpp() {
+        let source = "#include <base>\n\nnamespace a {\nstruct X {\n    void ping() {}\n};\n}\n\nnamespace b {\nstruct X : Base {\n    void run() {\n        this->ping();\n    }\n};\n}\n";
+        assert_eq!(
+            rows(&[("a.cpp", source)], "a.cpp"),
+            ["12 b.X.run>self.ping Ambiguous NameOnly [a.cpp#a.X.ping]"]
         );
     }
 }
