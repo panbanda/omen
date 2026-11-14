@@ -340,7 +340,7 @@
       "case": "rust/basics",
       "queries": [
         {"id": "i-twice", "type": "identifier", "query": "twice", "expected": ["util_twice"]},
-        {"id": "i-only-here", "type": "identifier", "query": "only_here", "expected": ["only_here"]},
+        {"id": "i-only-here-both", "type": "identifier", "query": "only_here", "expected": ["only_here", "checks_only_here"]},
         {"id": "i-twice-local", "type": "identifier", "query": "twice_local", "expected": ["twice_local"]},
         {"id": "i-part-local", "type": "identifier", "query": "local", "expected": ["local", "twice_local"]},
         {"id": "i-circle", "type": "identifier", "query": "Circle", "expected": ["circle"]},
@@ -424,6 +424,16 @@
         {"id": "x-words", "type": "natural_language", "query": "quantum teleport entanglement", "expected": []},
         {"id": "x-code", "type": "code_sketch", "query": "xyzzyPlugh(frobnicate, zork)", "expected": []}
       ]
+    }
+  ],
+  "retired": [
+    {
+      "id": "rust/i-only-here",
+      "type": "identifier",
+      "query": "only_here",
+      "expected": ["only_here"],
+      "locations": [{"file": "other.rs", "name": "only_here", "start_line": 5}],
+      "reason": "A second definition with the name exists: `checks::only_here` in other.rs. For a bare identifier, the two definitions are exact answers. The query `rust/i-only-here-both` expects the two."
     }
   ]
 }

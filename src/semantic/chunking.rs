@@ -20,6 +20,10 @@ pub struct Chunk {
     pub parent_name: Option<String>,
     pub signature: String,
     pub content: String,
+    /// The first line of the definition. A sub-chunk has its own `start_line`.
+    pub definition_line: u32,
+    /// The position of the definition among the definitions of one name on one line.
+    pub definition_ordinal: u32,
     pub start_line: u32,
     pub end_line: u32,
     pub chunk_index: u32,
@@ -43,7 +47,7 @@ pub fn extract_chunks(
 
     let mut all_chunks = Vec::new();
 
-    for func in functions {
+    for (func, definition_ordinal) in functions.iter().zip(definition_ordinals(functions)) {
         let parent_name = find_parent(&parent_map, func.start_line, func.end_line);
 
         let start = (func.start_line as usize).saturating_sub(1);
@@ -63,6 +67,8 @@ pub fn extract_chunks(
                 parent_name: parent_name.clone(),
                 signature: func.signature.clone(),
                 content: body,
+                definition_line: func.start_line,
+                definition_ordinal,
                 start_line: func.start_line,
                 end_line: func.end_line,
                 chunk_index: 0,
@@ -79,6 +85,8 @@ pub fn extract_chunks(
                     parent_name: parent_name.clone(),
                     signature: func.signature.clone(),
                     content: chunk_body,
+                    definition_line: func.start_line,
+                    definition_ordinal,
                     start_line: chunk_start,
                     end_line: chunk_end,
                     chunk_index: i as u32,
@@ -89,6 +97,23 @@ pub fn extract_chunks(
     }
 
     all_chunks
+}
+
+/// The position of each function among the functions that have its name and
+/// its first line. A line can have more than one definition of one name.
+pub fn definition_ordinals(functions: &[FunctionNode]) -> Vec<u32> {
+    let mut seen: std::collections::HashMap<(&str, u32), u32> = std::collections::HashMap::new();
+    functions
+        .iter()
+        .map(|func| {
+            let count = seen
+                .entry((func.name.as_str(), func.start_line))
+                .or_insert(0);
+            let ordinal = *count;
+            *count += 1;
+            ordinal
+        })
+        .collect()
 }
 
 /// A parent type span (class/struct/impl).
@@ -390,6 +415,8 @@ mod tests {
             parent_name: None,
             signature: "fn foo()".to_string(),
             content: "fn foo() { 1 }".to_string(),
+            definition_line: 1,
+            definition_ordinal: 0,
             start_line: 1,
             end_line: 1,
             chunk_index: 0,
@@ -409,6 +436,8 @@ mod tests {
             parent_name: Some("Foo".to_string()),
             signature: "fn bar()".to_string(),
             content: "fn bar() { code }".to_string(),
+            definition_line: 5,
+            definition_ordinal: 0,
             start_line: 5,
             end_line: 10,
             chunk_index: 1,

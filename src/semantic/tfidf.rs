@@ -14,6 +14,11 @@ pub struct DocMeta {
     pub symbol_name: String,
     pub symbol_type: String,
     pub signature: String,
+    /// The first line of the definition. A sub-chunk has its own `start_line`.
+    pub definition_line: u32,
+    /// The position of the definition among the definitions of one name on one line.
+    pub definition_ordinal: u32,
+    /// The first line of the definition, not of the chunk.
     pub start_line: u32,
     pub end_line: u32,
     pub cyclomatic_complexity: Option<u32>,
@@ -128,6 +133,26 @@ impl TfidfEngine {
         }
     }
 
+    /// A total order for two hits: the higher score first, then the file, the
+    /// line, the name, the ordinal, and the chunk line. Thus equal scores give
+    /// one order in each run.
+    fn compare_hits(&self, left: (usize, f32), right: (usize, f32)) -> std::cmp::Ordering {
+        let key = |index: usize| {
+            let meta = &self.doc_meta[index];
+            (
+                &meta.file_path,
+                meta.definition_line,
+                &meta.symbol_name,
+                meta.definition_ordinal,
+                meta.start_line,
+            )
+        };
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| key(left.0).cmp(&key(right.0)))
+    }
+
     /// Search for the top-k documents most similar to the query.
     pub fn search(&self, query: &str, top_k: usize) -> Vec<(DocMeta, f32)> {
         if self.doc_vectors.is_empty() {
@@ -144,7 +169,8 @@ impl TfidfEngine {
             .map(|(i, doc_vec)| (i, query_vec.dot(doc_vec)))
             .collect();
 
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.retain(|(_, score)| *score > 0.0);
+        scored.sort_by(|a, b| self.compare_hits(*a, *b));
         scored.truncate(top_k);
 
         scored
@@ -175,7 +201,8 @@ impl TfidfEngine {
             .map(|(i, doc_vec)| (i, query_vec.dot(doc_vec)))
             .collect();
 
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.retain(|(_, score)| *score > 0.0);
+        scored.sort_by(|a, b| self.compare_hits(*a, *b));
         scored.truncate(top_k);
 
         scored
@@ -249,6 +276,8 @@ mod tests {
             symbol_name: name.to_string(),
             symbol_type: "function".to_string(),
             signature: format!("fn {}()", name),
+            definition_line: 1,
+            definition_ordinal: 0,
             start_line: 1,
             end_line: 5,
             cyclomatic_complexity: None,
@@ -339,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_fit_single_doc() {
-        let docs = vec![("fn parse_file() {}".to_string(), make_meta("parse_file"))];
+        let docs = vec![("parse file".to_string(), make_meta("parse_file"))];
         let engine = TfidfEngine::fit(&docs);
         assert_eq!(engine.doc_vectors.len(), 1);
         assert_eq!(engine.doc_meta.len(), 1);
@@ -387,14 +416,62 @@ mod tests {
     }
 
     #[test]
+    fn a_document_without_a_query_term_is_not_a_result() {
+        let docs = vec![
+            ("alpha beta".to_string(), make_meta("a")),
+            ("gamma delta".to_string(), make_meta("b")),
+        ];
+        let engine = TfidfEngine::fit(&docs);
+        let names: Vec<String> = engine
+            .search("alpha", 10)
+            .into_iter()
+            .map(|(meta, _)| meta.symbol_name)
+            .collect();
+        assert_eq!(names, vec!["a"]);
+        assert!(engine.search("omega", 10).is_empty());
+        assert!(engine.search_in_files("omega", &["test.rs"], 10).is_empty());
+    }
+
+    #[test]
+    fn equal_scores_are_in_the_order_of_file_line_and_name() {
+        let place = |file: &str, line: u32, name: &str| {
+            let mut meta = make_meta(name);
+            meta.file_path = file.to_string();
+            meta.definition_line = line;
+            ("same text".to_string(), meta)
+        };
+        let docs = vec![
+            place("z.rs", 1, "a"),
+            place("a.rs", 9, "b"),
+            place("a.rs", 2, "z"),
+            place("a.rs", 2, "c"),
+        ];
+        let engine = TfidfEngine::fit(&docs);
+        let order = |hits: Vec<(DocMeta, f32)>| -> Vec<(String, u32, String)> {
+            hits.into_iter()
+                .map(|(meta, _)| (meta.file_path, meta.definition_line, meta.symbol_name))
+                .collect()
+        };
+        let expected: Vec<(String, u32, String)> = vec![
+            ("a.rs".to_string(), 2, "c".to_string()),
+            ("a.rs".to_string(), 2, "z".to_string()),
+            ("a.rs".to_string(), 9, "b".to_string()),
+            ("z.rs".to_string(), 1, "a".to_string()),
+        ];
+        assert_eq!(order(engine.search("same", 10)), expected);
+        let files = ["a.rs", "z.rs"];
+        assert_eq!(order(engine.search_in_files("same", &files, 10)), expected);
+    }
+
+    #[test]
     fn test_search_in_files() {
         let docs = vec![
-            ("fn parse_file() {}".to_string(), {
+            ("parse file".to_string(), {
                 let mut m = make_meta("parse_file");
                 m.file_path = "src/parser.rs".to_string();
                 m
             }),
-            ("fn parse_config() {}".to_string(), {
+            ("parse config".to_string(), {
                 let mut m = make_meta("parse_config");
                 m.file_path = "src/config.rs".to_string();
                 m
