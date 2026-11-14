@@ -26,6 +26,37 @@ struct Repository<'a> {
     by_module: HashMap<&'a str, Vec<usize>>,
 }
 
+/// The module tree of the Rust files of an index: which file is the root of a crate, the
+/// parent of a module, and the child module of a name. The index gives `use` and `mod`
+/// bindings the same tree.
+pub struct RustModules<'a> {
+    repository: Repository<'a>,
+}
+
+impl<'a> RustModules<'a> {
+    pub fn new(files: &'a [FileSymbols], manifests: &'a Manifests) -> Self {
+        Self {
+            repository: Repository::new(files, manifests),
+        }
+    }
+
+    /// The file of the root module of the crate that holds `file`.
+    pub fn root(&self, file: &str) -> Option<String> {
+        self.repository.rust_root(file)
+    }
+
+    /// The file of the module that declares the module in `file`.
+    pub fn parent(&self, file: &str) -> Option<String> {
+        self.repository.rust_parent(file)
+    }
+
+    /// The file of the child module `name` that `mod name;` in `file` declares.
+    pub fn child(&self, file: &str, name: &str) -> Option<String> {
+        self.repository
+            .rust_child(&Repository::rust_children(file), name)
+    }
+}
+
 /// The text and each part of the text that starts after a `/`.
 fn suffixes(path: &str) -> impl Iterator<Item = &str> {
     std::iter::once(path).chain(
