@@ -10,6 +10,7 @@ pub mod graph;
 pub mod headers;
 pub mod imports;
 pub mod lang;
+pub mod members;
 pub mod model;
 pub mod resolve;
 pub mod security;

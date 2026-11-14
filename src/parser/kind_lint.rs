@@ -5,9 +5,9 @@
 use std::collections::BTreeSet;
 
 use super::{get_function_node_types, get_tree_sitter_language, queries};
-use crate::analyzers::cohesion;
 use crate::core::Language;
 use crate::index::extract::{language_spec, NameRule};
+use crate::index::members;
 
 const LANGUAGES: [Language; 14] = [
     Language::Go,
@@ -68,7 +68,7 @@ const KNOWN_UNKNOWN_KINDS: &[&str] = &[
 /// The node kinds of the symbol extraction of the shared index.
 fn index_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {
     let spec = language_spec(language);
-    vec![
+    let mut tables = vec![
         (
             "index_definition",
             spec.definitions()
@@ -83,7 +83,9 @@ fn index_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {
         ("index_call", spec.call_syntax().kinds()),
         ("index_call_hook", spec.call_hook_kinds()),
         ("index_comment", spec.comment_kinds().to_vec()),
-    ]
+    ];
+    tables.extend(members::syntax_kinds(language));
+    tables
 }
 
 fn tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {
@@ -125,8 +127,6 @@ fn analyzer_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)>
             queries::get_comment_node_types(language).to_vec(),
         ),
         ("function", get_function_node_types(language)),
-        ("method", cohesion::get_method_node_types(language)),
-        ("field", cohesion::get_field_node_types(language)),
     ]
 }
 

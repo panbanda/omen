@@ -10,6 +10,7 @@ use tree_sitter::Node;
 
 use super::calls::{split_type, Argument, Call, CallSyntax, LocalName};
 use super::lang;
+use super::members::{self, MemberFacts, PendingBlock, Recorder, SymbolRow};
 use super::model::{
     symbol_key, Exported, ImportBinding, ImportKind, ImportTarget, Reference, ReferenceKind,
     Resolution, ResolutionStatus, SharedStr, Span, Symbol, SymbolKind,
@@ -121,6 +122,10 @@ pub struct Draft<'tree> {
     /// The modules that a Ruby `prepend` adds. They come before the type in
     /// the search for a method.
     pub prepends: Vec<String>,
+    /// The name of the class that the type extends.
+    pub superclass: Option<String>,
+    /// The function has the name of the variable or the field that holds it.
+    pub named_by_binding: bool,
 }
 
 /// Facts that only `link_files` and the resolver use. They are not a part of
@@ -142,6 +147,8 @@ pub struct LinkFacts {
     pub c_linkage: bool,
     pub defined_type: bool,
     pub prepends: Vec<String>,
+    pub superclass: Option<String>,
+    pub named_by_binding: bool,
     /// The names, different from its own, under which the module exports
     /// this top-level symbol, as `export { a as b }` gives `b` to `a`.
     pub export_aliases: Vec<String>,
@@ -593,6 +600,8 @@ struct Extractor<'a, 'tree> {
     /// The local name and the exported name of each export of a name of this
     /// file under a different name.
     export_aliases: Vec<(String, String)>,
+    language: Language,
+    members: Option<Recorder>,
 }
 
 /// What the walk does for the nodes of one kind.
@@ -604,6 +613,8 @@ struct KindFacts {
     local: bool,
     scope: bool,
     rule: Option<DefinitionRule>,
+    /// The roles of the kind in the facts of the members, as `members::kind_bits` gives.
+    member_bits: u8,
 }
 
 impl<'tree> Extractor<'_, 'tree> {
@@ -625,6 +636,10 @@ impl<'tree> Extractor<'_, 'tree> {
             local: self.local_kinds.contains(&kind),
             scope: self.spec.scope_kinds().contains(&kind),
             rule: self.rules.get(kind).copied(),
+            member_bits: self
+                .members
+                .as_ref()
+                .map_or(0, |recorder| members::kind_bits(&recorder.syntax, kind)),
         };
         self.facts_of_kinds[id] = Some(facts);
         facts
@@ -679,6 +694,11 @@ impl<'tree> Extractor<'_, 'tree> {
             c_linkage: false,
             defined_type: false,
             prepends: Vec::new(),
+            superclass: None,
+            named_by_binding: rule.name == NameRule::Hook
+                && rule.kind != SymbolKind::Field
+                && (name_node.start_byte() < node.start_byte()
+                    || name_node.end_byte() > node.end_byte()),
         };
         if draft.kind == SymbolKind::Module {
             draft.role = ScopeRole::Module;
@@ -687,6 +707,9 @@ impl<'tree> Extractor<'_, 'tree> {
         }
         if !self.spec.refine(&mut draft, &context) || draft.name.is_empty() {
             return None;
+        }
+        if self.members.is_some() && draft.kind.is_type() {
+            draft.superclass = members::superclass(self.language, node, self.source);
         }
         // The declared type of a field is in the place of a result type.
         if draft.kind == SymbolKind::Field && draft.return_type.is_none() {
@@ -710,7 +733,19 @@ impl<'tree> Extractor<'_, 'tree> {
             local,
             scope: opens_scope,
             rule,
+            member_bits,
         } = self.kind_facts(node);
+        if member_bits != 0 {
+            if let Some(recorder) = self.members.as_mut() {
+                recorder.visit(
+                    node,
+                    member_bits,
+                    self.source,
+                    &self.scopes,
+                    &self.ancestors,
+                );
+            }
+        }
         if imports || module {
             let context = Context {
                 file: self.file,
@@ -760,6 +795,7 @@ impl<'tree> Extractor<'_, 'tree> {
             self.closure_depths.push(depth);
         }
         let owner = definition.as_ref().map(|_| node.id());
+        let defines = definition.is_some();
         let scope = match definition {
             // A field opens no scope. A function value in the first value of
             // a field is in the scope of the type.
@@ -793,6 +829,15 @@ impl<'tree> Extractor<'_, 'tree> {
             ),
         };
         if let Some(scope) = scope {
+            if !defines && scope.role == ScopeRole::Type {
+                if let Some(recorder) = self.members.as_mut() {
+                    recorder.blocks.push(PendingBlock {
+                        node: node.id(),
+                        path: scope.path.clone(),
+                        end_line: node.end_position().row as u32 + 1,
+                    });
+                }
+            }
             self.scopes.push(scope);
             self.scope_depths.push(depth);
             self.scope_owners.push(owner);
@@ -871,6 +916,8 @@ pub struct FileSymbols {
     /// The module file that each qualifier of a call names, by the text of
     /// the qualifier. `resolve_imports` gives the entries.
     pub path_targets: BTreeMap<String, String>,
+    /// The facts that the class metrics use.
+    pub members: MemberFacts,
     /// The BLAKE3 hash of the bytes that gave these facts.
     pub content_hash: [u8; 32],
 }
@@ -958,6 +1005,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         locals: Vec::new(),
         block_kinds: spec.block_kinds(),
         export_aliases: Vec::new(),
+        language: parsed.language,
+        members: Recorder::new(parsed.language),
     };
     extractor.walk(parsed.root_node());
 
@@ -984,6 +1033,24 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             block,
         })
         .collect();
+    let member_facts = match extractor.members.take() {
+        Some(recorder) => {
+            let rows: Vec<SymbolRow<'_>> = found
+                .iter()
+                .map(|(draft, _)| SymbolRow {
+                    node: draft.node.id(),
+                    kind: draft.kind,
+                    name: &draft.name,
+                    container_path: &draft.container_path,
+                    start_byte: draft.span.start_byte,
+                    end_byte: draft.span.end_byte,
+                    has_receiver: draft.receiver_type.is_some(),
+                })
+                .collect();
+            recorder.finish(&parsed.source, &rows, &locals, &positions)
+        }
+        None => MemberFacts::default(),
+    };
     let parents: Vec<Option<usize>> = found
         .iter()
         .map(|(draft, _)| position_of(draft.owner))
@@ -1048,6 +1115,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             c_linkage: draft.c_linkage,
             defined_type: draft.defined_type,
             prepends: draft.prepends,
+            superclass: draft.superclass,
+            named_by_binding: draft.named_by_binding,
             export_aliases,
         });
     }
@@ -1114,6 +1183,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         reference_facts,
         locals,
         path_targets: BTreeMap::new(),
+        members: member_facts,
         content_hash: *blake3::hash(&parsed.source).as_bytes(),
     }
 }

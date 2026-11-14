@@ -463,6 +463,22 @@ Run the command again. Do not edit the repository while omen runs.
 
 `cohesion` now measures the classes of `.tsx` and `.jsx` files. Before 5.0, it skipped them.
 
+### Cohesion on the shared index
+
+`cohesion` reads the symbols, the calls, and the member facts of the shared index. It does not parse source. `--ref` selects the content of the metrics through the content source. Some values change, and each change is a correction:
+
+- WMC: omen counted each `if`, `for`, and `while` keyword two times. It now counts each keyword one time.
+- LCOM: the value is LCOM4. Two methods are connected when they share a field or when one calls the other on the object itself. A method name is not a field. Java, C#, C++, PHP, and Ruby had no field uses before. They have them now. A class without a declared field can connect methods through a field that it uses, as a Rust `self.0` does.
+- RFC: omen counts each called method one time. It counts a call in all languages. Before, Java, Python, PHP, and Ruby calls were not counted.
+- CBO: a class does not couple to itself. Python counts the names in type annotations, the base classes, and the calls of classes of the repository. Before, it counted each identifier. C# and JavaScript now count type names and `new` expressions.
+- A nested class has its own metrics. Its methods, fields, calls, and types are not in the outer class.
+- A method is a function that has its own name. A field and a function value that a variable holds are not methods. In C++, a declaration and its definition are one method. A Go or C++ method in a different file of the same directory belongs to its type.
+- The classes of Rust modules and functions, abstract TypeScript classes, and Java and C# records are now classes.
+- `parent_class` is the superclass only. A Ruby parent no longer has the text `< `. JavaScript and C# parents are now found. A C# interface of the repository is not a parent. DIT and NOC use these parents.
+- `start_line` is the line of the declaration. The lines of annotations and attributes before it are not in the range.
+
+C and Bash have no class, and `cohesion` reports nothing for them.
+
 ### GitHub Action input `binary`
 
 The action has the new input `binary`. It is the path of an omen binary, relative to the workflow workspace. The file must be executable and its name must be `omen`. If you set it, the action does not install a release, and it ignores `version`.
