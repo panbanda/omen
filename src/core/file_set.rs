@@ -1059,7 +1059,7 @@ mod tests {
         // The walk can also obey a global ignore file of the host, so only the
         // tree is compared when the switch is off.
         let config = Config {
-            exclude_built_assets: false,
+            include_generated: true,
             ..Config::default()
         };
         let from_tree = FileSet::from_tree_source(&tree_source, &config).unwrap();
