@@ -119,6 +119,44 @@ enum AliasLookup<'a> {
 /// The words that name the object of a method.
 const SELF_WORDS: &[&str] = &["self", "this", "$this", "cls"];
 
+/// The members that an object that is a function value has, and that do not
+/// run the function. The name of the one method of a functional interface,
+/// as Java `applyAsInt`, is not in this list: it runs the function.
+const NON_INVOCATION_MEMBERS: &[&str] = &[
+    "toString",
+    "equals",
+    "hashCode",
+    "getClass",
+    "clone",
+    "finalize",
+    "wait",
+    "notify",
+    "notifyAll",
+    "bind",
+    "valueOf",
+    "toLocaleString",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "constructor",
+    "length",
+    "name",
+    "andThen",
+    "compose",
+    "negate",
+    "and",
+    "or",
+    "reversed",
+    "thenComparing",
+    "__str__",
+    "__repr__",
+    "__eq__",
+    "__hash__",
+    "to_s",
+    "inspect",
+    "class",
+];
+
 /// Tells if the text of a type has `|` that is not in brackets.
 fn is_union(text: &str) -> bool {
     let mut depth = 0usize;
@@ -503,12 +541,16 @@ impl<'a> Resolver<'a> {
             return found;
         }
         let mut found = Vec::new();
-        for binding in &facts.imports {
+        let mut outside = false;
+        // An import of a name does not apply to a name with a qualifier.
+        for binding in facts.imports.iter().filter(|_| qualifier.is_none()) {
             if binding.local_name.as_deref() != Some(name) {
                 continue;
             }
             let imported = binding.imported_name.as_deref().unwrap_or(name);
-            for target in self.target_files(binding) {
+            let targets = self.target_files(binding);
+            outside |= targets.is_empty();
+            for target in targets {
                 found.extend(
                     self.exported_name(target, imported, &mut BTreeSet::new())
                         .into_iter()
@@ -516,7 +558,9 @@ impl<'a> Resolver<'a> {
                 );
             }
         }
-        if !found.is_empty() {
+        // An import of this name from a file outside the repository owns the
+        // name. A type of the repository with the same name is a different type.
+        if !found.is_empty() || outside {
             return found;
         }
         let found = in_files(&self.package_files(file));
@@ -1109,9 +1153,11 @@ impl<'a> Resolver<'a> {
     ) -> Outcome {
         let name = reference.name.as_str();
         let arity = reference.arity;
-        // A function value that a local name holds.
+        // A function value that a local name holds. Only a member that runs
+        // the function is a call of it.
         let closure = self.named_in(x, file).find(|id| {
-            id.0 == file
+            !NON_INVOCATION_MEMBERS.contains(&name)
+                && id.0 == file
                 && is_callable(self.symbol(*id))
                 && self.symbol(*id).container.is_some()
                 // A member of a type with the name is not the value of a local name.
@@ -2635,6 +2681,21 @@ mod false_edge_tests {
         let rows = rows(&files, "c.php");
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0].contains("[a.php#Item]"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_qualified_new_does_not_use_an_unrelated_import_java() {
+        let files = [
+            ("a/Item.java", "package a;\n\npublic class Item {}\n"),
+            ("b/Item.java", "package b;\n\npublic class Item {}\n"),
+            (
+                "c/Main.java",
+                "package c;\n\nimport b.Item;\n\nclass Main {\n    void run() {\n        new a.Item();\n    }\n}\n",
+            ),
+        ];
+        let rows = rows(&files, "c/Main.java");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].ends_with("[a/Item.java#Item]"), "{rows:?}");
     }
 
     #[test]

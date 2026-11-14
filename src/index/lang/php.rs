@@ -232,11 +232,18 @@ impl LanguageSpec for Php {
             let children: Vec<Node<'tree>> = node.named_children(&mut cursor).collect();
             let type_node = children.iter().find(|child| child.kind() != ARGUMENTS)?;
             let arguments = children.iter().find(|child| child.kind() == ARGUMENTS);
+            let qualifier = (type_node.kind() == QUALIFIED_NAME)
+                .then(|| context.text(*type_node))
+                .and_then(|text| {
+                    text.rsplit_once('\\')
+                        .map(|(qualifier, _)| qualifier.to_string())
+                })
+                .filter(|qualifier| !qualifier.is_empty());
             return Some(Call {
                 callee: Callee {
                     name_node: *type_node,
                     receiver: None,
-                    qualifier: None,
+                    qualifier,
                 },
                 kind: ReferenceKind::Construct,
                 arguments: count(arguments.copied()),

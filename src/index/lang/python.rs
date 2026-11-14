@@ -76,9 +76,64 @@ fn is_type_alias(assignment: Node<'_>, context: &Context<'_, '_>) -> bool {
         .is_some_and(|annotation| annotation == "TypeAlias" || annotation.ends_with(".TypeAlias"))
 }
 
+/// The text of the type that the value of `self.name = Type(...)` has.
+fn constructed_type(assignment: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+    let function = assignment
+        .child_by_field_name("right")
+        .filter(|value| value.kind() == CALL)?
+        .child_by_field_name("function")?;
+    [IDENTIFIER, ATTRIBUTE]
+        .contains(&function.kind())
+        .then(|| context.text(function))
+}
+
+/// The name of the field that `self.name` names, when the assignment gives
+/// the field a type.
+fn typed_self_field(assignment: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+    let left = assignment.child_by_field_name("left")?;
+    let object = left.child_by_field_name("object")?;
+    if left.kind() != ATTRIBUTE || object.kind() != IDENTIFIER || context.text(object) != "self" {
+        return None;
+    }
+    let annotated = assignment.child_by_field_name("type").is_some();
+    (annotated || constructed_type(assignment, context).is_some())
+        .then(|| left.child_by_field_name("attribute").map(|name| context.text(name)))
+        .flatten()
+}
+
+/// Tells if the field `name` has a type from a different write. Then an
+/// untyped write must stay as a field fact, because the writes can disagree.
+/// A class with a parent class can have the type from the parent class.
+fn has_typed_write(assignment: Node<'_>, name: &str, context: &Context<'_, '_>) -> bool {
+    let Some(class) = context
+        .scopes
+        .iter()
+        .rev()
+        .find(|scope| scope.role == ScopeRole::Type)
+    else {
+        return false;
+    };
+    if class.node.child_by_field_name("superclasses").is_some() {
+        return true;
+    }
+    let mut pending = vec![class.node];
+    while let Some(node) = pending.pop() {
+        if node.kind() == ASSIGNMENT
+            && node != assignment
+            && typed_self_field(node, context).as_deref() == Some(name)
+        {
+            return true;
+        }
+        let mut cursor = node.walk();
+        pending.extend(node.children(&mut cursor));
+    }
+    false
+}
+
 /// The name of the field that an assignment declares, and the text of its
 /// type: `name: Type` in the body of a class, `self.name: Type = value`, and
-/// `self.name = Type(...)`. A different value gives no type.
+/// `self.name = Type(...)`. A different value gives no type, and thus no
+/// field, unless another write gives the field a type. Then the text is empty.
 fn declared_field<'tree>(
     assignment: Node<'tree>,
     context: &Context<'_, 'tree>,
@@ -99,16 +154,12 @@ fn declared_field<'tree>(
                 return None;
             }
             let name = left.child_by_field_name("attribute")?;
-            let constructed = || {
-                let function = assignment
-                    .child_by_field_name("right")
-                    .filter(|value| value.kind() == CALL)?
-                    .child_by_field_name("function")?;
-                [IDENTIFIER, ATTRIBUTE]
-                    .contains(&function.kind())
-                    .then(|| context.text(function))
+            let declared = match annotation.or_else(|| constructed_type(assignment, context)) {
+                Some(declared) => declared,
+                None if has_typed_write(assignment, &context.text(name), context) => String::new(),
+                None => return None,
             };
-            Some((name, annotation.or_else(constructed)?))
+            Some((name, declared))
         }
         _ => None,
     }
