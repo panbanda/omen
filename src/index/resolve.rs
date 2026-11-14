@@ -1121,7 +1121,47 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn imported(&self, binding: &ImportBinding, name: &str) -> Outcome {
+    /// The definitions `name` in the modules that a Rust path names inside
+    /// the file of the binding, as `self::outer::name` does. The path has no
+    /// module of the file when the result is `None`.
+    fn inline_module_items(&self, binding: &ImportBinding, name: &str) -> Option<Vec<Id>> {
+        let file = *self.by_file.get(binding.file.as_str())?;
+        if self.family(file) != Family::Rust {
+            return None;
+        }
+        let mut path: Vec<&str> = binding.module_path.split("::").collect();
+        if path.first() != Some(&"self") {
+            return None;
+        }
+        path.remove(0);
+        if path.last() == Some(&name) {
+            path.pop();
+        }
+        let inline = |position: usize| {
+            self.named_in(path[position], file).any(|id| {
+                id.0 == file
+                    && self.symbol(id).kind == SymbolKind::Module
+                    && self.facts(id).container_path == path[..position]
+            })
+        };
+        if path.is_empty() || !(0..path.len()).all(inline) {
+            return None;
+        }
+        Some(
+            self.named_in(name, file)
+                .filter(|id| {
+                    id.0 == file
+                        && self.facts(*id).container_path == path
+                        && self
+                            .facts(*id)
+                            .parent
+                            .is_some_and(|parent| self.symbol((file, parent)).kind == SymbolKind::Module)
+                })
+                .collect(),
+        )
+    }
+
+    fn imported(&self, binding: &ImportBinding, name: &str, arity: usize) -> Outcome {
         let targets = self.target_files(binding);
         if targets.is_empty() {
             return Outcome::none(match binding.target_file {
@@ -1136,11 +1176,14 @@ impl<'a> Resolver<'a> {
             _ if aliased => Basis::ImportedAlias,
             _ => Basis::ImportedName,
         };
-        let mut found: Vec<Id> = targets
-            .iter()
-            .flat_map(|target| self.exported_name(*target, name, &mut BTreeSet::new()))
-            .filter(|id| is_callable(self.symbol(*id)) || is_container(self.symbol(*id)))
-            .collect();
+        let mut found: Vec<Id> = match self.inline_module_items(binding, name) {
+            Some(inside) => inside,
+            None => targets
+                .iter()
+                .flat_map(|target| self.exported_name(*target, name, &mut BTreeSet::new()))
+                .collect(),
+        };
+        found.retain(|id| is_callable(self.symbol(*id)) || is_container(self.symbol(*id)));
         if found.is_empty() {
             // A static member, as Java `import static a.Type.member` gives.
             let path = segments(&binding.module_path);
@@ -1148,11 +1191,11 @@ impl<'a> Resolver<'a> {
                 found = targets
                     .iter()
                     .flat_map(|target| self.types(owner, None, *target))
-                    .flat_map(|owner| self.members(owner, name, usize::MAX, &mut BTreeSet::new()))
+                    .flat_map(|owner| self.members(owner, name, arity, &mut BTreeSet::new()))
                     .collect();
             }
         }
-        Outcome::of(basis, self.preferred(found, usize::MAX))
+        Outcome::of(basis, self.preferred(found, arity))
             .unwrap_or_else(|| Outcome::none(Status::Unresolved))
     }
 
@@ -1226,7 +1269,7 @@ impl<'a> Resolver<'a> {
                 || binding.kind == ImportKind::Module
                 || binding.imported_name.as_deref() == Some("*");
             if module || self.target_files(binding).is_empty() {
-                return self.imported(binding, name);
+                return self.imported(binding, name, arity);
             }
             // The imported name can be a namespace that the module exports
             // again, as `export * as name from "./file"` gives.
@@ -1311,7 +1354,7 @@ impl<'a> Resolver<'a> {
             if !aliased.is_empty() {
                 return self.on_types(&aliased, name, reference.arity, Basis::QualifiedPath, file);
             }
-            let mut outcome = self.imported(binding, name);
+            let mut outcome = self.imported(binding, name, reference.arity);
             if outcome.status != Status::Unresolved || self.target_files(binding).is_empty() {
                 outcome.basis = outcome.basis.map(|_| Basis::QualifiedPath);
                 return outcome;
@@ -1494,7 +1537,7 @@ impl<'a> Resolver<'a> {
         });
         if let Some(binding) = binding {
             let imported = binding.imported_name.as_deref().unwrap_or(name);
-            return self.imported(binding, imported);
+            return self.imported(binding, imported, arity);
         }
         let package: Vec<usize> = self
             .package_files(file)

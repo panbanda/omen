@@ -215,9 +215,11 @@ impl LanguageSpec for Rust {
         }
     }
 
-    /// The arguments of a macro are tokens, not expressions. In them, a name
-    /// directly before `(` is a call of that name. The number of arguments is
-    /// not known, and a path or a receiver before the name gives no call.
+    /// The arguments of a macro are tokens, not expressions. In the tokens of
+    /// a standard macro that evaluates its arguments, a name directly before
+    /// `(` is a call of that name. The number of arguments is not known, and
+    /// a path or a receiver before the name gives no call. A different macro
+    /// can use its tokens as text, thus its tokens give no call.
     fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
         if node.kind() != IDENTIFIER {
             return self.call_syntax().call(node, context);
@@ -231,6 +233,9 @@ impl LanguageSpec for Rust {
         context
             .parent(node)
             .filter(|parent| parent.kind() == TOKEN_TREE)?;
+        if !EVALUATING_MACROS.contains(&enclosing_macro(node, context)?.as_str()) {
+            return None;
+        }
         let arguments = node.next_sibling()?;
         let opens = context.source.get(arguments.start_byte()) == Some(&b'(');
         if arguments.kind() != TOKEN_TREE || !opens {
@@ -294,13 +299,15 @@ impl LanguageSpec for Rust {
             use_tree(node, argument, "", exported, context, out);
         }
         // In a module in the file, `super` is a module of the same file.
-        // Thus the path of such a `use` is given from the file: one `self`
-        // replaces one `super` for each module that contains the `use`.
-        let depth = context
+        // Thus the path of such a `use` is given from the file: `self`, the
+        // modules that remain after the `super` words, and the rest of the path.
+        let modules: Vec<String> = context
             .scopes
             .iter()
             .filter(|scope| scope.kind == Some(SymbolKind::Module))
-            .count();
+            .map(|scope| scope.name.clone())
+            .collect();
+        let depth = modules.len();
         for binding in &mut out[first..] {
             let mut path = binding.module_path.as_str();
             let mut removed = 0;
@@ -315,7 +322,8 @@ impl LanguageSpec for Rust {
                 removed += 1;
             }
             if removed > 0 {
-                binding.module_path = joined("self", path);
+                let remaining = modules[..depth - removed].join("::");
+                binding.module_path = joined("self", &joined(&remaining, path));
             }
         }
     }
@@ -414,6 +422,44 @@ impl LanguageSpec for Rust {
             path,
         })
     }
+}
+
+/// The standard macros that evaluate each expression in their arguments.
+const EVALUATING_MACROS: &[&str] = &[
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "dbg",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "eprint",
+    "eprintln",
+    "format",
+    "format_args",
+    "matches",
+    "panic",
+    "print",
+    "println",
+    "todo",
+    "unimplemented",
+    "unreachable",
+    "vec",
+    "write",
+    "writeln",
+];
+
+/// The name of the macro that has the tokens that contain `node`.
+fn enclosing_macro(node: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+    let mut current = node.parent()?;
+    while current.kind() == TOKEN_TREE {
+        current = current.parent()?;
+    }
+    if current.kind() != "macro_invocation" {
+        return None;
+    }
+    let name = context.text(current.child_by_field_name("macro")?);
+    Some(last_segment(&name))
 }
 
 fn joined(prefix: &str, path: &str) -> String {

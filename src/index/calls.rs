@@ -141,6 +141,7 @@ impl CallSyntax {
         callee: Node<'tree>,
         context: &Context<'_, 'tree>,
     ) -> Option<Callee<'tree>> {
+        let callee = without_type_arguments(callee)?;
         let kind = callee.kind();
         if let Some((_, receiver, name)) = self.members.iter().find(|rule| rule.0 == kind) {
             let name_node = callee.child_by_field_name(name)?;
@@ -206,6 +207,7 @@ impl CallSyntax {
         } else {
             node.child_by_field_name(callee)?
         };
+        let callee = without_type_arguments(callee)?;
         let (_, receiver, _) = self.members.iter().find(|rule| rule.0 == callee.kind())?;
         let receiver = callee.child_by_field_name(receiver)?;
         Some((receiver.start_byte(), receiver.end_byte()))
@@ -302,6 +304,15 @@ impl CallSyntax {
                 });
             }
         }
+    }
+}
+
+/// The callee without the type arguments after it. Rust `helper::<u8>` is a
+/// `generic_function` node that has the callee in its `function` field.
+fn without_type_arguments(callee: Node<'_>) -> Option<Node<'_>> {
+    match callee.kind() {
+        "generic_function" => callee.child_by_field_name("function"),
+        _ => Some(callee),
     }
 }
 
