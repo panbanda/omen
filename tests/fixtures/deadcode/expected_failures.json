@@ -1,0 +1,12 @@
+[
+  {
+    "id": "php/deadcode/alive/live_value",
+    "reason": "omen reports liveValue in main.php as dead. A string names the callable in array_map, and the analysis does not read it.",
+    "tracking": "phase-2-deadcode"
+  },
+  {
+    "id": "ruby/deadcode/alive/live_value",
+    "reason": "omen reports live_value in main.rb as dead. A symbol names the method in method(:live_value), and the analysis does not read it.",
+    "tracking": "phase-2-deadcode"
+  }
+]

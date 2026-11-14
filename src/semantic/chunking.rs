@@ -37,7 +37,10 @@ pub fn searchable_symbols(facts: &FileSymbols) -> Vec<&Symbol> {
     facts
         .symbols
         .iter()
-        .filter(|symbol| symbol.is_callable() && symbol.body_range.is_some())
+        .filter(|symbol| {
+            symbol.is_callable()
+                && (symbol.body_range.is_some() || facts.language == crate::core::Language::Ruby)
+        })
         .collect()
 }
 

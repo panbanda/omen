@@ -1,0 +1,19 @@
+{
+  "language": "csharp",
+  "oracle": "Author-reviewed. csc accepts the files with a stub namespace Foreign. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "Program.cs", "name": "DeadPlain"},
+    {"label": "dead_caller", "file": "Program.cs", "name": "DeadCaller"},
+    {"label": "dead_callee", "file": "Program.cs", "name": "DeadCallee"},
+    {"label": "dead_unresolved", "file": "Program.cs", "name": "DeadUnresolved"},
+    {"label": "dead_method", "file": "Program.cs", "name": "DeadMethod"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "Program.cs", "name": "LiveDirect"},
+    {"label": "live_value", "file": "Program.cs", "name": "LiveValue"},
+    {"label": "live_public", "file": "Program.cs", "name": "LivePublic"},
+    {"label": "live_method", "file": "Program.cs", "name": "LiveMethod"},
+    {"label": "main", "file": "Program.cs", "name": "Main"}
+  ]
+}

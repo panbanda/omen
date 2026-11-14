@@ -1,0 +1,19 @@
+{
+  "language": "java",
+  "oracle": "Author-reviewed. javac accepts the files with a stub class com.example.foreign.Foreign. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "Main.java", "name": "deadPlain"},
+    {"label": "dead_caller", "file": "Main.java", "name": "deadCaller"},
+    {"label": "dead_callee", "file": "Main.java", "name": "deadCallee"},
+    {"label": "dead_unresolved", "file": "Main.java", "name": "deadUnresolved"},
+    {"label": "dead_method", "file": "Main.java", "name": "deadMethod"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "Main.java", "name": "liveDirect"},
+    {"label": "live_value", "file": "Main.java", "name": "liveValue"},
+    {"label": "live_public", "file": "Main.java", "name": "livePublic"},
+    {"label": "live_method", "file": "Main.java", "name": "liveMethod"},
+    {"label": "main", "file": "Main.java", "name": "main"}
+  ]
+}
