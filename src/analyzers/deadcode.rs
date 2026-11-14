@@ -1923,12 +1923,12 @@ fn epsilon() {}
         let result = parser
             .parse(content, Language::Rust, Path::new("standalone.rs"))
             .unwrap();
-        let functions = crate::parser::extract_functions(&result);
+        let functions = file_data(&result).definitions;
 
         assert_eq!(
             functions.len(),
             5,
-            "tree-sitter should find all 5 Rust functions, got: {:?}",
+            "the index should find all 5 Rust functions, got: {:?}",
             functions.iter().map(|f| &f.name).collect::<Vec<_>>()
         );
     }
