@@ -671,7 +671,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             commands::context::run(path, &config, &request, format, &mut stdout())?;
         }
         Command::Report(cmd) => {
-            run_report(path, &config, &cmd.subcommand, local_ref(&cli))?;
+            run_report(path, &config, &cmd.subcommand, local_ref(cli))?;
         }
         Command::Search(ref cmd) => {
             run_search(path, &config, cmd.subcommand.clone(), format)?;
