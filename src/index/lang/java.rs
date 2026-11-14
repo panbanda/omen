@@ -18,6 +18,12 @@ use crate::index::calls::{CallSyntax, LocalName};
 const LOCAL_VARIABLE_DECLARATION: &str = "local_variable_declaration";
 const FIELD_DECLARATION: &str = "field_declaration";
 const ENHANCED_FOR_STATEMENT: &str = "enhanced_for_statement";
+const SPREAD_PARAMETER: &str = "spread_parameter";
+
+/// The dimensions after a name, as `[][]` in `Item values[][]`, without white space.
+fn dimensions_text(text: &str) -> String {
+    text.split_whitespace().collect()
+}
 
 /// A method call has its object and its name in the call node. Thus the call
 /// node is also the callee expression.
@@ -40,10 +46,7 @@ const CALL_SYNTAX: CallSyntax = CallSyntax {
     self_words: &["this"],
     super_words: &["super"],
     locals: &[],
-    parameters: &[
-        ("formal_parameter", "name", "type"),
-        ("spread_parameter", "name", "type"),
-    ],
+    parameters: &[("formal_parameter", "name", "type")],
     return_type_field: "type",
     literals: &[
         ("decimal_integer_literal", "int"),
@@ -172,12 +175,20 @@ impl LanguageSpec for Java {
 
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
-        kinds.extend([LOCAL_VARIABLE_DECLARATION, ENHANCED_FOR_STATEMENT]);
+        kinds.extend([
+            LOCAL_VARIABLE_DECLARATION,
+            ENHANCED_FOR_STATEMENT,
+            SPREAD_PARAMETER,
+        ]);
         kinds
     }
 
     fn call_hook_kinds(&self) -> Vec<&'static str> {
-        vec![LOCAL_VARIABLE_DECLARATION, ENHANCED_FOR_STATEMENT]
+        vec![
+            LOCAL_VARIABLE_DECLARATION,
+            ENHANCED_FOR_STATEMENT,
+            SPREAD_PARAMETER,
+        ]
     }
 
     /// The type of a variable is on the declaration, and each declarator has
@@ -200,8 +211,40 @@ impl LanguageSpec for Java {
             }
             return;
         }
+        if node.kind() == SPREAD_PARAMETER {
+            // `Type... name` is an array of the type. The name is in a declarator.
+            let mut cursor = node.walk();
+            let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+            let name = children
+                .iter()
+                .find(|child| child.kind() == VARIABLE_DECLARATOR)
+                .and_then(|declarator| declarator.child_by_field_name("name"));
+            let element = children
+                .iter()
+                .find(|child| ![VARIABLE_DECLARATOR, "modifiers"].contains(&child.kind()));
+            if let (Some(name), Some(element)) = (name, element) {
+                out.push(LocalName {
+                    name: context.text(name),
+                    type_name: Some(format!("{}[]", context.text(*element))),
+                    value_start: None,
+                    is_parameter: true,
+                    element: false,
+                    result_index: None,
+                    visible: None,
+                });
+            }
+            return;
+        }
         if node.kind() != LOCAL_VARIABLE_DECLARATION {
+            let first = out.len();
             self.call_syntax().locals(node, context, out);
+            // `Type name[]` is an array of the type.
+            let dimensions = node
+                .child_by_field_name("dimensions")
+                .map(|dimensions| dimensions_text(&context.text(dimensions)));
+            if let (Some(dimensions), Some(local)) = (dimensions, out.get_mut(first)) {
+                local.type_name = local.type_name.take().map(|name| name + &dimensions);
+            }
             return;
         }
         let type_name = node
@@ -212,9 +255,13 @@ impl LanguageSpec for Java {
             let Some(name) = declarator.child_by_field_name("name") else {
                 continue;
             };
+            let dimensions = declarator
+                .child_by_field_name("dimensions")
+                .map(|dimensions| dimensions_text(&context.text(dimensions)))
+                .unwrap_or_default();
             out.push(LocalName {
                 name: context.text(name),
-                type_name: type_name.clone(),
+                type_name: type_name.clone().map(|declared| declared + &dimensions),
                 value_start: declarator
                     .child_by_field_name("value")
                     .map(|value| value.start_byte()),

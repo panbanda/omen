@@ -969,6 +969,28 @@ impl<'a> Resolver<'a> {
         Some(owners)
     }
 
+    /// Tells if the last name of a chain of member accesses is a field with a
+    /// pointer type.
+    fn ends_in_pointer(
+        &self,
+        file: usize,
+        chain: &[Id],
+        path: &[String],
+        at: Option<usize>,
+        depth: usize,
+    ) -> bool {
+        let Some((last, before)) = path.split_last().filter(|(_, before)| !before.is_empty())
+        else {
+            return false;
+        };
+        let owners = self.path_types(file, chain, before, false, at, depth + 1);
+        let Some([owner]) = owners.as_deref() else {
+            return false;
+        };
+        self.field_text(*owner, last, &mut BTreeSet::new())
+            .is_some_and(|(declared, _)| declared.contains('*'))
+    }
+
     /// The types of the value that a call gives. `None` means that the syntax
     /// does not give a type: the call has no one callee, or the callee has no
     /// declared result type.
@@ -1858,6 +1880,16 @@ impl<'a> Resolver<'a> {
                 let Some(owner) = self.enclosing_type(&chain) else {
                     return Outcome::none(Status::Unresolved);
                 };
+                // C# `: this(...)` calls a different constructor of the class.
+                if self.family(file) == Family::CSharp && name == "this" {
+                    let found: Vec<Id> = self
+                        .own_constructors(owner, arity)
+                        .into_iter()
+                        .filter(|id| Some(id) != chain.first())
+                        .collect();
+                    return Outcome::of(Basis::EnclosingType, found)
+                        .unwrap_or_else(|| Outcome::none(Status::Unresolved));
+                }
                 // Ruby `self.new` in a class method makes an object of the class.
                 if self.family(file) == Family::Ruby && name == "new" {
                     return Outcome::of(Basis::EnclosingType, self.constructors(owner, arity))
@@ -1949,7 +1981,17 @@ impl<'a> Resolver<'a> {
                             }),
                         Some(path) => {
                             let at = Some(facts.reference_facts[position].start_byte);
-                            self.path_types(file, &chain, path, false, at, depth + 1)
+                            // In C and C++ the member after `.` of a field that
+                            // has a pointer type belongs to the pointer, which
+                            // can be a smart pointer. It is not a member of the pointee.
+                            let pointer = self.family(file) == Family::C
+                                && !facts.reference_facts[position].arrow
+                                && self.ends_in_pointer(file, &chain, path, at, depth);
+                            if pointer {
+                                None
+                            } else {
+                                self.path_types(file, &chain, path, false, at, depth + 1)
+                            }
                         }
                         None => None,
                     },
@@ -2918,9 +2960,12 @@ mod false_edge_tests {
 
     #[test]
     fn test_cpp_call_on_a_value_member_chain_is_kept() {
-        let source = "struct Item {\n    void reset() {}\n};\n\nstruct Holder {\n    Item plain_;\n\n    void run() {\n        this->plain_.reset();\n    }\n};\n";
+        let source = "struct Item {\n    void reset() {}\n};\n\nstruct Holder {\n    Item plain_;\n    std::unique_ptr<Item> smart_;\n\n    void run() {\n        this->plain_.reset();\n        this->smart_.reset();\n    }\n};\n";
         let rows = rows(&[("a.cpp", source)], "a.cpp");
-        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows[0].contains("UniqueCandidate"), "{rows:?}");
+        assert!(rows[0].ends_with("[a.cpp#Item.reset]"), "{rows:?}");
+        assert!(!rows[1].contains("UniqueCandidate"), "{rows:?}");
     }
 
     #[test]

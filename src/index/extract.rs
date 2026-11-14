@@ -165,6 +165,9 @@ pub struct ReferenceFacts {
     /// The receiver is one element of the value that `receiver_path` names,
     /// as `c.items[i]` is.
     pub receiver_indexed: bool,
+    /// `->` follows the receiver. In C and C++ this is a member of the
+    /// object that a pointer names.
+    pub arrow: bool,
 }
 
 /// The names of the value that an index expression reads: `c.items[i]`
@@ -1050,6 +1053,12 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             receiver_indexed: receiver_text.is_some_and(|text| indexed_path(text).is_some()),
             tried: parsed.source.get(end_byte) == Some(&b'?')
                 && parsed.source.get(end_byte + 1) != Some(&b'.'),
+            arrow: receiver.is_some_and(|(_, end)| {
+                parsed
+                    .source
+                    .get(end..)
+                    .is_some_and(|rest| rest.trim_ascii_start().starts_with(b"->"))
+            }),
         });
     }
     FileSymbols {

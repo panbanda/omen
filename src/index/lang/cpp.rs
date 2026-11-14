@@ -432,7 +432,8 @@ enum PointerMember {
     No,
     /// The receiver is one name that can be a smart pointer.
     OneName,
-    /// The receiver is a chain. The resolver gives a chain a type.
+    /// The receiver is a chain. The type of its last field tells if the call
+    /// is a call of the pointee.
     Chain,
 }
 
@@ -513,16 +514,15 @@ impl LanguageSpec for Cpp {
         if node.kind() != c::DECLARATION {
             // The syntax does not tell if the receiver of `owner.reset()` is a
             // smart pointer. A declared pointee type must not give an edge to
-            // a member of the pointee. Thus one name becomes an expression
-            // without a type, and a chain gives no call.
+            // a member of the pointee. Thus the receiver becomes an expression
+            // without a name, and the resolver reads the type of the last field.
             let mut call = self.call_syntax().call(node, context)?;
             match pointer_member(node, context) {
                 PointerMember::No => {}
-                PointerMember::OneName => {
+                PointerMember::OneName | PointerMember::Chain => {
                     call.callee.receiver = Some(crate::index::model::Receiver::Expression);
                     call.callee.qualifier = None;
                 }
-                PointerMember::Chain => return None,
             }
             return Some(call);
         }
@@ -1415,7 +1415,10 @@ void Holder::run(Item& given, std::unique_ptr<Item> passed) {
                 // The receiver is not a local name with a declared value type.
                 "20 (..).reset Ambiguous NameOnly [holder.cpp#Item.reset]".to_string(),
                 format!("21 owned_.reset {reset}"),
-                // Lines 22 and 23 have a chain before `.`. They give no row.
+                // Lines 22 and 23 have a chain before `.`. The last field is a
+                // smart pointer, thus the call is not a call of the pointee.
+                "22 (..).reset Ambiguous NameOnly [holder.cpp#Item.reset]".to_string(),
+                "23 (..).get Ambiguous NameOnly [holder.cpp#Item.get]".to_string(),
                 "24 (..).reset Ambiguous NameOnly [holder.cpp#Item.reset]".to_string(),
                 format!("25 passed.reset {reset}"),
                 // A local name and a parameter with a value type are safe.

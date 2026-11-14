@@ -166,7 +166,8 @@ impl LanguageSpec for CSharp {
         ]
     }
 
-    /// `: base(...)` after a constructor calls the constructor of the parent class.
+    /// `: base(...)` after a constructor calls the constructor of the parent
+    /// class. `: this(...)` calls a different constructor of the same class.
     fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
         if node.kind() != CONSTRUCTOR_INITIALIZER {
             return self.call_syntax().call(node, context);
@@ -174,7 +175,12 @@ impl LanguageSpec for CSharp {
         let mut cursor = node.walk();
         let word = node
             .children(&mut cursor)
-            .find(|child| context.text(*child) == "base")?;
+            .find(|child| ["base", "this"].contains(&context.text(*child).as_str()))?;
+        let receiver = if context.text(word) == "this" {
+            Receiver::SelfValue
+        } else {
+            Receiver::Super
+        };
         let mut cursor = node.walk();
         let arguments = node
             .named_children(&mut cursor)
@@ -183,7 +189,7 @@ impl LanguageSpec for CSharp {
         Some(Call {
             callee: Callee {
                 name_node: word,
-                receiver: Some(Receiver::Super),
+                receiver: Some(receiver),
                 qualifier: None,
             },
             kind: ReferenceKind::Call,
