@@ -10,6 +10,31 @@ use crate::config::Config;
 use crate::core::progress::is_tty;
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 
+/// The data files that `report generate` writes and that `report validate` expects.
+pub(crate) const EXPECTED_DATA_FILES: [&str; 21] = [
+    "metadata",
+    "complexity",
+    "satd",
+    "stubs",
+    "deadcode",
+    "churn",
+    "clones",
+    "defect",
+    "changes",
+    "tdg",
+    "graph",
+    "hotspot",
+    "temporal",
+    "ownership",
+    "cohesion",
+    "repomap",
+    "smells",
+    "flags",
+    "security",
+    "score",
+    "trend",
+];
+
 pub fn run(
     path: &PathBuf,
     config: &Config,
@@ -110,6 +135,7 @@ pub fn run(
                 "repomap",
                 "smells",
                 "flags",
+                "security",
                 "score",
                 "trend",
             ];
@@ -165,6 +191,7 @@ pub fn run(
             // Group B: Git-heavy analyzers (I/O-bound, overlap with CPU work)
             // Group C: Mixed analyzers (benefit from warm OS caches)
             let churn_days = args.days.unwrap_or(since_days);
+            let security_analyzer = crate::analyzers::security::Analyzer::from_config(config)?;
 
             std::thread::scope(|s| {
                 // Group A: file-based analyzers
@@ -176,6 +203,7 @@ pub fn run(
                     );
                     run_analyzer!(crate::analyzers::satd::Analyzer::default(), "satd", "satd");
                     run_analyzer!(crate::analyzers::stubs::Analyzer::new(), "stubs", "stubs");
+                    run_analyzer!(security_analyzer, "security", "security");
                     run_analyzer!(
                         crate::analyzers::deadcode::Analyzer::default(),
                         "deadcode",
@@ -328,28 +356,7 @@ pub fn run(
         ReportSubcommand::Validate(args) => {
             // Basic validation: check that expected JSON files exist and are valid JSON
             // File list matches Go version
-            let expected_files = [
-                "metadata",
-                "complexity",
-                "satd",
-                "stubs",
-                "deadcode",
-                "churn",
-                "clones",
-                "defect",
-                "changes",
-                "tdg",
-                "graph",
-                "hotspot",
-                "temporal",
-                "ownership",
-                "cohesion",
-                "repomap",
-                "smells",
-                "flags",
-                "score",
-                "trend",
-            ];
+            let expected_files = EXPECTED_DATA_FILES;
 
             let mut errors = Vec::new();
             let mut valid_count = 0;

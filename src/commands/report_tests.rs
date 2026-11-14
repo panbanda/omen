@@ -46,3 +46,39 @@ fn test_generate_writes_the_artifacts_named_like_the_commands() {
         assert!(data.join(format!("{name}.json")).is_file(), "{name}.json");
     }
 }
+
+#[test]
+fn test_generate_writes_security_json_and_validate_expects_it() {
+    let (directory, path) = repository();
+    let data = directory.path().join("data");
+    run(
+        &path,
+        &Config::default(),
+        &subcommand(&[
+            "generate",
+            "--data",
+            data.to_str().expect("utf-8"),
+            "--skip",
+            "trend,churn,changes,ownership,temporal,hotspot,defect,tdg",
+        ]),
+        None,
+    )
+    .expect("generate");
+    let text = std::fs::read_to_string(data.join("security.json")).expect("security.json");
+    let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+    assert!(value["summary"]["sinks"].is_number());
+
+    std::fs::remove_file(data.join("security.json")).expect("remove");
+    let validate = run(
+        &path,
+        &Config::default(),
+        &subcommand(&["validate", "--data", data.to_str().expect("utf-8")]),
+        None,
+    );
+    let message = format!(
+        "{:?}",
+        validate.expect_err("the other files are missing too")
+    );
+    assert!(message.contains("validation errors"), "{message}");
+    assert!(EXPECTED_DATA_FILES.contains(&"security"));
+}
