@@ -1554,6 +1554,41 @@ def safe_parse(data):
     }
 
     #[test]
+    fn test_nested_closure_does_not_add_to_the_outer_function() {
+        let cases: [(&[u8], Language, &str); 4] = [
+            (
+                b"<?php\nfunction outer($x) {\n    $f = function($y) { return $y ? 1 : 0; };\n    return 0;\n}\n",
+                Language::Php,
+                "a.php",
+            ),
+            (
+                b"class A { int outer(int x) { Function<Integer, Integer> f = y -> y > 0 ? 1 : 0; return 0; } }",
+                Language::Java,
+                "A.java",
+            ),
+            (
+                b"class A { int Outer(int x) { int Local(int y) { return y > 0 ? 1 : 0; } return 0; } }",
+                Language::CSharp,
+                "A.cs",
+            ),
+            (
+                b"class A { int Outer(int x) { var f = delegate(int y) { return y > 0 ? 1 : 0; }; return 0; } }",
+                Language::CSharp,
+                "B.cs",
+            ),
+        ];
+        for (code, language, file) in cases {
+            let result = parse_and_analyze(code, language, file);
+            let outer = result
+                .functions
+                .iter()
+                .find(|function| function.name.eq_ignore_ascii_case("outer"))
+                .unwrap_or_else(|| panic!("{language:?}: no outer function"));
+            assert_eq!(outer.metrics.cyclomatic, 1, "{language:?}");
+        }
+    }
+
+    #[test]
     fn test_ternary_adds_one_per_language() {
         let cases: [(&[u8], Language, &str); 11] = [
             (

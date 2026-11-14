@@ -58,9 +58,6 @@ const KNOWN_UNKNOWN_KINDS: &[&str] = &[
     "flat/Go/else_clause",
     "flat/Java/else_clause",
     "flat/Php/elseif_clause",
-    "nested_scope/Java/anonymous_method_expression",
-    "nested_scope/Java/local_function_statement",
-    "nested_scope/Php/anonymous_function_creation_expression",
     "nesting/CSharp/enhanced_for_statement",
 ];
 

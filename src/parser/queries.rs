@@ -266,7 +266,12 @@ pub fn get_nested_scope_node_types(lang: Language) -> &'static [&'static str] {
             "generator_function",
             "generator_function_declaration",
         ],
-        Language::Java | Language::CSharp => &[
+        Language::Java => &[
+            "method_declaration",
+            "constructor_declaration",
+            "lambda_expression",
+        ],
+        Language::CSharp => &[
             "method_declaration",
             "constructor_declaration",
             "lambda_expression",
@@ -285,7 +290,7 @@ pub fn get_nested_scope_node_types(lang: Language) -> &'static [&'static str] {
         Language::Php => &[
             "function_definition",
             "method_declaration",
-            "anonymous_function_creation_expression",
+            "anonymous_function",
             "arrow_function",
         ],
         Language::Bash => &["function_definition"],
