@@ -211,8 +211,16 @@ fn callee_identity(entry: &Value) -> Option<String> {
     let qualified = entry.get("qualified_name")?.as_str()?;
     let (key_file, name) = match qualified.split_once('#') {
         Some((file, path)) => {
-            // `~2` after the name is the ordinal of a second definition.
-            let path = path.split('~').next()?;
+            // `~2` after the name is the ordinal of a second definition. A
+            // destructor name, as `~X`, also has `~`.
+            let path = match path.rsplit_once('~') {
+                Some((name, ordinal))
+                    if !ordinal.is_empty() && ordinal.bytes().all(|byte| byte.is_ascii_digit()) =>
+                {
+                    name
+                }
+                _ => path,
+            };
             (file, path.rsplit('.').next()?)
         }
         None => qualified.rsplit_once(':')?,
@@ -624,6 +632,16 @@ mod tests {
         assert_eq!(callee_identity(&new).as_deref(), Some("lib/a.rb:run"));
         assert_eq!(callee_identity(&bare).as_deref(), Some("lib/a.rb:run"));
         assert_eq!(callee_identity(&serde_json::json!({"file": "a"})), None);
+    }
+
+    #[test]
+    fn callee_identity_keeps_a_destructor_name() {
+        let destructor = serde_json::json!({"qualified_name": "a.cpp#X.~X"});
+        let second = serde_json::json!({"qualified_name": "a.cpp#X.~X~2"});
+        let named_with_digits = serde_json::json!({"qualified_name": "a.cpp#X.f~2"});
+        assert_eq!(callee_identity(&destructor).as_deref(), Some("a.cpp:~X"));
+        assert_eq!(callee_identity(&second).as_deref(), Some("a.cpp:~X"));
+        assert_eq!(callee_identity(&named_with_digits).as_deref(), Some("a.cpp:f"));
     }
 
     fn observation(error: Option<&str>, sha: Option<&str>) -> Observation {
