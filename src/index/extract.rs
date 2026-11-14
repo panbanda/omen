@@ -115,6 +115,12 @@ pub struct Draft<'tree> {
     pub function_value: bool,
     /// A C++ function in `extern "C"`. It has the linkage of a C function.
     pub c_linkage: bool,
+    /// A named type that owns methods although its kind is `TypeAlias`, as a
+    /// Go defined type `type Count int` does.
+    pub defined_type: bool,
+    /// The modules that a Ruby `prepend` adds. They come before the type in
+    /// the search for a method.
+    pub prepends: Vec<String>,
 }
 
 /// Facts that only `link_files` and the resolver use. They are not a part of
@@ -134,6 +140,8 @@ pub struct LinkFacts {
     pub default_export: bool,
     pub function_value: bool,
     pub c_linkage: bool,
+    pub defined_type: bool,
+    pub prepends: Vec<String>,
 }
 
 /// Facts of a reference that only the resolver uses.
@@ -638,6 +646,8 @@ impl<'tree> Extractor<'_, 'tree> {
             default_export: false,
             function_value: false,
             c_linkage: false,
+            defined_type: false,
+            prepends: Vec::new(),
         };
         if draft.kind == SymbolKind::Module {
             draft.role = ScopeRole::Module;
@@ -957,6 +967,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             default_export: draft.default_export,
             function_value: draft.function_value,
             c_linkage: draft.c_linkage,
+            defined_type: draft.defined_type,
+            prepends: draft.prepends,
         });
     }
     let mut calls = extractor.calls;

@@ -121,13 +121,10 @@ impl LanguageSpec for Go {
                     local.type_name = local.type_name.take().map(|name| format!("...{name}"));
                 }
             }
-            // `var name = Type{...}` has the type of the literal.
-            let literal = node
-                .child_by_field_name("value")
-                .and_then(|values| values.named_child(0))
-                .and_then(|value| literal_type(value, context));
-            if let (Some(literal), Some(local)) = (literal, out.get_mut(first)) {
-                local.type_name.get_or_insert(literal);
+            if node.kind() == VAR_SPEC {
+                if let Some(values) = node.child_by_field_name("value") {
+                    var_values(node, values, context, &mut out[first..]);
+                }
             }
             return;
         }
@@ -271,8 +268,12 @@ impl LanguageSpec for Go {
                 match definition.map(|definition| definition.kind()) {
                     Some(STRUCT_TYPE) => draft.kind = SymbolKind::Struct,
                     Some(INTERFACE_TYPE) => draft.kind = SymbolKind::Interface,
-                    // The type that a name is an alias of, for example a slice.
-                    _ => draft.return_type = definition.map(|aliased| context.text(aliased)),
+                    // The type that a name is based on, for example a slice. A
+                    // defined type has its own methods.
+                    _ => {
+                        draft.return_type = definition.map(|aliased| context.text(aliased));
+                        draft.defined_type = true;
+                    }
                 }
             }
             FUNCTION_LITERAL => draft.span = Span::between(&draft.name_node, &draft.node),
@@ -288,6 +289,41 @@ impl LanguageSpec for Go {
             Exported::Exported
         } else {
             Exported::NotExported
+        }
+    }
+}
+
+/// Gives each name of a `var` specification the value at its position, as a
+/// short declaration does. `var a, b = f()` gives each name one result of the
+/// call. `locals` has the names that are identifiers, in the order of the source.
+fn var_values(
+    specification: Node<'_>,
+    values: Node<'_>,
+    context: &Context<'_, '_>,
+    locals: &mut [LocalName],
+) {
+    let mut cursor = specification.walk();
+    let names: Vec<Node<'_>> = specification
+        .children_by_field_name("name", &mut cursor)
+        .collect();
+    let paired = names.len() == values.named_child_count();
+    let positions = names
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| name.kind() == IDENTIFIER)
+        .map(|(position, _)| position);
+    for (local, position) in locals.iter_mut().zip(positions) {
+        let value = paired
+            .then(|| values.named_child(position as u32))
+            .flatten();
+        let call = (!paired && values.named_child_count() == 1)
+            .then(|| values.named_child(0))
+            .flatten();
+        local.value_start = value.or(call).map(|found| found.start_byte());
+        local.result_index = call.map(|_| position);
+        // `var name = Type{...}` has the type of the literal.
+        if let Some(literal) = value.and_then(|value| literal_type(value, context)) {
+            local.type_name.get_or_insert(literal);
         }
     }
 }

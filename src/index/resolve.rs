@@ -476,7 +476,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn types_by_name(&self, name: &str, qualifier: Option<&str>, file: usize) -> Vec<Id> {
-        let is_type = |id: &Id| is_container(self.symbol(*id));
+        let is_type = |id: &Id| is_container(self.symbol(*id)) || self.facts(*id).defined_type;
         let in_files = |files: &[usize]| -> Vec<Id> {
             self.named(name, file)
                 .filter(|id| files.contains(&id.0) && is_type(id))
@@ -2475,5 +2475,255 @@ pub(crate) mod testing {
                 )
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod false_edge_tests {
+    use super::testing::rows;
+
+    /// The rows of the calls of `name`.
+    fn rows_of(files: &[(&str, &str)], file: &str, name: &str) -> Vec<String> {
+        rows(files, file)
+            .into_iter()
+            .filter(|row| {
+                let callee = row.split(' ').nth(1).unwrap_or_default();
+                callee.ends_with(&format!(".{name}"))
+                    || callee.ends_with(&format!(":{name}"))
+                    || callee.ends_with(&format!(">{name}"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_var_names_pair_with_their_values_go() {
+        let source = "package a\n\ntype First struct{}\n\nfunc (f First) run() {}\n\ntype Second struct{}\n\nfunc (s Second) run() {}\n\nfunc makeFirst() First { return First{} }\n\nfunc makeSecond() Second { return Second{} }\n\nfunc main() {\n\tvar first, second = makeFirst(), makeSecond()\n\tfirst.run()\n\tsecond.run()\n}\n";
+        assert_eq!(
+            rows_of(&[("a.go", source)], "a.go", "run"),
+            [
+                "17 main>first.run UniqueCandidate ReceiverDeclaredType [a.go#First.run]",
+                "18 main>second.run UniqueCandidate ReceiverDeclaredType [a.go#Second.run]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_defined_go_type_owns_methods() {
+        let source = "package a\n\ntype Count int\n\nfunc (c Count) Inc() {}\n\nfunc run() {\n\tvar c Count\n\tc.Inc()\n}\n";
+        assert_eq!(
+            rows_of(&[("a.go", source)], "a.go", "Inc"),
+            ["9 run>c.Inc UniqueCandidate ReceiverDeclaredType [a.go#Count.Inc]"]
+        );
+    }
+
+    #[test]
+    fn test_a_local_in_an_inner_block_hides_the_outer_local_go() {
+        let source = "package a\n\ntype A struct{}\n\nfunc (a A) Method() {}\n\ntype B struct{}\n\nfunc (b B) Method() {}\n\nfunc run() {\n\tx := A{}\n\t{\n\t\tx := B{}\n\t\tx.Method()\n\t}\n\tx.Method()\n}\n";
+        assert_eq!(
+            rows_of(&[("a.go", source)], "a.go", "Method"),
+            [
+                "15 run>x.Method UniqueCandidate ReceiverDeclaredType [a.go#B.Method]",
+                "17 run>x.Method UniqueCandidate ReceiverDeclaredType [a.go#A.Method]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_a_local_in_an_inner_block_hides_the_outer_local_rust() {
+        let source = "struct A;\nimpl A {\n    fn method(&self) {}\n}\nstruct B;\nimpl B {\n    fn method(&self) {}\n}\n\nfn run() {\n    let x: A = A;\n    {\n        let x: B = B;\n        x.method();\n    }\n    x.method();\n}\n";
+        assert_eq!(
+            rows_of(&[("a.rs", source)], "a.rs", "method"),
+            [
+                "14 run>x.method UniqueCandidate ReceiverDeclaredType [a.rs#B.method]",
+                "16 run>x.method UniqueCandidate ReceiverDeclaredType [a.rs#A.method]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_a_local_in_an_inner_block_hides_the_outer_local_java() {
+        let source = "class A {\n    void method() {}\n}\n\nclass B {\n    void method() {}\n}\n\nclass Main {\n    void run() {\n        A x = new A();\n        {\n            B x = new B();\n            x.method();\n        }\n        x.method();\n    }\n}\n";
+        assert_eq!(
+            rows_of(&[("Main.java", source)], "Main.java", "method"),
+            [
+                "14 Main.run>x.method UniqueCandidate ReceiverDeclaredType [Main.java#B.method]",
+                "16 Main.run>x.method UniqueCandidate ReceiverDeclaredType [Main.java#A.method]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_python_write_of_an_unknown_value_removes_the_field_type() {
+        let source = "class Item:\n    def name(self):\n        return \"\"\n\n\nclass Holder:\n    def __init__(self, replacement):\n        self.value = Item()\n        self.value = replacement\n\n    def run(self):\n        self.value.name()\n";
+        let rows = rows_of(&[("a.py", source)], "a.py", "name");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(!rows[0].contains("UniqueCandidate"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_php_qualified_new_does_not_use_an_unrelated_import() {
+        let files = [
+            ("a.php", "<?php\nnamespace A;\n\nclass Item {}\n"),
+            ("b.php", "<?php\nnamespace B;\n\nclass Item {}\n"),
+            (
+                "c.php",
+                "<?php\nnamespace App;\n\nuse B\\Item;\n\nfunction run() {\n    return new \\A\\Item();\n}\n",
+            ),
+        ];
+        let rows = rows(&files, "c.php");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].contains("[a.php#Item]"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_ruby_prepended_module_comes_before_the_class() {
+        let source = "module Loud\n  def name\n    \"loud\"\n  end\nend\n\nclass Base\n  prepend Loud\n\n  def name\n    \"base\"\n  end\n\n  def run\n    self.name\n  end\nend\n";
+        let rows = rows_of(&[("a.rb", source)], "a.rb", "name");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].ends_with("[a.rb#Loud.name]"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_ruby_included_module_comes_after_the_class() {
+        let source = "module Quiet\n  def name\n    \"quiet\"\n  end\nend\n\nclass Base\n  include Quiet\n\n  def name\n    \"base\"\n  end\n\n  def run\n    self.name\n  end\nend\n";
+        let rows = rows_of(&[("a.rb", source)], "a.rb", "name");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].ends_with("[a.rb#Base.name]"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_ruby_operator_assignment_binds_a_local() {
+        let source = "def helper\n  1\nend\n\ndef run\n  helper ||= 0\n  helper\nend\n\ndef count\n  total = 1\n  total += 1\n  total\nend\n\ndef total\n  2\nend\n\ndef bump\n  total += 1\n  total\nend\n";
+        assert_eq!(rows(&[("a.rb", source)], "a.rb"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_rust_macro_that_gives_text_does_not_call() {
+        let source = "fn helper() -> u32 {\n    1\n}\n\nfn main() {\n    let text = stringify!(helper());\n    println!(\"{}\", helper());\n}\n";
+        assert_eq!(
+            rows(&[("a.rs", source)], "a.rs"),
+            ["7 main>helper UniqueCandidate SameFile [a.rs#helper]"]
+        );
+    }
+
+    #[test]
+    fn test_rust_super_in_an_inline_module_keeps_the_module() {
+        let source = "fn target() {}\n\nmod outer {\n    pub fn target() {}\n\n    mod inner {\n        use super::target as chosen;\n\n        pub fn run() {\n            chosen();\n        }\n    }\n}\n";
+        let rows = rows(&[("a.rs", source)], "a.rs");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].ends_with("[a.rs#outer.target]"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_rust_turbofish_call_is_a_call() {
+        let source = "fn helper<T>() {}\n\nstruct Item;\n\nimpl Item {\n    fn run<T>(&self) {}\n\n    fn make<T>() {}\n}\n\nfn main(item: Item) {\n    helper::<u8>();\n    item.run::<u8>();\n    Item::make::<u8>();\n}\n";
+        assert_eq!(
+            rows(&[("a.rs", source)], "a.rs"),
+            [
+                "12 main>helper UniqueCandidate SameFile [a.rs#helper]",
+                "13 main>item.run UniqueCandidate ReceiverDeclaredType [a.rs#Item.run]",
+                "14 main>Item::make UniqueCandidate QualifiedPath [a.rs#Item.make]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_rust_impl_of_a_qualified_type_keeps_the_path() {
+        let source = "mod a {\n    pub struct Node;\n}\n\nmod b {\n    pub struct Node;\n}\n\nimpl a::Node {\n    fn run(&self) {}\n}\n\nimpl b::Node {\n    fn run(&self) {}\n}\n\nfn go(node: b::Node) {\n    node.run();\n}\n";
+        let keys = crate::index::extract::testing::keys(crate::core::Language::Rust, source);
+        assert!(keys.contains(&"file#a.Node.run".to_string()), "{keys:?}");
+        assert!(keys.contains(&"file#b.Node.run".to_string()), "{keys:?}");
+        let rows = rows(&[("a.rs", source)], "a.rs");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].ends_with("[a.rs#b.Node.run]"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_rust_qualifier_of_a_missing_module_gives_no_edge() {
+        let source = "struct Widget;\n\nimpl Widget {\n    fn run() {}\n}\n\nfn main() {\n    vendor::Widget::run();\n}\n";
+        let rows = rows(&[("a.rs", source)], "a.rs");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(!rows[0].contains("UniqueCandidate"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_explicit_import_of_an_outside_type_does_not_use_a_local_type_java() {
+        let files = [
+            (
+                "Main.java",
+                "package app;\n\nimport vendor.Widget;\n\nclass Main {\n    void run() {\n        new Widget();\n    }\n}\n",
+            ),
+            ("Widget.java", "package local;\n\npublic class Widget {}\n"),
+        ];
+        let rows = rows(&files, "Main.java");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(!rows[0].contains("UniqueCandidate"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_a_declaration_of_another_overload_stays_cpp() {
+        let source = "int parse(int);\n\nint parse(double value) {\n    return 1;\n}\n\nint run() {\n    return parse(1);\n}\n";
+        let rows = rows(&[("a.cpp", source)], "a.cpp");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(!rows[0].contains("parse~2"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_static_import_selects_an_overload_by_arity_java() {
+        let files = [
+            (
+                "Util.java",
+                "package u;\n\npublic class Util {\n    public static void parse(int a) {}\n\n    public static void parse(int a, int b) {}\n}\n",
+            ),
+            (
+                "Main.java",
+                "package m;\n\nimport static u.Util.parse;\n\nclass Main {\n    void run() {\n        parse(1);\n    }\n}\n",
+            ),
+        ];
+        let rows = rows(&files, "Main.java");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].contains("UniqueCandidate"), "{rows:?}");
+        assert!(rows[0].ends_with("[Util.java#Util.parse]"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_member_of_a_function_value_is_not_an_invocation() {
+        let source = "function run() {\n  const handler = () => 1;\n  handler.call(null);\n  handler.toString();\n}\n";
+        let rows = rows(&[("a.js", source)], "a.js");
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows[0].ends_with("[a.js#run.handler]"), "{rows:?}");
+        assert!(!rows[1].contains("run.handler"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_java_array_dimensions_after_the_name_select_the_overload() {
+        let source = "class Item {}\n\nclass Main {\n    void choose(Item a) {}\n\n    void choose(Item[] a) {}\n\n    void run() {\n        Item values[] = {};\n        choose(values);\n    }\n}\n";
+        let rows = rows(&[("Main.java", source)], "Main.java");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].ends_with("[Main.java#Main.choose~2]"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_java_varargs_parameter_has_an_array_type() {
+        let source = "class Item {\n    void name() {}\n}\n\nclass Main {\n    void run(Item... items) {\n        for (var item : items) {\n            item.name();\n        }\n    }\n}\n";
+        assert_eq!(
+            rows_of(&[("Main.java", source)], "Main.java", "name"),
+            ["8 Main.run>item.name UniqueCandidate ReceiverDeclaredType [Main.java#Item.name]"]
+        );
+    }
+
+    #[test]
+    fn test_cpp_call_on_a_value_member_chain_is_kept() {
+        let source = "struct Item {\n    void reset() {}\n};\n\nstruct Holder {\n    Item plain_;\n\n    void run() {\n        this->plain_.reset();\n    }\n};\n";
+        let rows = rows(&[("a.cpp", source)], "a.cpp");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+    }
+
+    #[test]
+    fn test_csharp_this_initializer_calls_the_other_constructor() {
+        let source = "class Item {\n    public Item(int a) {}\n\n    public Item() : this(1) {}\n}\n";
+        let rows = rows(&[("Item.cs", source)], "Item.cs");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].ends_with("[Item.cs#Item.Item]"), "{rows:?}");
     }
 }
