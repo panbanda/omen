@@ -25,6 +25,30 @@ fn check_writes(errors: &std::sync::Mutex<Vec<String>>) -> crate::core::Result<(
     )))
 }
 
+/// The one history window of `report generate`. Each part reads it.
+struct GenerateWindow {
+    /// The text of the window in `metadata.json`.
+    label: String,
+    /// The window as a `--since` value, for the trend.
+    since: String,
+    days: u32,
+}
+
+/// `--since` wins over `--days`, which is the alias. Without the two flags, the window is one
+/// year.
+fn generate_window(since: Option<&str>, days: Option<u32>) -> crate::core::Result<GenerateWindow> {
+    let (label, since) = match (since, days) {
+        (Some(since), _) => (since.to_string(), since.to_string()),
+        (None, Some(days)) => (format!("{days} days"), format!("{days}d")),
+        (None, None) => ("1y".to_string(), "1y".to_string()),
+    };
+    Ok(GenerateWindow {
+        days: super::analyzers::since_flag_days(&since)?,
+        label,
+        since,
+    })
+}
+
 /// Writes the file in one step: the old file stays until the new text is complete.
 fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     let mut pending = path.as_os_str().to_owned();
@@ -69,7 +93,7 @@ pub fn run(
 
     match subcommand {
         ReportSubcommand::Generate(args) => {
-            let since_days = super::analyzers::since_flag_days(&args.since)?;
+            let window = generate_window(args.since.as_deref(), args.days)?;
             // The reference is checked before the first write, so a failed run keeps
             // the files of an earlier run.
             let changes = git_ref
@@ -102,16 +126,10 @@ pub fn run(
                 .ok()
                 .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
                 .unwrap_or_else(|| "unknown".to_string());
-            // Use --days if provided, otherwise use --since
-            let since_str = if let Some(days) = args.days {
-                format!("{} days", days)
-            } else {
-                args.since.clone()
-            };
             let metadata = json!({
                 "repository": repo_name,
                 "generated_at": chrono::Utc::now().to_rfc3339(),
-                "since": since_str,
+                "since": window.label,
                 "omen_version": env!("CARGO_PKG_VERSION"),
                 "paths": [path.display().to_string()]
             });
@@ -224,7 +242,6 @@ pub fn run(
             // Group A: File-parsing analyzers (CPU-bound, share tree-sitter work)
             // Group B: Git-heavy analyzers (I/O-bound, overlap with CPU work)
             // Group C: Mixed analyzers (benefit from warm OS caches)
-            let churn_days = args.days.unwrap_or(since_days);
             let security_analyzer = crate::analyzers::security::Analyzer::from_config(config)?;
 
             std::thread::scope(|s| {
@@ -268,7 +285,7 @@ pub fn run(
                         "ownership"
                     );
                     run_analyzer!(
-                        crate::analyzers::churn::Analyzer::new().with_days(churn_days),
+                        crate::analyzers::churn::Analyzer::new().with_days(window.days),
                         "churn",
                         "churn"
                     );
@@ -348,17 +365,17 @@ pub fn run(
                 }
                 let samples = args.samples.or_else(|| {
                     // All the history has no number of days. Use 50 years.
-                    let days = if since_days == u32::MAX {
+                    let days = if window.days == u32::MAX {
                         (365 * 50) as f64
                     } else {
-                        since_days as f64
+                        window.days as f64
                     };
                     Some(crate::score::default_sample_count(days))
                 });
                 match crate::score::analyze_trend(
                     path,
                     config,
-                    &args.since,
+                    &window.since,
                     crate::cli::TrendPeriod::Monthly,
                     samples,
                 ) {

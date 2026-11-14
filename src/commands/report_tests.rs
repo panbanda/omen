@@ -166,3 +166,57 @@ fn test_generate_fails_when_trend_json_cannot_be_written() {
     let message = format!("{:?}", result.expect_err("the write fails"));
     assert!(message.contains("trend.json"), "{message}");
 }
+
+#[test]
+fn test_since_wins_over_days_in_the_one_window() {
+    let window = generate_window(Some("6m"), Some(30)).expect("window");
+    assert_eq!(window.label, "6m");
+    assert_eq!(window.since, "6m");
+    assert_eq!(window.days, 180);
+}
+
+#[test]
+fn test_days_alone_gives_the_window_for_every_part() {
+    let window = generate_window(None, Some(30)).expect("window");
+    assert_eq!(window.label, "30 days");
+    assert_eq!(window.since, "30d");
+    assert_eq!(window.days, 30);
+}
+
+#[test]
+fn test_no_flag_gives_the_default_window_of_one_year() {
+    let window = generate_window(None, None).expect("window");
+    assert_eq!(window.since, "1y");
+    assert_eq!(window.days, 365);
+}
+
+#[test]
+fn test_a_window_of_zero_days_is_an_error() {
+    assert!(generate_window(None, Some(0)).is_err());
+}
+
+#[test]
+fn test_generate_writes_the_one_window_into_metadata() {
+    let (directory, path) = repository();
+    let data = directory.path().join("data");
+    run(
+        &path,
+        &Config::default(),
+        &subcommand(&[
+            "generate",
+            "--data",
+            data.to_str().expect("utf-8"),
+            "--since",
+            "6m",
+            "--days",
+            "30",
+            "--skip",
+            "trend,churn,changes,ownership,temporal,hotspot,defect,tdg",
+        ]),
+        None,
+    )
+    .expect("generate");
+    let text = std::fs::read_to_string(data.join("metadata.json")).expect("metadata.json");
+    let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+    assert_eq!(value["since"], "6m");
+}
