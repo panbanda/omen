@@ -550,7 +550,16 @@ fn test_ref_honors_changed_since() {
 
     let changed = omen()
         .args([
-            "-p", root, "--ref", "HEAD", "-f", "json", "symbol", "in_b", "--changed-since", &first,
+            "-p",
+            root,
+            "--ref",
+            "HEAD",
+            "-f",
+            "json",
+            "symbol",
+            "in_b",
+            "--changed-since",
+            &first,
         ])
         .output()
         .unwrap();

@@ -641,7 +641,10 @@ mod tests {
         let named_with_digits = serde_json::json!({"qualified_name": "a.cpp#X.f~2"});
         assert_eq!(callee_identity(&destructor).as_deref(), Some("a.cpp:~X"));
         assert_eq!(callee_identity(&second).as_deref(), Some("a.cpp:~X"));
-        assert_eq!(callee_identity(&named_with_digits).as_deref(), Some("a.cpp:f"));
+        assert_eq!(
+            callee_identity(&named_with_digits).as_deref(),
+            Some("a.cpp:f")
+        );
     }
 
     fn observation(error: Option<&str>, sha: Option<&str>) -> Observation {

@@ -1014,7 +1014,11 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
                                 .iter()
                                 .chain(facts.parameter_types.iter().flatten())
                         })
-                        .chain(file.locals.iter().filter_map(|local| local.name.type_name.as_ref()));
+                        .chain(
+                            file.locals
+                                .iter()
+                                .filter_map(|local| local.name.type_name.as_ref()),
+                        );
                     for text in declared {
                         for word in text.split(|character: char| {
                             !(character.is_alphanumeric() || character == '_' || character == ':')

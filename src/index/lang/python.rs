@@ -97,7 +97,10 @@ fn typed_self_field(assignment: Node<'_>, context: &Context<'_, '_>) -> Option<S
     }
     let annotated = assignment.child_by_field_name("type").is_some();
     (annotated || constructed_type(assignment, context).is_some())
-        .then(|| left.child_by_field_name("attribute").map(|name| context.text(name)))
+        .then(|| {
+            left.child_by_field_name("attribute")
+                .map(|name| context.text(name))
+        })
         .flatten()
 }
 

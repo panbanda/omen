@@ -871,7 +871,14 @@ impl<'a> Resolver<'a> {
         }
         let path = local.value_path.as_ref()?;
         let chain = self.chain(file, local.owner);
-        self.path_types(file, &chain, path, element, local.name.value_start, depth + 1)
+        self.path_types(
+            file,
+            &chain,
+            path,
+            element,
+            local.name.value_start,
+            depth + 1,
+        )
     }
 
     /// The types that the text of a declared type names in `file`. A slice,
@@ -1234,10 +1241,9 @@ impl<'a> Resolver<'a> {
                 .filter(|id| {
                     id.0 == file
                         && self.facts(*id).container_path == path
-                        && self
-                            .facts(*id)
-                            .parent
-                            .is_some_and(|parent| self.symbol((file, parent)).kind == SymbolKind::Module)
+                        && self.facts(*id).parent.is_some_and(|parent| {
+                            self.symbol((file, parent)).kind == SymbolKind::Module
+                        })
                 })
                 .collect(),
         )
@@ -1851,7 +1857,11 @@ impl<'a> Resolver<'a> {
                 Argument::Literal(name) => name.clone(),
                 Argument::Name(name) => {
                     let at = Some(facts.start_byte);
-                    let declared = self.local(&chain, file, name, at)?.name.type_name.as_ref()?;
+                    let declared = self
+                        .local(&chain, file, name, at)?
+                        .name
+                        .type_name
+                        .as_ref()?;
                     let declared: String = declared.split_whitespace().collect();
                     let declared = declared.trim_start_matches(':').to_string();
                     if ["var", "auto", "let"].contains(&declared.as_str()) {
@@ -1986,16 +1996,14 @@ impl<'a> Resolver<'a> {
                 Outcome::of(Basis::EnclosingType, found)
                     .unwrap_or_else(|| Outcome::none(Status::Unresolved))
             }
-            Some(Receiver::Name(receiver)) => {
-                self.with_receiver(
-                    file,
-                    reference,
-                    &chain,
-                    receiver,
-                    facts.reference_facts[position].start_byte,
-                    depth,
-                )
-            }
+            Some(Receiver::Name(receiver)) => self.with_receiver(
+                file,
+                reference,
+                &chain,
+                receiver,
+                facts.reference_facts[position].start_byte,
+                depth,
+            ),
             Some(Receiver::Expression) => {
                 // A receiver that is a call has the type of the result of that call.
                 let receiver = facts.reference_facts[position].receiver;
@@ -2770,7 +2778,10 @@ mod false_edge_tests {
         let found = "UniqueCandidate ReceiverDeclaredType [a.go#Item.Name]";
         assert_eq!(
             rows_of(&[("a.go", source)], "a.go", "Name"),
-            [format!("11 run>a.Name {found}"), format!("12 run>b.Name {found}")]
+            [
+                format!("11 run>a.Name {found}"),
+                format!("12 run>b.Name {found}")
+            ]
         );
     }
 
@@ -2980,7 +2991,10 @@ mod false_edge_tests {
         let found = "UniqueCandidate ReceiverDeclaredType [src/shapes.rs#Circle.area]";
         assert_eq!(
             rows_of(&files, "src/other.rs", "area"),
-            [format!("8 Pair.run>(..).area {found}"), format!("9 Pair.run>given.area {found}")]
+            [
+                format!("8 Pair.run>(..).area {found}"),
+                format!("9 Pair.run>given.area {found}")
+            ]
         );
     }
 
@@ -3070,7 +3084,8 @@ mod false_edge_tests {
 
     #[test]
     fn test_csharp_this_initializer_calls_the_other_constructor() {
-        let source = "class Item {\n    public Item(int a) {}\n\n    public Item() : this(1) {}\n}\n";
+        let source =
+            "class Item {\n    public Item(int a) {}\n\n    public Item() : this(1) {}\n}\n";
         let rows = rows(&[("Item.cs", source)], "Item.cs");
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0].ends_with("[Item.cs#Item.Item]"), "{rows:?}");

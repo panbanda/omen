@@ -840,7 +840,12 @@ fn changed_files_between(
     }
 
     let output = Command::new("git")
-        .args(["diff", "--name-only", "--diff-filter=ACMR", "--end-of-options"])
+        .args([
+            "diff",
+            "--name-only",
+            "--diff-filter=ACMR",
+            "--end-of-options",
+        ])
         .arg(base)
         .args(target)
         .arg("--")

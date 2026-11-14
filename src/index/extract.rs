@@ -993,12 +993,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 let base = symbol_key(file, &draft.container_path, &draft.name, 1);
                 let count = counts.entry(base).or_insert(0);
                 *count += 1;
-                while !used.insert(symbol_key(
-                    file,
-                    &draft.container_path,
-                    &draft.name,
-                    *count,
-                )) {
+                while !used.insert(symbol_key(file, &draft.container_path, &draft.name, *count)) {
                     *count += 1;
                 }
                 ordinals[position] = *count;

@@ -160,13 +160,11 @@ pub fn report_with_reader(
             // that starts at the line of the symbol is the symbol. The
             // complexity analyzer can start a function at its annotation. Then
             // the smallest function that contains the line is the symbol.
-            let found = same_name()
-                .find(|f| f.start_line == sym.line)
-                .or_else(|| {
-                    same_name()
-                        .filter(|f| f.start_line <= sym.line && sym.line <= f.end_line)
-                        .min_by_key(|f| f.end_line - f.start_line)
-                });
+            let found = same_name().find(|f| f.start_line == sym.line).or_else(|| {
+                same_name()
+                    .filter(|f| f.start_line <= sym.line && sym.line <= f.end_line)
+                    .min_by_key(|f| f.end_line - f.start_line)
+            });
             if let Some(f) = found {
                 (Some(f.metrics.cyclomatic), Some(f.metrics.cognitive))
             } else {

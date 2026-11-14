@@ -348,7 +348,8 @@ fn literal_type(base: &str, text: &str) -> Option<String> {
     let hexadecimal = text.starts_with("0x") || text.starts_with("0X");
     if hexadecimal && ["int", "double", "number"].contains(&base) {
         // The digits include letters. Only the characters after the digits are a suffix.
-        let suffix = text[2..].trim_start_matches(|digit: char| digit.is_ascii_hexdigit() || digit == '_');
+        let suffix =
+            text[2..].trim_start_matches(|digit: char| digit.is_ascii_hexdigit() || digit == '_');
         return match suffix.to_ascii_lowercase().as_str() {
             "" => Some("int".to_string()),
             "l" => Some("long".to_string()),
@@ -617,10 +618,7 @@ mod tests {
     fn test_one_result_expands_grouped_names() {
         assert_eq!(one_result("(first, second *Item)", Some(0)), Some("*Item"));
         assert_eq!(one_result("(first, second *Item)", Some(1)), Some("*Item"));
-        assert_eq!(
-            one_result("(a, b int, c error)", Some(0)),
-            Some("int"),
-        );
+        assert_eq!(one_result("(a, b int, c error)", Some(0)), Some("int"),);
         assert_eq!(one_result("(a, b int, c error)", Some(2)), Some("error"));
         assert_eq!(one_result("(Item, error)", Some(0)), Some("Item"));
         assert_eq!(one_result("(n int, err error)", Some(1)), Some("error"));
