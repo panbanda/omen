@@ -856,6 +856,15 @@ impl Repository<'_> {
         if let Some(first) = defined.next() {
             return defined.next().is_none().then(|| first.key.clone());
         }
+        // `export { original as name }` gives the name to a symbol of the file.
+        let mut aliased = facts
+            .symbols
+            .iter()
+            .zip(&facts.link_facts)
+            .filter(|(_, link)| link.export_aliases.iter().any(|alias| alias == name));
+        if let Some((first, _)) = aliased.next() {
+            return aliased.next().is_none().then(|| first.key.clone());
+        }
         if let Some(key) = inline_module_symbol(facts, name) {
             return Some(key);
         }

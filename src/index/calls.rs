@@ -346,8 +346,17 @@ pub enum Argument {
 /// literal. The result is `None` for a suffix that this function does not know.
 fn literal_type(base: &str, text: &str) -> Option<String> {
     let hexadecimal = text.starts_with("0x") || text.starts_with("0X");
+    if hexadecimal && ["int", "double", "number"].contains(&base) {
+        // The digits include letters. Only the characters after the digits are a suffix.
+        let suffix = text[2..].trim_start_matches(|digit: char| digit.is_ascii_hexdigit() || digit == '_');
+        return match suffix.to_ascii_lowercase().as_str() {
+            "" => Some("int".to_string()),
+            "l" => Some("long".to_string()),
+            _ => None,
+        };
+    }
     let base = match base {
-        "number" if !hexadecimal && text.contains(['.', 'e', 'E']) => "double",
+        "number" if text.contains(['.', 'e', 'E']) => "double",
         "number" => "int",
         other => other,
     };
@@ -357,7 +366,6 @@ fn literal_type(base: &str, text: &str) -> Option<String> {
         .take_while(|character| character.is_ascii_alphabetic())
         .collect();
     let name = match (base, suffix.to_ascii_lowercase().as_str()) {
-        ("int" | "double", _) if hexadecimal => "int",
         ("int", "") => "int",
         ("int", "l") => "long",
         ("double", "" | "d") => "double",
@@ -513,20 +521,38 @@ pub fn one_result(text: &str, index: Option<usize>) -> Option<&str> {
         return index.is_none().then_some(text);
     };
     let parts = split_list(list);
-    let part = match (index, parts.as_slice()) {
-        (Some(index), parts) => *parts.get(index)?,
-        (None, [only]) => *only,
+    let position = match (index, parts.as_slice()) {
+        (Some(index), parts) if index < parts.len() => index,
+        (Some(_), _) => return None,
+        (None, [_]) => 0,
         (None, _) => return None,
     };
-    let is_name = |name: &str| {
-        name.chars()
-            .all(|character| character.is_alphanumeric() || character == '_')
-    };
+    let part = parts[position];
+    if let Some(declared) = named_type(part) {
+        return Some(declared);
+    }
+    // In `(first, second *Item)` a name shares the type of the next name that has one.
+    let grouped = parts.iter().any(|other| named_type(other).is_some());
+    if grouped && is_name(part) {
+        return parts[position + 1..]
+            .iter()
+            .find_map(|other| named_type(other));
+    }
+    Some(part)
+}
+
+fn is_name(name: &str) -> bool {
+    name.chars()
+        .all(|character| character.is_alphanumeric() || character == '_')
+}
+
+/// The type in `name Type`. A text without a name before the type gives `None`.
+fn named_type(part: &str) -> Option<&str> {
     match part.split_once(' ') {
         Some((name, declared)) if is_name(name) && !declared.trim().is_empty() => {
             Some(declared.trim())
         }
-        _ => Some(part),
+        _ => None,
     }
 }
 
@@ -588,12 +614,31 @@ mod tests {
     }
 
     #[test]
+    fn test_one_result_expands_grouped_names() {
+        assert_eq!(one_result("(first, second *Item)", Some(0)), Some("*Item"));
+        assert_eq!(one_result("(first, second *Item)", Some(1)), Some("*Item"));
+        assert_eq!(
+            one_result("(a, b int, c error)", Some(0)),
+            Some("int"),
+        );
+        assert_eq!(one_result("(a, b int, c error)", Some(2)), Some("error"));
+        assert_eq!(one_result("(Item, error)", Some(0)), Some("Item"));
+        assert_eq!(one_result("(n int, err error)", Some(1)), Some("error"));
+        assert_eq!(one_result("(first, second *Item)", None), None);
+    }
+
+    #[test]
     fn test_literal_type_reads_the_suffix() {
         let name = |base, text| literal_type(base, text).unwrap_or_else(|| "-".to_string());
         assert_eq!(name("int", "2"), "int");
         assert_eq!(name("int", "2L"), "long");
         assert_eq!(name("int", "2u"), "-");
         assert_eq!(name("int", "0xFF"), "int");
+        assert_eq!(name("int", "0xFFL"), "long");
+        assert_eq!(name("int", "0xffl"), "long");
+        assert_eq!(name("int", "0XDEADBEEFL"), "long");
+        assert_eq!(name("int", "0xFFu"), "-");
+        assert_eq!(name("number", "0xFFL"), "long");
         assert_eq!(name("double", "2.0"), "double");
         assert_eq!(name("double", "2.0f"), "float");
         assert_eq!(name("double", "2.0m"), "decimal");

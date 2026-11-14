@@ -410,6 +410,19 @@ impl<'a> Resolver<'a> {
         if !found.is_empty() {
             return found;
         }
+        // `export { original as name }` gives the name to a symbol of the file.
+        let aliased: Vec<Id> = (0..self.files[file].symbols.len())
+            .filter(|position| {
+                self.files[file].link_facts[*position]
+                    .export_aliases
+                    .iter()
+                    .any(|alias| alias == name)
+            })
+            .map(|position| (file, position))
+            .collect();
+        if !aliased.is_empty() {
+            return aliased;
+        }
         // A name in a module in the file, as a Rust `mod testing { ... }` has it.
         let in_module: Vec<Id> = self
             .named_in(name, file)
@@ -2730,6 +2743,34 @@ mod false_edge_tests {
                 "17 main>first.run UniqueCandidate ReceiverDeclaredType [a.go#First.run]",
                 "18 main>second.run UniqueCandidate ReceiverDeclaredType [a.go#Second.run]",
             ]
+        );
+    }
+
+    #[test]
+    fn test_export_alias_of_the_same_file_resolves_the_public_name() {
+        for (language, library, user) in [
+            ("ts", "function original(): void {}\n\nexport { original as publicName };\n", "import { publicName } from './lib';\n\nfunction run(): void {\n  publicName();\n}\n"),
+            ("js", "function original() {}\n\nexport { original as publicName };\n", "import { publicName } from './lib';\n\nfunction run() {\n  publicName();\n}\n"),
+        ] {
+            let lib = format!("lib.{language}");
+            let main = format!("main.{language}");
+            let rows = rows(&[(lib.as_str(), library), (main.as_str(), user)], &main);
+            assert_eq!(
+                rows,
+                [format!(
+                    "4 run>publicName UniqueCandidate ImportedName [{lib}#original]"
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn test_grouped_go_result_names_share_the_type() {
+        let source = "package a\n\ntype Item struct{}\n\nfunc (i *Item) Name() {}\n\nfunc pair() (first, second *Item) { return nil, nil }\n\nfunc run() {\n\ta, b := pair()\n\ta.Name()\n\tb.Name()\n}\n";
+        let found = "UniqueCandidate ReceiverDeclaredType [a.go#Item.Name]";
+        assert_eq!(
+            rows_of(&[("a.go", source)], "a.go", "Name"),
+            [format!("11 run>a.Name {found}"), format!("12 run>b.Name {found}")]
         );
     }
 

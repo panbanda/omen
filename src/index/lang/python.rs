@@ -448,7 +448,8 @@ impl LanguageSpec for Python {
     /// by convention, and a literal `__all__` lists the public names of a module.
     fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
         let dunder = draft.name.starts_with("__") && draft.name.ends_with("__");
-        if context.in_function() || (draft.name.starts_with('_') && !dunder) {
+        let private = draft.name.starts_with('_') && !dunder;
+        if context.in_function() {
             return Exported::NotExported;
         }
         if let Some(scope) = context
@@ -457,16 +458,27 @@ impl LanguageSpec for Python {
             .rev()
             .find(|scope| scope.role == ScopeRole::Type)
         {
-            return scope.exported.clone();
+            return if private {
+                Exported::NotExported
+            } else {
+                scope.exported.clone()
+            };
         }
         let mut module = draft.node;
         while let Some(parent) = module.parent() {
             module = parent;
         }
+        // A name in a literal `__all__` is public, also when it starts with `_`.
         match public_names(module, context) {
+            PublicNames::Listed(names) => {
+                if names.contains(&draft.name) {
+                    Exported::Exported
+                } else {
+                    Exported::NotExported
+                }
+            }
+            _ if private => Exported::NotExported,
             PublicNames::NotDeclared => Exported::Exported,
-            PublicNames::Listed(names) if names.contains(&draft.name) => Exported::Exported,
-            PublicNames::Listed(_) => Exported::NotExported,
             PublicNames::NotLiteral => {
                 Exported::Unknown("the module calculates `__all__`".to_string())
             }
@@ -539,6 +551,21 @@ mod tests {
                 "Function other - 6-7 not_exported",
                 "Class Circle - 9-11 exported",
                 "Method go Circle 10-11 exported",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_literal_all_makes_an_underscore_name_public() {
+        let source = "__all__ = ['_helper', 'area']\n\ndef _helper():\n    pass\n\ndef _hidden():\n    pass\n\ndef area():\n    pass\n\nclass Circle:\n    def _inner(self):\n        pass\n";
+        assert_eq!(
+            rows(Language::Python, source),
+            [
+                "Function _helper - 3-4 exported",
+                "Function _hidden - 6-7 not_exported",
+                "Function area - 9-10 exported",
+                "Class Circle - 12-14 not_exported",
+                "Method _inner Circle 13-14 not_exported",
             ]
         );
     }

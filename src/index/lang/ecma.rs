@@ -693,6 +693,27 @@ impl LanguageSpec for Ecma {
         }
     }
 
+    /// `export { original as publicName }` gives the name `publicName` to a
+    /// name of the same file.
+    fn export_aliases(&self, node: Node<'_>, context: &Context<'_, '_>) -> Vec<(String, String)> {
+        if node.kind() != EXPORT_STATEMENT || node.child_by_field_name("source").is_some() {
+            return Vec::new();
+        }
+        let Some(clause) = child_of_kind(node, EXPORT_CLAUSE) else {
+            return Vec::new();
+        };
+        let mut cursor = clause.walk();
+        clause
+            .named_children(&mut cursor)
+            .filter(|specifier| specifier.kind() == EXPORT_SPECIFIER)
+            .filter_map(|specifier| {
+                let name = specifier.child_by_field_name("name")?;
+                let alias = specifier.child_by_field_name("alias")?;
+                Some((context.text(name), context.text(alias)))
+            })
+            .collect()
+    }
+
     fn definitions(&self) -> Vec<DefinitionRule> {
         let mut definitions = COMMON_DEFINITIONS.to_vec();
         if self.typescript {

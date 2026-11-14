@@ -142,6 +142,9 @@ pub struct LinkFacts {
     pub c_linkage: bool,
     pub defined_type: bool,
     pub prepends: Vec<String>,
+    /// The names, different from its own, under which the module exports
+    /// this top-level symbol, as `export { a as b }` gives `b` to `a`.
+    pub export_aliases: Vec<String>,
 }
 
 /// Facts of a reference that only the resolver uses.
@@ -443,6 +446,12 @@ pub trait LanguageSpec: Sync {
         true
     }
 
+    /// The names that the node exports under a different name, as the local
+    /// name and the exported name. For example, `export { a as b }` gives `a` and `b`.
+    fn export_aliases(&self, _node: Node<'_>, _context: &Context<'_, '_>) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
     /// Each node kind for which the walk calls `locals`.
     fn local_kinds(&self) -> Vec<&'static str> {
         self.call_syntax().local_kinds()
@@ -581,6 +590,9 @@ struct Extractor<'a, 'tree> {
     calls: Vec<RawCall<'tree>>,
     locals: Vec<(LocalName, Option<usize>, Option<std::ops::Range<usize>>)>,
     block_kinds: Vec<&'static str>,
+    /// The local name and the exported name of each export of a name of this
+    /// file under a different name.
+    export_aliases: Vec<(String, String)>,
 }
 
 /// What the walk does for the nodes of one kind.
@@ -708,6 +720,8 @@ impl<'tree> Extractor<'_, 'tree> {
             };
             if imports {
                 self.spec.imports(node, &context, &mut self.imports);
+                self.export_aliases
+                    .extend(self.spec.export_aliases(node, &context));
             }
             if module {
                 self.modules.extend(self.spec.module_name(node, &context));
@@ -934,11 +948,13 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         calls: Vec::new(),
         locals: Vec::new(),
         block_kinds: spec.block_kinds(),
+        export_aliases: Vec::new(),
     };
     extractor.walk(parsed.root_node());
 
     let imports = extractor.imports;
     let modules = extractor.modules;
+    let export_aliases = extractor.export_aliases;
     let mut found = extractor.found;
     found.sort_by_key(|(draft, _)| (draft.span.start_byte, draft.span.end_byte));
     let positions: HashMap<usize, usize> = found
@@ -981,6 +997,15 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let mut symbols = Vec::with_capacity(found.len());
     let mut link_facts = Vec::with_capacity(found.len());
     for (((draft, exported), parent), ordinal) in found.into_iter().zip(parents).zip(ordinals) {
+        let export_aliases: Vec<String> = if parent.is_none() && draft.container_path.is_empty() {
+            export_aliases
+                .iter()
+                .filter(|(local, _)| *local == draft.name)
+                .map(|(_, alias)| alias.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         symbols.push(Symbol {
             key: symbol_key(file, &draft.container_path, &draft.name, ordinal),
             signature: signature(&draft, &parsed.source),
@@ -1008,6 +1033,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             c_linkage: draft.c_linkage,
             defined_type: draft.defined_type,
             prepends: draft.prepends,
+            export_aliases,
         });
     }
     let mut calls = extractor.calls;
