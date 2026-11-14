@@ -110,9 +110,6 @@ gate_basis = "builtin"
 # Look for the sinks of the experimental categories. Their precision on real
 # repositories is below 50 percent. The category now is: hardcoded_credential.
 experimental = false
-# Look for the sinks of the experimental categories. Their precision on real
-# repositories is below 50 percent. The category now is: hardcoded_credential.
-experimental = false
 
 # More sinks, for example the wrappers of a company. Each row is a table:
 sinks = []
