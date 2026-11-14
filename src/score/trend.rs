@@ -291,7 +291,7 @@ fn sample_times(
 fn parse_since_to_datetime(since: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
     if crate::git::is_since_all(since) {
         // Return a date far enough in the past to cover any repository
-        return Ok(DateTime::from_timestamp(0, 0).unwrap_or(now - Duration::days(365 * 50)));
+        return Ok(since_all_start());
     }
 
     let since = since.trim().to_lowercase();
@@ -308,15 +308,25 @@ fn parse_since_to_datetime(since: &str, now: DateTime<Utc>) -> Result<DateTime<U
         .parse()
         .map_err(|_| Error::config(format!("Invalid since value: {}", since)))?;
 
-    let duration = match unit {
-        "d" | "day" | "days" => Duration::days(num),
-        "w" | "wk" | "week" | "weeks" => Duration::weeks(num),
-        "m" | "mo" | "mon" | "month" | "months" => Duration::days(num * 30),
-        "y" | "yr" | "year" | "years" => Duration::days(num * 365),
+    let days_per_unit = match unit {
+        "d" | "day" | "days" => 1,
+        "w" | "wk" | "week" | "weeks" => 7,
+        "m" | "mo" | "mon" | "month" | "months" => 30,
+        "y" | "yr" | "year" | "years" => 365,
         _ => return Err(Error::config(format!("Unknown time unit: {}", unit))),
     };
 
-    Ok(now - duration)
+    // A window that no date can hold reaches back before all the history.
+    let start = num
+        .checked_mul(days_per_unit)
+        .and_then(Duration::try_days)
+        .and_then(|duration| now.checked_sub_signed(duration));
+    Ok(start.unwrap_or_else(since_all_start))
+}
+
+/// The start of a window that covers any repository.
+fn since_all_start() -> DateTime<Utc> {
+    DateTime::UNIX_EPOCH
 }
 
 /// Find the commit closest to the given time.
@@ -518,6 +528,24 @@ mod tests {
         let result = parse_since_to_datetime("all", now).unwrap();
         // Should return epoch (Unix timestamp 0)
         assert_eq!(result.timestamp(), 0);
+    }
+
+    #[test]
+    fn test_a_window_beyond_the_date_range_is_all_the_history() {
+        let now = Utc::now();
+        for since in [
+            "4294967295d",
+            "99999999999999d",
+            "9223372036854775807d",
+            "9223372036854775807w",
+            "9223372036854775807m",
+            "9223372036854775807y",
+            "-9223372036854775808d",
+        ] {
+            let result = parse_since_to_datetime(since, now)
+                .unwrap_or_else(|error| panic!("{since}: {error}"));
+            assert_eq!(result.timestamp(), 0, "{since}");
+        }
     }
 
     #[test]

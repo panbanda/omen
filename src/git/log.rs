@@ -262,7 +262,10 @@ pub fn git_resolved_since(repo_path: &std::path::Path, since: &str) -> Result<i6
 /// this change exists to fix. The all-history sentinel (`u32::MAX` days)
 /// always lands here.
 pub fn cutoff_from(anchor: i64, duration: std::time::Duration) -> Cutoff {
-    match anchor.checked_sub(duration.as_secs() as i64) {
+    match i64::try_from(duration.as_secs())
+        .ok()
+        .and_then(|seconds| anchor.checked_sub(seconds))
+    {
         Some(cutoff) if cutoff > 0 => Cutoff::At(cutoff),
         _ => Cutoff::All,
     }
@@ -281,7 +284,8 @@ pub fn parse_since_to_days(since: &str) -> Option<u32> {
     if is_since_all(since) {
         return None;
     }
-    parse_since_duration(since).map(|d| (d.as_secs() / 86400) as u32)
+    parse_since_duration(since)
+        .map(|d| u32::try_from(d.as_secs() / 86400).unwrap_or(u32::MAX))
 }
 
 /// Gives the number of days of a time window such as `30d`, `6m`, `1y`, or
@@ -321,15 +325,17 @@ pub fn parse_since_duration(since: &str) -> Option<std::time::Duration> {
 
     let num: u64 = num_str.trim().parse().ok()?;
 
-    let secs = match unit {
-        "d" | "day" | "days" => num * 86400,
-        "w" | "wk" | "wks" | "week" | "weeks" => num * 604800,
-        "m" | "mo" | "mon" | "month" | "months" => num * 2592000, // 30 days
-        "y" | "yr" | "yrs" | "year" | "years" => num * 31536000,  // 365 days
+    let seconds_per_unit = match unit {
+        "d" | "day" | "days" => 86400,
+        "w" | "wk" | "wks" | "week" | "weeks" => 604800,
+        "m" | "mo" | "mon" | "month" | "months" => 2592000, // 30 days
+        "y" | "yr" | "yrs" | "year" | "years" => 31536000,  // 365 days
         _ => return None,
     };
 
-    Some(std::time::Duration::from_secs(secs))
+    Some(std::time::Duration::from_secs(
+        num.saturating_mul(seconds_per_unit),
+    ))
 }
 
 /// Get commit log with file change statistics (numstat equivalent).
@@ -1250,6 +1256,17 @@ mod tests {
             .filter(|text| since_to_days(text).is_ok())
             .collect();
         assert_eq!(accepted, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_window_too_large_for_the_integers_is_all_the_history() {
+        for since in ["18446744073709551615d", "18446744073709551615y", "4294967295y"] {
+            assert_eq!(since_to_days(since), Ok(u32::MAX), "{since}");
+        }
+        assert_eq!(
+            cutoff_from(1_000, std::time::Duration::from_secs(u64::MAX)),
+            Cutoff::All
+        );
     }
 
     #[test]
