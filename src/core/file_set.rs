@@ -65,8 +65,14 @@ impl FileSet {
                 if Language::detect(path).is_none() {
                     return false;
                 }
+                // The walk skips hidden entries, so the tree must too.
+                if has_hidden_component(path) {
+                    return false;
+                }
                 // Exclude built/minified assets
-                if config.exclude_built_assets && is_built_asset(path) {
+                if config.exclude_built_assets
+                    && (is_built_asset(path) || is_default_ignored_path(path))
+                {
                     return false;
                 }
                 // Check exclude patterns
@@ -347,6 +353,15 @@ fn is_built_asset(path: &Path) -> bool {
     // Strip the real extension, then check if the remaining stem ends with a built suffix
     let stem = &file_name[..file_name.len() - ext.len() - 1];
     BUILT_SUFFIXES.iter().any(|suffix| stem.ends_with(suffix))
+}
+
+fn has_hidden_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|name| name.starts_with('.') && name != "." && name != "..")
+    })
 }
 
 fn is_default_ignored_path(path: &Path) -> bool {
@@ -996,5 +1011,58 @@ mod tests {
         };
         let file_set = FileSet::from_tree_source(&tree_source, &config_disabled).unwrap();
         assert_eq!(file_set.len(), 3);
+    }
+
+    #[test]
+    fn test_tree_source_and_walk_give_the_same_file_set() {
+        use crate::core::TreeSource;
+        use std::process::Command;
+
+        let temp = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(temp.path())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}");
+            String::from_utf8(output.stdout).unwrap()
+        };
+        run(&["init"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        let paths = [
+            "app.js",
+            "src/lib.rs",
+            "node_modules/dep/index.js",
+            "out/_next/static/chunks/00dfa0iob1t3d.js",
+            "swagger-ui-bundle.js",
+            "vendor/lib.go",
+            "dist/main.js",
+            ".hidden/tool.js",
+        ];
+        for path in paths {
+            let full = temp.path().join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, "x").unwrap();
+        }
+        run(&["add", "-f", "."]);
+        run(&["commit", "-m", "init"]);
+        let sha = run(&["rev-parse", "HEAD"]).trim().to_string();
+        let tree_source = TreeSource::new(temp.path(), &sha).unwrap();
+
+        let config = Config::default();
+        let from_tree = FileSet::from_tree_source(&tree_source, &config).unwrap();
+        let from_walk = FileSet::from_path(temp.path(), &config).unwrap();
+        assert_eq!(from_tree.files(), from_walk.files());
+
+        // The walk can also obey a global ignore file of the host, so only the
+        // tree is compared when the switch is off.
+        let config = Config {
+            exclude_built_assets: false,
+            ..Config::default()
+        };
+        let from_tree = FileSet::from_tree_source(&tree_source, &config).unwrap();
+        assert_eq!(from_tree.len(), 7);
     }
 }
