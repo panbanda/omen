@@ -159,9 +159,11 @@ envelope.
 | Ambiguous name in `get_symbol` and `task_context` | Success result with `ambiguous: true` and `choices`. | `ambiguous` error with the choices in `error.suggestions`. | Send the call again with the `name` and the `start_line` of one suggestion. |
 | Unknown name in `get_symbol` and `task_context` | Success result with `found: false`. | `not_found` error with near names in `error.suggestions`. | Read `error.code`, not `result.found`. |
 | Unknown symbol in `impact` | Empty success result with `suggestions`. | `not_found` error with the names in `error.suggestions`. | Read `error.code`. |
-| `files` and `include_projects` of `semantic_search` and `semantic_search_hyde` | One string with commas. | An array of strings. | Send `["a.rs", "b.rs"]`, not `"a.rs,b.rs"`. |
+| `files` and `include_projects` of `search` | One string with commas. | An array of strings. | Send `["a.rs", "b.rs"]`, not `"a.rs,b.rs"`. |
 | Envelope of `task_context` | Only `tool` and `result`. | The same envelope as each other tool. | None, unless the client rejects unknown keys. |
-| Envelope of each tool | `tool`, `total_items`, `returned`, `offset`, `result`. | Also `has_more`, `next_offset`, and `truncated`. | None, unless the client rejects unknown keys. |
+| Envelope of each tool | `tool`, `total_items`, `returned`, `offset`, `result`. | Also `has_more`, `next_offset`, `truncated`, `hints`, and `index`. | None, unless the client rejects unknown keys. |
+| Tool `semantic_search` | The tool searched with TF-IDF. | The tool has the name `search`. It matches terms and does not use embeddings. | Call `search` with the same arguments. |
+| Tool `semantic_search_hyde` | The tool searched with a code snippet in `hypothetical_document`. | The tool does not exist. A call gives a JSON-RPC error `-32602`. | Call `search` with the code snippet as `query`. |
 
 These bounds are new:
 

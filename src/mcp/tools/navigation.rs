@@ -354,7 +354,7 @@ fn symbol_suggestions(by_name: &HashMap<String, Vec<usize>>, query: &str) -> Vec
 /// The error for a symbol name that agrees with no definition.
 fn symbol_not_found(param: &'static str, name: &str, suggestions: Vec<String>) -> ToolError {
     let next = if suggestions.is_empty() {
-        "Find the symbol with `outline` or `semantic_search`."
+        "Find the symbol with `outline` or `search`."
     } else {
         "Use a name from `suggestions`."
     };

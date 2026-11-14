@@ -141,7 +141,7 @@ Top-level commands (flat structure):
 
 **Special safety flags**: `deadcode --cargo-check` executes `cargo check`, including build scripts, and is for trusted repositories only. Mutation testing refuses dirty working trees unless `mutation --allow-dirty` is supplied. MCP transport is stdio-only; `mcp --allow-external-paths` permits tool paths outside the configured repository root.
 
-**MCP tool list**: `context`, `outline`, `complexity`, `satd`, `deadcode`, `stubs`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `semantic_search`, `get_symbol`, `task_context`, `impact`, `semantic_search_hyde`. A test compares this line with `McpServer::tool_names()`.
+**MCP tool list**: `context`, `outline`, `complexity`, `satd`, `deadcode`, `stubs`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `search`, `get_symbol`, `task_context`, `impact`. A test compares this line with `McpServer::tool_names()`.
 
 **MCP contract** (see `docs/MCP_CONTEXT.md`):
 

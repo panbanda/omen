@@ -31,7 +31,7 @@ Sequence:
 1. Call `context` one time for the top symbols and the risks, or `outline` for the structure of a file.
 2. Before you edit a symbol, call `get_symbol` to read its source, its callers, and its callees.
 3. Before you change a signature, call `impact` to find the callers that the change can break.
-4. Use `semantic_search` when you do not know the name of a symbol.
+4. Use `search` when you do not know the name of a symbol.
 
 Pagination: `limit` has the default 50, and the value 0 removes the limit. \
 When `has_more` is true, send the same call with `offset` set to `next_offset`. \
@@ -847,11 +847,8 @@ mod tests {
         .unwrap();
     }
 
-    fn search_tools() -> [(&'static str, &'static str); 2] {
-        [
-            ("semantic_search", "query"),
-            ("semantic_search_hyde", "hypothetical_document"),
-        ]
+    fn search_tools() -> [(&'static str, &'static str); 1] {
+        [("search", "query")]
     }
 
     fn search_results(server: &McpServer, tool: &str, arguments: Value) -> Value {
@@ -975,7 +972,7 @@ mod tests {
         write_search_fixture(dir.path());
         let all = search_results(
             &server,
-            "semantic_search",
+            "search",
             json!({"query": "parse config", "min_score": 0.0, "top_k": 100}),
         );
         let total = all["result"]["results"].as_array().unwrap().len();
@@ -983,7 +980,7 @@ mod tests {
         assert_eq!(all["truncated"], json!([]));
         let cut = search_results(
             &server,
-            "semantic_search",
+            "search",
             json!({"query": "parse config", "min_score": 0.0, "top_k": 1}),
         );
         assert_eq!(cut["returned"], 1);
@@ -1077,7 +1074,7 @@ mod tests {
         write_indexed_project(dir.path());
         let search = search_results(
             &server,
-            "semantic_search",
+            "search",
             json!({
                 "query": "parse config", "min_score": 0.0, "top_k": 100,
                 "include_projects": ["sub"]
@@ -1123,7 +1120,7 @@ mod tests {
         // project fields.
         let single = search_results(
             &server,
-            "semantic_search",
+            "search",
             json!({"query": "parse config", "min_score": 0.0}),
         );
         let first = &single["result"]["results"][0];
@@ -1165,7 +1162,7 @@ mod tests {
         write_search_fixture(&dir.path().join("[id] page"));
         let found = search_results(
             &server,
-            "semantic_search",
+            "search",
             json!({"query": "parse config", "min_score": 0.0, "files": ["[id] page/simple.rs"]}),
         );
         assert_eq!(result_files(&found), ["[id] page/simple.rs"]);
@@ -1250,14 +1247,11 @@ mod tests {
         ok("outline", json!({"file": affected_file}));
 
         // Search result -> `files` of the search, `outline`, `get_symbol`.
-        let search = ok(
-            "semantic_search",
-            json!({"query": "parse config", "min_score": 0.0}),
-        );
+        let search = ok("search", json!({"query": "parse config", "min_score": 0.0}));
         let result = &search["result"]["results"][0];
         let result_file = result["file"].as_str().unwrap();
         let again = ok(
-            "semantic_search",
+            "search",
             json!({"query": "parse config", "min_score": 0.0, "files": [result_file]}),
         );
         assert!(result_files(&again).iter().all(|file| *file == result_file));
@@ -1655,7 +1649,7 @@ mod tests {
 
         let body = error_of(
             &server,
-            "semantic_search",
+            "search",
             json!({"query": "secret", "include_projects": [outside.path()]}),
         );
         assert_eq!(body["error"]["code"], "path_outside_root");
@@ -1750,28 +1744,14 @@ mod tests {
     }
 
     #[test]
-    fn test_semantic_search_rejects_external_include_project() {
+    fn test_search_rejects_external_include_project() {
         let (server, _root) = create_test_server();
         let outside = TempDir::new().unwrap();
 
         let result = call(
             &server,
-            "semantic_search",
+            "search",
             json!({"query": "test", "include_projects": [outside.path()]}),
-        );
-
-        assert_eq!(result["isError"], true);
-    }
-
-    #[test]
-    fn test_semantic_search_hyde_rejects_external_include_project() {
-        let (server, _root) = create_test_server();
-        let outside = TempDir::new().unwrap();
-
-        let result = call(
-            &server,
-            "semantic_search_hyde",
-            json!({"hypothetical_document": "test", "include_projects": [outside.path()]}),
         );
 
         assert_eq!(result["isError"], true);
@@ -2731,51 +2711,36 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_tools_list_has_semantic_search() {
+    fn the_removed_search_tools_are_unknown() {
         let (server, _temp_dir) = create_test_server();
-        let result = server.handle_tools_list().unwrap();
-        let tools = result.get("tools").unwrap().as_array().unwrap();
-        let has_semantic_search = tools
-            .iter()
-            .any(|t| t.get("name").unwrap() == "semantic_search");
-        assert!(has_semantic_search);
+        for name in ["semantic_search", "semantic_search_hyde"] {
+            let error = server
+                .handle_tool_call(Some(json!({"name": name, "arguments": {"query": "a"}})))
+                .expect_err(name);
+            assert_eq!(error, format!("Unknown tool: {name}"));
+        }
     }
 
     #[test]
-    fn test_semantic_search_missing_query() {
+    fn test_handle_tools_list_has_search() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_search = tools.iter().any(|t| t.get("name").unwrap() == "search");
+        assert!(has_search);
+    }
+
+    #[test]
+    fn test_search_missing_query() {
         let (server, _temp_dir) = create_test_server();
         let params = json!({
-            "name": "semantic_search",
+            "name": "search",
             "arguments": {}
         });
         let result = server.handle_tool_call(Some(params));
         let error = &result.unwrap()["structuredContent"]["error"];
         assert_eq!(error["code"], "missing_argument");
         assert_eq!(error["param"], "query");
-    }
-
-    #[test]
-    fn test_handle_tools_list_has_semantic_search_hyde() {
-        let (server, _temp_dir) = create_test_server();
-        let result = server.handle_tools_list().unwrap();
-        let tools = result.get("tools").unwrap().as_array().unwrap();
-        let has_hyde = tools
-            .iter()
-            .any(|t| t.get("name").unwrap() == "semantic_search_hyde");
-        assert!(has_hyde);
-    }
-
-    #[test]
-    fn test_semantic_search_hyde_missing_document() {
-        let (server, _temp_dir) = create_test_server();
-        let params = json!({
-            "name": "semantic_search_hyde",
-            "arguments": {}
-        });
-        let result = server.handle_tool_call(Some(params));
-        let error = &result.unwrap()["structuredContent"]["error"];
-        assert_eq!(error["code"], "missing_argument");
-        assert_eq!(error["param"], "hypothetical_document");
     }
 
     #[test]
@@ -2857,14 +2822,14 @@ mod tests {
     }
 
     #[test]
-    fn test_semantic_search_with_max_complexity() {
+    fn test_search_with_max_complexity() {
         let (server, temp_dir) = create_test_server();
 
         // Create a Rust file with a simple function so the index is non-empty
         std::fs::write(temp_dir.path().join("test.rs"), "fn simple() { return; }\n").unwrap();
 
         let params = json!({
-            "name": "semantic_search",
+            "name": "search",
             "arguments": {
                 "query": "simple",
                 "max_complexity": 5
@@ -2873,41 +2838,19 @@ mod tests {
         let result = server.handle_tool_call(Some(params));
         assert!(
             result.is_ok(),
-            "semantic_search with max_complexity should succeed: {result:?}"
+            "search with max_complexity should succeed: {result:?}"
         );
         let response = result.unwrap();
         assert!(response.get("content").is_some());
     }
 
     #[test]
-    fn test_semantic_search_hyde_with_max_complexity() {
-        let (server, temp_dir) = create_test_server();
-
-        std::fs::write(temp_dir.path().join("test.rs"), "fn simple() { return; }\n").unwrap();
-
-        let params = json!({
-            "name": "semantic_search_hyde",
-            "arguments": {
-                "hypothetical_document": "fn simple() { return; }",
-                "max_complexity": 5
-            }
-        });
-        let result = server.handle_tool_call(Some(params));
-        assert!(
-            result.is_ok(),
-            "semantic_search_hyde with max_complexity should succeed: {result:?}"
-        );
-        let response = result.unwrap();
-        assert!(response.get("content").is_some());
-    }
-
-    #[test]
-    fn test_semantic_search_max_complexity_schema_exposed() {
+    fn test_search_max_complexity_schema_exposed() {
         let (server, _temp_dir) = create_test_server();
         let result = server.handle_tools_list().unwrap();
         let tools = result.get("tools").unwrap().as_array().unwrap();
 
-        for tool_name in ["semantic_search", "semantic_search_hyde"] {
+        for tool_name in ["search"] {
             let tool = tools
                 .iter()
                 .find(|t| t.get("name").unwrap() == tool_name)

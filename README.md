@@ -676,7 +676,7 @@ omen search query "authentication" --files src/auth/,src/middleware/
 omen search query "retry logic" --include-project /path/to/other-repo
 
 # Filter by complexity
-# (via MCP: semantic_search with max_complexity parameter)
+# (via MCP: search with max_complexity parameter)
 ```
 
 **How it works:**
@@ -691,7 +691,7 @@ Queries return at most 10 results by default and discard each symbol that has no
 
 **Features:**
 
-- **HyDE search** - Write a hypothetical code snippet as your query for better matches (available via MCP `semantic_search_hyde` tool)
+- **Snippet queries** - Use a code snippet as the query. The tokenizer splits each identifier in the snippet into its words.
 - **Complexity filtering** - Exclude high-complexity functions from results (`max_complexity` parameter on MCP tools)
 - **Multi-repo search** - Query across multiple project indexes with unified IDF scoring (`--include-project`)
 - **Per-function metrics** - Results include cyclomatic and cognitive complexity when available
@@ -867,15 +867,14 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `smells` - Architectural smell detection
 - `flags` - Feature flag detection and staleness
 - `score` - Composite health score (0-100)
-- `semantic_search` - Natural language code search
+- `search` - Find symbols by a description or a code snippet
 - `get_symbol` - Source, signature, location, relationships, and complexity for one symbol
 - `task_context` - Bounded context for one definition, with a byte budget
 - `impact` - Transitive caller/callee blast-radius analysis
-- `semantic_search_hyde` - HyDE-style search (query with a hypothetical code snippet)
 
 The server validates the arguments of each call against the input schema of the tool. An unknown argument, a value of the wrong type, a value out of its bounds, and a value that is not in its enum are errors. The server does not replace an incorrect value with a default.
 
-Each tool gives compact JSON in the same envelope: `tool`, `total_items`, `returned`, `offset`, `has_more`, `next_offset`, `truncated`, and `result`. `git_skipped_reason` is present when an analyzer ran without git data. Each tool accepts `limit` (default 50) and `offset` (default 0), but not `task_context`, which has a byte budget. When `has_more` is `true`, send the same call with `offset` set to `next_offset`. `context` with `format: "markdown"` gives text without an envelope.
+Each tool gives compact JSON in the same envelope: `tool`, `total_items`, `returned`, `offset`, `has_more`, `next_offset`, `truncated`, `hints`, `index`, and `result`. `git_skipped_reason` is present when an analyzer ran without git data. Each tool accepts `limit` (default 50) and `offset` (default 0), but not `task_context`, which has a byte budget. When `has_more` is `true`, send the same call with `offset` set to `next_offset`. `context` with `format: "markdown"` gives text without an envelope.
 
 A failure of a tool is a result with `isError: true` and a structured `error` object with a `code`, such as `invalid_argument`, `not_found`, or `ambiguous`. See [docs/MCP_CONTEXT.md](docs/MCP_CONTEXT.md) for the full contract.
 

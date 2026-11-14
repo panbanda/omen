@@ -87,7 +87,7 @@ const MIRRORS: &[Mirror] = &[
     ),
     mirror("score", &["score"]).not_paged(),
     // `--top` of `search query` is `top_k`, and the two have the default 10.
-    mirror("semantic_search", &["search", "query", "helper"])
+    mirror("search", &["search", "query", "helper"])
         .not_paged()
         .arguments(r#"{"query": "helper"}"#)
         .option(&["--min-score", "0"], r#"{"min_score": 0}"#),
@@ -107,16 +107,10 @@ const MIRRORS: &[Mirror] = &[
 ];
 
 /// The tools that have no CLI command, each with the reason.
-const TOOLS_WITHOUT_COMMAND: &[(&str, &str)] = &[
-    (
-        "task_context",
-        "The CLI has no command for bounded context.",
-    ),
-    (
-        "semantic_search_hyde",
-        "The CLI has no search by a code snippet.",
-    ),
-];
+const TOOLS_WITHOUT_COMMAND: &[(&str, &str)] = &[(
+    "task_context",
+    "The CLI has no command for bounded context.",
+)];
 
 /// A part of the output that is permitted to be different, with the reason.
 /// The path is a JSON pointer in the output. The segment `*` is each element
@@ -391,7 +385,7 @@ const PRIMARY_LISTS: &[(&str, &str)] = &[
     ("smells", "/smells"),
     ("flags", "/flags"),
     ("score", "/components"),
-    ("semantic_search", "/results"),
+    ("search", "/results"),
     ("get_symbol", "/callees"),
     ("impact", "/callers"),
 ];
@@ -540,11 +534,11 @@ const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
     (("hotspot", "days"), "days"),
     (("flags", "provider"), "provider"),
     (("flags", "stale_days"), "stale_days"),
-    (("semantic_search", "query"), "query"),
-    (("semantic_search", "top_k"), "top"),
-    (("semantic_search", "min_score"), "min_score"),
-    (("semantic_search", "files"), "files"),
-    (("semantic_search", "include_projects"), "include_project"),
+    (("search", "query"), "query"),
+    (("search", "top_k"), "top"),
+    (("search", "min_score"), "min_score"),
+    (("search", "files"), "files"),
+    (("search", "include_projects"), "include_project"),
     (("get_symbol", "name"), "name"),
     // The flag is the opposite of the parameter.
     (("get_symbol", "include_source"), "no_source"),
@@ -595,7 +589,7 @@ const MCP_ONLY: &[((&str, &str), &str)] = &[
         "The `score` command has no `--offset` flag.",
     ),
     (
-        ("semantic_search", "max_complexity"),
+        ("search", "max_complexity"),
         "The `search query` command has no complexity filter.",
     ),
     (

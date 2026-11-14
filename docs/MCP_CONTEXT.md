@@ -146,7 +146,7 @@ while the fingerprint is the same. `sources` is the number of source files.
   total 1 when the budget removed that object.
 - `get_symbol`: `/source`, in lines, when `max_source_lines` cut the source.
 - `context`: each list that `max_tokens` cut.
-- `semantic_search` and `semantic_search_hyde`: `/results` when `top_k` cut the
+- `search`: `/results` when `top_k` cut the
   results that the filters accepted.
 
 One rule applies to each tool. `total_items` is the size of the primary list

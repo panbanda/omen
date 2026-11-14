@@ -418,14 +418,10 @@ const MCP_CASES: &[McpCase] = &[
         &["/result/summary/by_provider"],
     ),
     mcp("score", "{}"),
-    mcp("semantic_search", r#"{"query": "helper"}"#),
+    mcp("search", r#"{"query": "helper"}"#),
     mcp("get_symbol", r#"{"name": "run"}"#),
     mcp("task_context", r#"{"name": "run"}"#),
     mcp("impact", r#"{"symbol": "run"}"#),
-    mcp(
-        "semantic_search_hyde",
-        r#"{"hypothetical_document": "pub fn helper() -> u32 { 1 }"}"#,
-    ),
 ];
 
 /// The MCP tools that have no snapshot, each with the reason.
