@@ -452,8 +452,8 @@ impl<'a, 'v> Classes<'a, 'v> {
                     call.resolution.status,
                     ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
                 );
-                if call.kind == ReferenceKind::Call {
-                    // A call that resolves to one definition is a call of that
+                {
+                    // A call or a construction that resolves to one definition is a call of that
                     // method. Other calls are the same method when they have
                     // the same qualifier and the same name.
                     let callee = match call.resolution.candidates.as_slice() {
@@ -464,7 +464,8 @@ impl<'a, 'v> Classes<'a, 'v> {
                         _ => format!("{}::{}", call.qualifier.as_deref().unwrap_or(""), call.name),
                     };
                     self.builders[found.class].called.insert(callee);
-                    if let Some(method) = found.method {
+                    let calls_object = call.kind == ReferenceKind::Call;
+                    if let (true, Some(method)) = (calls_object, found.method) {
                         let caller = Slot {
                             view: view_index,
                             position: method,

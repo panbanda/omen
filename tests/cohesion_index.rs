@@ -500,6 +500,26 @@ fn test_rfc_is_the_union_of_the_methods_and_the_called_methods() {
 }
 
 #[test]
+fn test_rfc_counts_a_constructor_call() {
+    let java = "class Part {\n    Part() {}\n}\n\nclass Factory {\n    Part make() { return new Part(); }\n}\n";
+    let analysis = analyze(&[("A.java", java)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+
+    let no_constructor =
+        "class Part {\n}\n\nclass Factory {\n    Part make() { return new Part(); }\n}\n";
+    let analysis = analyze(&[("A.java", no_constructor)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+
+    let csharp = "class Part {\n    public Part() {}\n}\n\nclass Factory {\n    Part Make() { return new Part(); }\n}\n";
+    let analysis = analyze(&[("A.cs", csharp)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+
+    let typescript = "class Part {\n  constructor() {}\n}\n\nclass Factory {\n  make() {\n    return new Part();\n  }\n}\n";
+    let analysis = analyze(&[("a.ts", typescript)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+}
+
+#[test]
 fn test_rfc_counts_a_method_that_the_class_does_not_have() {
     let source = "class Door {\n    void open() { close(); lock(); }\n    void close() {}\n}\n";
     let analysis = analyze(&[("Door.java", source)]);
