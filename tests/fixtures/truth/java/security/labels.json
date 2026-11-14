@@ -68,6 +68,8 @@
     {"label": "unsafe_deserialization.real_call.constructed_receiver", "category": "unsafe_deserialization", "scenario": "real_call", "file": "Extra.java", "line": 6, "basis": "imported_symbol"},
     {"label": "unsafe_deserialization.real_call.parenthesized_receiver", "category": "unsafe_deserialization", "scenario": "real_call", "file": "Extra.java", "line": 10, "basis": "imported_symbol"},
     {"label": "unsafe_deserialization.real_call.secret_receiver", "category": "unsafe_deserialization", "scenario": "real_call", "file": "Extra.java", "line": 11, "basis": "imported_symbol"},
-    {"label": "hardcoded_credential.real_call.secret_in_constructor", "category": "hardcoded_credential", "scenario": "real_call", "file": "Extra.java", "line": 11, "basis": "builtin"}
+    {"label": "hardcoded_credential.real_call.secret_in_constructor", "category": "hardcoded_credential", "scenario": "real_call", "file": "Extra.java", "line": 11, "basis": "builtin"},
+    {"label": "tls_verification_disabled.real_call.compact_lambda", "category": "tls_verification_disabled", "scenario": "real_call", "file": "Verifiers.java", "line": 5, "basis": "imported_symbol"},
+    {"label": "tls_verification_disabled.safe_variant.lambda_with_call", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "Verifiers.java", "line": 6, "flagged": false}
   ]
 }

@@ -9,6 +9,47 @@ pub fn text<'a>(node: Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.byte_range()]).unwrap_or("")
 }
 
+pub fn unwrap_parentheses(node: Node<'_>) -> Node<'_> {
+    let mut node = node;
+    while node.kind() == "parenthesized_expression" && node.named_child_count() == 1 {
+        match node.named_child(0) {
+            Some(inner) => node = inner,
+            None => break,
+        }
+    }
+    node
+}
+
+/// The node is a lambda whose whole body is `true`, or a block whose only
+/// statement is `return true;`.
+pub fn is_constant_true_lambda(node: Node<'_>, source: &[u8]) -> bool {
+    if !matches!(
+        node.kind(),
+        "lambda_expression" | "anonymous_method_expression"
+    ) {
+        return false;
+    }
+    let Some(body) = node.child_by_field_name("body") else {
+        return false;
+    };
+    let is_true =
+        |expression: Node<'_>| text(unwrap_parentheses(expression), source).trim() == "true";
+    if body.kind() != "block" {
+        return is_true(body);
+    }
+    let mut cursor = body.walk();
+    let statements: Vec<Node<'_>> = body
+        .named_children(&mut cursor)
+        .filter(|statement| !statement.kind().contains("comment"))
+        .collect();
+    match statements.as_slice() {
+        [statement] if statement.kind() == "return_statement" => {
+            statement.named_child(0).is_some_and(is_true)
+        }
+        _ => false,
+    }
+}
+
 /// The innermost node with exactly the byte range of a call. The ranges of
 /// wrapper nodes, such as a statement, can be the same.
 pub fn call_node<'tree>(
@@ -253,6 +294,9 @@ pub fn holds(
             let found = argument_text(node);
             needles.iter().any(|needle| found.contains(needle))
         }),
+        Predicate::ArgIsTrueLambda { index } => arguments
+            .get(*index)
+            .is_some_and(|node| is_constant_true_lambda(unwrap_parentheses(*node), source)),
         Predicate::AnyArgIn(values) => arguments
             .iter()
             .any(|node| values.contains(&argument_text(node).as_str())),

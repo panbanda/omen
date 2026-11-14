@@ -138,17 +138,6 @@ fn chain_segments(text: &str) -> Option<Vec<String>> {
     Some(segments)
 }
 
-fn unwrap_parentheses(node: Node<'_>) -> Node<'_> {
-    let mut node = node;
-    while node.kind() == "parenthesized_expression" && node.named_child_count() == 1 {
-        match node.named_child(0) {
-            Some(inner) => node = inner,
-            None => break,
-        }
-    }
-    node
-}
-
 /// The text without the parentheses that enclose all of it.
 fn without_outer_parentheses(text: &str) -> &str {
     let mut text = text.trim();
@@ -861,10 +850,10 @@ impl FileContext<'_> {
     /// whole body is `true`, or a block whose only statement is `return true;`. Any other
     /// value is a name, and the last segment of the assigned path must be that name.
     fn value_matches(&self, right: Node<'_>, values: &[&str]) -> bool {
-        let right = unwrap_parentheses(right);
+        let right = syntax::unwrap_parentheses(right);
         values.iter().any(|wanted| {
             if *wanted == "=>true" {
-                return self.is_constant_true_lambda(right);
+                return syntax::is_constant_true_lambda(right, self.source);
             }
             let compact: String = syntax::text(right, self.source)
                 .split_whitespace()
@@ -872,35 +861,6 @@ impl FileContext<'_> {
                 .to_lowercase();
             split_path(&compact).last().map(String::as_str) == Some(*wanted)
         })
-    }
-
-    fn is_constant_true_lambda(&self, node: Node<'_>) -> bool {
-        if !matches!(
-            node.kind(),
-            "lambda_expression" | "anonymous_method_expression"
-        ) {
-            return false;
-        }
-        let Some(body) = node.child_by_field_name("body") else {
-            return false;
-        };
-        let is_true = |expression: Node<'_>| {
-            syntax::text(unwrap_parentheses(expression), self.source).trim() == "true"
-        };
-        if body.kind() != "block" {
-            return is_true(body);
-        }
-        let mut cursor = body.walk();
-        let statements: Vec<Node<'_>> = body
-            .named_children(&mut cursor)
-            .filter(|statement| !statement.kind().contains("comment"))
-            .collect();
-        match statements.as_slice() {
-            [statement] if statement.kind() == "return_statement" => {
-                statement.named_child(0).is_some_and(is_true)
-            }
-            _ => false,
-        }
     }
 
     /// Reports an assignment to a member that a row names.

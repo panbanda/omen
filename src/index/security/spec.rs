@@ -33,6 +33,10 @@ pub enum Predicate {
         index: usize,
         needles: &'static [&'static str],
     },
+    /// The argument at the index is a lambda whose whole body is `true`.
+    ArgIsTrueLambda {
+        index: usize,
+    },
     AnyArgIn(&'static [&'static str]),
     AnyArgStartsWith(&'static [&'static str]),
     /// The loader argument is missing, or the imports resolve it to a loader that is not safe.
@@ -475,10 +479,13 @@ pub const SPECS: &[SinkSpec] = &[
         JAVA,
         "javax.net.ssl.HttpsURLConnection",
         "setDefaultHostnameVerifier|setHostnameVerifier",
-        ArgContains {
-            index: 0,
-            needles: &["-> true", "noophostnameverifier", "allow_all"],
-        },
+        Predicate::AnyOf(&[
+            Predicate::ArgIsTrueLambda { index: 0 },
+            ArgContains {
+                index: 0,
+                needles: &["noophostnameverifier", "allow_all"],
+            },
+        ]),
     ),
     // C#
     path(CommandExecution, CSHARP, "System.Diagnostics.Process", "Start", Always),
@@ -939,7 +946,7 @@ mod tests {
                 Predicate::ArgStartsWith { prefixes, .. } => vec![prefixes],
                 Predicate::ArgContains { needles, .. } => vec![needles],
                 Predicate::AnyArgIn(values) | Predicate::AnyArgStartsWith(values) => vec![values],
-                Predicate::All(inner) => {
+                Predicate::All(inner) | Predicate::AnyOf(inner) => {
                     inner.iter().for_each(check);
                     vec![]
                 }

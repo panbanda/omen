@@ -509,6 +509,16 @@ mod tests {
     }
 
     #[test]
+    fn a_hostname_verifier_that_always_gives_true_is_a_sink_without_regard_to_spacing_java() {
+        let source = "import javax.net.ssl.HttpsURLConnection;\n\nclass A {\n    void run() {\n        HttpsURLConnection.setDefaultHostnameVerifier((host, session)->true);\n        HttpsURLConnection.setDefaultHostnameVerifier((host, session) -> true);\n        HttpsURLConnection.setDefaultHostnameVerifier((host, session) -> { return true; });\n        HttpsURLConnection.setDefaultHostnameVerifier((host, session) -> trueish(host));\n        HttpsURLConnection.setDefaultHostnameVerifier((host, session) -> host.equals(\"a\"));\n    }\n}\n";
+        let lines: Vec<u32> = found(Language::Java, &[("A.java", source)])
+            .iter()
+            .map(|sink| sink.1)
+            .collect();
+        assert_eq!(lines, [5, 6, 7]);
+    }
+
+    #[test]
     fn a_local_in_a_block_that_holds_the_call_hides_the_sink_go() {
         let source = "package main\n\nimport \"os/exec\"\n\nfunc run(cmd string) {\n\t{\n\t\texec := struct{}{}\n\t\texec.Command(cmd)\n\t}\n}\n";
         assert_eq!(found(Language::Go, &[("a.go", source)]), []);
