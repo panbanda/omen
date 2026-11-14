@@ -25,7 +25,7 @@ const NAMED_PARAMETERS: &[&str] = &[
     "block_parameter",
 ];
 
-/// A call has its receiver and its method name in the call node.
+/// A call has its receiver and its method .is_some_and(|name| keywords.contains(&name.as_str())); in the call node.
 const CALL_SYNTAX: CallSyntax = CallSyntax {
     calls: &[(CALL, "", "arguments")],
     constructions: &[],
@@ -34,7 +34,10 @@ const CALL_SYNTAX: CallSyntax = CallSyntax {
     names: &[IDENTIFIER, CONSTANT],
     self_words: &["self"],
     super_words: &[SUPER],
-    locals: &[(ASSIGNMENT, "left", "", "right")],
+    locals: &[
+        (ASSIGNMENT, "left", "", "right"),
+        (OPERATOR_ASSIGNMENT, "left", "", "right"),
+    ],
     parameters: &[],
     return_type_field: "",
     literals: &[],
@@ -98,15 +101,16 @@ fn bare_call_name(call: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
         .map(|method| context.text(method))
 }
 
-/// The modules that `include` and `prepend` in the body of a class or a
-/// module add. The object gets the methods of these modules.
-fn mixins(definition: Node<'_>, context: &Context<'_, '_>) -> Vec<String> {
+/// The modules that the calls of `keywords` in the body of a class or a
+/// module add, as `include` and `prepend` do. The object gets the methods of
+/// these modules.
+fn mixins(definition: Node<'_>, context: &Context<'_, '_>, keywords: &[&str]) -> Vec<String> {
     let body = definition.child_by_field_name("body").unwrap_or(definition);
     let mut cursor = body.walk();
     let mut found = Vec::new();
     for statement in body.named_children(&mut cursor) {
         let is_mixin = bare_call_name(statement, context)
-            .is_some_and(|name| ["include", "prepend"].contains(&name.as_str()));
+            .is_some_and(|name| keywords.contains(&name.as_str()));
         let Some(arguments) = statement
             .child_by_field_name("arguments")
             .filter(|_| is_mixin)
@@ -395,7 +399,9 @@ impl LanguageSpec for Ruby {
                         draft.supertypes.push(context.text(name));
                     }
                 }
-                draft.supertypes.extend(mixins(node, context));
+                draft.supertypes.extend(mixins(node, context, &["include"]));
+                draft.prepends = mixins(node, context, &["prepend"]);
+                draft.supertypes.extend(draft.prepends.clone());
             }
             _ => {}
         }

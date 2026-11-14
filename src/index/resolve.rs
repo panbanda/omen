@@ -587,6 +587,20 @@ impl<'a> Resolver<'a> {
         if !seen.insert(owner) {
             return Vec::new();
         }
+        // A Ruby `prepend` puts a module before the class in the search.
+        let prepended: Vec<Id> = self
+            .facts(owner)
+            .prepends
+            .iter()
+            .flat_map(|module| {
+                let (qualifier, name) = split_type(module);
+                self.types(&name, qualifier.as_deref(), owner.0)
+            })
+            .flat_map(|module| self.members(module, name, arity, seen))
+            .collect();
+        if !prepended.is_empty() {
+            return prepended;
+        }
         let type_symbol = self.symbol(owner);
         let namespace = type_symbol.kind == SymbolKind::Module;
         let owner_path = self.member_path(owner);
@@ -2717,7 +2731,14 @@ mod false_edge_tests {
     #[test]
     fn test_ruby_operator_assignment_binds_a_local() {
         let source = "def helper\n  1\nend\n\ndef run\n  helper ||= 0\n  helper\nend\n\ndef count\n  total = 1\n  total += 1\n  total\nend\n\ndef total\n  2\nend\n\ndef bump\n  total += 1\n  total\nend\n";
-        assert_eq!(rows(&[("a.rb", source)], "a.rb"), Vec::<String>::new());
+        assert_eq!(
+            rows(&[("a.rb", source)], "a.rb"),
+            [
+                "7 run>helper Unresolved - []",
+                "13 count>total Unresolved - []",
+                "22 bump>total Unresolved - []",
+            ]
+        );
     }
 
     #[test]
