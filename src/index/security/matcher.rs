@@ -43,7 +43,7 @@ pub fn find_sinks_with(
 }
 
 /// The names that the repository defines. A field and a variable are not names of a module or a type.
-struct Repository<'a> {
+pub(super) struct Repository<'a> {
     by_file: HashMap<&'a str, HashSet<&'a str>>,
     by_directory: HashMap<&'a str, HashSet<&'a str>>,
     all: HashSet<&'a str>,
@@ -54,7 +54,7 @@ fn directory(file: &str) -> &str {
 }
 
 impl<'a> Repository<'a> {
-    fn new(files: &'a [FileSymbols]) -> Self {
+    pub(super) fn new(files: &'a [FileSymbols]) -> Self {
         let mut repository = Self {
             by_file: HashMap::new(),
             by_directory: HashMap::new(),
@@ -236,7 +236,7 @@ struct FileContext<'a> {
     call_kinds: Vec<&'static str>,
 }
 
-fn file_sinks(
+pub(super) fn file_sinks(
     parsed: &ParseResult,
     file: &FileSymbols,
     repository: &Repository<'_>,
@@ -683,7 +683,7 @@ impl FileContext<'_> {
                 let mut sink = self.sink(
                     spec.category,
                     reference.name_range,
-                    reference.enclosing.clone(),
+                    reference.enclosing.as_ref().map(|key| key.to_string()),
                     &callee_text,
                     basis,
                     !arguments.is_empty() && arguments.iter().all(|node| syntax::is_literal(*node)),
@@ -771,7 +771,7 @@ impl FileContext<'_> {
 
     fn enclosing_key(&self, byte: usize) -> Option<String> {
         self.enclosing_position(byte)
-            .map(|position| self.file.symbols[position].key.clone())
+            .map(|position| self.file.symbols[position].key.to_string())
     }
 
     /// Walks the tree for the sinks that are not calls.

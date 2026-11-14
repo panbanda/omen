@@ -180,12 +180,50 @@ mod tests {
                 .find(|facts| facts.file == file)
                 .into_iter()
                 .flat_map(|facts| &facts.references)
-                .flat_map(|reference| reference.resolution.candidates.clone())
+                .flat_map(|reference| {
+                    reference
+                        .resolution
+                        .candidates
+                        .iter()
+                        .map(|key| key.to_string())
+                })
                 .collect()
         };
         assert_eq!(index.files[0].language, crate::core::Language::Cpp);
         assert_eq!(candidates("main.c"), ["api.h#shared"]);
         assert_eq!(candidates("use.cpp"), ["impl.cpp#shared"]);
+    }
+
+    #[test]
+    fn test_references_share_the_text_of_the_keys_and_the_path() {
+        let files = vec![PathBuf::from("a.py"), PathBuf::from("b.py")];
+        let sources = [
+            ("a.py", "def run():\n    helper()\n    helper()\n"),
+            ("b.py", "def helper():\n    return 1\n"),
+        ];
+        let read = |path: &Path| {
+            sources
+                .iter()
+                .find(|(name, _)| Path::new(name) == path)
+                .map(|(_, text)| text.as_bytes().to_vec())
+                .ok_or_else(|| crate::core::Error::git("no such file".to_string()))
+        };
+        let list = |_: &Path| -> Vec<PathBuf> { Vec::new() };
+
+        let index = CodeIndex::build(Path::new("."), &files, &read, &list);
+
+        let helper = &index.files[1].symbols[0].key;
+        let calls = &index.files[0].references;
+        assert_eq!(calls.len(), 2);
+        for call in calls {
+            assert_eq!(call.resolution.candidates, ["b.py#helper"]);
+            assert_eq!(call.resolution.candidates[0].as_ptr(), helper.as_ptr());
+        }
+        assert_eq!(calls[0].file.as_ptr(), calls[1].file.as_ptr());
+        assert_eq!(
+            calls[0].enclosing.as_ref().map(|key| key.as_ptr()),
+            Some(index.files[0].symbols[0].key.as_ptr())
+        );
     }
 
     #[test]

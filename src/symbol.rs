@@ -216,7 +216,7 @@ pub fn report_with_reader(
         source_truncated,
         callers,
         callees,
-        call_resolutions: index.calls_of(primary_idx).to_vec(),
+        call_resolutions: index.calls_of(primary_idx),
         cyclomatic,
         cognitive,
         candidates,

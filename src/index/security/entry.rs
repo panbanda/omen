@@ -124,6 +124,66 @@ pub struct EntryRule {
     pub symbols: Vec<String>,
 }
 
+/// A syntax tree that a [`TreeSource`] gives.
+pub enum TreeRef<'a> {
+    Borrowed(&'a ParseResult),
+    Shared(std::sync::Arc<ParseResult>),
+}
+
+impl std::ops::Deref for TreeRef<'_> {
+    type Target = ParseResult;
+
+    fn deref(&self) -> &ParseResult {
+        match self {
+            Self::Borrowed(tree) => tree,
+            Self::Shared(tree) => tree,
+        }
+    }
+}
+
+/// The syntax trees of the files of one analysis, by position.
+///
+/// A source can parse a file when a caller asks. Thus the analysis does not need
+/// the trees of all files at one time.
+pub trait TreeSource: Sync {
+    fn tree(&self, position: usize) -> Option<TreeRef<'_>>;
+}
+
+/// The syntax trees that the entry point rules ask for in other files. The source
+/// parses a file when a rule asks, and it keeps the tree for the next question.
+pub struct OnDemandTrees<'a> {
+    parse_file: &'a (dyn Fn(usize) -> Option<ParseResult> + Sync),
+    parsed: parking_lot::Mutex<std::collections::HashMap<usize, std::sync::Arc<ParseResult>>>,
+}
+
+impl<'a> OnDemandTrees<'a> {
+    pub fn new(parse_file: &'a (dyn Fn(usize) -> Option<ParseResult> + Sync)) -> Self {
+        Self {
+            parse_file,
+            parsed: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+}
+
+impl TreeSource for OnDemandTrees<'_> {
+    fn tree(&self, position: usize) -> Option<TreeRef<'_>> {
+        if let Some(tree) = self.parsed.lock().get(&position) {
+            return Some(TreeRef::Shared(std::sync::Arc::clone(tree)));
+        }
+        let tree = std::sync::Arc::new((self.parse_file)(position)?);
+        let tree = std::sync::Arc::clone(self.parsed.lock().entry(position).or_insert(tree));
+        Some(TreeRef::Shared(tree))
+    }
+}
+
+struct Trees<'a>(&'a [ParseResult]);
+
+impl TreeSource for Trees<'_> {
+    fn tree(&self, position: usize) -> Option<TreeRef<'_>> {
+        self.0.get(position).map(TreeRef::Borrowed)
+    }
+}
+
 /// Like [`find_entry_points`], with the rules of the user.
 pub fn find_entry_points_with(
     parsed: &[ParseResult],
@@ -131,19 +191,30 @@ pub fn find_entry_points_with(
     rules: &[EntryRule],
 ) -> Vec<EntryPoint> {
     assert_eq!(parsed.len(), files.len(), "each file needs its syntax tree");
+    let trees = Trees(parsed);
     let per_file: Vec<Vec<EntryPoint>> = (0..files.len())
         .into_par_iter()
-        .map(|position| {
-            let context = Context::new(&parsed[position], &files[position], files, parsed, rules);
-            let mut found = context.detect();
-            found.sort_by(|left, right| {
-                (left.range.start_byte, &left.key).cmp(&(right.range.start_byte, &right.key))
-            });
-            found.dedup_by(|later, earlier| later.key == earlier.key);
-            found
-        })
+        .map(|position| entry_points_of_file(position, &parsed[position], files, &trees, rules))
         .collect();
     per_file.into_iter().flatten().collect()
+}
+
+/// The entry points of `files[position]`, in source order. `own` is the tree of that
+/// file. `trees` gives the trees of the other files when a rule needs them.
+pub fn entry_points_of_file(
+    position: usize,
+    own: &ParseResult,
+    files: &[FileSymbols],
+    trees: &dyn TreeSource,
+    rules: &[EntryRule],
+) -> Vec<EntryPoint> {
+    let context = Context::new(own, &files[position], files, trees, rules);
+    let mut found = context.detect();
+    found.sort_by(|left, right| {
+        (left.range.start_byte, &left.key).cmp(&(right.range.start_byte, &right.key))
+    });
+    found.dedup_by(|later, earlier| later.key == earlier.key);
+    found
 }
 
 const HTTP_VERBS: [&str; 8] = [
@@ -323,7 +394,7 @@ struct Context<'a> {
     parsed: &'a ParseResult,
     file: &'a FileSymbols,
     all: &'a [FileSymbols],
-    all_parsed: &'a [ParseResult],
+    all_parsed: &'a dyn TreeSource,
     rules: &'a [EntryRule],
     source: &'a [u8],
     test_ranges: Vec<Range<usize>>,
@@ -344,7 +415,7 @@ impl<'a> Context<'a> {
         parsed: &'a ParseResult,
         file: &'a FileSymbols,
         all: &'a [FileSymbols],
-        all_parsed: &'a [ParseResult],
+        all_parsed: &'a dyn TreeSource,
         rules: &'a [EntryRule],
     ) -> Self {
         let test_ranges = if file.language == Language::Rust {
@@ -465,8 +536,8 @@ impl<'a> Context<'a> {
             self.all
                 .iter()
                 .position(|file| &file.file == target)
-                .is_some_and(|position| {
-                    let parsed = &self.all_parsed[position];
+                .and_then(|position| self.all_parsed.tree(position))
+                .is_some_and(|parsed| {
                     bound_to_marker(parsed.root_node(), &parsed.source, name, markers)
                 })
         })
@@ -477,7 +548,7 @@ impl<'a> Context<'a> {
             .symbols
             .iter()
             .find(|symbol| symbol.name_range.start_byte == name_node.start_byte())
-            .map(|symbol| symbol.key.clone())
+            .map(|symbol| symbol.key.to_string())
     }
 
     /// The one function or method with the name. A definition in the file wins over a definition in another file.
@@ -497,10 +568,10 @@ impl<'a> Context<'a> {
         };
         let here = matching(self.file);
         if here.len() == 1 {
-            return Some(here[0].key.clone());
+            return Some(here[0].key.to_string());
         }
         let everywhere: Vec<&Symbol> = self.all.iter().flat_map(matching).collect();
-        (everywhere.len() == 1).then(|| everywhere[0].key.clone())
+        (everywhere.len() == 1).then(|| everywhere[0].key.to_string())
     }
 
     fn handler_symbol(&self, handler: Node<'_>) -> Option<String> {
@@ -607,7 +678,7 @@ impl<'a> Context<'a> {
                     out.push(Draft {
                         range: symbol.range,
                         kind: rule.kind,
-                        symbol: Some(symbol.key.clone()),
+                        symbol: Some(symbol.key.to_string()),
                         framework: rule.framework,
                         route: None,
                         guards: Vec::new(),
@@ -666,7 +737,7 @@ impl<'a> Context<'a> {
                 out.push(Draft {
                     range: symbol.range,
                     kind: EntryKind::CliMain,
-                    symbol: Some(symbol.key.clone()),
+                    symbol: Some(symbol.key.to_string()),
                     framework,
                     route: None,
                     guards: Vec::new(),
@@ -714,7 +785,7 @@ impl<'a> Context<'a> {
                 out.push(Draft {
                     range: symbol.range,
                     kind: EntryKind::HttpHandler,
-                    symbol: Some(symbol.key.clone()),
+                    symbol: Some(symbol.key.to_string()),
                     framework: "next",
                     route: Some(route(verb, path.clone())),
                     guards: Vec::new(),
@@ -1625,7 +1696,7 @@ impl<'a> Context<'a> {
     /// The `before_action` callbacks in the body of a controller class, in any file.
     fn rails_guards(&self, class: &str) -> Vec<String> {
         let mut guards = Vec::new();
-        for (file, parsed) in self.all.iter().zip(self.all_parsed) {
+        for (position, file) in self.all.iter().enumerate() {
             if file.language != Language::Ruby {
                 continue;
             }
@@ -1634,6 +1705,9 @@ impl<'a> Context<'a> {
                 .iter()
                 .find(|symbol| symbol.name == class && symbol.kind.is_type())
             else {
+                continue;
+            };
+            let Some(parsed) = self.all_parsed.tree(position) else {
                 continue;
             };
             let source = String::from_utf8_lossy(&parsed.source);

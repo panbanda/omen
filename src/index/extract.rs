@@ -12,7 +12,7 @@ use super::calls::{split_type, Argument, Call, CallSyntax, LocalName};
 use super::lang;
 use super::model::{
     symbol_key, Exported, ImportBinding, ImportKind, ImportTarget, Reference, ReferenceKind,
-    Resolution, ResolutionStatus, Span, Symbol, SymbolKind,
+    Resolution, ResolutionStatus, SharedStr, Span, Symbol, SymbolKind,
 };
 use crate::core::Language;
 use crate::parser::ParseResult;
@@ -1013,7 +1013,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             Vec::new()
         };
         symbols.push(Symbol {
-            key: symbol_key(file, &draft.container_path, &draft.name, ordinal),
+            key: symbol_key(file, &draft.container_path, &draft.name, ordinal).into(),
             signature: signature(&draft, &parsed.source),
             doc: doc(draft.node, spec.comment_kinds(), &parsed.source),
             name: draft.name,
@@ -1043,6 +1043,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         });
     }
     let mut calls = extractor.calls;
+    let shared_file = SharedStr::from(file);
     calls.sort_by_key(|(_, range, _, _, _)| range.start);
     let mut references = Vec::with_capacity(calls.len());
     let mut reference_facts = Vec::with_capacity(calls.len());
@@ -1055,7 +1056,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             ReferenceKind::Call => text.to_string(),
         };
         references.push(Reference {
-            file: file.to_string(),
+            file: shared_file.clone(),
             name_range: Span::of(&call.callee.name_node),
             name,
             kind: call.kind,
@@ -1267,7 +1268,7 @@ pub(crate) mod testing {
     pub(crate) fn keys(language: Language, source: &str) -> Vec<String> {
         symbols(language, source)
             .into_iter()
-            .map(|symbol| symbol.key)
+            .map(|symbol| symbol.key.to_string())
             .collect()
     }
 }
