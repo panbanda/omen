@@ -265,12 +265,12 @@ pub fn holds(
         Predicate::ArgNotLiteral { index } => {
             arguments.get(*index).is_some_and(|node| !is_literal(*node))
         }
-        Predicate::BuiltString { index: Some(index) } => arguments
+        Predicate::BuiltString { index } => arguments
             .get(*index)
             .is_some_and(|node| is_built_string(*node, source, syntax)),
-        Predicate::BuiltString { index: None } => arguments
+        Predicate::AnyOf(any) => any
             .iter()
-            .any(|node| is_built_string(*node, source, syntax)),
+            .any(|inner| holds(inner, arguments, source, syntax)),
         Predicate::All(all) => all
             .iter()
             .all(|inner| holds(inner, arguments, source, syntax)),

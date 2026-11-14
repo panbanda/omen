@@ -473,6 +473,32 @@ mod tests {
     }
 
     #[test]
+    fn only_the_sql_argument_makes_a_built_string_a_sink_go() {
+        let source = "package main\n\nimport (\n\t\"database/sql\"\n\t\"fmt\"\n)\n\nfunc run(db *sql.DB, ctx int, v string) {\n\tdb.Exec(\"INSERT INTO t VALUES (?)\", fmt.Sprintf(\"%s\", v))\n\tdb.Exec(fmt.Sprintf(\"INSERT INTO t VALUES (%s)\", v))\n\tdb.ExecContext(ctx, \"INSERT INTO t VALUES (?)\", fmt.Sprintf(\"%s\", v))\n\tdb.ExecContext(ctx, fmt.Sprintf(\"INSERT INTO t VALUES (%s)\", v))\n\tdb.QueryContext(fmt.Sprintf(\"%s\", v), \"SELECT 1\")\n}\n";
+        assert_eq!(
+            found(Language::Go, &[("a.go", source)]),
+            [
+                one("a.go", 10, "sql_string_construction", "name_only"),
+                one("a.go", 12, "sql_string_construction", "name_only"),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_the_sql_argument_makes_a_built_string_a_sink_php() {
+        let source = "<?php\nfunction run($link, $name) {\n    mysql_query(\"SELECT 1\", \"a\" . $name);\n    mysql_query(\"SELECT \" . $name, $link);\n    mysqli_query($link, \"SELECT '$name'\");\n    mysqli_query(\"a\" . $name, \"SELECT 1\");\n    pg_query(\"SELECT \" . $name);\n    pg_query($link, \"SELECT \" . $name);\n    sqlite_query($link, \"SELECT 1\");\n}\n";
+        assert_eq!(
+            found(Language::Php, &[("a.php", source)]),
+            [
+                one("a.php", 4, "sql_string_construction", "builtin"),
+                one("a.php", 5, "sql_string_construction", "builtin"),
+                one("a.php", 7, "sql_string_construction", "builtin"),
+                one("a.php", 8, "sql_string_construction", "builtin"),
+            ]
+        );
+    }
+
+    #[test]
     fn a_local_in_a_block_that_holds_the_call_hides_the_sink_go() {
         let source = "package main\n\nimport \"os/exec\"\n\nfunc run(cmd string) {\n\t{\n\t\texec := struct{}{}\n\t\texec.Command(cmd)\n\t}\n}\n";
         assert_eq!(found(Language::Go, &[("a.go", source)]), []);

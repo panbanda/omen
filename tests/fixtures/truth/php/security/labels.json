@@ -57,6 +57,10 @@
     {"label": "hardcoded_credential.real_call", "category": "hardcoded_credential", "scenario": "real_call", "file": "sinks.php", "line": 79, "basis": "builtin"},
     {"label": "hardcoded_credential.safe_variant", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "sinks.php", "line": 80, "flagged": false},
     {"label": "hardcoded_credential.name_in_comment", "category": "hardcoded_credential", "scenario": "name_in_comment", "file": "sinks.php", "line": 81, "flagged": false},
-    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/SinksTest.php", "line": 12, "basis": "builtin", "in_test": true}
+    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/SinksTest.php", "line": 12, "basis": "builtin", "in_test": true},
+    {"label": "sql_string_construction.safe_variant.second_argument", "category": "sql_string_construction", "scenario": "safe_variant", "file": "sql_arguments.php", "line": 5, "flagged": false},
+    {"label": "sql_string_construction.real_call.first_argument", "category": "sql_string_construction", "scenario": "real_call", "file": "sql_arguments.php", "line": 6, "basis": "builtin"},
+    {"label": "sql_string_construction.real_call.second_argument", "category": "sql_string_construction", "scenario": "real_call", "file": "sql_arguments.php", "line": 7, "basis": "builtin"},
+    {"label": "sql_string_construction.real_call.only_argument", "category": "sql_string_construction", "scenario": "real_call", "file": "sql_arguments.php", "line": 8, "basis": "builtin"}
   ]
 }

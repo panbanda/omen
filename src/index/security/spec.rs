@@ -42,12 +42,13 @@ pub enum Predicate {
     ArgNotLiteral {
         index: usize,
     },
-    /// The argument at the index, or any argument, is a concatenated,
-    /// interpolated, or formatted string.
+    /// The argument at the index is a concatenated, interpolated, or formatted string.
     BuiltString {
-        index: Option<usize>,
+        index: usize,
     },
     All(&'static [Predicate]),
+    /// At least one of the predicates holds.
+    AnyOf(&'static [Predicate]),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,10 +221,8 @@ const fn keyword(name: &'static str, value: &'static str) -> Predicate {
 }
 
 const fn built(index: usize) -> Predicate {
-    Predicate::BuiltString { index: Some(index) }
+    Predicate::BuiltString { index }
 }
-
-const ANY_BUILT: Predicate = Predicate::BuiltString { index: None };
 
 const WEAK_DIGESTS: &[&str] = &["md5", "sha1", "sha-1", "md2", "md4"];
 const WEAK_CIPHERS: &[&str] = &["des", "rc4", "rc2", "bf", "blowfish", "arcfour"];
@@ -349,8 +348,14 @@ pub const SPECS: &[SinkSpec] = &[
     method(
         SqlStringConstruction,
         GO,
-        "Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext",
-        ANY_BUILT,
+        "Query|QueryRow|Exec",
+        built(0),
+    ),
+    method(
+        SqlStringConstruction,
+        GO,
+        "QueryContext|QueryRowContext|ExecContext",
+        built(1),
     ),
     path(WeakHash, GO, "crypto/md5|crypto/sha1", "New|Sum", Always),
     path(WeakCipher, GO, "crypto/des", "NewCipher|NewTripleDESCipher", Always),
@@ -585,8 +590,18 @@ pub const SPECS: &[SinkSpec] = &[
         SqlStringConstruction,
         PHP,
         "",
-        "mysqli_query|mysql_query|pg_query|sqlite_query",
-        ANY_BUILT,
+        "mysql_query",
+        built(0),
+    ),
+    path(SqlStringConstruction, PHP, "", "mysqli_query", built(1)),
+    // The connection is optional in `pg_query` and comes first or second in `sqlite_query`.
+    // A connection is never a built string, so the check of both places is exact.
+    path(
+        SqlStringConstruction,
+        PHP,
+        "",
+        "pg_query|sqlite_query",
+        Predicate::AnyOf(&[built(0), built(1)]),
     ),
     method(SqlStringConstruction, PHP, "query|exec|multi_query|real_query", built(0)),
     path(WeakHash, PHP, "", "md5|sha1|md5_file|sha1_file", Always),
