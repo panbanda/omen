@@ -56,6 +56,32 @@ list of each case. It reports each corpus and each language separately, with
 edges and candidates as separate checks.
 `tests/fixtures/quality/expected_failures.json` obeys the same ledger rules.
 
+## Accepted regressions
+
+A pull request can make a rank or a truth fact worse than the base branch. The
+`ledger_never_grows` checks then fail. A reviewer can accept the loss. The
+author lists it in `accepted_regressions.json` in the fixture directory:
+`tests/fixtures/retrieval`, `tests/fixtures/truth`, or `tests/fixtures/quality`.
+
+Follow these rules for the file:
+
+- Each entry in `retrieval` has `id`, `base_rank`, `rank`, and `reason`. The id
+  is `<language>/<query id>`. A rank of `null` means that no result is correct.
+  An entry in `truth` or `quality` has `id` and `reason`. The id is the id of
+  the fact in the ledger.
+- The file rejects unknown keys. The ids are in ascending order. Each entry has
+  a reason that is not blank.
+- An entry must match a regression against the base branch exactly. For a
+  rank, `base_rank` and `rank` must be the ranks of the base branch and of the
+  pull request.
+- An entry that matches no regression fails the check. Thus an entry cannot
+  stay without a reason.
+- A new ledger entry of an accepted retrieval query is also accepted.
+
+After the merge, the base branch has the regression. The next pull request has
+no regression against it. Thus the entry fails the check. The next pull request
+must delete the entry. Do not use an administrator merge to pass the check.
+
 ## Reproducible experiments
 
 Record baseline/candidate commit and binary hashes, corpus hash, exact commands,
