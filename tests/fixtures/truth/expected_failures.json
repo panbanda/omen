@@ -1,17 +1,1 @@
-[
-  {
-    "id": "rust/security/sinks/memory_unsafe.real_call.generic_call/basis",
-    "reason": "The index does not extract a call with type arguments, as transmute::<A, B>(x). The matcher reads only the references of the index.",
-    "tracking": "phase-5-security"
-  },
-  {
-    "id": "rust/security/sinks/memory_unsafe.real_call.generic_call/found",
-    "reason": "The index does not extract a call with type arguments, as transmute::<A, B>(x). The matcher reads only the references of the index.",
-    "tracking": "phase-5-security"
-  },
-  {
-    "id": "rust/security/sinks/memory_unsafe.real_call.generic_call/in_test",
-    "reason": "The index does not extract a call with type arguments, as transmute::<A, B>(x). The matcher reads only the references of the index.",
-    "tracking": "phase-5-security"
-  }
-]
+[]
