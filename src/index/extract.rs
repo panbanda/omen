@@ -12,7 +12,7 @@ use super::calls::{split_type, Argument, Call, CallSyntax, LocalName};
 use super::lang;
 use super::model::{
     symbol_key, Exported, ImportBinding, ImportKind, ImportTarget, Reference, ReferenceKind,
-    Resolution, ResolutionStatus, Span, Symbol, SymbolKind,
+    Resolution, ResolutionStatus, SharedStr, Span, Symbol, SymbolKind,
 };
 use crate::core::Language;
 use crate::parser::ParseResult;
@@ -871,6 +871,15 @@ pub struct FileSymbols {
     /// The module file that each qualifier of a call names, by the text of
     /// the qualifier. `resolve_imports` gives the entries.
     pub path_targets: BTreeMap<String, String>,
+    /// The BLAKE3 hash of the bytes that gave these facts.
+    pub content_hash: [u8; 32],
+}
+
+impl FileSymbols {
+    /// The bytes are the bytes that gave these facts.
+    pub fn is_content_of_facts(&self, content: &[u8]) -> bool {
+        *blake3::hash(content).as_bytes() == self.content_hash
+    }
 }
 
 /// Completes the facts that need the symbols of a different file.
@@ -1013,7 +1022,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             Vec::new()
         };
         symbols.push(Symbol {
-            key: symbol_key(file, &draft.container_path, &draft.name, ordinal),
+            key: symbol_key(file, &draft.container_path, &draft.name, ordinal).into(),
             signature: signature(&draft, &parsed.source),
             doc: doc(draft.node, spec.comment_kinds(), &parsed.source),
             name: draft.name,
@@ -1043,6 +1052,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         });
     }
     let mut calls = extractor.calls;
+    let shared_file = SharedStr::from(file);
     calls.sort_by_key(|(_, range, _, _, _)| range.start);
     let mut references = Vec::with_capacity(calls.len());
     let mut reference_facts = Vec::with_capacity(calls.len());
@@ -1055,7 +1065,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             ReferenceKind::Call => text.to_string(),
         };
         references.push(Reference {
-            file: file.to_string(),
+            file: shared_file.clone(),
             name_range: Span::of(&call.callee.name_node),
             name,
             kind: call.kind,
@@ -1104,6 +1114,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         reference_facts,
         locals,
         path_targets: BTreeMap::new(),
+        content_hash: *blake3::hash(&parsed.source).as_bytes(),
     }
 }
 
@@ -1267,7 +1278,7 @@ pub(crate) mod testing {
     pub(crate) fn keys(language: Language, source: &str) -> Vec<String> {
         symbols(language, source)
             .into_iter()
-            .map(|symbol| symbol.key)
+            .map(|symbol| symbol.key.to_string())
             .collect()
     }
 }

@@ -885,7 +885,7 @@ impl Repository<'_> {
             .iter()
             .filter(|symbol| symbol.container.is_none() && symbol.name == name);
         if let Some(first) = defined.next() {
-            return defined.next().is_none().then(|| first.key.clone());
+            return defined.next().is_none().then(|| first.key.to_string());
         }
         // `export { original as name }` gives the name to a symbol of the file.
         let mut aliased = facts
@@ -894,7 +894,7 @@ impl Repository<'_> {
             .zip(&facts.link_facts)
             .filter(|(_, link)| link.export_aliases.iter().any(|alias| alias == name));
         if let Some((first, _)) = aliased.next() {
-            return aliased.next().is_none().then(|| first.key.clone());
+            return aliased.next().is_none().then(|| first.key.to_string());
         }
         if let Some(key) = inline_module_symbol(facts, name) {
             return Some(key);
@@ -937,7 +937,7 @@ fn inline_module_symbol(facts: &FileSymbols, name: &str) -> Option<String> {
     };
     let mut found = facts.symbols.iter().filter(in_module);
     let first = found.next()?;
-    found.next().is_none().then(|| first.key.clone())
+    found.next().is_none().then(|| first.key.to_string())
 }
 
 /// Gives a Go import without an alias the name that the package clause of

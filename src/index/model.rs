@@ -4,6 +4,111 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::Language;
 
+/// A string that many facts share. A clone adds a count and copies no text.
+///
+/// The index has one key for each symbol, and each call site that names the
+/// symbol holds a clone of that key.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct SharedStr(std::sync::Arc<str>);
+
+impl SharedStr {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for SharedStr {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for SharedStr {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for SharedStr {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SharedStr {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl From<&str> for SharedStr {
+    fn from(text: &str) -> Self {
+        Self(text.into())
+    }
+}
+
+impl From<String> for SharedStr {
+    fn from(text: String) -> Self {
+        Self(text.into())
+    }
+}
+
+impl From<&String> for SharedStr {
+    fn from(text: &String) -> Self {
+        Self(text.as_str().into())
+    }
+}
+
+impl From<SharedStr> for String {
+    fn from(text: SharedStr) -> Self {
+        text.0.to_string()
+    }
+}
+
+impl PartialEq<str> for SharedStr {
+    fn eq(&self, other: &str) -> bool {
+        &*self.0 == other
+    }
+}
+
+impl PartialEq<&str> for SharedStr {
+    fn eq(&self, other: &&str) -> bool {
+        &*self.0 == *other
+    }
+}
+
+impl PartialEq<String> for SharedStr {
+    fn eq(&self, other: &String) -> bool {
+        &*self.0 == other.as_str()
+    }
+}
+
+impl PartialEq<SharedStr> for String {
+    fn eq(&self, other: &SharedStr) -> bool {
+        self.as_str() == &*other.0
+    }
+}
+
+impl PartialEq<SharedStr> for &str {
+    fn eq(&self, other: &SharedStr) -> bool {
+        *self == &*other.0
+    }
+}
+
+impl Serialize for SharedStr {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SharedStr {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::from)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolKind {
@@ -83,7 +188,7 @@ impl Span {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Symbol {
     /// `rel/path#Container.name`. See [`symbol_key`].
-    pub key: String,
+    pub key: SharedStr,
     pub name: String,
     pub kind: SymbolKind,
     /// The name of the nearest type or function that contains the definition.
@@ -290,23 +395,23 @@ pub struct Resolution {
     pub basis: Option<ResolutionBasis>,
     /// The keys of the candidate symbols, in key order. An edge exists only
     /// for the status `Resolved` or `UniqueCandidate`.
-    pub candidates: Vec<String>,
+    pub candidates: Vec<SharedStr>,
     /// The keys of the definitions that a later definition with the same
     /// name replaces, in key order. They are not targets of an edge. Only a
     /// language that permits a second definition of a name, as Bash does,
     /// gives them.
-    pub superseded: Vec<String>,
+    pub superseded: Vec<SharedStr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reference {
-    pub file: String,
+    pub file: SharedStr,
     pub name_range: Span,
     pub name: String,
     pub kind: ReferenceKind,
     /// The key of the nearest definition that contains the reference. A call
     /// in a callback thus has the function that contains the callback.
-    pub enclosing: Option<String>,
+    pub enclosing: Option<SharedStr>,
     /// The reference is in a function value that has no name.
     pub via_closure: bool,
     pub receiver: Option<Receiver>,
@@ -339,6 +444,30 @@ pub fn symbol_key(file: &str, container_path: &[String], name: &str, ordinal: us
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_shared_string_clone_shares_the_text() {
+        let key = SharedStr::from("a.rs#run");
+        let clone = key.clone();
+        assert_eq!(key.as_ptr(), clone.as_ptr());
+        assert_eq!(key, "a.rs#run");
+        assert_eq!(key, "a.rs#run".to_string());
+        assert_eq!(key.len(), 8);
+    }
+
+    #[test]
+    fn test_shared_string_is_a_plain_string_in_json() {
+        let key = SharedStr::from("a.rs#run");
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(json, "\"a.rs#run\"");
+        let back: SharedStr = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, key);
+    }
+
+    #[test]
+    fn test_reference_holds_no_more_than_pointers_for_keys() {
+        assert!(std::mem::size_of::<SharedStr>() <= 16);
+    }
 
     #[test]
     fn test_symbol_key_without_container() {

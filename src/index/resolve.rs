@@ -16,7 +16,7 @@ use super::calls::{element_type, one_result, required_type, split_list, split_ty
 use super::extract::{name_path, FileSymbols, LinkFacts, Local};
 use super::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ReferenceKind, Resolution,
-    ResolutionBasis as Basis, ResolutionStatus as Status, Symbol, SymbolKind,
+    ResolutionBasis as Basis, ResolutionStatus as Status, SharedStr, Symbol, SymbolKind,
 };
 use crate::core::Language;
 
@@ -2120,13 +2120,13 @@ pub fn resolve_references(files: &mut [FileSymbols]) {
                 (0..files[file].references.len())
                     .map(|position| {
                         let outcome = resolver.resolve(file, position, 0);
-                        let mut candidates: Vec<String> = outcome
+                        let mut candidates: Vec<SharedStr> = outcome
                             .candidates
                             .iter()
                             .map(|id| resolver.symbol(*id).key.clone())
                             .collect();
                         candidates.sort();
-                        let mut superseded: Vec<String> = outcome
+                        let mut superseded: Vec<SharedStr> = outcome
                             .superseded
                             .iter()
                             .map(|id| resolver.symbol(*id).key.clone())

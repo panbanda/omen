@@ -7,7 +7,9 @@ fn call_resolutions(
     root: &std::path::Path,
     paths: &[std::path::PathBuf],
 ) -> Vec<omen::index::view::CallEvidence> {
-    CallView::from_index(&CodeIndex::from_files(root, paths)).call_resolutions
+    CallView::from_index(&CodeIndex::from_files(root, paths))
+        .call_resolutions()
+        .collect()
 }
 
 #[test]
@@ -31,7 +33,7 @@ fn unchanged_then_same_size_edit_then_delete_matches_fresh_graph() {
     assert_eq!(edited.reused_files, 1);
     assert_ne!(edited.fingerprint, first.fingerprint);
     assert_eq!(
-        edited.index.call_resolutions,
+        edited.index.call_resolutions().collect::<Vec<_>>(),
         call_resolutions(dir.path(), &paths)
     );
     std::fs::remove_file(&b).unwrap();
@@ -40,7 +42,7 @@ fn unchanged_then_same_size_edit_then_delete_matches_fresh_graph() {
     assert!(deleted.graph_rebuilt);
     assert_eq!(deleted.index.symbols.len(), 1);
     assert_eq!(
-        deleted.index.call_resolutions,
+        deleted.index.call_resolutions().collect::<Vec<_>>(),
         call_resolutions(dir.path(), &[a])
     );
 }

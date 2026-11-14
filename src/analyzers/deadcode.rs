@@ -19,9 +19,17 @@ use serde::{Deserialize, Serialize};
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::index::extract::FileSymbols;
 use crate::index::imports::RustModules;
-use crate::index::model::{Exported, Receiver, Reference, ResolutionStatus, Symbol, SymbolKind};
-use crate::index::security::entry::find_entry_points_with;
+use crate::index::model::{
+    Exported, Receiver, Reference, ResolutionStatus, SharedStr, Symbol, SymbolKind,
+};
+use crate::index::security::entry::{
+    entry_points_of_file, find_entry_points_with, EntryPoint, OnDemandTrees,
+};
 use crate::parser::{self, Parser};
+
+/// The result for one file: its definitions and uses, its entry points, and its syntax
+/// tree when the analysis needs the tree later.
+type StreamedFile = (FileDeadCode, Vec<EntryPoint>, Option<parser::ParseResult>);
 
 /// Dead code analyzer.
 pub struct Analyzer {
@@ -93,59 +101,103 @@ impl AnalyzerTrait for Analyzer {
         // decorators, visibility modifiers, and uses as a value). Cargo results
         // supplement this with compiler-level dead code warnings when available.
         let index = ctx.code_index()?;
-        let parsed: Vec<Option<(parser::ParseResult, FileDeadCode)>> = index
-            .files
-            .par_iter()
-            .map(|facts| {
-                let path = Path::new(&facts.file);
-                let content = ctx.read_file(path).ok()?;
-                let result = self.parser.parse(&content, facts.language, path).ok()?;
-                let data = collect_file_data(&result, facts);
-                Some((result, data))
-            })
-            .collect();
-        let mut trees: Vec<parser::ParseResult> = Vec::new();
-        let mut file_results: Vec<FileDeadCode> = Vec::new();
-        let mut parsed_facts: Vec<&FileSymbols> = Vec::new();
-        for (facts, item) in index.files.iter().zip(parsed) {
-            if let Some((tree, data)) = item {
-                parsed_facts.push(facts);
-                trees.push(tree);
-                file_results.push(data);
-            }
-        }
         // An entry point is alive, and its callees are reachable. The entry points are those
         // of the security analysis, with the rows of the configuration.
         let entry_rules = crate::analyzers::security::options_of(&ctx.config.security)?.entry_rules;
-        let entry_keys: HashSet<String> = if parsed_facts.len() == index.files.len() {
-            find_entry_points_with(&trees, &index.files, &entry_rules)
+        let parse_file = |position: usize| -> Result<Option<parser::ParseResult>> {
+            let facts = &index.files[position];
+            let path = Path::new(&facts.file);
+            crate::index::headers::parse_unchanged(
+                facts,
+                || ctx.read_file(path),
+                |content| self.parser.parse(content, facts.language, path).ok(),
+            )
+        };
+        // Each thread parses a file, uses the tree, and drops it. Only the trees of Rust
+        // files stay, because the resolution of paths in Rust needs them.
+        let loader = OnDemandTrees::new(&parse_file);
+        let streamed: Vec<Option<StreamedFile>> = (0..index.files.len())
+            .into_par_iter()
+            .map(|position| {
+                let facts = &index.files[position];
+                let Some(result) = parse_file(position)? else {
+                    return Ok(None);
+                };
+                let data = collect_file_data(&result, facts);
+                let entries =
+                    entry_points_of_file(position, &result, &index.files, &loader, &entry_rules);
+                let tree = (facts.language == Language::Rust).then_some(result);
+                Ok(Some((data, entries, tree)))
+            })
+            .collect::<Result<_>>()?;
+        loader.finish()?;
+        let mut rust_trees: HashMap<String, parser::ParseResult> = HashMap::new();
+        let mut file_results: Vec<FileDeadCode> = Vec::new();
+        let entry_keys: HashSet<SharedStr> = if streamed.iter().all(Option::is_some) {
+            let mut keys = HashSet::new();
+            for (facts, item) in index.files.iter().zip(streamed.into_iter().flatten()) {
+                let (data, entries, tree) = item;
+                file_results.push(data);
+                keys.extend(entries.into_iter().filter_map(|entry| entry.symbol));
+                if let Some(tree) = tree {
+                    rust_trees.insert(facts.file.clone(), tree);
+                }
+            }
+            keys.into_iter().map(SharedStr::from).collect()
         } else {
-            let facts: Vec<FileSymbols> = parsed_facts.iter().copied().cloned().collect();
-            find_entry_points_with(&trees, &facts, &entry_rules)
-        }
-        .into_iter()
-        .filter_map(|entry| entry.symbol)
-        .collect();
+            // A file without a tree changes the set of files for the entry points. This
+            // path keeps all trees, as the analysis of one set of trees needs.
+            drop(streamed);
+            let parsed: Vec<Option<(parser::ParseResult, FileDeadCode)>> = index
+                .files
+                .par_iter()
+                .enumerate()
+                .map(|(position, facts)| {
+                    let Some(result) = parse_file(position)? else {
+                        return Ok(None);
+                    };
+                    let data = collect_file_data(&result, facts);
+                    Ok(Some((result, data)))
+                })
+                .collect::<Result<_>>()?;
+            let mut trees: Vec<parser::ParseResult> = Vec::new();
+            let mut parsed_facts: Vec<FileSymbols> = Vec::new();
+            for (facts, item) in index.files.iter().zip(parsed) {
+                if let Some((tree, data)) = item {
+                    parsed_facts.push(facts.clone());
+                    trees.push(tree);
+                    file_results.push(data);
+                }
+            }
+            let keys = find_entry_points_with(&trees, &parsed_facts, &entry_rules)
+                .into_iter()
+                .filter_map(|entry| entry.symbol.map(SharedStr::from))
+                .collect();
+            for (facts, tree) in parsed_facts.iter().zip(trees) {
+                rust_trees.insert(facts.file.clone(), tree);
+            }
+            keys
+        };
 
         // Phase 2: Build the global tables. A definition is known by the key
         // of the shared index, which is unique for each definition.
-        let mut all_definitions: HashMap<String, Definition> = HashMap::new();
+        let mut all_definitions: HashMap<SharedStr, Definition> = HashMap::new();
         let mut all_usages: HashSet<String> = HashSet::new();
         let mut value_references: Vec<CallReference> = Vec::new();
         let mut path_uses: Vec<PathUse> = Vec::new();
-        let mut keys_by_name: HashMap<String, Vec<String>> = HashMap::new();
+        let mut keys_by_name: HashMap<String, Vec<SharedStr>> = HashMap::new();
 
-        for fdc in &file_results {
-            for def in &fdc.definitions {
-                all_definitions.insert(def.key.clone(), def.clone());
+        for fdc in file_results {
+            for def in fdc.definitions {
                 keys_by_name
                     .entry(def.name.clone())
                     .or_default()
                     .push(def.key.clone());
+                all_definitions.insert(def.key.clone(), def);
             }
-            all_usages.extend(fdc.usages.iter().cloned());
-            value_references.extend(fdc.calls.iter().cloned());
-            path_uses.extend(fdc.path_uses.iter().cloned());
+            all_usages.extend(fdc.usages);
+            value_references.extend(fdc.calls);
+            path_uses.extend(fdc.path_uses);
         }
         for keys in keys_by_name.values_mut() {
             keys.sort();
@@ -157,9 +209,9 @@ impl AnalyzerTrait for Analyzer {
         // name it: the index gives each candidate of an ambiguous call, and a
         // call that the index cannot resolve counts for each definition with
         // that name.
-        let mut call_graph: HashMap<String, Vec<String>> = HashMap::new();
-        let mut roots: Vec<String> = Vec::new();
-        let mut candidate_keys: HashSet<String> = HashSet::new();
+        let mut call_graph: HashMap<SharedStr, Vec<SharedStr>> = HashMap::new();
+        let mut roots: Vec<SharedStr> = Vec::new();
+        let mut candidate_keys: HashSet<SharedStr> = HashSet::new();
         let mut unresolved_names: HashSet<String> = HashSet::new();
         for reference in index.files.iter().flat_map(|facts| &facts.references) {
             let resolution = &reference.resolution;
@@ -167,13 +219,13 @@ impl AnalyzerTrait for Analyzer {
                 resolution.status,
                 ResolutionStatus::Unresolved | ResolutionStatus::Ambiguous
             );
-            let mut targets: Vec<String> = resolution
+            let mut targets: Vec<SharedStr> = resolution
                 .candidates
                 .iter()
                 .filter(|key| {
                     !weak
                         || all_definitions
-                            .get(*key)
+                            .get(key.as_str())
                             .is_none_or(|def| can_be_named_by(def, reference))
                 })
                 .cloned()
@@ -195,7 +247,7 @@ impl AnalyzerTrait for Analyzer {
             match reference
                 .enclosing
                 .as_ref()
-                .filter(|key| all_definitions.contains_key(*key))
+                .filter(|key| all_definitions.contains_key(key.as_str()))
             {
                 Some(caller) => call_graph
                     .entry(caller.clone())
@@ -212,10 +264,9 @@ impl AnalyzerTrait for Analyzer {
                 .iter()
                 .map(|facts| (facts.file.as_str(), facts))
                 .collect(),
-            trees: parsed_facts
+            trees: rust_trees
                 .iter()
-                .zip(&trees)
-                .map(|(facts, tree)| (facts.file.as_str(), tree))
+                .map(|(file, tree)| (file.as_str(), tree))
                 .collect(),
             by_name: &keys_by_name,
         };
@@ -237,9 +288,9 @@ impl AnalyzerTrait for Analyzer {
             }
         }
         for call in &value_references {
-            let callees: Vec<String> = match keys_by_name.get(&call.callee) {
+            let callees: Vec<SharedStr> = match keys_by_name.get(&call.callee) {
                 Some(keys) => {
-                    let local: Vec<String> = keys
+                    let local: Vec<SharedStr> = keys
                         .iter()
                         .filter(|key| {
                             all_definitions
@@ -260,7 +311,7 @@ impl AnalyzerTrait for Analyzer {
                 roots.extend(callees);
                 continue;
             }
-            let callers: Vec<&String> = keys_by_name
+            let callers: Vec<&SharedStr> = keys_by_name
                 .get(&call.caller)
                 .into_iter()
                 .flatten()
@@ -279,8 +330,8 @@ impl AnalyzerTrait for Analyzer {
         }
 
         // Phase 4: Mark reachable from entry points
-        let mut reachable: HashSet<String> = HashSet::new();
-        let mut queue: Vec<String> = Vec::new();
+        let mut reachable: HashSet<SharedStr> = HashSet::new();
+        let mut queue: Vec<SharedStr> = Vec::new();
 
         roots.extend(entry_keys.iter().cloned());
         for root in roots {
@@ -1233,7 +1284,7 @@ struct RustPaths<'a> {
     files: HashMap<&'a str, &'a FileSymbols>,
     trees: HashMap<&'a str, &'a parser::ParseResult>,
     /// The keys of the definitions, by name.
-    by_name: &'a HashMap<String, Vec<String>>,
+    by_name: &'a HashMap<String, Vec<SharedStr>>,
 }
 
 impl<'a> RustPaths<'a> {
@@ -1289,7 +1340,7 @@ impl<'a> RustPaths<'a> {
     /// The keys of the functions that the path names from `(file, chain)`. Conditional
     /// definitions of one name, as `#[cfg(...)]` alternatives, have the ordinals `~2`, `~3`.
     /// Each of them is a function that the path can name.
-    fn function(&self, file: &str, chain: &[String], segments: &[String]) -> Vec<String> {
+    fn function(&self, file: &str, chain: &[String], segments: &[String]) -> Vec<SharedStr> {
         let Some((name, modules)) = segments.split_last() else {
             return Vec::new();
         };
@@ -1337,7 +1388,7 @@ impl<'a> RustPaths<'a> {
     /// The keys of the function that the path names in the module `(file, chain)`: first
     /// through the `use` bindings of the module, then in the module itself, then through
     /// its glob imports.
-    fn resolve(&self, path_use: &PathUse) -> Vec<String> {
+    fn resolve(&self, path_use: &PathUse) -> Vec<SharedStr> {
         use crate::index::model::ImportKind;
         let file = &path_use.file;
         let chain = &path_use.chain;
@@ -1704,7 +1755,7 @@ fn is_nameable_from_other_files(
 /// it, except in a language where a module or an object holds functions.
 fn can_be_named_by(def: &Definition, call: &Reference) -> bool {
     let def_language = Language::detect(Path::new(&def.file));
-    let call_language = Language::detect(Path::new(&call.file));
+    let call_language = Language::detect(Path::new(call.file.as_str()));
     let (Some(def_language), Some(call_language)) = (def_language, call_language) else {
         return false;
     };
@@ -1871,7 +1922,7 @@ impl FileDeadCode {
 #[derive(Clone)]
 struct Definition {
     /// The key of the symbol in the shared index.
-    key: String,
+    key: SharedStr,
     name: String,
     kind: String,
     file: String,
@@ -1976,6 +2027,57 @@ mod tests {
     }
 
     #[test]
+    fn test_a_file_that_fails_to_read_after_the_index_is_an_error() {
+        let error = analyze_with_second_read(None).unwrap_err();
+        assert!(error.to_string().contains(CHANGED), "{error}");
+    }
+
+    #[test]
+    fn test_a_file_whose_bytes_changed_after_the_index_is_an_error() {
+        let error = analyze_with_second_read(Some("function other() {}\n")).unwrap_err();
+        assert!(error.to_string().contains(CHANGED), "{error}");
+    }
+
+    const CHANGED: &str =
+        "a.ts changed or became unreadable during analysis; run the command again";
+
+    /// The second read of `a.ts` fails, or it gives `second`.
+    fn analyze_with_second_read(second: Option<&'static str>) -> Result<Analysis> {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, ContentSource, FileSet};
+        use std::path::PathBuf;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct SecondRead(AtomicUsize, Option<&'static str>);
+        impl ContentSource for SecondRead {
+            fn read(&self, path: &Path) -> Result<Vec<u8>> {
+                if path == Path::new("a.ts") && self.0.fetch_add(1, Ordering::SeqCst) == 1 {
+                    return match self.1 {
+                        Some(text) => Ok(text.as_bytes().to_vec()),
+                        None => Err(crate::core::Error::analysis("gone")),
+                    };
+                }
+                let stem = path.file_stem().unwrap().to_string_lossy();
+                Ok(format!("function unusedIn_{stem}() {{}}\n").into_bytes())
+            }
+            fn list_directory(&self, _: &Path) -> Result<Vec<PathBuf>> {
+                Ok(Vec::new())
+            }
+        }
+
+        let files = FileSet::from_files(
+            PathBuf::from("."),
+            vec![PathBuf::from("a.ts"), PathBuf::from("b.ts")],
+        );
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(Path::new(".")))
+            .with_content_source(Arc::new(SecondRead(AtomicUsize::new(0), second)));
+
+        Analyzer::new().analyze(&ctx)
+    }
+
+    #[test]
     fn test_analyzer_creation() {
         let analyzer = Analyzer::new();
         assert_eq!(analyzer.name(), "deadcode");
@@ -1999,7 +2101,7 @@ mod tests {
     #[test]
     fn test_is_entry_point() {
         let def = Definition {
-            key: String::new(),
+            key: SharedStr::default(),
             nameable_from_other_files: false,
             is_free_function: false,
             name: "main".to_string(),
@@ -2016,7 +2118,7 @@ mod tests {
         assert!(is_entry_point("main", &def));
 
         let def2 = Definition {
-            key: String::new(),
+            key: SharedStr::default(),
             nameable_from_other_files: false,
             is_free_function: false,
             name: "TestSomething".to_string(),
@@ -2045,7 +2147,7 @@ mod tests {
     #[test]
     fn test_calculate_confidence() {
         let private_def = Definition {
-            key: String::new(),
+            key: SharedStr::default(),
             nameable_from_other_files: false,
             is_free_function: false,
             name: "helper".to_string(),
@@ -2063,7 +2165,7 @@ mod tests {
         assert!(conf > 0.9); // High confidence for private, unreachable, unused
 
         let exported_def = Definition {
-            key: String::new(),
+            key: SharedStr::default(),
             nameable_from_other_files: false,
             is_free_function: false,
             name: "Public".to_string(),
@@ -2090,7 +2192,7 @@ mod tests {
 
         // Two files both have a helper() function
         let def1 = Definition {
-            key: String::new(),
+            key: SharedStr::default(),
             nameable_from_other_files: false,
             is_free_function: false,
             name: "helper".to_string(),
@@ -2106,7 +2208,7 @@ mod tests {
         };
 
         let def2 = Definition {
-            key: String::new(),
+            key: SharedStr::default(),
             nameable_from_other_files: false,
             is_free_function: false,
             name: "helper".to_string(),
@@ -2682,7 +2784,7 @@ def plain_function():
     #[test]
     fn test_go_exported_is_entry_point() {
         let def = Definition {
-            key: String::new(),
+            key: SharedStr::default(),
             nameable_from_other_files: false,
             is_free_function: false,
             name: "PublicFunc".to_string(),
@@ -2699,7 +2801,7 @@ def plain_function():
         assert!(is_entry_point("PublicFunc", &def));
 
         let private_def = Definition {
-            key: String::new(),
+            key: SharedStr::default(),
             nameable_from_other_files: false,
             is_free_function: false,
             name: "privateFunc".to_string(),
@@ -2719,7 +2821,7 @@ def plain_function():
     #[test]
     fn test_go_benchmark_and_example_entry_points() {
         let def = Definition {
-            key: String::new(),
+            key: SharedStr::default(),
             nameable_from_other_files: false,
             is_free_function: false,
             name: "BenchmarkSort".to_string(),
@@ -3044,7 +3146,7 @@ func RegisterConductorServiceServer() {
     #[test]
     fn test_handler_patterns_are_entry_points() {
         let base_def = Definition {
-            key: String::new(),
+            key: SharedStr::default(),
             nameable_from_other_files: false,
             is_free_function: false,
             name: "".to_string(),
@@ -3068,7 +3170,7 @@ func RegisterConductorServiceServer() {
     #[test]
     fn test_confidence_reduces_for_test_files() {
         let test_def = Definition {
-            key: String::new(),
+            key: SharedStr::default(),
             nameable_from_other_files: false,
             is_free_function: false,
             name: "helper".to_string(),

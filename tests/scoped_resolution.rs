@@ -17,7 +17,7 @@ fn calls(files: &[(&str, &str)], caller: &str) -> Vec<CallEvidence> {
     let view = CallView::from_index(&CodeIndex::from_files(dir.path(), &paths));
     view.resolve(caller)
         .into_iter()
-        .flat_map(|position| view.calls_of(position).to_vec())
+        .flat_map(|position| view.calls_of(position))
         .collect()
 }
 

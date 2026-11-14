@@ -28,14 +28,17 @@ pub struct InvalidSuppression {
     pub problem: String,
 }
 
-struct Allow {
+pub(super) struct Allow {
     line: u32,
     category: SinkCategory,
     reason: String,
 }
 
 /// The suppression comments of one file, and the problems with the other comments.
-fn comments_of(parsed: &ParseResult, file: &str) -> (Vec<Allow>, Vec<InvalidSuppression>) {
+pub(super) fn comments_of(
+    parsed: &ParseResult,
+    file: &str,
+) -> (Vec<Allow>, Vec<InvalidSuppression>) {
     let text = String::from_utf8_lossy(&parsed.source);
     let root = parsed.root_node();
     let mut allowed = Vec::new();
@@ -107,10 +110,23 @@ pub fn apply(
     parsed: &[ParseResult],
     files: &[String],
 ) -> (Vec<Sink>, Vec<Suppressed>, Vec<InvalidSuppression>) {
+    let per_file: Vec<(Vec<Allow>, Vec<InvalidSuppression>)> = parsed
+        .iter()
+        .zip(files)
+        .map(|(tree, file)| comments_of(tree, file))
+        .collect();
+    split(sinks, files, per_file)
+}
+
+/// Like [`apply`], with the comments of each file. `comments[i]` belongs to `files[i]`.
+pub(super) fn split(
+    sinks: Vec<Sink>,
+    files: &[String],
+    comments: Vec<(Vec<Allow>, Vec<InvalidSuppression>)>,
+) -> (Vec<Sink>, Vec<Suppressed>, Vec<InvalidSuppression>) {
     let mut allowed: Vec<(String, Allow)> = Vec::new();
     let mut invalid = Vec::new();
-    for (tree, file) in parsed.iter().zip(files) {
-        let (found, problems) = comments_of(tree, file);
+    for (file, (found, problems)) in files.iter().zip(comments) {
         allowed.extend(found.into_iter().map(|allow| (file.clone(), allow)));
         invalid.extend(problems);
     }

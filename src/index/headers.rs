@@ -39,6 +39,29 @@ pub fn parse(path: &Path, language: Language, content: &[u8]) -> Option<ParseRes
     }
 }
 
+/// Reads and parses a file again for an analysis of the index.
+///
+/// A read that fails, or bytes that are not the bytes that gave `facts`, are an error
+/// for the whole command: the analysis never uses a second version of a file. `Ok(None)`
+/// means that the file has no syntax tree, and it does not depend on the read.
+pub fn parse_unchanged(
+    facts: &FileSymbols,
+    read: impl FnOnce() -> crate::core::Result<Vec<u8>>,
+    parse: impl FnOnce(&[u8]) -> Option<ParseResult>,
+) -> crate::core::Result<Option<ParseResult>> {
+    let changed = || {
+        crate::core::Error::analysis(format!(
+            "{} changed or became unreadable during analysis; run the command again",
+            facts.file
+        ))
+    };
+    let content = read().map_err(|_| changed())?;
+    if !facts.is_content_of_facts(&content) {
+        return Err(changed());
+    }
+    Ok(parse(&content))
+}
+
 fn relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)

@@ -51,7 +51,7 @@ struct EdgeInfo {
 impl Edges {
     fn from_view(view: &CallView) -> Self {
         let mut edges = Self::default();
-        for call in &view.call_resolutions {
+        for call in view.call_resolutions() {
             if !matches!(
                 call.status,
                 ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate

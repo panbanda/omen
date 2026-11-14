@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use super::build::CodeIndex;
-use super::model::{Receiver, ResolutionBasis, ResolutionStatus, SymbolKind};
+use super::model::{Receiver, ResolutionBasis, ResolutionStatus, SharedStr, SymbolKind};
 use crate::core::{Error, Language, Result};
 
 /// The weakest basis that gives an edge when the caller does not select
@@ -69,6 +69,17 @@ pub struct CallEvidence {
     pub candidates: Vec<SymbolLocation>,
 }
 
+/// A call site as the view keeps it. The definitions are positions in
+/// `CallView::symbols`: the view makes the `CallEvidence` when a caller asks.
+struct StoredCall {
+    caller: u32,
+    call: Box<str>,
+    line: u32,
+    status: ResolutionStatus,
+    basis: Option<ResolutionBasis>,
+    candidates: Box<[u32]>,
+}
+
 /// The number of call sites of each status.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolutionSummary {
@@ -97,13 +108,13 @@ pub struct CallView {
     /// is not in the view.
     pub symbols: Vec<ViewSymbol>,
     pub by_name: HashMap<String, Vec<usize>>,
-    by_key: HashMap<String, usize>,
+    by_key: HashMap<SharedStr, usize>,
     /// For each definition, the definitions that it calls, with the basis
     /// of the call. A call whose one candidate has only the name is here
     /// with the basis `NameOnly`. It is an edge only on request.
     callees: Vec<Vec<(usize, ResolutionBasis)>>,
     callers: Vec<Vec<(usize, ResolutionBasis)>>,
-    pub call_resolutions: Vec<CallEvidence>,
+    stored_calls: Vec<StoredCall>,
     call_resolution_ranges: Vec<Range<usize>>,
     /// The counts of all call sites of the input, also of the calls that
     /// are not in a definition.
@@ -142,7 +153,7 @@ impl CallView {
                     body_start: symbol
                         .body_range
                         .map_or(symbol.range.start_byte, |body| body.start_byte),
-                    qualified_name: symbol.key.clone(),
+                    qualified_name: symbol.key.to_string(),
                     kind: symbol.kind,
                     file: file.file.clone(),
                     line: symbol.range.start_line,
@@ -155,7 +166,9 @@ impl CallView {
             vec![BTreeSet::new(); symbols.len()];
         let mut callers: Vec<BTreeSet<(usize, ResolutionBasis)>> =
             vec![BTreeSet::new(); symbols.len()];
-        let mut evidence: Vec<Vec<CallEvidence>> = vec![Vec::new(); symbols.len()];
+        let mut evidence: Vec<Vec<StoredCall>> = std::iter::repeat_with(Vec::new)
+            .take(symbols.len())
+            .collect();
         let mut summary = ResolutionSummary::default();
         for reference in index
             .files
@@ -205,24 +218,21 @@ impl CallView {
                 (None, Some(qualifier)) => format!("{qualifier}::{}", reference.name),
                 (None, None) => reference.name.clone(),
             };
-            evidence[caller].push(CallEvidence {
-                caller: SymbolLocation::from(&symbols[caller]),
-                call,
+            evidence[caller].push(StoredCall {
+                caller: caller as u32,
+                call: call.into_boxed_str(),
                 line: reference.name_range.start_line,
                 status: resolution.status,
                 basis: resolution.basis,
-                candidates: candidates
-                    .iter()
-                    .map(|candidate| SymbolLocation::from(&symbols[*candidate]))
-                    .collect(),
+                candidates: candidates.iter().map(|position| *position as u32).collect(),
             });
         }
-        let mut call_resolutions = Vec::new();
+        let mut stored_calls = Vec::new();
         let mut call_resolution_ranges = Vec::with_capacity(symbols.len());
         for calls in evidence {
-            let start = call_resolutions.len();
-            call_resolutions.extend(calls);
-            call_resolution_ranges.push(start..call_resolutions.len());
+            let start = stored_calls.len();
+            stored_calls.extend(calls);
+            call_resolution_ranges.push(start..stored_calls.len());
         }
         Self {
             symbols,
@@ -236,7 +246,7 @@ impl CallView {
                 .into_iter()
                 .map(|set| set.into_iter().collect())
                 .collect(),
-            call_resolutions,
+            stored_calls,
             call_resolution_ranges,
             summary,
             sources: index.files.len(),
@@ -308,8 +318,33 @@ impl CallView {
     }
 
     /// The call sites in the body of one definition, in source order.
-    pub fn calls_of(&self, symbol: usize) -> &[CallEvidence] {
-        &self.call_resolutions[self.call_resolution_ranges[symbol].clone()]
+    pub fn calls_of(&self, symbol: usize) -> Vec<CallEvidence> {
+        self.stored_calls[self.call_resolution_ranges[symbol].clone()]
+            .iter()
+            .map(|call| self.evidence(call))
+            .collect()
+    }
+
+    /// The call sites of all definitions, in the order of the definitions and
+    /// then in source order.
+    pub fn call_resolutions(&self) -> impl Iterator<Item = CallEvidence> + '_ {
+        self.stored_calls.iter().map(|call| self.evidence(call))
+    }
+
+    fn evidence(&self, call: &StoredCall) -> CallEvidence {
+        let location = |position: u32| SymbolLocation::from(&self.symbols[position as usize]);
+        CallEvidence {
+            caller: location(call.caller),
+            call: call.call.to_string(),
+            line: call.line,
+            status: call.status,
+            basis: call.basis,
+            candidates: call
+                .candidates
+                .iter()
+                .map(|position| location(*position))
+                .collect(),
+        }
     }
 
     /// The number of call sites of each status in all files of the input.
@@ -504,6 +539,22 @@ mod tests {
         "shop.py",
         "class Item:\n    def name(self):\n        return helper()\n\n\ndef helper():\n    return leaf()\n\n\ndef leaf():\n    return len(\"a\")\n\n\ndef run(item: Item):\n    return item.name()\n",
     )];
+
+    #[test]
+    fn test_stored_call_holds_positions_and_no_locations() {
+        assert!(std::mem::size_of::<StoredCall>() <= 56);
+    }
+
+    #[test]
+    fn test_all_calls_are_the_calls_of_each_definition_in_order() {
+        let view = view(FILES);
+        let each: Vec<CallEvidence> = (0..view.symbols.len())
+            .flat_map(|position| view.calls_of(position))
+            .collect();
+        let all: Vec<CallEvidence> = view.call_resolutions().collect();
+        assert!(!all.is_empty());
+        assert_eq!(all, each);
+    }
 
     #[test]
     fn test_query_forms_name_one_definition() {

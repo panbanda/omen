@@ -259,6 +259,12 @@ mod tests {
             ErrorCode::InvalidArgument
         );
         assert_eq!(code(Error::Config("bad".to_string())), ErrorCode::Internal);
+        assert_eq!(
+            code(Error::analysis(
+                "a.py changed or became unreadable during analysis; run the command again"
+            )),
+            ErrorCode::Internal
+        );
     }
 
     #[test]
