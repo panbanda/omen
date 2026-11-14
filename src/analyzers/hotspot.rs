@@ -100,7 +100,7 @@ impl Analyzer {
     /// subcommand, `omen all`, `report generate` -- uses the same window
     /// rather than the default.
     pub fn from_config(config: &crate::config::Config) -> Self {
-        Self::new().with_days(config.hotspot.days)
+        Self::new().with_days(config.hotspot.since.days())
     }
 
     pub fn with_days(mut self, days: u32) -> Self {

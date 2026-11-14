@@ -33,14 +33,13 @@ markers = []
 
 [churn]
 since = "6m"
-top = 20
 
 [duplicates]
 min_tokens = 50
 min_similarity = 0.9
 
 [hotspot]
-top = 20
+since = "90d"
 
 [score]
 min = 70.0

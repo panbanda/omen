@@ -23,7 +23,7 @@ impl Default for Analyzer {
     fn default() -> Self {
         Self {
             weights: ScoreWeights::default(),
-            defect_churn_days: crate::config::DefectConfig::default().churn_days,
+            defect_churn_days: crate::config::DefectConfig::default().since.days(),
         }
     }
 }
@@ -44,7 +44,7 @@ impl Analyzer {
     /// churn window wherever it runs -- the subcommand, the gate, MCP, and
     /// each trend sample.
     pub fn from_config(config: &crate::config::Config) -> Self {
-        Self::default().with_defect_churn_days(config.defect.churn_days)
+        Self::default().with_defect_churn_days(config.defect.since.days())
     }
 
     pub fn with_defect_churn_days(mut self, days: u32) -> Self {
@@ -1771,11 +1771,11 @@ mod tests {
         // The window used to reach only the score gate; ordinary `omen
         // score`, MCP and each trend sample built the analyzer with defaults.
         let mut config = crate::config::Config::default();
-        config.defect.churn_days = 365;
+        config.defect.since = crate::config::HistoryWindow::parse("365d").unwrap();
         assert_eq!(Analyzer::from_config(&config).defect_churn_days, 365);
         assert_eq!(
             Analyzer::default().defect_churn_days,
-            crate::config::DefectConfig::default().churn_days
+            crate::config::DefectConfig::default().since.days()
         );
     }
 }

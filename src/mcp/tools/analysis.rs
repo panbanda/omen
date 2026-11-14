@@ -4,7 +4,6 @@ use super::{
     Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolOutput, ToolSpec, COMPACT,
     MAX_COUNT, PATH,
 };
-use crate::mcp::error::ToolError;
 use crate::mcp::McpServer;
 
 /// The largest history window: 100 years.
@@ -71,18 +70,9 @@ pub(super) static CHURN: ToolSpec = ToolSpec {
     ],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
-        // `churn.since` is a window such as `6m` or `all`. Text that is not a
-        // window is an error, not all the history.
-        let days = match arguments.count_u32("days") {
-            Some(days) => days,
-            None => crate::git::since_to_days(&server.config.churn.since).map_err(|error| {
-                ToolError::internal(format!(
-                    "The value of `churn.since` in the configuration is not correct: {error}"
-                ))
-                .with_param("days")
-                .with_next("Correct the configuration, or give `days`.")
-            })?,
-        };
+        let days = arguments
+            .count_u32("days")
+            .unwrap_or(server.config.churn.since.days());
         server.analyze(
             arguments,
             crate::analyzers::churn::Analyzer::new().with_days(days),
@@ -144,13 +134,13 @@ pub(super) static DEFECT: ToolSpec = ToolSpec {
     params: &[
         PATH,
         Param::integer("days", 1, MAX_DAYS, DAYS_DESCRIPTION)
-            .with_default(ParamDefault::Configuration("defect.churn_days")),
+            .with_default(ParamDefault::Configuration("defect.since")),
     ],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
         let days = arguments
             .count_u32("days")
-            .unwrap_or(server.config.defect.churn_days);
+            .unwrap_or(server.config.defect.since.days());
         server.analyze(
             arguments,
             crate::analyzers::defect::Analyzer::new().with_churn_days(days),
@@ -161,13 +151,14 @@ pub(super) static DEFECT: ToolSpec = ToolSpec {
 pub(super) static CHANGES: ToolSpec = ToolSpec {
     name: "changes",
     description: "Gives the risk of each recent commit. The tool uses just-in-time risk analysis. \
-        `changes.days` of the configuration gives the number of days of history.",
+        `changes.since` of the configuration gives the window of history.",
     params: &[PATH],
     paginated: Pagination::Field("commits"),
     handler: |server, arguments| {
         server.analyze(
             arguments,
-            crate::analyzers::changes::Analyzer::new().with_days(server.config.changes.days),
+            crate::analyzers::changes::Analyzer::new()
+                .with_days(server.config.changes.since.days()),
         )
     },
 };
@@ -224,13 +215,13 @@ pub(super) static HOTSPOT: ToolSpec = ToolSpec {
     params: &[
         PATH,
         Param::integer("days", 1, MAX_DAYS, DAYS_DESCRIPTION)
-            .with_default(ParamDefault::Configuration("hotspot.days")),
+            .with_default(ParamDefault::Configuration("hotspot.since")),
     ],
     paginated: Pagination::Field("hotspots"),
     handler: |server, arguments| {
         let days = arguments
             .count_u32("days")
-            .unwrap_or(server.config.hotspot.days);
+            .unwrap_or(server.config.hotspot.since.days());
         server.analyze(
             arguments,
             crate::analyzers::hotspot::Analyzer::new().with_days(days),
