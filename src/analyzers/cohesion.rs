@@ -8,6 +8,10 @@
 //! - DIT: Depth of Inheritance Tree
 //! - NOC: Number of Children (direct subclasses)
 //!
+//! The analyzer parses no source. It reads the symbols, the calls, and the
+//! member facts of the shared index. See `index::members` for the facts and
+//! for the syntax of the classes of each language.
+//!
 //! # References
 //!
 //! - Chidamber, S.R., Kemerer, C.F. (1994) "A Metrics Suite for Object Oriented Design"
@@ -25,11 +29,15 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use chrono::Utc;
-use rayon::prelude::*;
+use petgraph::graph::{DiGraph, NodeIndex};
 use serde::{Deserialize, Serialize};
 
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
-use crate::parser::Parser;
+use crate::index::build::CodeIndex;
+use crate::index::extract::FileSymbols;
+use crate::index::graph::strongly_connected_components;
+use crate::index::members::{class_model, ClassModel, ClassSyntax};
+use crate::index::model::{Receiver, ReferenceKind, ResolutionStatus, SharedStr, SymbolKind};
 
 /// Default threshold for WMC above which a class is considered complex.
 /// Research suggests 20-24 is appropriate (Chidamber & Kemerer 1994 IEEE TSE).
@@ -90,57 +98,54 @@ impl Analyzer {
     }
 
     /// Analyzes cohesion metrics in a repository.
-    /// Uses ctx.read_file() to support both filesystem and git tree sources.
+    ///
+    /// The shared index of the context gives the facts. The index reads each
+    /// file through the content source of the context, thus a historical
+    /// reference gives the metrics of that reference.
     pub fn analyze_repo(&self, ctx: &AnalysisContext<'_>) -> Result<Analysis> {
-        // Phase 1: Get files from context, filtered by OO languages
-        let files: Vec<_> = ctx
+        let index = ctx.code_index()?;
+        let too_large: HashSet<&str> = if self.config.max_file_size == 0 {
+            HashSet::new()
+        } else {
+            index
+                .files
+                .iter()
+                .filter(|facts| {
+                    ctx.read_file(Path::new(&facts.file))
+                        .is_ok_and(|content| content.len() > self.config.max_file_size)
+                })
+                .map(|facts| facts.file.as_str())
+                .collect()
+        };
+        Ok(self.analyze_index(&index, &too_large))
+    }
+
+    fn is_skipped(&self, file: &str, excluded: &HashSet<&str>) -> bool {
+        if excluded.contains(file) {
+            return true;
+        }
+        self.config.skip_test_files && is_test_file(Path::new(file))
+    }
+
+    /// Calculates the metrics of the classes of an index. The analyzer does
+    /// not examine the files in `excluded`.
+    pub fn analyze_index(&self, index: &CodeIndex, excluded: &HashSet<&str>) -> Analysis {
+        let views: Vec<View<'_>> = index
             .files
             .iter()
-            .filter(|path| {
-                // Skip test files if configured
-                if self.config.skip_test_files && is_test_file(path) {
-                    return false;
-                }
-                // Only include OO languages
-                Language::detect(path).map(is_oo_language).unwrap_or(false)
+            .filter(|facts| !self.is_skipped(&facts.file, excluded))
+            .filter_map(|facts| match class_model(facts.language) {
+                ClassModel::Classes(syntax) => Some(View { facts, syntax }),
+                ClassModel::NotApplicable(_) => None,
             })
             .collect();
 
-        // Phase 2: Parse files in parallel and extract classes
-        let max_file_size = self.config.max_file_size;
-        let all_classes: Vec<ClassMetrics> = files
-            .par_iter()
-            .filter_map(|path| {
-                // Read file via context (supports both filesystem and git tree)
-                let source = ctx.read_file(path).ok()?;
-
-                // Skip if too large
-                if max_file_size > 0 && source.len() > max_file_size {
-                    return None;
-                }
-
-                let lang = Language::detect(path)?;
-
-                // Parse with thread-local parser
-                let parser = Parser::new();
-                let parse_result = parser.parse(&source, lang, path).ok()?;
-                let classes =
-                    extract_classes_from_file(path, &source, parse_result.tree.as_ref(), lang);
-
-                Some(classes)
-            })
-            .flatten()
-            .collect();
-
-        let mut all_classes = all_classes;
-
-        // Build class hierarchy for DIT/NOC calculation
+        let measured = Classes::new(&views).metrics();
         let mut hierarchy = ClassHierarchy::new();
-        for cls in &all_classes {
-            hierarchy.add_class(&cls.class_name, cls.parent_class.as_deref());
+        for (cls, bases) in &measured {
+            hierarchy.add_class_with_bases(&cls.class_name, bases);
         }
-
-        // Update DIT and NOC for each class
+        let mut all_classes: Vec<ClassMetrics> = measured.into_iter().map(|(cls, _)| cls).collect();
         for cls in &mut all_classes {
             cls.dit = hierarchy.get_dit(&cls.class_name);
             cls.noc = hierarchy.get_noc(&cls.class_name);
@@ -151,11 +156,11 @@ impl Analyzer {
 
         let summary = calculate_summary(&all_classes);
 
-        Ok(Analysis {
+        Analysis {
             generated_at: Utc::now().to_rfc3339(),
             classes: all_classes,
             summary,
-        })
+        }
     }
 }
 
@@ -175,34 +180,561 @@ impl AnalyzerTrait for Analyzer {
     }
 }
 
-/// Checks if a language supports class-like structures.
-/// Includes traditional OO languages plus Rust (struct+impl) and Go (struct+methods).
-fn is_oo_language(lang: Language) -> bool {
-    matches!(
-        lang,
-        Language::Java
-            | Language::TypeScript
-            | Language::JavaScript
-            | Language::Tsx
-            | Language::Jsx
-            | Language::Python
-            | Language::CSharp
-            | Language::Cpp
-            | Language::Ruby
-            | Language::Php
-            | Language::Rust
-            | Language::Go
-    )
+/// One file of a language that has classes.
+struct View<'a> {
+    facts: &'a FileSymbols,
+    syntax: ClassSyntax,
+}
+
+/// The position of a class: the file in `views` and the symbol in the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Slot {
+    view: usize,
+    position: usize,
+}
+
+/// What the metrics need to know about one class.
+#[derive(Default)]
+struct Builder {
+    methods: Vec<Slot>,
+    fields: Vec<SharedStr>,
+    field_set: HashSet<SharedStr>,
+    used: HashMap<Slot, HashSet<SharedStr>>,
+    coupled: HashSet<String>,
+    called: HashSet<String>,
+    /// The calls from a method of the class to a method of the same class.
+    edges: Vec<(Slot, Callee)>,
+    end_line: u32,
+}
+
+/// The start of the text of a call on the object itself that the index did not resolve.
+const OWN_PREFIX: &str = "\u{0}own:";
+
+/// The method that a call names, as far as the index can tell.
+enum Callee {
+    /// The index resolved the call to this symbol.
+    Key(SharedStr),
+    /// The call is on the object itself and has this name.
+    OwnMethod(String),
+}
+
+/// The class of a definition and, when the definition is in a method, the method.
+struct Attribution {
+    class: usize,
+    method: Option<usize>,
+}
+
+struct Classes<'a, 'v> {
+    views: &'v [View<'a>],
+    slots: Vec<Slot>,
+    /// For each view, the class number of each symbol that is a class.
+    class_of_symbol: Vec<Vec<Option<usize>>>,
+    /// The class numbers for each language and path of a class.
+    by_path: HashMap<String, Vec<usize>>,
+    builders: Vec<Builder>,
+    /// The names of the C# interfaces that no C# class has as a name.
+    interfaces: HashSet<String>,
+}
+
+fn path_key(language: Language, path: &[String], name: Option<&str>) -> String {
+    let mut key = format!("{language}\u{1f}");
+    key.push_str(&path.join("\u{1f}"));
+    if let Some(name) = name {
+        if !path.is_empty() {
+            key.push('\u{1f}');
+        }
+        key.push_str(name);
+    }
+    key
+}
+
+fn directory_of(file: &str) -> &str {
+    file.rsplit_once('/').map_or("", |(directory, _)| directory)
+}
+
+impl<'a, 'v> Classes<'a, 'v> {
+    fn new(views: &'v [View<'a>]) -> Self {
+        let mut slots = Vec::new();
+        let mut class_of_symbol = Vec::new();
+        let mut by_path: HashMap<String, Vec<usize>> = HashMap::new();
+        for (view_index, view) in views.iter().enumerate() {
+            let mut of_symbol = vec![None; view.facts.symbols.len()];
+            for (position, symbol) in view.facts.symbols.iter().enumerate() {
+                if !view.syntax.classes.contains(&symbol.kind) {
+                    continue;
+                }
+                let facts = &view.facts.link_facts[position];
+                let key = path_key(
+                    view.facts.language,
+                    &facts.container_path,
+                    Some(&symbol.name),
+                );
+                of_symbol[position] = Some(slots.len());
+                by_path.entry(key).or_default().push(slots.len());
+                slots.push(Slot {
+                    view: view_index,
+                    position,
+                });
+            }
+            class_of_symbol.push(of_symbol);
+        }
+        let builders = slots.iter().map(|_| Builder::default()).collect();
+        let named = |interface: bool| -> HashSet<String> {
+            slots
+                .iter()
+                .map(|slot| (slot, &views[slot.view].facts.symbols[slot.position]))
+                .filter(|(slot, symbol)| {
+                    views[slot.view].facts.language == Language::CSharp
+                        && (symbol.kind == SymbolKind::Interface) == interface
+                })
+                .map(|(_, symbol)| symbol.name.clone())
+                .collect()
+        };
+        let class_names = named(false);
+        let interfaces = named(true)
+            .into_iter()
+            .filter(|name| !class_names.contains(name))
+            .collect();
+        let mut classes = Self {
+            views,
+            slots,
+            class_of_symbol,
+            by_path,
+            builders,
+            interfaces,
+        };
+        classes.collect();
+        classes
+    }
+
+    /// The class that contains the members of `path` in the file `view`. A
+    /// definition at the byte `at` is in the class whose range contains it.
+    /// A Go method or a C++ method can be in a different file of the same directory.
+    fn class_of_path(&self, view: usize, path: &[String], at: usize) -> Option<usize> {
+        let language = self.views[view].facts.language;
+        let candidates = self.by_path.get(&path_key(language, path, None))?;
+        let same_file: Vec<usize> = candidates
+            .iter()
+            .copied()
+            .filter(|class| self.slots[*class].view == view)
+            .collect();
+        if !same_file.is_empty() {
+            let containing = same_file.iter().copied().find(|class| {
+                let range = &self.symbol_of(*class).range;
+                range.start_byte <= at && at < range.end_byte
+            });
+            return containing.or_else(|| same_file.first().copied());
+        }
+        if !matches!(language, Language::Go | Language::Cpp) {
+            return None;
+        }
+        let directory = directory_of(&self.views[view].facts.file);
+        let same_directory = candidates.iter().copied().find(|class| {
+            directory_of(&self.views[self.slots[*class].view].facts.file) == directory
+        });
+        if same_directory.is_some() {
+            return same_directory;
+        }
+        (language == Language::Cpp && candidates.len() == 1).then(|| candidates[0])
+    }
+
+    fn symbol_of(&self, class: usize) -> &crate::index::model::Symbol {
+        let slot = self.slots[class];
+        &self.views[slot.view].facts.symbols[slot.position]
+    }
+
+    /// The class that a definition belongs to. A definition in a method of a
+    /// class belongs to that class, and the method is the member.
+    fn attribute(&self, view: usize, position: usize) -> Option<Attribution> {
+        let facts = self.views[view].facts;
+        let mut current = position;
+        loop {
+            if let Some(class) = self.class_of_symbol[view][current] {
+                return Some(Attribution {
+                    class,
+                    method: None,
+                });
+            }
+            let symbol = &facts.symbols[current];
+            let link = &facts.link_facts[current];
+            if let Some(class) =
+                self.class_of_path(view, &link.container_path, symbol.range.start_byte)
+            {
+                return Some(Attribution {
+                    class,
+                    method: (symbol.is_callable() && !link.named_by_binding).then_some(current),
+                });
+            }
+            current = link.parent?;
+        }
+    }
+
+    fn collect(&mut self) {
+        let views = self.views;
+        let class_names: HashMap<&str, &str> = self
+            .slots
+            .iter()
+            .map(|slot| {
+                let symbol = &views[slot.view].facts.symbols[slot.position];
+                (symbol.key.as_str(), symbol.name.as_str())
+            })
+            .collect();
+        let known_names: HashSet<&str> = class_names.values().copied().collect();
+        for (view_index, view) in views.iter().enumerate() {
+            let facts = view.facts;
+            for (position, symbol) in facts.symbols.iter().enumerate() {
+                let link = &facts.link_facts[position];
+                // A function value that a variable holds is not a method.
+                if !symbol.is_callable()
+                    || link.named_by_binding
+                    || self.class_of_symbol[view_index][position].is_some()
+                {
+                    continue;
+                }
+                let Some(class) =
+                    self.class_of_path(view_index, &link.container_path, symbol.range.start_byte)
+                else {
+                    continue;
+                };
+                let builder = &mut self.builders[class];
+                builder.methods.push(Slot {
+                    view: view_index,
+                    position,
+                });
+                if self.slots[class].view == view_index {
+                    builder.end_line = builder.end_line.max(symbol.range.end_line);
+                }
+            }
+            for block in &facts.members.blocks {
+                if let Some(class) = self.class_of_symbol[view_index][block.class as usize] {
+                    let builder = &mut self.builders[class];
+                    builder.end_line = builder.end_line.max(block.end_line);
+                }
+            }
+            for declaration in &facts.members.declarations {
+                if let Some(found) = self.attribute(view_index, declaration.owner as usize) {
+                    let builder = &mut self.builders[found.class];
+                    if builder.field_set.insert(declaration.name.clone()) {
+                        builder.fields.push(declaration.name.clone());
+                    }
+                }
+            }
+            for access in &facts.members.accesses {
+                let found = self.attribute(view_index, access.owner as usize);
+                if let Some(Attribution {
+                    class,
+                    method: Some(method),
+                }) = found
+                {
+                    let method = Slot {
+                        view: view_index,
+                        position: method,
+                    };
+                    self.builders[class]
+                        .used
+                        .entry(method)
+                        .or_default()
+                        .insert(access.name.clone());
+                }
+            }
+            for reference in &facts.members.references {
+                // A Go name of one character is a type parameter, unless the
+                // repository has a class with that name.
+                let type_parameter = facts.language == Language::Go
+                    && reference.name.len() <= 1
+                    && !known_names.contains(reference.name.as_str());
+                if type_parameter {
+                    continue;
+                }
+                if let Some(found) = self.attribute(view_index, reference.owner as usize) {
+                    self.builders[found.class]
+                        .coupled
+                        .insert(reference.name.to_string());
+                }
+            }
+            for (call, call_facts) in facts.references.iter().zip(&facts.reference_facts) {
+                let Some(owner) = call_facts.owner else {
+                    continue;
+                };
+                let Some(found) = self.attribute(view_index, owner) else {
+                    continue;
+                };
+                let resolved = matches!(
+                    call.resolution.status,
+                    ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
+                );
+                {
+                    // A call or a construction that resolves to one definition is a call of that
+                    // method. Other calls are the same method when they have
+                    // the same qualifier and the same name.
+                    let callee = match call.resolution.candidates.as_slice() {
+                        [only] if resolved => only.to_string(),
+                        _ if call.receiver == Some(Receiver::SelfValue) => {
+                            format!("{OWN_PREFIX}{}", call.name)
+                        }
+                        _ => format!("{}::{}", call.qualifier.as_deref().unwrap_or(""), call.name),
+                    };
+                    self.builders[found.class].called.insert(callee);
+                    let calls_object = call.kind == ReferenceKind::Call;
+                    if let (true, Some(method)) = (calls_object, found.method) {
+                        let caller = Slot {
+                            view: view_index,
+                            position: method,
+                        };
+                        let edge = match call.resolution.candidates.as_slice() {
+                            [only] if resolved => Some(Callee::Key(only.clone())),
+                            _ if call.receiver == Some(Receiver::SelfValue) => {
+                                Some(Callee::OwnMethod(call.name.clone()))
+                            }
+                            _ => None,
+                        };
+                        if let Some(edge) = edge {
+                            self.builders[found.class].edges.push((caller, edge));
+                        }
+                    }
+                }
+                // Python has no declared types, thus a call of a class is the
+                // evidence of coupling.
+                if facts.language == Language::Python && resolved {
+                    for candidate in &call.resolution.candidates {
+                        if let Some(name) = class_names.get(candidate.as_str()) {
+                            self.builders[found.class].coupled.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The metrics of each class, in the order of the classes in the files.
+    fn metrics(self) -> Vec<(ClassMetrics, Vec<String>)> {
+        let views = self.views;
+        self.slots
+            .iter()
+            .zip(&self.builders)
+            .map(|(slot, builder)| {
+                let view = &views[slot.view];
+                let facts = view.facts;
+                let class = &facts.symbols[slot.position];
+                let own_name = class.name.as_str();
+
+                let signature_of = |method: &Slot| {
+                    let method_facts = views[method.view].facts;
+                    // The overload signatures of a TypeScript method have
+                    // different parameters and one implementation.
+                    let typescript =
+                        matches!(method_facts.language, Language::TypeScript | Language::Tsx);
+                    (
+                        method_facts.symbols[method.position].name.as_str(),
+                        method_facts.link_facts[method.position]
+                            .parameter_count
+                            .filter(|_| !typescript),
+                    )
+                };
+                let defined: HashSet<(&str, Option<usize>)> = builder
+                    .methods
+                    .iter()
+                    .filter(|method| facts_of(views, method).body_range.is_some())
+                    .map(signature_of)
+                    .collect();
+                // A declaration in the body of a class and the definition of
+                // the same method outside the body are one method.
+                let methods: Vec<&Slot> = builder
+                    .methods
+                    .iter()
+                    .filter(|method| {
+                        facts_of(views, method).body_range.is_some()
+                            || !defined.contains(&signature_of(method))
+                    })
+                    .collect();
+                let method_names: HashSet<&str> = builder
+                    .methods
+                    .iter()
+                    .map(|method| facts_of(views, method).name.as_str())
+                    .collect();
+
+                let mut method_infos: Vec<MethodInfo> = methods
+                    .iter()
+                    .map(|method| {
+                        let method_facts = views[method.view].facts;
+                        let symbol = &method_facts.symbols[method.position];
+                        let complexity = 1 + method_facts
+                            .members
+                            .decision_points
+                            .get(method.position)
+                            .copied()
+                            .unwrap_or(0);
+                        let used_fields = builder
+                            .used
+                            .get(method)
+                            .map(|names| {
+                                names
+                                    .iter()
+                                    .filter(|name| {
+                                        builder.field_set.contains(*name)
+                                            || !method_names.contains(name.as_str())
+                                    })
+                                    .map(|name| name.to_string())
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        MethodInfo {
+                            name: symbol.name.clone(),
+                            complexity,
+                            used_fields,
+                            calls: Vec::new(),
+                        }
+                    })
+                    .collect();
+
+                let mut kept_by_signature: HashMap<(&str, Option<usize>), usize> = HashMap::new();
+                for (index, method) in methods.iter().enumerate() {
+                    kept_by_signature
+                        .entry(signature_of(method))
+                        .or_insert(index);
+                }
+                let slot_index: HashMap<&Slot, usize> = methods
+                    .iter()
+                    .enumerate()
+                    .map(|(index, method)| (*method, index))
+                    .collect();
+                let index_of = |slot: &Slot| {
+                    slot_index
+                        .get(slot)
+                        .or_else(|| kept_by_signature.get(&signature_of(slot)))
+                        .copied()
+                };
+                let by_key: HashMap<&str, usize> = builder
+                    .methods
+                    .iter()
+                    .filter_map(|method| {
+                        index_of(method).map(|index| (facts_of(views, method).key.as_str(), index))
+                    })
+                    .collect();
+                let mut by_name: HashMap<&str, Vec<usize>> = HashMap::new();
+                for (index, method) in methods.iter().enumerate() {
+                    by_name
+                        .entry(facts_of(views, method).name.as_str())
+                        .or_default()
+                        .push(index);
+                }
+                let mut edges: Vec<(usize, usize)> = Vec::new();
+                // The access to a name that is a method and not a field, as a
+                // Python property is, runs that method.
+                for (from, method) in methods.iter().enumerate() {
+                    for name in builder.used.get(*method).into_iter().flatten() {
+                        if builder.field_set.contains(name) {
+                            continue;
+                        }
+                        let targets = by_name.get(name.as_str()).into_iter().flatten();
+                        edges.extend(targets.filter(|to| **to != from).map(|to| (from, *to)));
+                    }
+                }
+                for (caller, callee) in &builder.edges {
+                    let Some(from) = index_of(caller) else {
+                        continue;
+                    };
+                    let targets: Vec<usize> = match callee {
+                        Callee::Key(key) => by_key.get(key.as_str()).copied().into_iter().collect(),
+                        Callee::OwnMethod(name) => {
+                            by_name.get(name.as_str()).cloned().unwrap_or_default()
+                        }
+                    };
+                    edges.extend(
+                        targets
+                            .into_iter()
+                            .filter(|to| *to != from)
+                            .map(|to| (from, to)),
+                    );
+                }
+                for (from, to) in edges {
+                    method_infos[from].calls.push(to);
+                }
+
+                let nom = method_infos.len() as u32;
+                let wmc: u32 = method_infos.iter().map(|method| method.complexity).sum();
+                // RFC is the size of the union of the methods and the called methods.
+                let method_keys: HashSet<&str> = builder
+                    .methods
+                    .iter()
+                    .map(|method| facts_of(views, method).key.as_str())
+                    .collect();
+                let outside = builder
+                    .called
+                    .iter()
+                    .filter(|callee| match callee.strip_prefix(OWN_PREFIX) {
+                        Some(name) => !method_names.contains(name),
+                        None => !method_keys.contains(callee.as_str()),
+                    })
+                    .count();
+                let rfc = nom + outside as u32;
+                let mut coupled: Vec<String> = builder
+                    .coupled
+                    .iter()
+                    .filter(|name| name.as_str() != own_name)
+                    .cloned()
+                    .collect();
+                coupled.sort();
+                let cbo = coupled.len() as u32;
+                let lcom = calculate_lcom(&method_infos);
+                let fields: Vec<String> =
+                    builder.fields.iter().map(|name| name.to_string()).collect();
+                let start_line = class.range.start_line as usize;
+                let end_line = class.range.end_line.max(builder.end_line) as usize;
+                let violations = build_violations(wmc, cbo, lcom);
+                let bases: Vec<String> = facts.link_facts[slot.position]
+                    .bases
+                    .iter()
+                    .filter(|base| !self.interfaces.contains(*base))
+                    .cloned()
+                    .collect();
+
+                let metrics = ClassMetrics {
+                    file: facts.file.clone(),
+                    class_name: class.name.clone(),
+                    parent_class: bases.first().cloned(),
+                    language: facts.language.to_string(),
+                    start_line,
+                    end_line,
+                    loc: (end_line - start_line + 1) as u32,
+                    wmc,
+                    cbo,
+                    rfc,
+                    lcom,
+                    dit: 0,
+                    noc: 0,
+                    nom,
+                    nof: fields.len() as u32,
+                    methods: method_infos
+                        .iter()
+                        .map(|method| method.name.clone())
+                        .collect(),
+                    fields,
+                    coupled_classes: coupled,
+                    violations,
+                };
+                (metrics, bases)
+            })
+            .collect()
+    }
+}
+
+fn facts_of<'a>(views: &'a [View<'_>], slot: &Slot) -> &'a crate::index::model::Symbol {
+    &views[slot.view].facts.symbols[slot.position]
 }
 
 /// Class hierarchy for DIT/NOC calculation.
-/// Tracks parent-child relationships across the codebase.
+/// Tracks the base types of each class across the codebase. A class can have more than one base.
 #[derive(Debug, Default)]
 pub struct ClassHierarchy {
-    /// Maps class name -> parent class name (None if no parent)
-    parents: HashMap<String, Option<String>>,
+    /// Maps class name -> names of its base types, in source order
+    parents: HashMap<String, Vec<String>>,
     /// Maps class name -> list of direct children
     children: HashMap<String, Vec<String>>,
+    /// The DIT of each name. The first request for a DIT calculates all of them.
+    depths: std::cell::OnceCell<HashMap<String, u32>>,
+    /// The count of the edges that the depth calculation examined, for the tests.
+    steps: std::cell::Cell<u64>,
 }
 
 impl ClassHierarchy {
@@ -211,50 +743,110 @@ impl ClassHierarchy {
         Self::default()
     }
 
-    /// Adds a class to the hierarchy.
-    pub fn add_class(&mut self, class_name: &str, parent: Option<&str>) {
-        let parent_str = parent.map(|s| s.to_string());
-        self.parents
-            .insert(class_name.to_string(), parent_str.clone());
+    /// The count of the edges that the depth calculation examined.
+    pub fn steps(&self) -> u64 {
+        self.steps.get()
+    }
 
-        // Register this class as a child of its parent
-        if let Some(parent_name) = parent_str {
+    /// Adds a class that has at most one base to the hierarchy.
+    pub fn add_class(&mut self, class_name: &str, parent: Option<&str>) {
+        let bases: Vec<String> = parent.map(str::to_string).into_iter().collect();
+        self.add_class_with_bases(class_name, &bases);
+    }
+
+    /// Adds a class and its base types to the hierarchy.
+    pub fn add_class_with_bases(&mut self, class_name: &str, bases: &[String]) {
+        let mut unique: Vec<String> = Vec::new();
+        for base in bases {
+            if !unique.contains(base) {
+                unique.push(base.clone());
+            }
+        }
+        for base in &unique {
             self.children
-                .entry(parent_name)
+                .entry(base.clone())
                 .or_default()
                 .push(class_name.to_string());
         }
+        self.parents.insert(class_name.to_string(), unique);
 
         // Ensure the class has an entry in children map (even if empty)
         self.children.entry(class_name.to_string()).or_default();
+        self.depths = std::cell::OnceCell::new();
     }
 
     /// Calculates DIT (Depth of Inheritance Tree) for a class.
-    /// DIT = max path length from class to root of inheritance tree.
-    /// Per Chidamber & Kemerer 1994, DIT counts the number of ancestor classes.
+    /// DIT = length of the longest path from the class to a root of the
+    /// inheritance tree, over all base types. A base that the hierarchy does
+    /// not have is a root.
+    ///
+    /// A cycle is invalid code. The classes of one cycle have the depth of
+    /// their component: an edge inside a component adds nothing.
     pub fn get_dit(&self, class_name: &str) -> u32 {
-        let mut depth = 0;
-        let mut current = class_name.to_string();
-        let mut visited = HashSet::new();
+        self.depths
+            .get_or_init(|| self.all_depths())
+            .get(class_name)
+            .copied()
+            .unwrap_or(0)
+    }
 
-        // Walk up the inheritance chain, tracking visited to break cycles
-        while let Some(Some(parent)) = self.parents.get(&current) {
-            if !visited.insert(parent.clone()) {
-                break;
+    /// The depth of each name, in one pass over the graph of the base types.
+    /// The pass collapses each strongly connected component and finds the
+    /// longest path over the components, which have no cycle.
+    fn all_depths(&self) -> HashMap<String, u32> {
+        let mut graph: DiGraph<&str, ()> = DiGraph::new();
+        let mut nodes: HashMap<&str, NodeIndex> = HashMap::new();
+        let mut names: Vec<&str> = self
+            .parents
+            .iter()
+            .flat_map(|(name, bases)| {
+                std::iter::once(name.as_str()).chain(bases.iter().map(String::as_str))
+            })
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        for name in names {
+            nodes.insert(name, graph.add_node(name));
+        }
+        let mut classes: Vec<&String> = self.parents.keys().collect();
+        classes.sort_unstable();
+        for class in classes {
+            for base in &self.parents[class] {
+                graph.add_edge(nodes[class.as_str()], nodes[base.as_str()], ());
             }
-            depth += 1;
-            current = parent.clone();
         }
 
-        // If parent not in our map, still count it as depth 1
-        if depth == 0 {
-            if let Some(Some(_)) = self.parents.get(class_name) {
-                // Has a parent but parent not tracked - depth is at least 1
-                return 1;
+        // The components come with the bases first.
+        let components = strongly_connected_components(&graph);
+        let mut component_of: HashMap<NodeIndex, usize> = HashMap::new();
+        for (number, component) in components.iter().enumerate() {
+            for node in component {
+                component_of.insert(*node, number);
             }
         }
-
-        depth
+        let mut depth_of_component = vec![0u32; components.len()];
+        for (number, component) in components.iter().enumerate() {
+            let mut deepest = 0;
+            for node in component {
+                for base in graph.neighbors(*node) {
+                    self.steps.set(self.steps.get() + 1);
+                    let other = component_of[&base];
+                    if other != number {
+                        deepest = deepest.max(1 + depth_of_component[other]);
+                    }
+                }
+            }
+            depth_of_component[number] = deepest;
+        }
+        graph
+            .node_indices()
+            .map(|node| {
+                (
+                    graph[node].to_string(),
+                    depth_of_component[component_of[&node]],
+                )
+            })
+            .collect()
     }
 
     /// Calculates NOC (Number of Children) for a class.
@@ -264,603 +856,6 @@ impl ClassHierarchy {
             .get(class_name)
             .map(|c| c.len() as u32)
             .unwrap_or(0)
-    }
-}
-
-/// Extracts class metrics from a parsed file.
-fn extract_classes_from_file(
-    path: &Path,
-    source: &[u8],
-    tree: &tree_sitter::Tree,
-    lang: Language,
-) -> Vec<ClassMetrics> {
-    match lang {
-        Language::Rust => extract_rust_classes(path, source, tree),
-        Language::Go => extract_go_classes(path, source, tree),
-        _ => {
-            let mut classes = Vec::new();
-            let root = tree.root_node();
-            let mut cursor = root.walk();
-            extract_classes_recursive(&mut cursor, source, path, lang, &mut classes);
-            classes
-        }
-    }
-}
-
-/// Extracts class-like metrics from Rust struct+impl blocks.
-///
-/// In Rust, struct fields and impl methods are separate top-level items.
-/// We find all struct_item nodes, then associate impl_item blocks by matching
-/// the type name.
-fn extract_rust_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) -> Vec<ClassMetrics> {
-    let lang = Language::Rust;
-    let root = tree.root_node();
-
-    // Phase 1: Collect all struct definitions (name -> node range for fields)
-    let mut struct_nodes: Vec<(String, tree_sitter::Node)> = Vec::new();
-    collect_nodes_by_kind(&root, "struct_item", source, &mut struct_nodes);
-
-    // Phase 2: Collect all impl blocks and group by type name
-    let mut impl_nodes: Vec<(String, tree_sitter::Node)> = Vec::new();
-    collect_impl_blocks(&root, source, &mut impl_nodes);
-
-    // Phase 3: Build metrics for each struct
-    let mut classes = Vec::new();
-    for (struct_name, struct_node) in &struct_nodes {
-        let start_line = struct_node.start_position().row + 1;
-        let mut end_line = struct_node.end_position().row + 1;
-
-        // Extract fields from the struct body
-        let fields = extract_fields(struct_node, source, lang);
-        let nof = fields.len() as u32;
-
-        // Find all impl blocks for this struct and extract methods
-        let mut methods = Vec::new();
-        let method_types = get_method_node_types(lang);
-        for (impl_name, impl_node) in &impl_nodes {
-            if impl_name == struct_name {
-                let impl_end = impl_node.end_position().row + 1;
-                if impl_end > end_line {
-                    end_line = impl_end;
-                }
-                let mut cursor = impl_node.walk();
-                extract_methods_recursive(&mut cursor, source, lang, &method_types, &mut methods);
-            }
-        }
-
-        let nom = methods.len() as u32;
-        let wmc: u32 = methods.iter().map(|m| m.complexity).sum();
-        let loc = (end_line - start_line + 1) as u32;
-
-        let all_called = collect_called_methods(&impl_nodes, struct_name, source, lang);
-        let rfc = nom + all_called.len() as u32;
-
-        let all_coupled =
-            collect_coupled_classes(struct_node, &impl_nodes, struct_name, source, lang);
-        let cbo = all_coupled.len() as u32;
-
-        let lcom = calculate_lcom(&methods, &fields);
-        let violations = build_violations(wmc, cbo, lcom);
-
-        classes.push(ClassMetrics {
-            file: path.to_string_lossy().to_string(),
-            class_name: struct_name.clone(),
-            parent_class: None,
-            language: lang.to_string(),
-            start_line,
-            end_line,
-            loc,
-            wmc,
-            cbo,
-            rfc,
-            lcom,
-            dit: 0,
-            noc: 0,
-            nom,
-            nof,
-            methods: methods.iter().map(|m| m.name.clone()).collect(),
-            fields,
-            coupled_classes: sorted(all_coupled),
-            violations,
-        });
-    }
-
-    classes
-}
-
-/// Extracts class-like metrics from Go struct types and their method declarations.
-///
-/// In Go, struct fields are inside `type_declaration` and methods are
-/// `method_declaration` nodes at the file level with a receiver parameter
-/// that references the struct type.
-fn extract_go_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) -> Vec<ClassMetrics> {
-    let lang = Language::Go;
-    let root = tree.root_node();
-
-    // Phase 1: Collect type declarations that contain struct_type
-    let mut struct_defs: Vec<(String, tree_sitter::Node)> = Vec::new();
-    for i in 0..root.child_count() {
-        let child = match root.child(i) {
-            Some(c) if c.kind() == "type_declaration" => c,
-            _ => continue,
-        };
-        for j in 0..child.child_count() {
-            if let Some(spec) = child.child(j) {
-                if spec.kind() == "type_spec" && has_child_of_kind(&spec, "struct_type") {
-                    if let Some(name) = node_name_text(&spec, source) {
-                        struct_defs.push((name, child));
-                    }
-                }
-            }
-        }
-    }
-
-    // Phase 2: Collect method declarations and group by receiver type
-    let mut method_map: HashMap<String, Vec<tree_sitter::Node>> = HashMap::new();
-    for i in 0..root.child_count() {
-        let child = match root.child(i) {
-            Some(c) if c.kind() == "method_declaration" => c,
-            _ => continue,
-        };
-        if let Some(receiver_type) = extract_go_receiver_type(&child, source) {
-            method_map.entry(receiver_type).or_default().push(child);
-        }
-    }
-
-    // Phase 3: Build metrics
-    let mut classes = Vec::new();
-    for (struct_name, struct_node) in &struct_defs {
-        let start_line = struct_node.start_position().row + 1;
-        let mut end_line = struct_node.end_position().row + 1;
-
-        // Extract fields from the struct type_spec
-        let fields = extract_go_struct_fields(struct_node, source);
-        let nof = fields.len() as u32;
-
-        // Extract methods from method_declarations
-        let mut methods = Vec::new();
-        if let Some(method_nodes) = method_map.get(struct_name) {
-            for method_node in method_nodes {
-                let method_end = method_node.end_position().row + 1;
-                if method_end > end_line {
-                    end_line = method_end;
-                }
-                let name = method_node
-                    .child_by_field_name("name")
-                    .and_then(|n| std::str::from_utf8(&source[n.byte_range()]).ok())
-                    .unwrap_or("")
-                    .to_string();
-                if !name.is_empty() {
-                    let complexity = calculate_complexity(method_node, lang);
-                    let used_fields = find_fields_used_by_method(method_node, source, lang);
-                    methods.push(MethodInfo {
-                        name,
-                        complexity,
-                        used_fields,
-                    });
-                }
-            }
-        }
-
-        let nom = methods.len() as u32;
-        let wmc: u32 = methods.iter().map(|m| m.complexity).sum();
-        let loc = (end_line - start_line + 1) as u32;
-
-        // RFC: collect called methods from all method_declaration nodes
-        let mut all_called = HashSet::new();
-        if let Some(method_nodes) = method_map.get(struct_name) {
-            for method_node in method_nodes {
-                for c in extract_called_methods(method_node, source, lang) {
-                    all_called.insert(c);
-                }
-            }
-        }
-        let rfc = nom + all_called.len() as u32;
-
-        // CBO: coupled classes from struct def + method nodes
-        let method_pairs: Vec<(String, tree_sitter::Node)> = method_map
-            .get(struct_name)
-            .map(|nodes| nodes.iter().map(|n| (struct_name.clone(), *n)).collect())
-            .unwrap_or_default();
-        let all_coupled =
-            collect_coupled_classes(struct_node, &method_pairs, struct_name, source, lang);
-        let cbo = all_coupled.len() as u32;
-
-        let lcom = calculate_lcom(&methods, &fields);
-        let violations = build_violations(wmc, cbo, lcom);
-
-        classes.push(ClassMetrics {
-            file: path.to_string_lossy().to_string(),
-            class_name: struct_name.clone(),
-            parent_class: None,
-            language: lang.to_string(),
-            start_line,
-            end_line,
-            loc,
-            wmc,
-            cbo,
-            rfc,
-            lcom,
-            dit: 0,
-            noc: 0,
-            nom,
-            nof,
-            methods: methods.iter().map(|m| m.name.clone()).collect(),
-            fields,
-            coupled_classes: sorted(all_coupled),
-            violations,
-        });
-    }
-
-    classes
-}
-
-/// Collects top-level nodes of the given kind, extracting names from the `name` field.
-fn collect_nodes_by_kind<'a>(
-    root: &tree_sitter::Node<'a>,
-    kind: &str,
-    source: &[u8],
-    out: &mut Vec<(String, tree_sitter::Node<'a>)>,
-) {
-    for i in 0..root.child_count() {
-        let child = match root.child(i) {
-            Some(c) if c.kind() == kind => c,
-            _ => continue,
-        };
-        if let Some(name) = node_name_text(&child, source) {
-            out.push((name, child));
-        }
-    }
-}
-
-/// Collects Rust impl blocks and extracts the type name they implement.
-fn collect_impl_blocks<'a>(
-    root: &tree_sitter::Node<'a>,
-    source: &[u8],
-    out: &mut Vec<(String, tree_sitter::Node<'a>)>,
-) {
-    for i in 0..root.child_count() {
-        let child = match root.child(i) {
-            Some(c) if c.kind() == "impl_item" => c,
-            _ => continue,
-        };
-        if let Some(name) = extract_rust_impl_type(&child, source) {
-            out.push((name, child));
-        }
-    }
-}
-
-/// Extracts the type name from a Rust impl block.
-/// For `impl Foo { ... }`, returns "Foo".
-/// For `impl Trait for Foo { ... }`, returns "Foo".
-fn extract_rust_impl_type(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
-    // In tree-sitter-rust, impl_item has a "type" field for inherent impls
-    // and a "type" field for trait impls (the type after "for").
-    // The "type" field points to the type being implemented.
-    if let Some(type_node) = node.child_by_field_name("type") {
-        let text = std::str::from_utf8(&source[type_node.byte_range()]).ok()?;
-        // Strip generic parameters if present (e.g., "Foo<T>" -> "Foo")
-        let name = text.split('<').next().unwrap_or(text).trim();
-        if !name.is_empty() {
-            return Some(name.to_string());
-        }
-    }
-    None
-}
-
-/// Extracts the receiver type from a Go method declaration.
-/// For `func (s *Server) Handle()`, returns "Server".
-fn extract_go_receiver_type(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
-    // method_declaration has a "receiver" field containing parameter_list
-    let receiver = node.child_by_field_name("receiver")?;
-    // Walk through the parameter list to find the type
-    for i in 0..receiver.child_count() {
-        if let Some(param) = receiver.child(i) {
-            if param.kind() == "parameter_declaration" {
-                // The type may be a pointer_type (*Server) or type_identifier (Server)
-                if let Some(type_node) = param.child_by_field_name("type") {
-                    return extract_go_base_type(&type_node, source);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Extracts the base type name from a Go type node, stripping pointer indirection.
-fn extract_go_base_type(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
-    match node.kind() {
-        "pointer_type" => {
-            // *Server -> look for the inner type_identifier
-            for i in 0..node.child_count() {
-                if let Some(child) = node.child(i) {
-                    if child.kind() == "type_identifier" {
-                        return std::str::from_utf8(&source[child.byte_range()])
-                            .ok()
-                            .map(|s| s.to_string());
-                    }
-                }
-            }
-            None
-        }
-        "type_identifier" => std::str::from_utf8(&source[node.byte_range()])
-            .ok()
-            .map(|s| s.to_string()),
-        _ => None,
-    }
-}
-
-/// Extracts the text of a node's `name` field, returning `None` if absent or empty.
-fn node_name_text(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let name_node = node.child_by_field_name("name")?;
-    let name = std::str::from_utf8(&source[name_node.byte_range()]).ok()?;
-    if name.is_empty() {
-        return None;
-    }
-    Some(name.to_string())
-}
-
-/// Checks if a node has a child of the given kind.
-fn has_child_of_kind(node: &tree_sitter::Node, kind: &str) -> bool {
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            if child.kind() == kind {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Extracts field names from a Go struct's field_declaration_list.
-fn extract_go_struct_fields(type_decl: &tree_sitter::Node, source: &[u8]) -> Vec<String> {
-    let mut fields = Vec::new();
-    let mut seen = HashSet::new();
-    // type_declaration -> type_spec -> struct_type -> field_declaration_list -> field_declaration
-    let mut cursor = type_decl.walk();
-    extract_go_fields_recursive(&mut cursor, source, &mut fields, &mut seen);
-    fields
-}
-
-/// Recursively finds Go field_declaration nodes and extracts their names.
-fn extract_go_fields_recursive<'source>(
-    cursor: &mut tree_sitter::TreeCursor,
-    source: &'source [u8],
-    fields: &mut Vec<String>,
-    seen: &mut HashSet<&'source str>,
-) {
-    loop {
-        let node = cursor.node();
-
-        if node.kind() == "field_declaration" {
-            // field_declaration has a "name" field (field_identifier)
-            if let Some(name_node) = node.child_by_field_name("name") {
-                if let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()]) {
-                    if !name.is_empty() && seen.insert(name) {
-                        fields.push(name.to_string());
-                    }
-                }
-            }
-        }
-
-        if cursor.goto_first_child() {
-            extract_go_fields_recursive(cursor, source, fields, seen);
-            cursor.goto_parent();
-        }
-
-        if !cursor.goto_next_sibling() {
-            break;
-        }
-    }
-}
-
-/// Recursively extracts classes from tree.
-fn extract_classes_recursive(
-    cursor: &mut tree_sitter::TreeCursor,
-    source: &[u8],
-    path: &Path,
-    lang: Language,
-    classes: &mut Vec<ClassMetrics>,
-) {
-    loop {
-        let node = cursor.node();
-
-        if is_class_node(node.kind(), lang) {
-            if let Some(metrics) = extract_class_metrics(&node, source, path, lang) {
-                classes.push(metrics);
-            }
-        }
-
-        // Recurse into children
-        if cursor.goto_first_child() {
-            extract_classes_recursive(cursor, source, path, lang, classes);
-            cursor.goto_parent();
-        }
-
-        if !cursor.goto_next_sibling() {
-            break;
-        }
-    }
-}
-
-/// Checks if a node type represents a class.
-fn is_class_node(node_type: &str, lang: Language) -> bool {
-    match lang {
-        Language::Java => node_type == "class_declaration" || node_type == "interface_declaration",
-        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
-            node_type == "class_declaration" || node_type == "class"
-        }
-        Language::Python => node_type == "class_definition",
-        Language::CSharp => {
-            node_type == "class_declaration" || node_type == "interface_declaration"
-        }
-        Language::Cpp => node_type == "class_specifier" || node_type == "struct_specifier",
-        Language::Ruby => node_type == "class" || node_type == "module",
-        Language::Php => node_type == "class_declaration" || node_type == "interface_declaration",
-        Language::Rust => node_type == "struct_item",
-        Language::Go => node_type == "type_declaration",
-        _ => false,
-    }
-}
-
-/// Extracts CK metrics from a class node.
-fn extract_class_metrics(
-    node: &tree_sitter::Node,
-    source: &[u8],
-    path: &Path,
-    lang: Language,
-) -> Option<ClassMetrics> {
-    // Get class name
-    let name = get_class_name(node, source, lang)?;
-
-    // Extract parent class for inheritance tracking
-    let parent_class = extract_parent_class(node, source, lang);
-
-    let start_line = node.start_position().row + 1;
-    let end_line = node.end_position().row + 1;
-    let loc = (end_line - start_line + 1) as u32;
-
-    // Extract methods
-    let methods = extract_methods(node, source, lang);
-    let nom = methods.len() as u32;
-
-    // WMC = sum of cyclomatic complexity of all methods
-    let wmc: u32 = methods.iter().map(|m| m.complexity).sum();
-
-    // Extract fields
-    let fields = extract_fields(node, source, lang);
-    let nof = fields.len() as u32;
-
-    // RFC = local methods + called methods
-    let called_methods = extract_called_methods(node, source, lang);
-    let rfc = nom + called_methods.len() as u32;
-
-    // CBO = number of coupled classes
-    let coupled_classes = extract_coupled_classes(node, source, lang);
-    let cbo = coupled_classes.len() as u32;
-
-    // LCOM3 = connected components in method-field graph
-    // (LCOM4 would additionally connect methods that call each other)
-    let lcom = calculate_lcom(&methods, &fields);
-
-    // DIT and NOC are calculated later after building the full class hierarchy
-    let dit = 0;
-    let noc = 0;
-
-    let violations = build_violations(wmc, cbo, lcom);
-
-    Some(ClassMetrics {
-        file: path.to_string_lossy().to_string(),
-        class_name: name,
-        parent_class,
-        language: lang.to_string(),
-        start_line,
-        end_line,
-        loc,
-        wmc,
-        cbo,
-        rfc,
-        lcom,
-        dit,
-        noc,
-        nom,
-        nof,
-        methods: methods.iter().map(|m| m.name.clone()).collect(),
-        fields,
-        coupled_classes,
-        violations,
-    })
-}
-
-/// Finds the first child of `parent` whose `kind()` matches one of `kinds`,
-/// and returns its source text as a `String`.
-fn first_child_text_by_kind(
-    parent: &tree_sitter::Node,
-    source: &[u8],
-    kinds: &[&str],
-) -> Option<String> {
-    for i in 0..parent.child_count() {
-        let child = parent.child(i)?;
-        if kinds.contains(&child.kind()) {
-            return std::str::from_utf8(&source[child.byte_range()])
-                .ok()
-                .map(|s| s.to_string());
-        }
-    }
-    None
-}
-
-/// Extracts the parent class name from a class node (for extends/inherits).
-fn extract_parent_class(node: &tree_sitter::Node, source: &[u8], lang: Language) -> Option<String> {
-    match lang {
-        Language::Java => {
-            // Java: class Child extends Parent { }
-            let sc = node.child_by_field_name("superclass")?;
-            first_child_text_by_kind(&sc, source, &["type_identifier"])
-        }
-        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
-            // TS/JS: class Child extends Parent { }
-            // class_heritage -> extends_clause -> identifier|type_identifier
-            let heritage = find_child_by_kind(node, "class_heritage")?;
-            let clause = find_child_by_kind(&heritage, "extends_clause")?;
-            first_child_text_by_kind(&clause, source, &["identifier", "type_identifier"])
-        }
-        Language::Python => {
-            // Python: class Child(Parent):
-            let args = node.child_by_field_name("superclasses")?;
-            first_child_text_by_kind(&args, source, &["identifier"])
-        }
-        Language::CSharp => {
-            // C#: class Child : Parent { }
-            let bases = node.child_by_field_name("bases")?;
-            first_child_text_by_kind(&bases, source, &["identifier", "type_identifier"])
-        }
-        Language::Cpp => {
-            // C++: class Child : public Parent { }
-            let clause = find_child_by_kind(node, "base_class_clause")?;
-            first_child_text_by_kind(&clause, source, &["type_identifier"])
-        }
-        Language::Ruby => {
-            // Ruby: class Child < Parent
-            let sc = node.child_by_field_name("superclass")?;
-            std::str::from_utf8(&source[sc.byte_range()])
-                .ok()
-                .map(|s| s.to_string())
-        }
-        Language::Php => {
-            // PHP: class Child extends Parent { }
-            let base = node.child_by_field_name("base_clause")?;
-            first_child_text_by_kind(&base, source, &["name", "qualified_name"])
-        }
-        // Rust and Go have no class inheritance
-        Language::Rust | Language::Go => None,
-        _ => None,
-    }
-}
-
-/// Finds the first direct child of `node` with the given `kind`.
-fn find_child_by_kind<'a>(
-    node: &tree_sitter::Node<'a>,
-    kind: &str,
-) -> Option<tree_sitter::Node<'a>> {
-    for i in 0..node.child_count() {
-        let child = node.child(i)?;
-        if child.kind() == kind {
-            return Some(child);
-        }
-    }
-    None
-}
-
-/// Gets the class name from a node.
-fn get_class_name(node: &tree_sitter::Node, source: &[u8], lang: Language) -> Option<String> {
-    match lang {
-        Language::Go => {
-            // type_declaration -> type_spec -> name
-            let spec = find_child_by_kind(node, "type_spec")?;
-            node_name_text(&spec, source)
-        }
-        _ => node_name_text(node, source),
     }
 }
 
@@ -882,610 +877,22 @@ fn build_violations(wmc: u32, cbo: u32, lcom: u32) -> Vec<String> {
     violations
 }
 
-/// Collects RFC (called methods) from a set of nodes belonging to a single class.
-fn collect_called_methods(
-    nodes: &[(String, tree_sitter::Node)],
-    class_name: &str,
-    source: &[u8],
-    lang: Language,
-) -> HashSet<String> {
-    let mut all_called = HashSet::new();
-    for (name, node) in nodes {
-        if name == class_name {
-            for c in extract_called_methods(node, source, lang) {
-                all_called.insert(c);
-            }
-        }
-    }
-    all_called
-}
-
-/// Collects CBO (coupled classes) from a base node plus additional nodes for a single class.
-fn collect_coupled_classes(
-    base_node: &tree_sitter::Node,
-    extra_nodes: &[(String, tree_sitter::Node)],
-    class_name: &str,
-    source: &[u8],
-    lang: Language,
-) -> HashSet<String> {
-    let mut all_coupled: HashSet<String> = extract_coupled_classes(base_node, source, lang)
-        .into_iter()
-        .collect();
-    for (name, node) in extra_nodes {
-        if name == class_name {
-            for c in extract_coupled_classes(node, source, lang) {
-                all_coupled.insert(c);
-            }
-        }
-    }
-    all_coupled.remove(class_name);
-    all_coupled
-}
-
 /// Method info for LCOM calculation.
 struct MethodInfo {
     name: String,
     complexity: u32,
     used_fields: HashSet<String>,
+    /// The positions of the methods of the same class that this method calls on the object itself.
+    calls: Vec<usize>,
 }
 
-/// Extracts methods from a class node.
-fn extract_methods(node: &tree_sitter::Node, source: &[u8], lang: Language) -> Vec<MethodInfo> {
-    let mut methods = Vec::new();
-    let method_types = get_method_node_types(lang);
-
-    let mut cursor = node.walk();
-    extract_methods_recursive(&mut cursor, source, lang, &method_types, &mut methods);
-
-    methods
-}
-
-/// Recursively extracts methods.
-fn extract_methods_recursive(
-    cursor: &mut tree_sitter::TreeCursor,
-    source: &[u8],
-    lang: Language,
-    method_types: &[&str],
-    methods: &mut Vec<MethodInfo>,
-) {
-    loop {
-        let node = cursor.node();
-
-        if method_types.contains(&node.kind()) {
-            let name = node
-                .child_by_field_name("name")
-                .and_then(|n| std::str::from_utf8(&source[n.byte_range()]).ok())
-                .unwrap_or("")
-                .to_string();
-
-            if !name.is_empty() {
-                let complexity = calculate_complexity(&node, lang);
-                let used_fields = find_fields_used_by_method(&node, source, lang);
-
-                methods.push(MethodInfo {
-                    name,
-                    complexity,
-                    used_fields,
-                });
-            }
-        } else if cursor.goto_first_child() {
-            extract_methods_recursive(cursor, source, lang, method_types, methods);
-            cursor.goto_parent();
-        }
-
-        if !cursor.goto_next_sibling() {
-            break;
-        }
-    }
-}
-
-/// Gets method node types for a language.
-pub(crate) fn get_method_node_types(lang: Language) -> Vec<&'static str> {
-    match lang {
-        Language::Java => vec!["method_declaration", "constructor_declaration"],
-        Language::TypeScript | Language::Tsx => {
-            vec!["method_definition", "public_field_definition"]
-        }
-        Language::JavaScript | Language::Jsx => vec!["method_definition"],
-        Language::Python => vec!["function_definition"],
-        Language::CSharp => vec!["method_declaration", "constructor_declaration"],
-        Language::Cpp => vec!["function_definition", "function_declarator"],
-        Language::Ruby => vec!["method", "singleton_method"],
-        Language::Php => vec!["method_declaration"],
-        Language::Rust => vec!["function_item"],
-        Language::Go => vec!["method_declaration"],
-        _ => vec![],
-    }
-}
-
-/// Calculates cyclomatic complexity for a node.
-fn calculate_complexity(node: &tree_sitter::Node, _lang: Language) -> u32 {
-    let decision_types = [
-        "if_statement",
-        "if_expression",
-        "if",
-        "for_statement",
-        "for_expression",
-        "for",
-        "while_statement",
-        "while_expression",
-        "while",
-        "switch_statement",
-        "match_expression",
-        "case_clause",
-        "case_statement",
-        "catch_clause",
-        "except_clause",
-        "conditional_expression",
-        "ternary_expression",
-    ];
-
-    let mut complexity = 1u32; // Base complexity
-    let mut cursor = node.walk();
-    count_decision_points(&mut cursor, &decision_types, &mut complexity);
-
-    complexity
-}
-
-/// Counts decision points recursively.
-fn count_decision_points(
-    cursor: &mut tree_sitter::TreeCursor,
-    decision_types: &[&str],
-    complexity: &mut u32,
-) {
-    loop {
-        let node = cursor.node();
-
-        if decision_types.contains(&node.kind()) {
-            *complexity += 1;
-        }
-
-        if cursor.goto_first_child() {
-            count_decision_points(cursor, decision_types, complexity);
-            cursor.goto_parent();
-        }
-
-        if !cursor.goto_next_sibling() {
-            break;
-        }
-    }
-}
-
-/// Finds fields used by a method.
-fn find_fields_used_by_method(
-    node: &tree_sitter::Node,
-    source: &[u8],
-    lang: Language,
-) -> HashSet<String> {
-    let mut fields = HashSet::new();
-    let mut cursor = node.walk();
-    find_field_accesses(&mut cursor, source, lang, &mut fields);
-    fields
-}
-
-/// If `node` is a two-part field access where the receiver matches `self_keyword`
-/// (e.g. `self.x`, `this.y`), returns the field name. `obj_field` and `attr_field`
-/// are the tree-sitter field names for the two child nodes.
-fn extract_self_field_access(
-    node: &tree_sitter::Node,
-    source: &[u8],
-    self_keyword: &str,
-    obj_field: &str,
-    attr_field: &str,
-) -> Option<String> {
-    let obj = node.child_by_field_name(obj_field)?;
-    let attr = node.child_by_field_name(attr_field)?;
-    let obj_text = std::str::from_utf8(&source[obj.byte_range()]).ok()?;
-    if obj_text != self_keyword {
-        return None;
-    }
-    std::str::from_utf8(&source[attr.byte_range()])
-        .ok()
-        .map(|s| s.to_string())
-}
-
-/// Checks if a Go selector_expression is a receiver field access and returns the field name.
-fn extract_go_field_access(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let field_node = node.child_by_field_name("field")?;
-    let operand = node.child_by_field_name("operand")?;
-    if operand.kind() != "identifier" {
-        return None;
-    }
-    let op_text = std::str::from_utf8(&source[operand.byte_range()]).ok()?;
-    // Go receivers are typically short lowercase names
-    let is_receiver = op_text.len() <= 4
-        && op_text
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase());
-    if !is_receiver {
-        return None;
-    }
-    std::str::from_utf8(&source[field_node.byte_range()])
-        .ok()
-        .map(|s| s.to_string())
-}
-
-/// Recursively finds field accesses.
-fn find_field_accesses(
-    cursor: &mut tree_sitter::TreeCursor,
-    source: &[u8],
-    lang: Language,
-    fields: &mut HashSet<String>,
-) {
-    loop {
-        let node = cursor.node();
-        let kind = node.kind();
-
-        let field_name = match lang {
-            Language::Python if kind == "attribute" => {
-                extract_self_field_access(&node, source, "self", "object", "attribute")
-            }
-            Language::Ruby if kind == "instance_variable" => {
-                std::str::from_utf8(&source[node.byte_range()])
-                    .ok()
-                    .map(|s| s.to_string())
-            }
-            Language::Java
-            | Language::CSharp
-            | Language::TypeScript
-            | Language::JavaScript
-            | Language::Tsx
-            | Language::Jsx
-                if kind == "member_expression" || kind == "member_access_expression" =>
-            {
-                extract_self_field_access(&node, source, "this", "object", "property")
-            }
-            Language::Rust if kind == "field_expression" => {
-                extract_self_field_access(&node, source, "self", "value", "field")
-            }
-            Language::Go if kind == "selector_expression" => extract_go_field_access(&node, source),
-            _ => None,
-        };
-        if let Some(name) = field_name {
-            fields.insert(name);
-        }
-
-        if cursor.goto_first_child() {
-            find_field_accesses(cursor, source, lang, fields);
-            cursor.goto_parent();
-        }
-
-        if !cursor.goto_next_sibling() {
-            break;
-        }
-    }
-}
-
-/// Extracts field names from a class.
-fn extract_fields(node: &tree_sitter::Node, source: &[u8], lang: Language) -> Vec<String> {
-    let mut fields = Vec::new();
-    let mut seen = HashSet::new();
-    let field_types = get_field_node_types(lang);
-
-    let mut cursor = node.walk();
-    extract_fields_recursive(
-        &mut cursor,
-        source,
-        lang,
-        &field_types,
-        &mut fields,
-        &mut seen,
-    );
-
-    fields
-}
-
-/// Recursively extracts fields.
-fn extract_fields_recursive(
-    cursor: &mut tree_sitter::TreeCursor,
-    source: &[u8],
-    lang: Language,
-    field_types: &[&str],
-    fields: &mut Vec<String>,
-    seen: &mut HashSet<String>,
-) {
-    loop {
-        let node = cursor.node();
-
-        if field_types.contains(&node.kind()) {
-            if let Some(name) = extract_field_name(&node, source, lang) {
-                if seen.insert(name.clone()) {
-                    fields.push(name);
-                }
-            }
-        }
-
-        if cursor.goto_first_child() {
-            extract_fields_recursive(cursor, source, lang, field_types, fields, seen);
-            cursor.goto_parent();
-        }
-
-        if !cursor.goto_next_sibling() {
-            break;
-        }
-    }
-}
-
-/// Gets field node types for a language.
-pub(crate) fn get_field_node_types(lang: Language) -> Vec<&'static str> {
-    match lang {
-        Language::Java => vec!["field_declaration"],
-        Language::TypeScript | Language::Tsx => vec!["public_field_definition"],
-        Language::JavaScript | Language::Jsx => vec!["field_definition"],
-        Language::Python => vec!["assignment"],
-        Language::CSharp => vec!["field_declaration", "property_declaration"],
-        Language::Cpp => vec!["field_declaration"],
-        Language::Ruby => vec!["instance_variable"],
-        Language::Php => vec!["property_declaration"],
-        Language::Rust => vec!["field_declaration"],
-        Language::Go => vec!["field_declaration"],
-        _ => vec![],
-    }
-}
-
-/// Extracts field name from a node.
-fn extract_field_name(node: &tree_sitter::Node, source: &[u8], lang: Language) -> Option<String> {
-    match lang {
-        Language::Python => {
-            // Look for self.field = ... pattern
-            if node.kind() == "assignment" {
-                let left = node.child_by_field_name("left")?;
-                if left.kind() == "attribute" {
-                    let obj = left.child_by_field_name("object")?;
-                    let attr = left.child_by_field_name("attribute")?;
-                    let obj_text = std::str::from_utf8(&source[obj.byte_range()]).ok()?;
-                    if obj_text == "self" {
-                        return std::str::from_utf8(&source[attr.byte_range()])
-                            .ok()
-                            .map(|s| s.to_string());
-                    }
-                }
-            }
-            None
-        }
-        Language::Ruby => std::str::from_utf8(&source[node.byte_range()])
-            .ok()
-            .map(|s| s.to_string()),
-        Language::Rust | Language::Go => {
-            // field_declaration has a "name" field
-            node.child_by_field_name("name")
-                .and_then(|n| std::str::from_utf8(&source[n.byte_range()]).ok())
-                .map(|s| s.to_string())
-        }
-        _ => {
-            // Look for declarator/name
-            let name_node = node
-                .child_by_field_name("declarator")
-                .and_then(|n| n.child_by_field_name("name").or(Some(n)))
-                .or_else(|| node.child_by_field_name("name"))?;
-
-            std::str::from_utf8(&source[name_node.byte_range()])
-                .ok()
-                .map(|s| s.to_string())
-        }
-    }
-}
-
-/// Extracts called method names from a class.
-fn extract_called_methods(node: &tree_sitter::Node, source: &[u8], _lang: Language) -> Vec<String> {
-    let mut called = HashSet::new();
-    let mut cursor = node.walk();
-    extract_calls_recursive(&mut cursor, source, &mut called);
-    called.into_iter().collect()
-}
-
-/// Recursively extracts method calls.
-fn extract_calls_recursive(
-    cursor: &mut tree_sitter::TreeCursor,
-    source: &[u8],
-    called: &mut HashSet<String>,
-) {
-    loop {
-        let node = cursor.node();
-
-        if node.kind() == "call_expression"
-            || node.kind() == "method_call"
-            || node.kind() == "invocation_expression"
-        {
-            if let Some(fn_node) = node
-                .child_by_field_name("function")
-                .or_else(|| node.child_by_field_name("name"))
-            {
-                if let Ok(name) = std::str::from_utf8(&source[fn_node.byte_range()]) {
-                    called.insert(name.to_string());
-                }
-            }
-        }
-
-        if cursor.goto_first_child() {
-            extract_calls_recursive(cursor, source, called);
-            cursor.goto_parent();
-        }
-
-        if !cursor.goto_next_sibling() {
-            break;
-        }
-    }
-}
-
-/// Extracts coupled class names from a class.
-fn extract_coupled_classes(node: &tree_sitter::Node, source: &[u8], lang: Language) -> Vec<String> {
-    let mut coupled = HashSet::new();
-
-    // Language-specific type reference node types
-    let type_node_types: Vec<&str> = match lang {
-        Language::Ruby => vec![
-            "constant",         // Class references like User, Post, ActiveRecord
-            "scope_resolution", // Namespaced constants like ActiveRecord::Base
-        ],
-        Language::Python => vec![
-            "identifier", // Python uses identifiers for class refs in type hints
-            "attribute",  // For qualified names like module.ClassName
-        ],
-        Language::Rust => vec![
-            "type_identifier",   // Type references in signatures
-            "scoped_identifier", // Qualified paths like std::io::Error
-        ],
-        Language::Go => vec![
-            "type_identifier", // Type references
-            "qualified_type",  // Package-qualified types like http.Handler
-        ],
-        _ => vec![
-            "type_identifier",
-            "class_type",
-            "simple_type",
-            "named_type",
-            "type_name",
-        ],
-    };
-
-    let mut cursor = node.walk();
-    extract_types_recursive(&mut cursor, source, &type_node_types, lang, &mut coupled);
-    sorted(coupled)
-}
-
-/// Gives the names in a stable sequence. The sequence of a `HashSet` is
-/// different in each run.
-fn sorted(names: HashSet<String>) -> Vec<String> {
-    let mut names: Vec<String> = names.into_iter().collect();
-    names.sort();
-    names
-}
-
-/// Recursively extracts type references.
-fn extract_types_recursive(
-    cursor: &mut tree_sitter::TreeCursor,
-    source: &[u8],
-    type_node_types: &[&str],
-    lang: Language,
-    coupled: &mut HashSet<String>,
-) {
-    loop {
-        let node = cursor.node();
-
-        if type_node_types.contains(&node.kind()) {
-            if let Ok(name) = std::str::from_utf8(&source[node.byte_range()]) {
-                if is_valid_class_reference(name, lang) {
-                    coupled.insert(name.to_string());
-                }
-            }
-        }
-
-        if cursor.goto_first_child() {
-            extract_types_recursive(cursor, source, type_node_types, lang, coupled);
-            cursor.goto_parent();
-        }
-
-        if !cursor.goto_next_sibling() {
-            break;
-        }
-    }
-}
-
-/// Checks if a name is a valid class reference for the given language.
-fn is_valid_class_reference(name: &str, lang: Language) -> bool {
-    if is_primitive_type(name) || name.len() <= 1 {
-        return false;
-    }
-
-    match lang {
-        Language::Ruby => {
-            // Ruby constants start with uppercase
-            // Exclude common non-class constants
-            let first_char = name.chars().next().unwrap_or('a');
-            if !first_char.is_ascii_uppercase() {
-                return false;
-            }
-            // Exclude common Ruby constants that aren't classes
-            !matches!(
-                name,
-                "DEFAULT_FEATURED_BADGE_COUNT"
-                    | "MAX_SIMILAR_USERS"
-                    | "TRUE"
-                    | "FALSE"
-                    | "STDIN"
-                    | "STDOUT"
-                    | "STDERR"
-                    | "ENV"
-                    | "ARGV"
-                    | "DATA"
-                    | "RUBY_VERSION"
-                    | "RUBY_PLATFORM"
-            ) && !name.chars().all(|c| c.is_ascii_uppercase() || c == '_')
-            // Exclude SCREAMING_SNAKE_CASE constants (non-class constants)
-        }
-        Language::Rust => {
-            // Rust types are PascalCase. Exclude common non-struct types.
-            let first_char = name.chars().next().unwrap_or('a');
-            first_char.is_ascii_uppercase()
-        }
-        Language::Go => {
-            // Go exported types are PascalCase
-            let first_char = name.chars().next().unwrap_or('a');
-            first_char.is_ascii_uppercase()
-        }
-        _ => true,
-    }
-}
-
-/// Checks if a type name is a primitive.
-fn is_primitive_type(name: &str) -> bool {
-    matches!(
-        name,
-        "int"
-            | "int8"
-            | "int16"
-            | "int32"
-            | "int64"
-            | "uint"
-            | "uint8"
-            | "uint16"
-            | "uint32"
-            | "uint64"
-            | "float"
-            | "float32"
-            | "float64"
-            | "double"
-            | "bool"
-            | "boolean"
-            | "Boolean"
-            | "string"
-            | "String"
-            | "str"
-            | "void"
-            | "None"
-            | "null"
-            | "nil"
-            | "byte"
-            | "char"
-            | "short"
-            | "long"
-            | "any"
-            | "object"
-            | "Object"
-            | "number"
-            | "Number"
-            | "true"
-            | "false"
-            | "self"
-            | "this"
-            | "super"
-    )
-}
-
-/// Calculates LCOM3 (Hitz & Montazeri 1995) as the number of connected components.
-/// Methods are connected if they share at least one instance variable.
-/// Note: This is LCOM3, not LCOM4. LCOM4 would also connect methods that call each other.
-fn calculate_lcom(methods: &[MethodInfo], fields: &[String]) -> u32 {
+/// Calculates LCOM4 (Hitz & Montazeri 1995) as the number of connected components.
+/// Two methods are connected if they share an instance variable, or if one
+/// calls the other on the object itself.
+fn calculate_lcom(methods: &[MethodInfo]) -> u32 {
     if methods.is_empty() {
         return 0;
     }
-    if fields.is_empty() {
-        // No fields means methods don't share state
-        return methods.len() as u32;
-    }
-
     let n = methods.len();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
 
@@ -1506,6 +913,13 @@ fn calculate_lcom(methods: &[MethodInfo], fields: &[String]) -> u32 {
                 adj[a].push(b);
                 adj[b].push(a);
             }
+        }
+    }
+
+    for (from, method) in methods.iter().enumerate() {
+        for to in &method.calls {
+            adj[from].push(*to);
+            adj[*to].push(from);
         }
     }
 
@@ -1699,6 +1113,10 @@ pub struct Summary {
 mod tests {
     use super::*;
 
+    fn is_oo_language(language: Language) -> bool {
+        matches!(class_model(language), ClassModel::Classes(_))
+    }
+
     #[test]
     fn test_config_default() {
         let config = Config::default();
@@ -1741,21 +1159,9 @@ mod tests {
     }
 
     #[test]
-    fn test_is_primitive_type() {
-        assert!(is_primitive_type("int"));
-        assert!(is_primitive_type("String"));
-        assert!(is_primitive_type("bool"));
-        assert!(is_primitive_type("void"));
-        assert!(is_primitive_type("this"));
-        assert!(!is_primitive_type("MyClass"));
-        assert!(!is_primitive_type("UserService"));
-    }
-
-    #[test]
     fn test_lcom_no_methods() {
         let methods: Vec<MethodInfo> = vec![];
-        let fields: Vec<String> = vec![];
-        assert_eq!(calculate_lcom(&methods, &fields), 0);
+        assert_eq!(calculate_lcom(&methods), 0);
     }
 
     #[test]
@@ -1765,16 +1171,17 @@ mod tests {
                 name: "foo".to_string(),
                 complexity: 1,
                 used_fields: HashSet::new(),
+                calls: Vec::new(),
             },
             MethodInfo {
                 name: "bar".to_string(),
                 complexity: 1,
                 used_fields: HashSet::new(),
+                calls: Vec::new(),
             },
         ];
-        let fields: Vec<String> = vec![];
         // No fields = methods don't share state = each is its own component
-        assert_eq!(calculate_lcom(&methods, &fields), 2);
+        assert_eq!(calculate_lcom(&methods), 2);
     }
 
     #[test]
@@ -1790,16 +1197,17 @@ mod tests {
                 name: "foo".to_string(),
                 complexity: 1,
                 used_fields: fields1,
+                calls: Vec::new(),
             },
             MethodInfo {
                 name: "bar".to_string(),
                 complexity: 1,
                 used_fields: fields2,
+                calls: Vec::new(),
             },
         ];
-        let fields = vec!["x".to_string()];
         // Both methods use field x, so they're connected = 1 component
-        assert_eq!(calculate_lcom(&methods, &fields), 1);
+        assert_eq!(calculate_lcom(&methods), 1);
     }
 
     #[test]
@@ -1815,16 +1223,17 @@ mod tests {
                 name: "foo".to_string(),
                 complexity: 1,
                 used_fields: fields1,
+                calls: Vec::new(),
             },
             MethodInfo {
                 name: "bar".to_string(),
                 complexity: 1,
                 used_fields: fields2,
+                calls: Vec::new(),
             },
         ];
-        let fields = vec!["x".to_string(), "y".to_string()];
         // Methods use different fields, not connected = 2 components
-        assert_eq!(calculate_lcom(&methods, &fields), 2);
+        assert_eq!(calculate_lcom(&methods), 2);
     }
 
     #[test]
@@ -2040,10 +1449,10 @@ mod tests {
             name: "only".to_string(),
             complexity: 1,
             used_fields: HashSet::new(),
+            calls: Vec::new(),
         }];
-        let fields: Vec<String> = vec![];
         // No fields: each method is its own component
-        assert_eq!(calculate_lcom(&methods, &fields), 1);
+        assert_eq!(calculate_lcom(&methods), 1);
     }
 
     #[test]
@@ -2054,10 +1463,10 @@ mod tests {
             name: "only".to_string(),
             complexity: 1,
             used_fields: used,
+            calls: Vec::new(),
         }];
-        let fields = vec!["x".to_string()];
         // Single method using a field: 1 connected component
-        assert_eq!(calculate_lcom(&methods, &fields), 1);
+        assert_eq!(calculate_lcom(&methods), 1);
     }
 
     #[test]
@@ -2068,16 +1477,17 @@ mod tests {
                 name: "a".to_string(),
                 complexity: 1,
                 used_fields: HashSet::new(),
+                calls: Vec::new(),
             },
             MethodInfo {
                 name: "b".to_string(),
                 complexity: 1,
                 used_fields: HashSet::new(),
+                calls: Vec::new(),
             },
         ];
-        let fields = vec!["x".to_string(), "y".to_string()];
         // No shared fields: 2 disconnected components
-        assert_eq!(calculate_lcom(&methods, &fields), 2);
+        assert_eq!(calculate_lcom(&methods), 2);
     }
 
     #[test]
@@ -2096,20 +1506,22 @@ mod tests {
                 name: "a".to_string(),
                 complexity: 1,
                 used_fields: fa,
+                calls: Vec::new(),
             },
             MethodInfo {
                 name: "b".to_string(),
                 complexity: 1,
                 used_fields: fb,
+                calls: Vec::new(),
             },
             MethodInfo {
                 name: "c".to_string(),
                 complexity: 1,
                 used_fields: fc,
+                calls: Vec::new(),
             },
         ];
-        let fields = vec!["x".to_string(), "y".to_string()];
-        assert_eq!(calculate_lcom(&methods, &fields), 1);
+        assert_eq!(calculate_lcom(&methods), 1);
     }
 
     #[test]
@@ -2125,10 +1537,10 @@ mod tests {
                 name: format!("m{i}"),
                 complexity: 1,
                 used_fields: used,
+                calls: Vec::new(),
             });
         }
-        let fields = vec!["shared".to_string()];
-        assert_eq!(calculate_lcom(&methods, &fields), 1);
+        assert_eq!(calculate_lcom(&methods), 1);
     }
 
     #[test]
@@ -2143,6 +1555,7 @@ mod tests {
             name: "hub".to_string(),
             complexity: 1,
             used_fields: hub_fields,
+            calls: Vec::new(),
         }];
         for i in 0..5 {
             let mut used = HashSet::new();
@@ -2151,11 +1564,11 @@ mod tests {
                 name: format!("sat{i}"),
                 complexity: 1,
                 used_fields: used,
+                calls: Vec::new(),
             });
         }
-        let fields: Vec<String> = (0..5).map(|i| format!("f{i}")).collect();
         // Hub connects to all satellites; satellites connect to hub => 1 component
-        assert_eq!(calculate_lcom(&methods, &fields), 1);
+        assert_eq!(calculate_lcom(&methods), 1);
     }
 
     #[test]
@@ -2168,25 +1581,28 @@ mod tests {
                 name: "a0".to_string(),
                 complexity: 1,
                 used_fields: ["a".to_string()].into_iter().collect(),
+                calls: Vec::new(),
             },
             MethodInfo {
                 name: "a1".to_string(),
                 complexity: 1,
                 used_fields: ["a".to_string()].into_iter().collect(),
+                calls: Vec::new(),
             },
             MethodInfo {
                 name: "b0".to_string(),
                 complexity: 1,
                 used_fields: ["b".to_string()].into_iter().collect(),
+                calls: Vec::new(),
             },
             MethodInfo {
                 name: "b1".to_string(),
                 complexity: 1,
                 used_fields: ["b".to_string()].into_iter().collect(),
+                calls: Vec::new(),
             },
         ];
-        let fields = vec!["a".to_string(), "b".to_string()];
-        assert_eq!(calculate_lcom(&methods, &fields), 2);
+        assert_eq!(calculate_lcom(&methods), 2);
     }
 
     #[test]
@@ -2211,6 +1627,49 @@ mod tests {
         let dit_b = hierarchy.get_dit("B");
         assert!(dit_a <= 2, "DIT should be bounded even with cycles");
         assert!(dit_b <= 2, "DIT should be bounded even with cycles");
+    }
+
+    #[test]
+    fn test_class_hierarchy_cyclic_ladder_is_linear() {
+        // Two classes for each level, each with both classes of the next level as
+        // bases, and a back edge from the last level to the first. A search over
+        // paths is exponential in the number of levels.
+        let levels = 60;
+        let mut hierarchy = ClassHierarchy::new();
+        for level in 0..levels {
+            let bases: Vec<String> = if level + 1 < levels {
+                vec![format!("A{}", level + 1), format!("B{}", level + 1)]
+            } else {
+                vec!["A0".to_string()]
+            };
+            hierarchy.add_class_with_bases(&format!("A{level}"), &bases);
+            hierarchy.add_class_with_bases(&format!("B{level}"), &bases);
+        }
+        let started = std::time::Instant::now();
+        for level in 0..levels {
+            assert_eq!(hierarchy.get_dit(&format!("A{level}")), 0);
+            // No class has `B0` as a base. It is above the component of the
+            // cycle, and the component is one level.
+            let expected = u32::from(level == 0);
+            assert_eq!(hierarchy.get_dit(&format!("B{level}")), expected);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_class_hierarchy_cycle_below_a_chain() {
+        // Leaf -> Mid -> (X <-> Y) -> Root: the cycle is one level.
+        let mut hierarchy = ClassHierarchy::new();
+        hierarchy.add_class("Leaf", Some("Mid"));
+        hierarchy.add_class("Mid", Some("X"));
+        hierarchy.add_class_with_bases("X", &["Y".to_string(), "Root".to_string()]);
+        hierarchy.add_class("Y", Some("X"));
+        hierarchy.add_class("Root", None);
+        assert_eq!(hierarchy.get_dit("Root"), 0);
+        assert_eq!(hierarchy.get_dit("X"), 1);
+        assert_eq!(hierarchy.get_dit("Y"), 1);
+        assert_eq!(hierarchy.get_dit("Mid"), 2);
+        assert_eq!(hierarchy.get_dit("Leaf"), 3);
     }
 
     #[test]
@@ -2285,6 +1744,53 @@ mod tests {
         }
     }
 
+    /// Level `n` has the bases `n + 1` and `n + 2`. The last level has the
+    /// root as a base, thus the hierarchy has a cycle.
+    fn ladder(levels: usize, close: bool) -> ClassHierarchy {
+        let mut hierarchy = ClassHierarchy::new();
+        for level in 0..levels {
+            let mut bases = Vec::new();
+            for next in [level + 1, level + 2] {
+                if next < levels {
+                    bases.push(format!("L{next}"));
+                } else if close {
+                    bases.push("L0".to_string());
+                }
+            }
+            hierarchy.add_class_with_bases(&format!("L{level}"), &bases);
+        }
+        hierarchy
+    }
+
+    #[test]
+    fn test_dit_work_is_linear_for_a_ladder_with_a_cycle() {
+        let hierarchy = ladder(60, true);
+        for level in 0..60 {
+            hierarchy.get_dit(&format!("L{level}"));
+        }
+        // 60 classes and 120 edges.
+        assert!(hierarchy.steps() <= 2_000, "steps: {}", hierarchy.steps());
+    }
+
+    #[test]
+    fn test_dit_of_a_ladder_without_a_cycle_is_the_longest_path() {
+        let hierarchy = ladder(60, false);
+        assert_eq!(hierarchy.get_dit("L0"), 59);
+        assert_eq!(hierarchy.get_dit("L58"), 1);
+        assert_eq!(hierarchy.get_dit("L59"), 0);
+    }
+
+    #[test]
+    fn test_dit_of_a_cycle_is_the_depth_of_its_component() {
+        let mut hierarchy = ClassHierarchy::new();
+        hierarchy.add_class_with_bases("A", &["B".to_string()]);
+        hierarchy.add_class_with_bases("B", &["A".to_string(), "Root".to_string()]);
+        hierarchy.add_class_with_bases("C", &["A".to_string()]);
+        assert_eq!(hierarchy.get_dit("A"), 1);
+        assert_eq!(hierarchy.get_dit("B"), 1);
+        assert_eq!(hierarchy.get_dit("C"), 2);
+    }
+
     #[test]
     fn test_class_hierarchy_unknown_parent() {
         // Child extends UnknownParent (not in codebase, e.g., stdlib)
@@ -2297,314 +1803,72 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_parent_class_java() {
-        let parser = Parser::new();
-        let source = b"public class Child extends Parent { }";
-        let result = parser
-            .parse(source, Language::Java, Path::new("Child.java"))
-            .unwrap();
-
-        let class_node = find_first_class_node(&result.tree, Language::Java).unwrap();
-        let parent = extract_parent_class(&class_node, source, Language::Java);
-
-        assert_eq!(parent, Some("Parent".to_string()));
-    }
-
-    #[test]
-    fn test_extract_parent_class_java_no_extends() {
-        let parser = Parser::new();
-        let source = b"public class Standalone { }";
-        let result = parser
-            .parse(source, Language::Java, Path::new("Standalone.java"))
-            .unwrap();
-
-        let class_node = find_first_class_node(&result.tree, Language::Java).unwrap();
-        let parent = extract_parent_class(&class_node, source, Language::Java);
-
-        assert_eq!(parent, None);
-    }
-
-    #[test]
-    fn test_extract_parent_class_python() {
-        let parser = Parser::new();
-        let source = b"class Child(Parent):\n    pass";
-        let result = parser
-            .parse(source, Language::Python, Path::new("child.py"))
-            .unwrap();
-
-        let class_node = find_first_class_node(&result.tree, Language::Python).unwrap();
-        let parent = extract_parent_class(&class_node, source, Language::Python);
-
-        assert_eq!(parent, Some("Parent".to_string()));
-    }
-
-    #[test]
-    fn test_extract_parent_class_typescript() {
-        let parser = Parser::new();
-        let source = b"class Child extends Parent { }";
-        let result = parser
-            .parse(source, Language::TypeScript, Path::new("child.ts"))
-            .unwrap();
-
-        let class_node = find_first_class_node(&result.tree, Language::TypeScript).unwrap();
-        let parent = extract_parent_class(&class_node, source, Language::TypeScript);
-
-        assert_eq!(parent, Some("Parent".to_string()));
-    }
-
-    /// Helper to find the first class node in a tree using a cursor.
-    fn find_first_class_node<'a>(
-        tree: &'a tree_sitter::Tree,
-        lang: Language,
-    ) -> Option<tree_sitter::Node<'a>> {
-        let mut cursor = tree.walk();
-        find_class_node_recursive(&mut cursor, lang)
-    }
-
-    fn find_class_node_recursive<'a>(
-        cursor: &mut tree_sitter::TreeCursor<'a>,
-        lang: Language,
-    ) -> Option<tree_sitter::Node<'a>> {
-        loop {
-            let node = cursor.node();
-            if is_class_node(node.kind(), lang) {
-                return Some(node);
-            }
-            if cursor.goto_first_child() {
-                if let Some(found) = find_class_node_recursive(cursor, lang) {
-                    return Some(found);
-                }
-                cursor.goto_parent();
-            }
-            if !cursor.goto_next_sibling() {
-                break;
-            }
-        }
-        None
-    }
-
-    #[test]
-    fn test_rust_struct_impl_extraction() {
-        let parser = Parser::new();
-        let source = br#"
-pub struct Counter {
-    count: u32,
-    name: String,
-}
-
-impl Counter {
-    pub fn new(name: String) -> Self {
-        Self { count: 0, name }
-    }
-
-    pub fn increment(&mut self) {
-        self.count += 1;
-    }
-
-    pub fn get_count(&self) -> u32 {
-        self.count
-    }
-
-    pub fn reset(&mut self) {
-        self.count = 0;
-    }
-}
-"#;
-        let result = parser
-            .parse(source, Language::Rust, Path::new("counter.rs"))
-            .unwrap();
-
-        let classes = extract_classes_from_file(
-            Path::new("counter.rs"),
-            source,
-            result.tree.as_ref(),
-            Language::Rust,
-        );
-
-        assert_eq!(classes.len(), 1);
-        let cls = &classes[0];
-        assert_eq!(cls.class_name, "Counter");
-        assert_eq!(cls.language, "Rust");
-        assert!(cls.nom > 0, "expected methods, got nom={}", cls.nom);
-        assert_eq!(cls.nom, 4);
-        assert!(cls.nof > 0, "expected fields, got nof={}", cls.nof);
-        assert_eq!(cls.nof, 2);
-        assert!(cls.wmc > 0, "expected non-zero WMC");
-        assert!(cls.rfc >= cls.nom, "RFC should be at least NOM");
-        assert_eq!(cls.dit, 0);
-        assert!(cls.parent_class.is_none());
-    }
-
-    #[test]
-    fn test_tsx_and_jsx_classes_have_the_metrics_of_ts_and_js() {
+    fn test_analyzer_uses_content_source_for_historical_commits() {
         use crate::config::Config;
-        use crate::core::{AnalysisContext, FileSet};
+        use crate::core::{AnalysisContext, FileSet, FilesystemSource};
+        use std::path::PathBuf;
+        use std::sync::Arc;
 
-        let dir = tempfile::tempdir().unwrap();
-        let source = "class Counter extends Base {\n  count = 0;\n  step = 1;\n  increment() {\n    this.count = this.count + this.step;\n  }\n  reset() {\n    this.count = 0;\n  }\n}\n";
-        for name in ["Counter.tsx", "Counter.ts", "Counter.jsx", "Counter.js"] {
-            std::fs::write(dir.path().join(name), source).unwrap();
-        }
+        let current = tempfile::tempdir().unwrap();
+        let historical = tempfile::tempdir().unwrap();
+        std::fs::write(
+            current.path().join("code.py"),
+            "class CurrentVersion:\n    pass\n",
+        )
+        .unwrap();
+        std::fs::write(
+            historical.path().join("code.py"),
+            "class HistoricalVersion:\n    pass\n",
+        )
+        .unwrap();
+        let files =
+            FileSet::from_files(current.path().to_path_buf(), vec![PathBuf::from("code.py")]);
         let config = Config::default();
-        let files = FileSet::from_path(dir.path(), &config).unwrap();
-        let ctx = AnalysisContext::new(&files, &config, Some(dir.path()));
+        let source = Arc::new(FilesystemSource::new(historical.path()));
+        let ctx =
+            AnalysisContext::new(&files, &config, Some(current.path())).with_content_source(source);
 
         let result = Analyzer::new().analyze_repo(&ctx).unwrap();
 
-        let metrics_of = |file: &str| {
-            let classes: Vec<&ClassMetrics> = result
-                .classes
-                .iter()
-                .filter(|class| class.file == file)
-                .collect();
-            assert_eq!(classes.len(), 1, "{file}");
-            let class = classes[0];
-            (
-                class.class_name.clone(),
-                class.parent_class.clone(),
-                class.nom,
-                class.nof,
-                class.wmc,
-                class.lcom,
-            )
-        };
-        assert_eq!(metrics_of("Counter.tsx"), metrics_of("Counter.ts"));
-        assert_eq!(metrics_of("Counter.jsx"), metrics_of("Counter.js"));
-        assert_eq!(metrics_of("Counter.tsx").0, "Counter");
-        assert_eq!(metrics_of("Counter.tsx").1.as_deref(), Some("Base"));
+        let names: Vec<&str> = result
+            .classes
+            .iter()
+            .map(|class| class.class_name.as_str())
+            .collect();
+        assert_eq!(names, vec!["HistoricalVersion"]);
     }
 
     #[test]
-    fn test_rust_multiple_impl_blocks() {
-        let parser = Parser::new();
-        let source = br#"
-pub struct Widget {
-    width: u32,
-    height: u32,
-}
+    fn test_file_above_the_size_limit_is_not_analyzed() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, FileSet};
 
-impl Widget {
-    pub fn area(&self) -> u32 {
-        self.width * self.height
-    }
-}
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("small.py"),
+            "class Small:\n    pass\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("large.py"),
+            format!("class Large:\n    pass\n# {}\n", "x".repeat(200)),
+        )
+        .unwrap();
+        let config = Config::default();
+        let files = FileSet::from_path(directory.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(directory.path()));
 
-impl Widget {
-    pub fn resize(&mut self, w: u32, h: u32) {
-        self.width = w;
-        self.height = h;
-    }
-}
-"#;
-        let result = parser
-            .parse(source, Language::Rust, Path::new("widget.rs"))
-            .unwrap();
+        let analyzer = Analyzer::with_config(super::Config {
+            skip_test_files: true,
+            max_file_size: 100,
+        });
+        let result = analyzer.analyze_repo(&ctx).unwrap();
 
-        let classes = extract_classes_from_file(
-            Path::new("widget.rs"),
-            source,
-            result.tree.as_ref(),
-            Language::Rust,
-        );
-
-        assert_eq!(classes.len(), 1);
-        let cls = &classes[0];
-        assert_eq!(cls.class_name, "Widget");
-        // Methods from both impl blocks should be collected
-        assert_eq!(cls.nom, 2);
-        assert_eq!(cls.nof, 2);
-    }
-
-    #[test]
-    fn test_go_struct_method_extraction() {
-        let parser = Parser::new();
-        let source = br#"
-package main
-
-type Server struct {
-	Host string
-	Port int
-}
-
-func (s *Server) Start() error {
-	return nil
-}
-
-func (s *Server) Stop() {
-	s.Host = ""
-}
-
-func (s Server) Address() string {
-	return s.Host
-}
-"#;
-        let result = parser
-            .parse(source, Language::Go, Path::new("server.go"))
-            .unwrap();
-
-        let classes = extract_classes_from_file(
-            Path::new("server.go"),
-            source,
-            result.tree.as_ref(),
-            Language::Go,
-        );
-
-        assert_eq!(classes.len(), 1);
-        let cls = &classes[0];
-        assert_eq!(cls.class_name, "Server");
-        assert_eq!(cls.language, "Go");
-        assert!(cls.nom > 0, "expected methods, got nom={}", cls.nom);
-        assert_eq!(cls.nom, 3);
-        assert!(cls.nof > 0, "expected fields, got nof={}", cls.nof);
-        assert_eq!(cls.nof, 2);
-        assert!(cls.wmc > 0, "expected non-zero WMC");
-        assert_eq!(cls.dit, 0);
-        assert!(cls.parent_class.is_none());
-    }
-
-    #[test]
-    fn test_go_multiple_structs() {
-        let parser = Parser::new();
-        let source = br#"
-package main
-
-type Request struct {
-	Method string
-	URL    string
-}
-
-type Response struct {
-	Status int
-	Body   string
-}
-
-func (r *Request) Validate() bool {
-	return r.Method != ""
-}
-
-func (r *Response) IsOK() bool {
-	return r.Status == 200
-}
-"#;
-        let result = parser
-            .parse(source, Language::Go, Path::new("http.go"))
-            .unwrap();
-
-        let classes = extract_classes_from_file(
-            Path::new("http.go"),
-            source,
-            result.tree.as_ref(),
-            Language::Go,
-        );
-
-        assert_eq!(classes.len(), 2);
-        let names: HashSet<_> = classes.iter().map(|c| c.class_name.as_str()).collect();
-        assert!(names.contains("Request"));
-        assert!(names.contains("Response"));
-
-        for cls in &classes {
-            assert_eq!(cls.nom, 1);
-            assert!(cls.nof >= 2);
-        }
+        let names: Vec<&str> = result
+            .classes
+            .iter()
+            .map(|class| class.class_name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Small"]);
     }
 }

@@ -371,6 +371,22 @@ pub fn get_comment_node_types(lang: Language) -> &'static [&'static str] {
     }
 }
 
+/// Get the operator from a binary expression.
+/// Returns a borrowed string slice to avoid allocation.
+pub fn get_operator<'a>(node: &tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        let kind = child.kind();
+        if kind == "&&" || kind == "||" || kind == "and" || kind == "or" {
+            return Some(kind);
+        }
+        if kind == "operator" {
+            return child.utf8_text(source).ok();
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
