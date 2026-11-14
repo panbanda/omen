@@ -185,9 +185,20 @@ fn test_days_alone_gives_the_window_for_every_part() {
 
 #[test]
 fn test_the_label_is_the_normalised_window() {
-    assert_eq!(generate_window(None, Some(30)).expect("window").label, "30d");
-    assert_eq!(generate_window(Some(" 1Y "), None).expect("window").label, "1y");
-    assert_eq!(generate_window(Some(" Forever "), None).expect("window").label, "all");
+    assert_eq!(
+        generate_window(None, Some(30)).expect("window").label,
+        "30d"
+    );
+    assert_eq!(
+        generate_window(Some(" 1Y "), None).expect("window").label,
+        "1y"
+    );
+    assert_eq!(
+        generate_window(Some(" Forever "), None)
+            .expect("window")
+            .label,
+        "all"
+    );
     assert_eq!(generate_window(None, None).expect("window").label, "1y");
 }
 

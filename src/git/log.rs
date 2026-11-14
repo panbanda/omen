@@ -284,8 +284,7 @@ pub fn parse_since_to_days(since: &str) -> Option<u32> {
     if is_since_all(since) {
         return None;
     }
-    parse_since_duration(since)
-        .map(|d| u32::try_from(d.as_secs() / 86400).unwrap_or(u32::MAX))
+    parse_since_duration(since).map(|d| u32::try_from(d.as_secs() / 86400).unwrap_or(u32::MAX))
 }
 
 /// Gives the number of days of a time window such as `30d`, `6m`, `1y`, or
@@ -1260,7 +1259,11 @@ mod tests {
 
     #[test]
     fn a_window_too_large_for_the_integers_is_all_the_history() {
-        for since in ["18446744073709551615d", "18446744073709551615y", "4294967295y"] {
+        for since in [
+            "18446744073709551615d",
+            "18446744073709551615y",
+            "4294967295y",
+        ] {
             assert_eq!(since_to_days(since), Ok(u32::MAX), "{since}");
         }
         assert_eq!(
