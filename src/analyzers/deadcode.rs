@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::index::extract::FileSymbols;
 use crate::index::model::{Exported, Receiver, Reference, ResolutionStatus, Symbol, SymbolKind};
+use crate::index::security::entry::find_entry_points;
 use crate::parser::{self, Parser};
 
 /// Dead code analyzer.
@@ -91,16 +92,37 @@ impl AnalyzerTrait for Analyzer {
         // decorators, visibility modifiers, and uses as a value). Cargo results
         // supplement this with compiler-level dead code warnings when available.
         let index = ctx.code_index()?;
-        let file_results: Vec<FileDeadCode> = index
+        let parsed: Vec<Option<(parser::ParseResult, FileDeadCode)>> = index
             .files
             .par_iter()
-            .filter_map(|facts| {
+            .map(|facts| {
                 let path = Path::new(&facts.file);
                 let content = ctx.read_file(path).ok()?;
                 let result = self.parser.parse(&content, facts.language, path).ok()?;
-                Some(collect_file_data(&result, facts))
+                let data = collect_file_data(&result, facts);
+                Some((result, data))
             })
             .collect();
+        let mut trees: Vec<parser::ParseResult> = Vec::new();
+        let mut file_results: Vec<FileDeadCode> = Vec::new();
+        let mut parsed_facts: Vec<&FileSymbols> = Vec::new();
+        for (facts, item) in index.files.iter().zip(parsed) {
+            if let Some((tree, data)) = item {
+                parsed_facts.push(facts);
+                trees.push(tree);
+                file_results.push(data);
+            }
+        }
+        // An entry point is alive, and its callees are reachable.
+        let entry_keys: HashSet<String> = if parsed_facts.len() == index.files.len() {
+            find_entry_points(&trees, &index.files)
+        } else {
+            let facts: Vec<FileSymbols> = parsed_facts.into_iter().cloned().collect();
+            find_entry_points(&trees, &facts)
+        }
+        .into_iter()
+        .filter_map(|entry| entry.symbol)
+        .collect();
 
         // Phase 2: Build the global tables. A definition is known by the key
         // of the shared index, which is unique for each definition.
@@ -223,6 +245,7 @@ impl AnalyzerTrait for Analyzer {
         let mut reachable: HashSet<String> = HashSet::new();
         let mut queue: Vec<String> = Vec::new();
 
+        roots.extend(entry_keys.iter().cloned());
         for root in roots {
             if all_definitions.contains_key(&root) && reachable.insert(root.clone()) {
                 queue.push(root);
@@ -279,7 +302,7 @@ impl AnalyzerTrait for Analyzer {
             let simple_name = def.name.as_str();
 
             // Skip entry points
-            if is_entry_point(simple_name, def) {
+            if is_entry_point(simple_name, def) || entry_keys.contains(key) {
                 continue;
             }
 
@@ -3375,5 +3398,189 @@ mod index_tests {
         let analysis = Analyzer::new().analyze(&ctx).unwrap();
 
         assert_eq!(analysis.summary.total_definitions, 2);
+    }
+
+    struct EntryCase {
+        language: &'static str,
+        files: &'static [(&'static str, &'static str)],
+        alive: &'static [&'static str],
+        dead: &'static [&'static str],
+    }
+
+    const ENTRY_CASES: &[EntryCase] = &[
+        EntryCase {
+            language: "python fastapi",
+            files: &[(
+                "api.py",
+                "from fastapi import FastAPI\n\napi = FastAPI()\n\n\ndef helper():\n    return 1\n\n\n@api.get(\"/items\")\nasync def read():\n    return helper()\n\n\ndef _unused_control():\n    return 2\n",
+            )],
+            alive: &["read", "helper"],
+            dead: &["_unused_control"],
+        },
+        EntryCase {
+            language: "python flask",
+            files: &[(
+                "app.py",
+                "from flask import Flask\n\napp = Flask(__name__)\n\n\ndef helper():\n    return 1\n\n\n@app.route(\"/items\")\ndef show():\n    return helper()\n\n\ndef _unused_control():\n    return 2\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["_unused_control"],
+        },
+        EntryCase {
+            language: "javascript express",
+            files: &[(
+                "server.js",
+                "const express = require('express');\nconst app = express();\n\nfunction helper() { return 1; }\nfunction show(req, res) { res.send(helper()); }\nfunction register() { app.get('/items', show); }\nfunction unusedControl() { return 2; }\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unusedControl"],
+        },
+        EntryCase {
+            language: "typescript express",
+            files: &[(
+                "server.ts",
+                "import express from 'express';\nconst app = express();\n\nfunction helper(): number { return 1; }\nfunction show(req: any, res: any) { res.send(helper()); }\nfunction register() { app.get('/items', show); }\nfunction unusedControl(): number { return 2; }\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unusedControl"],
+        },
+        EntryCase {
+            language: "java spring",
+            files: &[(
+                "ItemController.java",
+                "import org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\nclass ItemController {\n    @GetMapping(\"/items\")\n    String show() { return helper(); }\n\n    private String helper() { return \"x\"; }\n\n    private String unusedControl() { return \"y\"; }\n}\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unusedControl"],
+        },
+        EntryCase {
+            language: "go net/http",
+            files: &[(
+                "main.go",
+                "package main\n\nimport \"net/http\"\n\nfunc helper() int { return 1 }\n\nfunc show(w http.ResponseWriter, r *http.Request) { helper() }\n\nfunc register() { http.HandleFunc(\"/items\", show) }\n\nfunc unusedControl() int { return 2 }\n\nfunc main() {}\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unusedControl"],
+        },
+        EntryCase {
+            language: "rust axum",
+            files: &[(
+                "routes.rs",
+                "use axum::{routing::get, Router};\n\nfn helper() -> u32 { 1 }\n\nasync fn show() -> u32 { helper() }\n\nfn routes() -> Router { Router::new().route(\"/items\", get(show)) }\n\nfn unused_control() -> u32 { 2 }\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unused_control"],
+        },
+        EntryCase {
+            language: "rust actix",
+            files: &[(
+                "routes.rs",
+                "use actix_web::get;\n\nfn helper() -> u32 { 1 }\n\n#[get(\"/items\")]\nasync fn show() -> u32 { helper() }\n\nfn unused_control() -> u32 { 2 }\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unused_control"],
+        },
+        EntryCase {
+            language: "csharp aspnet",
+            files: &[(
+                "ItemsController.cs",
+                "using Microsoft.AspNetCore.Mvc;\n\n[ApiController]\n[Route(\"api/items\")]\nclass ItemsController : ControllerBase {\n    [HttpGet]\n    int Show() { return Helper(); }\n\n    private int Helper() { return 1; }\n\n    private int UnusedControl() { return 2; }\n}\n",
+            )],
+            alive: &["Show", "Helper"],
+            dead: &["UnusedControl"],
+        },
+        EntryCase {
+            language: "php laravel",
+            files: &[
+                (
+                    "routes/web.php",
+                    "<?php\nuse App\\Http\\Controllers\\ItemController;\n\nRoute::get('/items', [ItemController::class, 'show']);\n",
+                ),
+                (
+                    "app/Http/Controllers/ItemController.php",
+                    "<?php\nclass ItemController {\n    private function helper() { return 1; }\n\n    private function show() { return $this->helper(); }\n\n    private function unusedControl() { return 2; }\n}\n",
+                ),
+            ],
+            alive: &["show", "helper"],
+            dead: &["unusedControl"],
+        },
+        EntryCase {
+            language: "ruby rails",
+            files: &[
+                (
+                    "config/routes.rb",
+                    "Rails.application.routes.draw do\n  get '/items', to: 'items#show'\nend\n",
+                ),
+                (
+                    "app/controllers/items_controller.rb",
+                    "class ItemsController < ApplicationController\n  def show\n    helper\n  end\n\n  private\n\n  def helper\n    1\n  end\n\n  def unused_control\n    2\n  end\nend\n",
+                ),
+            ],
+            alive: &["show", "helper"],
+            dead: &["unused_control"],
+        },
+        EntryCase {
+            language: "c main",
+            files: &[(
+                "main.c",
+                "static int helper(void) { return 1; }\n\nstatic int unused_control(void) { return 2; }\n\nint main(void) { return helper(); }\n",
+            )],
+            alive: &["main", "helper"],
+            dead: &["unused_control"],
+        },
+        EntryCase {
+            language: "cpp main",
+            files: &[(
+                "main.cpp",
+                "static int helper() { return 1; }\n\nstatic int unused_control() { return 2; }\n\nint main() { return helper(); }\n",
+            )],
+            alive: &["main", "helper"],
+            dead: &["unused_control"],
+        },
+        EntryCase {
+            language: "bash script",
+            files: &[(
+                "run.sh",
+                "#!/bin/bash\n\nhelper() {\n    echo 1\n}\n\n_unused_control() {\n    echo 2\n}\n\nhelper\n",
+            )],
+            alive: &["helper"],
+            dead: &[],
+        },
+    ];
+
+    #[test]
+    fn test_an_entry_point_is_alive_and_its_callees_are_reachable() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let mut failures: Vec<String> = Vec::new();
+        for case in ENTRY_CASES {
+            let directory = tempfile::tempdir().unwrap();
+            let mut names: Vec<PathBuf> = Vec::new();
+            for (name, text) in case.files {
+                let path = directory.path().join(name);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, text).unwrap();
+                names.push(PathBuf::from(name));
+            }
+            names.sort();
+            let files = FileSet::from_files(directory.path().to_path_buf(), names);
+            let config = Config::default();
+            let ctx = AnalysisContext::new(&files, &config, Some(directory.path()));
+            let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+            let reported: Vec<&str> = result.items.iter().map(|item| item.name.as_str()).collect();
+            for name in case.alive {
+                if reported.contains(name) {
+                    failures.push(format!("{}: `{name}` is reported as dead", case.language));
+                }
+            }
+            for name in case.dead {
+                if !reported.contains(name) {
+                    failures.push(format!("{}: `{name}` is not reported", case.language));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 }
