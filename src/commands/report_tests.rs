@@ -105,3 +105,25 @@ fn test_an_analyzer_file_replaces_the_old_file_in_one_step() {
         .collect();
     assert_eq!(names, ["security.json"]);
 }
+
+#[test]
+fn test_generate_fails_when_an_analyzer_file_cannot_be_written() {
+    let (directory, path) = repository();
+    let data = directory.path().join("data");
+    std::fs::create_dir_all(data.join("security.json"))
+        .expect("a directory in the place of the file");
+    let result = run(
+        &path,
+        &Config::default(),
+        &subcommand(&[
+            "generate",
+            "--data",
+            data.to_str().expect("utf-8"),
+            "--skip",
+            "trend,churn,changes,ownership,temporal,hotspot,defect,tdg",
+        ]),
+        None,
+    );
+    let message = format!("{:?}", result.expect_err("the write fails"));
+    assert!(message.contains("security.json"), "{message}");
+}

@@ -169,6 +169,7 @@ pub fn run(
             };
 
             let completed = std::sync::atomic::AtomicU64::new(0);
+            let write_errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
             let output_dir = &args.data;
 
             // Helper: run an analyzer and save its JSON output
@@ -181,15 +182,24 @@ pub fn run(
                             Err(e) => json!({"error": e.to_string()}),
                         };
                         let output_path = output_dir.join(format!("{}.json", $filename));
-                        let _ = write_atomically(
+                        match write_atomically(
                             &output_path,
                             &serde_json::to_string_pretty(&result).unwrap_or_default(),
-                        );
-                        let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        if let Some(ref bar) = progress {
-                            bar.set_position(done);
-                        } else {
-                            eprintln!("Generated: {}", output_path.display());
+                        ) {
+                            Ok(()) => {
+                                let done =
+                                    completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                        + 1;
+                                if let Some(ref bar) = progress {
+                                    bar.set_position(done);
+                                } else {
+                                    eprintln!("Generated: {}", output_path.display());
+                                }
+                            }
+                            Err(error) => write_errors
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .push(format!("{}: {error}", output_path.display())),
                         }
                     }
                 }};
@@ -289,6 +299,17 @@ pub fn run(
                     run_analyzer!(crate::analyzers::tdg::Analyzer::default(), "tdg", "tdg");
                 });
             });
+
+            let failed = write_errors
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            if !failed.is_empty() {
+                return Err(crate::core::Error::analysis(format!(
+                    "The report data was not written: {}",
+                    failed.join("; ")
+                )));
+            }
 
             // Phase 2: Score (reads pre-generated JSON files, nearly instant)
             if !skip_list.contains(&"score") {
