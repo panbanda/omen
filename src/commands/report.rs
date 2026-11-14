@@ -50,25 +50,8 @@ fn generate_window(since: Option<&str>, days: Option<u32>) -> crate::core::Resul
     })
 }
 
-/// Writes the file in one step: the old file stays until the new text is complete. The
-/// temporary file has a random name and is new, so a link at a guessed name is not followed.
 fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    let directory = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let mut pending = tempfile::NamedTempFile::new_in(directory)?;
-    pending.write_all(text.as_bytes())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        pending
-            .as_file()
-            .set_permissions(std::fs::Permissions::from_mode(0o644))?;
-    }
-    pending.persist(path).map_err(|error| error.error)?;
-    Ok(())
+    crate::core::write_atomically(path, text.as_bytes(), crate::core::FileMode::Exactly(0o644))
 }
 
 /// The data files that `report generate` writes and that `report validate` expects.

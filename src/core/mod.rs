@@ -1,6 +1,7 @@
 //! Core types and traits for code analysis.
 
 mod analyzer;
+mod atomic_file;
 mod content_source;
 mod error;
 mod file_set;
@@ -10,6 +11,7 @@ mod source_file;
 mod utils;
 
 pub use analyzer::{AnalysisContext, AnalysisResult, Analyzer, Summary};
+pub use atomic_file::{write_atomically, FileMode};
 pub use content_source::{ContentSource, FilesystemSource, TreeSource};
 pub use error::{Error, Result};
 pub use file_set::FileSet;

@@ -4,17 +4,14 @@
 //! to their original state, even if a panic occurs during mutation testing.
 
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 
-use crate::core::{Error, Result};
+use crate::core::{write_atomically, Error, FileMode, Result};
 
-/// Global counter for generating unique temp file names across threads.
-static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 type ActiveMutations = Arc<parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>>;
 
 static ACTIVE_MUTATIONS: LazyLock<ActiveMutations> =
@@ -163,28 +160,8 @@ impl MutationGuard {
 impl Drop for MutationGuard {
     fn drop(&mut self) {
         if self.modified {
-            // Best-effort atomic restoration: write to temp, then rename.
-            // Falls back to direct write if rename fails (e.g. cross-device).
-            let parent = self.path.parent().unwrap_or(Path::new("."));
-            let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let temp_path = parent.join(format!(
-                ".omen-restore-{}-{}.tmp",
-                std::process::id(),
-                counter
-            ));
-            if File::create(&temp_path)
-                .and_then(|mut f| {
-                    f.write_all(&self.original)?;
-                    f.sync_all()
-                })
-                .is_ok()
-            {
-                if fs::rename(&temp_path, &self.path).is_err() {
-                    let _ = fs::remove_file(&temp_path);
-                    let _ = fs::write(&self.path, &self.original);
-                }
-            } else {
-                let _ = fs::remove_file(&temp_path);
+            // Falls back to a direct write if the atomic write fails.
+            if atomic_write(&self.path, &self.original).is_err() {
                 let _ = fs::write(&self.path, &self.original);
             }
         }
@@ -715,29 +692,12 @@ pub(crate) fn active_runs_of_the_process() -> usize {
 /// This writes to a temporary file first, then renames it to the target path.
 /// This ensures that the file is never in a partially-written state.
 pub fn atomic_write(path: impl AsRef<Path>, content: &[u8]) -> Result<()> {
-    let path = path.as_ref();
-
-    // Get the parent directory for the temp file
-    let parent = path.parent().unwrap_or(Path::new("."));
-
-    // Create a temporary file in the same directory (unique per thread via atomic counter)
-    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_path = parent.join(format!(
-        ".omen-mutation-{}-{}.tmp",
-        std::process::id(),
-        counter
-    ));
-
-    // Write to temp file
-    let mut file = File::create(&temp_path).map_err(Error::Io)?;
-    file.write_all(content).map_err(Error::Io)?;
-    file.sync_all().map_err(Error::Io)?;
-    drop(file);
-
-    // Rename temp file to target (atomic on POSIX, near-atomic on Windows)
-    fs::rename(&temp_path, path).map_err(Error::Io)?;
-
-    Ok(())
+    write_atomically(
+        path.as_ref(),
+        content,
+        FileMode::KeepExisting { new_file: 0o644 },
+    )
+    .map_err(Error::Io)
 }
 
 /// Check if there are uncommitted changes in the given file.
@@ -1484,37 +1444,6 @@ mod tests {
     }
 
     #[test]
-    fn test_temp_file_names_unique_across_threads() {
-        use std::collections::HashSet;
-        use std::sync::{Arc, Mutex};
-
-        let temp_dir = TempDir::new().unwrap();
-        let collected = Arc::new(Mutex::new(HashSet::new()));
-        let threads: Vec<_> = (0..8)
-            .map(|_| {
-                let dir = temp_dir.path().to_path_buf();
-                let collected = Arc::clone(&collected);
-                std::thread::spawn(move || {
-                    let file = dir.join("src.rs");
-                    fs::write(&file, b"original").unwrap();
-                    for _ in 0..50 {
-                        let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-                        let name = format!(".omen-mutation-{}-{}.tmp", std::process::id(), counter);
-                        collected.lock().unwrap().insert(name);
-                    }
-                })
-            })
-            .collect();
-
-        for t in threads {
-            t.join().unwrap();
-        }
-
-        // 8 threads x 50 iterations = 400 unique names expected
-        assert_eq!(collected.lock().unwrap().len(), 400);
-    }
-
-    #[test]
     fn test_drop_restores_atomically() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.rs");
@@ -1540,5 +1469,70 @@ mod tests {
             })
             .collect();
         assert!(temp_files.is_empty());
+    }
+
+    /// Put a link at each temporary name that the next writes can use. A write
+    /// that follows a link changes the victim file.
+    #[cfg(unix)]
+    fn plant_links(directory: &Path, victim: &Path) {
+        for counter in 0..500 {
+            for prefix in [".omen-mutation-", ".omen-restore-"] {
+                let name = format!("{prefix}{}-{counter}.tmp", std::process::id());
+                std::os::unix::fs::symlink(victim, directory.join(name)).unwrap();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_atomic_write_does_not_follow_a_link_at_a_guessed_name() {
+        let temp_dir = TempDir::new().unwrap();
+        let victim = temp_dir.path().join("victim.txt");
+        fs::write(&victim, b"victim").unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        plant_links(temp_dir.path(), &victim);
+
+        atomic_write(&file_path, b"mutated").unwrap();
+
+        assert_eq!(fs::read(&victim).unwrap(), b"victim");
+        assert_eq!(fs::read(&file_path).unwrap(), b"mutated");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_drop_restore_does_not_follow_a_link_at_a_guessed_name() {
+        let temp_dir = TempDir::new().unwrap();
+        let victim = temp_dir.path().join("victim.txt");
+        fs::write(&victim, b"victim").unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        plant_links(temp_dir.path(), &victim);
+
+        drop(guard);
+
+        assert_eq!(fs::read(&victim).unwrap(), b"victim");
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_mutation_and_restore_keep_the_mode_of_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o750)).unwrap();
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        assert_eq!(mode(&file_path), 0o750);
+        drop(guard);
+
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+        assert_eq!(mode(&file_path), 0o750);
     }
 }
