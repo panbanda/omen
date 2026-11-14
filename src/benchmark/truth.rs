@@ -143,9 +143,9 @@ pub struct Labels {
     pub calls: Vec<CallLabel>,
     #[serde(default)]
     pub imports: Vec<ImportLabel>,
-    /// When set, a sink that omen reports and that no label names is a failure.
+    /// When true, a sink that omen reports and that no label names is a failure. When absent, the value of `closed_world` applies.
     #[serde(default)]
-    pub sinks_closed_world: bool,
+    pub sinks_closed_world: Option<bool>,
     #[serde(default)]
     pub sinks: Vec<SinkLabel>,
 }
@@ -269,6 +269,7 @@ pub struct Observed {
 pub struct ObservedSink {
     pub file: String,
     pub line: u32,
+    pub column: u32,
     pub category: String,
     pub basis: String,
     pub in_test: bool,
@@ -684,23 +685,32 @@ fn compare_imports(case: &str, labels: &Labels, observed: &Observed, out: &mut V
     }
 }
 
+/// A label takes one reported sink. A second label on the same line and category needs a
+/// second sink. A sink that no label takes is unlabelled.
 fn compare_sinks(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec<Assertion>) {
-    let mut labelled = BTreeSet::new();
-    for label in &labels.sinks {
-        let key = (label.file.as_str(), label.line, label.category.as_str());
-        labelled.insert(key);
-        let prefix = format!("{case}/sinks/{}", label.label);
-        let found = observed
-            .sinks
+    let mut sinks: Vec<&ObservedSink> = observed.sinks.iter().collect();
+    sinks.sort_by(|left, right| {
+        (&left.file, left.line, left.column, &left.category).cmp(&(
+            &right.file,
+            right.line,
+            right.column,
+            &right.category,
+        ))
+    });
+    let mut taken = vec![false; sinks.len()];
+    let same_place = |sink: &ObservedSink, label: &SinkLabel| {
+        sink.file == label.file && sink.line == label.line && sink.category == label.category
+    };
+    for label in labels.sinks.iter().filter(|label| label.flagged) {
+        let found = sinks
             .iter()
-            .find(|sink| (sink.file.as_str(), sink.line, sink.category.as_str()) == key);
-        if !label.flagged {
-            out.push(assertion(
-                format!("{prefix}/absent"),
-                found.map(|sink| format!("reported with the basis {}", sink.basis)),
-            ));
-            continue;
-        }
+            .enumerate()
+            .find(|(position, sink)| !taken[*position] && same_place(sink, label))
+            .map(|(position, sink)| {
+                taken[position] = true;
+                *sink
+            });
+        let prefix = format!("{case}/sinks/{}", label.label);
         let check = |name: &str, failure: Option<String>| {
             assertion(
                 format!("{prefix}/{name}"),
@@ -736,20 +746,34 @@ fn compare_sinks(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec
             ));
         }
     }
-    if labels.sinks_closed_world {
-        let unlabelled: BTreeSet<_> = observed
-            .sinks
-            .iter()
-            .map(|sink| (sink.file.as_str(), sink.line, sink.category.as_str()))
-            .filter(|key| !labelled.contains(key))
-            .collect();
-        for (file, line, category) in unlabelled {
-            out.push(assertion(
-                format!("{case}/sinks/unlabelled:{file}:{line}:{category}/absent"),
-                Some("reported but not a labelled sink".to_string()),
-            ));
+    let mut forbidden = Vec::new();
+    for label in labels.sinks.iter().filter(|label| !label.flagged) {
+        let found = sinks.iter().find(|sink| same_place(sink, label));
+        out.push(assertion(
+            format!("{case}/sinks/{}/absent", label.label),
+            found.map(|sink| format!("reported with the basis {}", sink.basis)),
+        ));
+        forbidden.push(label);
+    }
+    if sinks_closed_world(labels) {
+        for (position, sink) in sinks.iter().enumerate() {
+            let covered = taken[position] || forbidden.iter().any(|label| same_place(sink, label));
+            if !covered {
+                out.push(assertion(
+                    format!(
+                        "{case}/sinks/unlabelled:{}:{}:{}:{}/absent",
+                        sink.file, sink.line, sink.column, sink.category
+                    ),
+                    Some("reported but not a labelled sink".to_string()),
+                ));
+            }
         }
     }
+}
+
+/// Without a setting, the sinks follow `closed_world`. Thus an old case does not ignore a sink.
+fn sinks_closed_world(labels: &Labels) -> bool {
+    labels.sinks_closed_world.unwrap_or(labels.closed_world)
 }
 
 /// Check every label of one case against what omen reported.
@@ -1567,6 +1591,7 @@ mod tests {
         ObservedSink {
             file: file.to_string(),
             line,
+            column: 4,
             category: category.to_string(),
             basis: "imported_symbol".to_string(),
             in_test: file.starts_with("tests/"),
@@ -1630,7 +1655,7 @@ mod tests {
         other_category.sinks.push(sink("sinks.py", 5, "weak_hash"));
         assert_eq!(
             sink_failures(&other_category),
-            ["python/security/sinks/unlabelled:sinks.py:5:weak_hash/absent"]
+            ["python/security/sinks/unlabelled:sinks.py:5:4:weak_hash/absent"]
         );
     }
 
@@ -1658,11 +1683,68 @@ mod tests {
         observed.sinks.push(sink("sinks.py", 9, "weak_hash"));
         assert_eq!(
             sink_failures(&observed),
-            ["python/security/sinks/unlabelled:sinks.py:9:weak_hash/absent"]
+            ["python/security/sinks/unlabelled:sinks.py:9:4:weak_hash/absent"]
         );
         let mut open = sink_labels();
-        open.sinks_closed_world = false;
+        open.sinks_closed_world = Some(false);
         let failing = compare("python/security", &open, &observed)
+            .unwrap()
+            .iter()
+            .filter(|assertion| !assertion.passed)
+            .count();
+        assert_eq!(failing, 0);
+    }
+
+    #[test]
+    fn one_reported_sink_cannot_satisfy_two_labels() {
+        let mut labels = sink_labels();
+        let mut twin = labels.sinks[0].clone();
+        twin.label = "command_execution.twin".to_string();
+        labels.sinks.push(twin);
+        let failing: Vec<String> = compare("python/security", &labels, &correct_sinks())
+            .unwrap()
+            .into_iter()
+            .filter(|assertion| !assertion.passed)
+            .map(|assertion| assertion.id)
+            .collect();
+        assert_eq!(
+            failing,
+            [
+                "python/security/sinks/command_execution.twin/found",
+                "python/security/sinks/command_execution.twin/basis",
+                "python/security/sinks/command_execution.twin/in_test",
+                "python/security/sinks/command_execution.twin/constant_argument",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_second_sink_of_the_same_category_on_a_labelled_line_is_unlabelled() {
+        let mut observed = correct_sinks();
+        let mut extra = sink("sinks.py", 4, "command_execution");
+        extra.column = 20;
+        observed.sinks.push(extra);
+        assert_eq!(
+            sink_failures(&observed),
+            ["python/security/sinks/unlabelled:sinks.py:4:20:command_execution/absent"]
+        );
+    }
+
+    #[test]
+    fn the_sinks_follow_closed_world_when_the_case_does_not_say() {
+        let mut labels = sink_labels();
+        labels.sinks_closed_world = None;
+        labels.closed_world = true;
+        let mut observed = correct_sinks();
+        observed.sinks.push(sink("sinks.py", 9, "weak_hash"));
+        let failing = compare("python/security", &labels, &observed)
+            .unwrap()
+            .iter()
+            .filter(|assertion| !assertion.passed)
+            .count();
+        assert_eq!(failing, 1);
+        labels.closed_world = false;
+        let failing = compare("python/security", &labels, &observed)
             .unwrap()
             .iter()
             .filter(|assertion| !assertion.passed)

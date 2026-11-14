@@ -35,8 +35,13 @@ pub enum Predicate {
     },
     AnyArgIn(&'static [&'static str]),
     AnyArgStartsWith(&'static [&'static str]),
-    /// No argument has the text. The test is case sensitive.
-    NoArgContains(&'static str),
+    /// The loader argument is missing, or the imports resolve it to a loader that is not safe.
+    /// A loader that the imports cannot resolve is not a sink.
+    NotSafeLoader,
+    /// The argument at the index exists and is not a literal.
+    ArgNotLiteral {
+        index: usize,
+    },
     /// The argument at the index, or any argument, is a concatenated,
     /// interpolated, or formatted string.
     BuiltString {
@@ -61,10 +66,19 @@ pub enum Target {
         module: &'static str,
         name: &'static str,
     },
-    /// A field of a struct literal or an object literal.
+    /// A field of a struct literal. The literal has the type `owner` of the module `module`.
     KeyedField {
         key: &'static str,
         value: &'static str,
+        module: &'static str,
+        owner: &'static str,
+    },
+    /// An assignment to a member. The assigned value, without white space and in
+    /// lower case, contains one of the values.
+    Assignment {
+        module: &'static str,
+        name: &'static str,
+        values: &'static [&'static str],
     },
     UnsafeBlock,
     /// A string literal that is a token with a provider prefix.
@@ -166,11 +180,37 @@ const fn keyed(
     languages: &'static [Language],
     key: &'static str,
     value: &'static str,
+    module: &'static str,
+    owner: &'static str,
 ) -> SinkSpec {
     SinkSpec {
         category,
         languages,
-        target: Target::KeyedField { key, value },
+        target: Target::KeyedField {
+            key,
+            value,
+            module,
+            owner,
+        },
+        predicate: Always,
+    }
+}
+
+const fn assignment(
+    category: SinkCategory,
+    languages: &'static [Language],
+    module: &'static str,
+    name: &'static str,
+    values: &'static [&'static str],
+) -> SinkSpec {
+    SinkSpec {
+        category,
+        languages,
+        target: Target::Assignment {
+            module,
+            name,
+            values,
+        },
         predicate: Always,
     }
 }
@@ -209,7 +249,7 @@ pub const SPECS: &[SinkSpec] = &[
         PYTHON,
         "yaml",
         "load|load_all",
-        Predicate::NoArgContains("Safe"),
+        Predicate::NotSafeLoader,
     ),
     path(UnsafeDeserialization, PYTHON, "yaml", "unsafe_load|unsafe_load_all", Always),
     method(SqlStringConstruction, PYTHON, "execute|executemany|executescript", built(0)),
@@ -304,6 +344,7 @@ pub const SPECS: &[SinkSpec] = &[
         keyword("rejectunauthorized", "false"),
     ),
     // Go
+    // A command is built here. The sink does not say that the command runs.
     path(CommandExecution, GO, "os/exec", "Command|CommandContext", Always),
     method(
         SqlStringConstruction,
@@ -314,8 +355,23 @@ pub const SPECS: &[SinkSpec] = &[
     path(WeakHash, GO, "crypto/md5|crypto/sha1", "New|Sum", Always),
     path(WeakCipher, GO, "crypto/des", "NewCipher|NewTripleDESCipher", Always),
     path(WeakCipher, GO, "crypto/rc4", "NewCipher", Always),
-    keyed(TlsVerificationDisabled, GO, "InsecureSkipVerify", "true"),
+    keyed(
+        TlsVerificationDisabled,
+        GO,
+        "InsecureSkipVerify",
+        "true",
+        "crypto/tls",
+        "Config",
+    ),
+    path(
+        MemoryUnsafe,
+        GO,
+        "unsafe",
+        "Pointer|Slice|SliceData|String|StringData|Add",
+        Always,
+    ),
     // Rust
+    // A command is built here. The sink does not say that the command runs.
     path(CommandExecution, RUST, "std::process::Command", "new", Always),
     path(
         SqlStringConstruction,
@@ -457,12 +513,26 @@ pub const SPECS: &[SinkSpec] = &[
         "Create",
         Always,
     ),
-    mention(
+    assignment(
         TlsVerificationDisabled,
         CSHARP,
         "System.Net.Http.HttpClientHandler",
-        "DangerousAcceptAnyServerCertificateValidator",
+        "ServerCertificateCustomValidationCallback",
+        &["dangerousacceptanyservercertificatevalidator", "=>true"],
     ),
+    assignment(
+        TlsVerificationDisabled,
+        CSHARP,
+        "System.Net.ServicePointManager",
+        "ServerCertificateValidationCallback",
+        &["=>true"],
+    ),
+    SinkSpec {
+        category: MemoryUnsafe,
+        languages: CSHARP,
+        target: Target::UnsafeBlock,
+        predicate: Always,
+    },
     // Ruby
     path(CommandExecution, RUBY, "", "system|exec|spawn", Always),
     path(
@@ -590,6 +660,13 @@ pub const SPECS: &[SinkSpec] = &[
             },
         ]),
     ),
+    path(
+        SqlStringConstruction,
+        C,
+        "",
+        "sqlite3_exec|mysql_query|mysql_real_query|PQexec",
+        Predicate::ArgNotLiteral { index: 1 },
+    ),
     path(MemoryUnsafe, C, "", "gets|strcpy|strcat|sprintf|vsprintf", Always),
     path(MemoryUnsafe, CPP, "std", "strcpy|strcat|sprintf|vsprintf", Always),
     // Bash
@@ -713,6 +790,10 @@ pub struct LanguageSyntax {
     pub mention_kinds: &'static [&'static str],
     /// The node kinds of a key and a value in a literal that the syntax names with children, not fields.
     pub keyed_kinds: &'static [&'static str],
+    /// The node kinds of an assignment to a member.
+    pub assignment_kinds: &'static [&'static str],
+    /// The node kind of a block that the language marks as unsafe.
+    pub unsafe_kinds: &'static [&'static str],
     /// The modules that the language gives without an import. A callee in one of them can be written without the module.
     pub implicit_modules: &'static [&'static str],
     /// A name has one value in the whole repository, thus a definition in any file replaces the library name.
@@ -729,6 +810,8 @@ pub fn syntax_of(language: Language) -> LanguageSyntax {
         string_kinds: &["string"],
         mention_kinds: &[],
         keyed_kinds: &[],
+        assignment_kinds: &[],
+        unsafe_kinds: &[],
         implicit_modules: &[],
         global_namespace: false,
         same_directory_names: false,
@@ -753,6 +836,7 @@ pub fn syntax_of(language: Language) -> LanguageSyntax {
         Language::Rust => LanguageSyntax {
             string_kinds: &["string_literal", "raw_string_literal"],
             roots: &["*"],
+            unsafe_kinds: &["unsafe_block"],
             ..base
         },
         Language::Java => LanguageSyntax {
@@ -767,7 +851,8 @@ pub fn syntax_of(language: Language) -> LanguageSyntax {
                 "verbatim_string_literal",
                 "raw_string_literal",
             ],
-            mention_kinds: &["member_access_expression"],
+            assignment_kinds: &["assignment_expression"],
+            unsafe_kinds: &["unsafe_statement"],
             same_directory_names: true,
             ..base
         },

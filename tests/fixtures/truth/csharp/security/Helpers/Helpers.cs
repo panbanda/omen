@@ -48,5 +48,6 @@ namespace Helpers
     public class HttpClientHandler
     {
         public static object DangerousAcceptAnyServerCertificateValidator = null;
+        public object ServerCertificateCustomValidationCallback = null;
     }
 }

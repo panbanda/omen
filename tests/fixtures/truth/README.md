@@ -62,7 +62,11 @@ not report one. The security cases are in the directories `security` and
 - `in_test` is `true` for a sink in test code. `constant_argument` is checked
   only when the label gives it.
 - With `sinks_closed_world`, a sink that omen reports without a label is a
-  failure.
+  failure. A label takes one reported sink. A second label on the same line
+  needs a second sink. Without the setting, `closed_world` applies.
+- A `not_applicable` entry means that the language cannot have the construct.
+  A gap in the detector is not a reason. Label the fact, and list the failure
+  in the ledger.
 - Each language has each category and scenario. Use a `not_applicable` entry
   with the dimension `sinks` when a row does not apply. The category of the
   entry is `<category>/<scenario>`. A category without a scenario covers each

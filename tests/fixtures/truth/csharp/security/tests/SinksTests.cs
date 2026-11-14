@@ -7,7 +7,7 @@ using Microsoft.CodeAnalysis.CSharp.Scripting;
 
 public class SinksTests
 {
-    public void TestEverything(BinaryFormatter formatter, System.IO.Stream stream, string name)
+    public void TestEverything(BinaryFormatter formatter, System.IO.Stream stream, string name, HttpClientHandler handler)
     {
         Process.Start("sh");
         CSharpScript.EvaluateAsync(name);
@@ -15,7 +15,7 @@ public class SinksTests
         new SqlCommand("SELECT * FROM users WHERE name = '" + name + "'");
         MD5.Create();
         DES.Create();
-        var handler = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+        handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
         var token = "AKIAIOSFODNN7EXAMPLE";
     }
 }

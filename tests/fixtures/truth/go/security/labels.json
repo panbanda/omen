@@ -8,7 +8,6 @@
   "not_applicable": [
     {"dimension": "sinks", "category": "code_evaluation", "reason": "Go has no eval function."},
     {"dimension": "sinks", "category": "unsafe_deserialization", "reason": "The standard decoders do not build arbitrary types from bytes."},
-    {"dimension": "sinks", "category": "memory_unsafe", "reason": "The sink table treats Go as a memory-safe language. The unsafe package is outside this table."},
     {"dimension": "sinks", "category": "sql_string_construction/aliased_import", "reason": "The sink is a method of a database handle. No import binds the method."},
     {"dimension": "sinks", "category": "tls_verification_disabled/aliased_import", "reason": "The sink is a field of a struct literal. No import binds the field."},
     {"dimension": "sinks", "category": "tls_verification_disabled/same_name_symbol", "reason": "The sink is a field name. The matcher does not resolve a field to a repository symbol."},
@@ -52,6 +51,14 @@
     {"label": "hardcoded_credential.real_call", "category": "hardcoded_credential", "scenario": "real_call", "file": "sinks.go", "line": 62, "basis": "builtin"},
     {"label": "hardcoded_credential.safe_variant", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "sinks.go", "line": 63, "flagged": false},
     {"label": "hardcoded_credential.name_in_comment", "category": "hardcoded_credential", "scenario": "name_in_comment", "file": "sinks.go", "line": 64, "flagged": false},
-    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "sinks_test.go", "line": 18, "basis": "builtin", "in_test": true}
+    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "sinks_test.go", "line": 18, "basis": "builtin", "in_test": true},
+    {"label": "memory_unsafe.real_call", "category": "memory_unsafe", "scenario": "real_call", "file": "unsafe.go", "line": 10, "basis": "imported_symbol"},
+    {"label": "memory_unsafe.aliased_import", "category": "memory_unsafe", "scenario": "aliased_import", "file": "unsafe.go", "line": 11, "basis": "imported_symbol"},
+    {"label": "memory_unsafe.safe_variant", "category": "memory_unsafe", "scenario": "safe_variant", "file": "unsafe.go", "line": 12, "flagged": false},
+    {"label": "memory_unsafe.name_in_string", "category": "memory_unsafe", "scenario": "name_in_string", "file": "unsafe.go", "line": 13, "flagged": false},
+    {"label": "memory_unsafe.name_in_comment", "category": "memory_unsafe", "scenario": "name_in_comment", "file": "unsafe.go", "line": 14, "flagged": false},
+    {"label": "memory_unsafe.same_name_symbol", "category": "memory_unsafe", "scenario": "same_name_symbol", "file": "unsafe_decoys.go", "line": 6, "flagged": false},
+    {"label": "memory_unsafe.in_test", "category": "memory_unsafe", "scenario": "in_test", "file": "unsafe_test.go", "line": 6, "basis": "imported_symbol", "in_test": true},
+    {"label": "tls_verification_disabled.safe_variant.map_literal", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_extra.go", "line": 4, "flagged": false}
   ]
 }

@@ -61,6 +61,11 @@
     {"label": "memory_unsafe.name_in_string", "category": "memory_unsafe", "scenario": "name_in_string", "file": "sinks.rs", "line": 61, "flagged": false},
     {"label": "memory_unsafe.name_in_comment", "category": "memory_unsafe", "scenario": "name_in_comment", "file": "sinks.rs", "line": 62, "flagged": false},
     {"label": "memory_unsafe.same_name_symbol", "category": "memory_unsafe", "scenario": "same_name_symbol", "file": "decoys.rs", "line": 7, "flagged": false},
-    {"label": "memory_unsafe.in_test", "category": "memory_unsafe", "scenario": "in_test", "file": "sinks.rs", "line": 82, "basis": "builtin", "in_test": true}
+    {"label": "memory_unsafe.in_test", "category": "memory_unsafe", "scenario": "in_test", "file": "sinks.rs", "line": 82, "basis": "builtin", "in_test": true},
+    {"label": "command_execution.aliased_import.reexport", "category": "command_execution", "scenario": "aliased_import", "file": "extra.rs", "line": 7, "basis": "imported_symbol"},
+    {"label": "memory_unsafe.real_call.library_block", "category": "memory_unsafe", "scenario": "real_call", "file": "extra.rs", "line": 11, "basis": "builtin"},
+    {"label": "memory_unsafe.real_call.from_raw_parts", "category": "memory_unsafe", "scenario": "real_call", "file": "extra.rs", "line": 12, "basis": "imported_symbol"},
+    {"label": "memory_unsafe.real_call.from_ptr", "category": "memory_unsafe", "scenario": "real_call", "file": "extra.rs", "line": 13, "basis": "imported_symbol"},
+    {"label": "hardcoded_credential.real_call.raw_string", "category": "hardcoded_credential", "scenario": "real_call", "file": "extra.rs", "line": 18, "basis": "builtin"}
   ]
 }

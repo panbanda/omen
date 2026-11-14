@@ -10,6 +10,10 @@ func Command(program string) string {
 	return program
 }
 
+func Pointer(value *int) *int {
+	return value
+}
+
 func New() string {
 	return "new"
 }

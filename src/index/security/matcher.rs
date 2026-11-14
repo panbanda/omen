@@ -7,7 +7,7 @@ use std::ops::Range;
 use rayon::prelude::*;
 use tree_sitter::Node;
 
-use super::spec::{specs_for, syntax_of, LanguageSyntax, SinkSpec, Target};
+use super::spec::{specs_for, syntax_of, LanguageSyntax, Predicate, SinkSpec, Target};
 use super::syntax;
 use super::{Sink, SinkBasis, SinkCategory, SinkFlags};
 use crate::core::{is_test_file, Language};
@@ -119,6 +119,9 @@ fn type_segments(text: &str) -> Option<Vec<String>> {
 
 /// The segments of a receiver that is a chain of names and calls without arguments.
 fn chain_segments(text: &str) -> Option<Vec<String>> {
+    if text.trim_start().starts_with("new ") {
+        return None;
+    }
     let compact: String = text.split_whitespace().collect();
     let mut segments = Vec::new();
     for part in compact.split(['.', ':']).filter(|part| !part.is_empty()) {
@@ -134,6 +137,44 @@ fn chain_segments(text: &str) -> Option<Vec<String>> {
     }
     Some(segments)
 }
+
+/// The type that `new Type(arguments)` makes, when the text is only that expression.
+fn constructed_type(text: &str) -> Option<Vec<String>> {
+    let rest = text.trim().strip_prefix("new ")?.trim_start();
+    let open = rest.find(['(', '<', '{'])?;
+    if !rest[open..].starts_with('(') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut close = None;
+    for (offset, character) in rest[open..].char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + offset);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    if !rest[close? + 1..].trim().is_empty() {
+        return None;
+    }
+    chain_segments(rest[..open].trim())
+}
+
+/// The loaders of PyYAML that build arbitrary objects.
+const UNSAFE_LOADERS: [&str; 6] = [
+    "Loader",
+    "UnsafeLoader",
+    "FullLoader",
+    "CLoader",
+    "CUnsafeLoader",
+    "CFullLoader",
+];
 
 /// The owner of a written path after the imports of the file.
 enum Owner {
@@ -255,7 +296,10 @@ impl FileContext<'_> {
     fn binds(binding: &ImportBinding, name: &str) -> bool {
         matches!(
             binding.kind,
-            ImportKind::Module | ImportKind::Named | ImportKind::ModuleDeclaration
+            ImportKind::Module
+                | ImportKind::Named
+                | ImportKind::ReExportNamed
+                | ImportKind::ModuleDeclaration
         ) && binding.local_name.as_deref() == Some(name)
     }
 
@@ -275,7 +319,9 @@ impl FileContext<'_> {
             {
                 vec![local.to_string()]
             }
-            (ImportKind::Named, Some(imported)) if !matches!(imported, "default" | "*") => {
+            (ImportKind::Named | ImportKind::ReExportNamed, Some(imported))
+                if !matches!(imported, "default" | "*") =>
+            {
                 if segments.last().map(String::as_str) == Some(imported) {
                     segments
                 } else {
@@ -405,7 +451,9 @@ impl FileContext<'_> {
         let mut path = match &reference.receiver {
             Some(Receiver::SelfValue | Receiver::Super) => return None,
             Some(Receiver::Name(name)) => vec![name.clone()],
-            Some(Receiver::Expression) => match receiver_text.and_then(chain_segments) {
+            Some(Receiver::Expression) => match receiver_text
+                .and_then(|text| chain_segments(text).or_else(|| constructed_type(text)))
+            {
                 Some(chain) => chain,
                 None => return Some(None),
             },
@@ -546,6 +594,11 @@ impl FileContext<'_> {
                 if !held {
                     continue;
                 }
+                if spec.predicate == Predicate::NotSafeLoader
+                    && !self.loader_is_unsafe(&arguments, &chain)
+                {
+                    continue;
+                }
                 let callee_start = facts.start_byte.min(reference.name_range.start_byte);
                 let callee_text = self
                     .source
@@ -561,6 +614,48 @@ impl FileContext<'_> {
                     !arguments.is_empty() && arguments.iter().all(|node| syntax::is_literal(*node)),
                 ));
             }
+        }
+    }
+
+    /// A missing loader is not safe. A loader is not safe when the imports resolve it to
+    /// a PyYAML loader that builds arbitrary objects. A loader that the imports cannot
+    /// resolve, such as a variable, is not a sink.
+    fn loader_is_unsafe(&self, arguments: &[Node<'_>], chain: &[usize]) -> bool {
+        let keyword = arguments.iter().find_map(|argument| {
+            let named = argument.kind() == "keyword_argument"
+                && argument.child_by_field_name("name").is_some_and(|name| {
+                    syntax::text(name, self.source).eq_ignore_ascii_case("loader")
+                });
+            named
+                .then(|| argument.child_by_field_name("value"))
+                .flatten()
+        });
+        let positional = arguments
+            .get(1)
+            .filter(|argument| argument.kind() != "keyword_argument");
+        let Some(loader) = keyword.or(positional.copied()) else {
+            return true;
+        };
+        let compact: String = syntax::text(loader, self.source)
+            .split_whitespace()
+            .collect();
+        let written = split_path(&compact);
+        if written.is_empty()
+            || !written
+                .iter()
+                .all(|part| part.chars().all(|c| c.is_alphanumeric() || c == '_'))
+        {
+            return false;
+        }
+        match self.resolve(&written, chain) {
+            Owner::Paths { paths, .. } => paths.iter().any(|path| {
+                path.len() >= 2
+                    && path[0] == "yaml"
+                    && path
+                        .last()
+                        .is_some_and(|last| UNSAFE_LOADERS.contains(&last.as_str()))
+            }),
+            Owner::Repository | Owner::Unknown => false,
         }
     }
 
@@ -618,7 +713,8 @@ impl FileContext<'_> {
             }
             return;
         }
-        if kind == "unsafe_block" && self.has_target(|target| matches!(target, Target::UnsafeBlock))
+        if self.syntax.unsafe_kinds.contains(&kind)
+            && self.has_target(|target| matches!(target, Target::UnsafeBlock))
         {
             sinks.push(self.sink(
                 SinkCategory::MemoryUnsafe,
@@ -634,6 +730,9 @@ impl FileContext<'_> {
         }
         if self.syntax.keyed_kinds.contains(&kind) {
             self.keyed_field(node, sinks);
+        }
+        if self.syntax.assignment_kinds.contains(&kind) {
+            self.assignment(node, sinks);
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -653,9 +752,14 @@ impl FileContext<'_> {
             if let Target::KeyedField {
                 key: wanted_key,
                 value: wanted_value,
+                module,
+                owner,
             } = spec.target
             {
-                if key == wanted_key.to_lowercase() && value == wanted_value {
+                if key == wanted_key.to_lowercase()
+                    && value == wanted_value
+                    && self.literal_has_type(node, module, owner)
+                {
                     sinks.push(self.sink(
                         spec.category,
                         Span::of(&node),
@@ -665,6 +769,94 @@ impl FileContext<'_> {
                         false,
                     ));
                 }
+            }
+        }
+    }
+
+    /// The nearest composite literal around the node has the type `owner` of the module,
+    /// and the imports resolve the type. A map literal has no such type.
+    fn literal_has_type(&self, node: Node<'_>, module: &str, owner: &str) -> bool {
+        let mut parent = node.parent();
+        while let Some(candidate) = parent {
+            if candidate.kind() == "composite_literal" {
+                let Some(declared) = candidate.child_by_field_name("type") else {
+                    return false;
+                };
+                let compact: String = syntax::text(declared, self.source)
+                    .split_whitespace()
+                    .collect();
+                let written = split_path(&compact);
+                if written.is_empty()
+                    || !written
+                        .iter()
+                        .all(|part| part.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                {
+                    return false;
+                }
+                let chain = self.owner_chain(self.enclosing_position(node.start_byte()));
+                return match self.resolve(&written, &chain) {
+                    Owner::Paths { paths, imported } => paths
+                        .iter()
+                        .any(|path| self.path_match(module, owner, path, imported).is_some()),
+                    Owner::Repository | Owner::Unknown => false,
+                };
+            }
+            parent = candidate.parent();
+        }
+        false
+    }
+
+    /// Reports an assignment to a member that a row names.
+    fn assignment(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
+        let (Some(left), Some(right)) = (
+            node.child_by_field_name("left"),
+            node.child_by_field_name("right"),
+        ) else {
+            return;
+        };
+        let compact: String = syntax::text(left, self.source).split_whitespace().collect();
+        let written = split_path(&compact);
+        if written.len() < 2
+            || !written
+                .iter()
+                .all(|part| part.chars().all(|c| c.is_alphanumeric() || c == '_'))
+        {
+            return;
+        }
+        let value: String = syntax::text(right, self.source)
+            .split_whitespace()
+            .collect::<String>()
+            .to_lowercase();
+        let chain = self.owner_chain(self.enclosing_position(node.start_byte()));
+        let Owner::Paths { paths, imported } = self.resolve(&written, &chain) else {
+            return;
+        };
+        for spec in &self.specs {
+            let Target::Assignment {
+                module,
+                name,
+                values,
+            } = spec.target
+            else {
+                continue;
+            };
+            if written.last().map(String::as_str) != Some(name)
+                || !values.iter().any(|wanted| value.contains(wanted))
+            {
+                continue;
+            }
+            let basis = paths
+                .iter()
+                .find_map(|path| self.path_match(module, name, path, imported));
+            if let Some(basis) = basis {
+                sinks.push(self.sink(
+                    spec.category,
+                    Span::of(&node),
+                    self.enclosing_key(node.start_byte()),
+                    &compact,
+                    basis,
+                    false,
+                ));
             }
         }
     }

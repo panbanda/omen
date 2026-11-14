@@ -276,6 +276,7 @@ fn observed_sinks(trees: &[omen::parser::ParseResult], files: &[FileSymbols]) ->
         .map(|sink| ObservedSink {
             file: sink.file,
             line: sink.range.start_line,
+            column: sink.range.start_column,
             category: sink.category.name().to_string(),
             basis: sink.basis.name().to_string(),
             in_test: sink.flags.in_test,

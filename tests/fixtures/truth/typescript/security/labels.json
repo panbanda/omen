@@ -64,6 +64,9 @@
     {"label": "hardcoded_credential.real_call", "category": "hardcoded_credential", "scenario": "real_call", "file": "sinks.ts", "line": 74, "basis": "builtin"},
     {"label": "hardcoded_credential.safe_variant", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "sinks.ts", "line": 75, "flagged": false},
     {"label": "hardcoded_credential.name_in_comment", "category": "hardcoded_credential", "scenario": "name_in_comment", "file": "sinks.ts", "line": 76, "flagged": false},
-    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/sinks.test.ts", "line": 14, "basis": "builtin", "in_test": true}
+    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/sinks.test.ts", "line": 14, "basis": "builtin", "in_test": true},
+    {"label": "command_execution.real_call.spawn_shell", "category": "command_execution", "scenario": "real_call", "file": "extra.ts", "line": 4, "basis": "imported_symbol"},
+    {"label": "command_execution.safe_variant.spawn_plain", "category": "command_execution", "scenario": "safe_variant", "file": "extra.ts", "line": 5, "flagged": false},
+    {"label": "command_execution.safe_variant.spawn_nested", "category": "command_execution", "scenario": "safe_variant", "file": "extra.ts", "line": 6, "flagged": false}
   ]
 }

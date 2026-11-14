@@ -56,9 +56,31 @@ pub fn arguments<'tree>(call: Node<'tree>, language: Language) -> Vec<Node<'tree
         .collect()
 }
 
+/// The text of a Rust raw string `r#"..."#` or a C++ raw string `R"delimiter(...)delimiter"`.
+fn raw_inner(text: &str) -> Option<&str> {
+    let rust = text.strip_prefix('b').unwrap_or(text);
+    if let Some(rest) = rust.strip_prefix('r') {
+        let hashes = rest.chars().take_while(|c| *c == '#').count();
+        let body = rest[hashes..].strip_prefix('"')?;
+        let closing = format!("\"{}", "#".repeat(hashes));
+        return body.strip_suffix(closing.as_str());
+    }
+    let cpp = ["u8", "u", "U", "L"]
+        .iter()
+        .find_map(|prefix| text.strip_prefix(prefix))
+        .unwrap_or(text);
+    let rest = cpp.strip_prefix("R\"")?;
+    let open = rest.find('(')?;
+    let closing = format!("){}\"", &rest[..open]);
+    rest[open + 1..].strip_suffix(closing.as_str())
+}
+
 /// The text of a string literal without its prefix and its quotation marks.
 pub fn unquote(text: &str) -> &str {
     let text = text.trim();
+    if let Some(inner) = raw_inner(text) {
+        return inner;
+    }
     let Some(quote) = text.find(['"', '\'', '`']) else {
         return text;
     };
@@ -133,16 +155,22 @@ fn has_interpolation(node: Node<'_>) -> bool {
             && has_descendant(node, &|child| child.kind() == "variable_name"))
 }
 
-const FORMAT_CALLEES: [&str; 8] = [
-    ".format",
-    "Sprintf",
-    "sprintf",
-    "String.Format",
-    "String.format",
-    "format!",
-    "concat",
-    "format",
-];
+const FORMAT_CALLEES: [&str; 5] = ["format", "Format", "Sprintf", "sprintf", "concat"];
+
+/// The name of the callee of a call, without its receiver or its path.
+fn callee_name<'a>(node: Node<'_>, source: &'a [u8]) -> &'a str {
+    for field in ["function", "name", "method", "macro"] {
+        if let Some(callee) = node.child_by_field_name(field) {
+            let whole = text(callee, source);
+            return whole
+                .rsplit(['.', ':', '>'])
+                .next()
+                .unwrap_or(whole)
+                .trim_end_matches('!');
+        }
+    }
+    ""
+}
 
 /// A string that code builds from parts: a concatenation with a literal, an
 /// interpolation, or a call of a formatting function.
@@ -168,15 +196,7 @@ pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -
         | "method_invocation"
         | "invocation_expression"
         | "function_call_expression"
-        | "member_call_expression" => {
-            let whole = text(node, source);
-            let callee = whole
-                .split(['(', '[', '{'])
-                .next()
-                .unwrap_or("")
-                .trim_end_matches(' ');
-            FORMAT_CALLEES.iter().any(|name| callee.ends_with(name))
-        }
+        | "member_call_expression" => FORMAT_CALLEES.contains(&callee_name(node, source)),
         _ => has_interpolation(node),
     }
 }
@@ -195,15 +215,6 @@ pub fn is_literal(node: Node<'_>) -> bool {
     .any(|word| kind.contains(word))
 }
 
-fn visit(node: Node<'_>, test: &mut dyn FnMut(Node<'_>) -> bool) -> bool {
-    if test(node) {
-        return true;
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
-    children.into_iter().any(|child| visit(child, test))
-}
-
 /// Tells if the predicate holds for the arguments of a call.
 pub fn holds(
     predicate: &Predicate,
@@ -215,9 +226,18 @@ pub fn holds(
     match predicate {
         Predicate::Always => true,
         Predicate::Keyword { name, value } => arguments.iter().any(|argument| {
-            visit(*argument, &mut |node| {
+            let is_pair = |node: Node<'_>| {
                 key_value(node, source).is_some_and(|(key, found)| key == *name && found == *value)
-            })
+            };
+            // A pair is an argument, or a direct member of an object literal that is an argument.
+            // A pair in a nested value, such as `env={"shell": True}`, does not count.
+            if matches!(argument.kind(), "object" | "hash") {
+                let mut cursor = argument.walk();
+                let members: Vec<Node<'_>> = argument.named_children(&mut cursor).collect();
+                members.into_iter().any(is_pair)
+            } else {
+                is_pair(*argument)
+            }
         }),
         Predicate::ArgIn { index, values } => arguments
             .get(*index)
@@ -237,9 +257,11 @@ pub fn holds(
             let found = argument_text(node);
             prefixes.iter().any(|prefix| found.starts_with(prefix))
         }),
-        Predicate::NoArgContains(needle) => !arguments
-            .iter()
-            .any(|node| text(*node, source).contains(needle)),
+        // The matcher resolves the loader through the imports.
+        Predicate::NotSafeLoader => true,
+        Predicate::ArgNotLiteral { index } => {
+            arguments.get(*index).is_some_and(|node| !is_literal(*node))
+        }
         Predicate::BuiltString { index: Some(index) } => arguments
             .get(*index)
             .is_some_and(|node| is_built_string(*node, source, syntax)),
@@ -275,6 +297,11 @@ mod tests {
         assert_eq!(unquote("b'x'"), "x");
         assert_eq!(unquote("\"\"\"long\"\"\""), "long");
         assert_eq!(unquote("`tpl`"), "tpl");
+        assert_eq!(unquote("r#\"a\"b\"#"), "a\"b");
+        assert_eq!(unquote("r\"x\""), "x");
+        assert_eq!(unquote("R\"(x)\""), "x");
+        assert_eq!(unquote("R\"tag(a)b)tag\""), "a)b");
+        assert_eq!(unquote("return"), "return");
         assert_eq!(unquote("0L"), "0L");
         assert_eq!(unquote("value"), "value");
         assert_eq!(unquote("call(\"x\")"), "call(\"x\")");

@@ -72,6 +72,14 @@
     {"label": "hardcoded_credential.real_call", "category": "hardcoded_credential", "scenario": "real_call", "file": "sinks.py", "line": 79, "basis": "builtin"},
     {"label": "hardcoded_credential.safe_variant", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "sinks.py", "line": 80, "flagged": false},
     {"label": "hardcoded_credential.name_in_comment", "category": "hardcoded_credential", "scenario": "name_in_comment", "file": "sinks.py", "line": 81, "flagged": false},
-    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/test_sinks.py", "line": 16, "basis": "builtin", "in_test": true}
+    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/test_sinks.py", "line": 16, "basis": "builtin", "in_test": true},
+
+    {"label": "command_execution.safe_variant.nested_env", "category": "command_execution", "scenario": "safe_variant", "file": "extra.py", "line": 9, "flagged": false},
+    {"label": "tls_verification_disabled.safe_variant.nested_json", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "extra.py", "line": 10, "flagged": false},
+    {"label": "sql_string_construction.safe_variant.reformat", "category": "sql_string_construction", "scenario": "safe_variant", "file": "extra.py", "line": 11, "flagged": false},
+    {"label": "unsafe_deserialization.safe_variant.safe_alias", "category": "unsafe_deserialization", "scenario": "safe_variant", "file": "extra.py", "line": 12, "flagged": false},
+    {"label": "unsafe_deserialization.aliased_import.unsafe_alias", "category": "unsafe_deserialization", "scenario": "aliased_import", "file": "extra.py", "line": 13, "basis": "imported_symbol"},
+    {"label": "unsafe_deserialization.real_call.missing_loader", "category": "unsafe_deserialization", "scenario": "real_call", "file": "extra.py", "line": 14, "basis": "imported_symbol"},
+    {"label": "unsafe_deserialization.safe_variant.unresolved_loader", "category": "unsafe_deserialization", "scenario": "safe_variant", "file": "extra.py", "line": 15, "flagged": false}
   ]
 }

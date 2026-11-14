@@ -6,10 +6,11 @@
   "closed_world": false,
   "sinks_closed_world": true,
   "not_applicable": [
-    {"dimension": "sinks", "category": "memory_unsafe", "reason": "C# is a memory-safe language outside unsafe contexts. The sink table does not cover unsafe contexts."},
     {"dimension": "sinks", "category": "hardcoded_credential/aliased_import", "reason": "A string literal is not imported."},
     {"dimension": "sinks", "category": "hardcoded_credential/name_in_string", "reason": "The literal is the sink. Another string does not name it."},
-    {"dimension": "sinks", "category": "hardcoded_credential/same_name_symbol", "reason": "A literal is not a name that a repository symbol can have."}
+    {"dimension": "sinks", "category": "hardcoded_credential/same_name_symbol", "reason": "A literal is not a name that a repository symbol can have."},
+    {"dimension": "sinks", "category": "memory_unsafe/aliased_import", "reason": "The word unsafe is a keyword. A using directive cannot alias it."},
+    {"dimension": "sinks", "category": "memory_unsafe/same_name_symbol", "reason": "The word unsafe is a keyword. A repository symbol cannot have the name."}
   ],
   "sinks": [
     {"label": "command_execution.real_call", "category": "command_execution", "scenario": "real_call", "file": "Sinks.cs", "line": 19, "basis": "imported_symbol", "constant_argument": false},
@@ -64,6 +65,12 @@
     {"label": "hardcoded_credential.real_call", "category": "hardcoded_credential", "scenario": "real_call", "file": "Sinks.cs", "line": 82, "basis": "builtin"},
     {"label": "hardcoded_credential.safe_variant", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "Sinks.cs", "line": 83, "flagged": false},
     {"label": "hardcoded_credential.name_in_comment", "category": "hardcoded_credential", "scenario": "name_in_comment", "file": "Sinks.cs", "line": 84, "flagged": false},
-    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/SinksTests.cs", "line": 19, "basis": "builtin", "in_test": true}
+    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/SinksTests.cs", "line": 19, "basis": "builtin", "in_test": true},
+    {"label": "unsafe_deserialization.real_call.constructed_receiver", "category": "unsafe_deserialization", "scenario": "real_call", "file": "Extra.cs", "line": 8, "basis": "imported_symbol"},
+    {"label": "memory_unsafe.real_call", "category": "memory_unsafe", "scenario": "real_call", "file": "UnsafeCode.cs", "line": 5, "basis": "builtin"},
+    {"label": "memory_unsafe.safe_variant", "category": "memory_unsafe", "scenario": "safe_variant", "file": "UnsafeCode.cs", "line": 13, "flagged": false},
+    {"label": "memory_unsafe.name_in_string", "category": "memory_unsafe", "scenario": "name_in_string", "file": "UnsafeCode.cs", "line": 21, "flagged": false},
+    {"label": "memory_unsafe.name_in_comment", "category": "memory_unsafe", "scenario": "name_in_comment", "file": "UnsafeCode.cs", "line": 22, "flagged": false},
+    {"label": "memory_unsafe.in_test", "category": "memory_unsafe", "scenario": "in_test", "file": "tests/UnsafeTests.cs", "line": 5, "basis": "builtin", "in_test": true}
   ]
 }

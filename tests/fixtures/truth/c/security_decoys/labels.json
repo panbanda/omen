@@ -13,6 +13,7 @@
     {"label": "weak_hash.same_name_symbol", "category": "weak_hash", "scenario": "same_name_symbol", "file": "decoys.c", "line": 24, "flagged": false},
     {"label": "weak_cipher.same_name_symbol", "category": "weak_cipher", "scenario": "same_name_symbol", "file": "decoys.c", "line": 25, "flagged": false},
     {"label": "tls_verification_disabled.same_name_symbol", "category": "tls_verification_disabled", "scenario": "same_name_symbol", "file": "decoys.c", "line": 26, "flagged": false},
-    {"label": "memory_unsafe.same_name_symbol", "category": "memory_unsafe", "scenario": "same_name_symbol", "file": "decoys.c", "line": 27, "flagged": false}
+    {"label": "memory_unsafe.same_name_symbol", "category": "memory_unsafe", "scenario": "same_name_symbol", "file": "decoys.c", "line": 27, "flagged": false},
+    {"label": "sql_string_construction.same_name_symbol", "category": "sql_string_construction", "scenario": "same_name_symbol", "file": "sql_decoys.c", "line": 6, "flagged": false}
   ]
 }

@@ -68,11 +68,11 @@ public class Sinks
         // DES.Create()
     }
 
-    public void TlsVerificationDisabled()
+    public void TlsVerificationDisabled(HttpClientHandler handler, Handler second)
     {
-        var first = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-        var second = Handler.DangerousAcceptAnyServerCertificateValidator;
-        var third = HttpClientHandler.DefaultProxy;
+        handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+        second.ServerCertificateCustomValidationCallback = (message, certificate, chain, errors) => true;
+        var third = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
         var text = "HttpClientHandler.DangerousAcceptAnyServerCertificateValidator";
         // HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
     }

@@ -17,6 +17,7 @@ pub use matcher::find_sinks;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SinkCategory {
+    /// A command is built or run. The sink does not say that the command runs.
     CommandExecution,
     CodeEvaluation,
     UnsafeDeserialization,
@@ -335,6 +336,25 @@ mod tests {
                 &[("helpers/Runtime.java", runtime), ("B.java", decoy)]
             ),
             []
+        );
+    }
+
+    #[test]
+    fn a_constructed_receiver_gives_its_type() {
+        let csharp = "using System.Runtime.Serialization.Formatters.Binary;\n\npublic class A {\n    public void Run(System.IO.Stream stream) {\n        new BinaryFormatter().Deserialize(stream);\n    }\n}\n";
+        assert_eq!(
+            found(Language::CSharp, &[("A.cs", csharp)]),
+            [one("A.cs", 5, "unsafe_deserialization", "imported_symbol")]
+        );
+        let java = "import java.io.ObjectInputStream;\nimport java.io.InputStream;\n\npublic class A {\n    void run(InputStream stream) throws Exception {\n        new ObjectInputStream(stream).readObject();\n    }\n}\n";
+        assert_eq!(
+            found(Language::Java, &[("A.java", java)]),
+            [one(
+                "A.java",
+                6,
+                "unsafe_deserialization",
+                "imported_symbol"
+            )]
         );
     }
 
