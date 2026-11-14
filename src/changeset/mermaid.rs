@@ -50,6 +50,8 @@ fn escape(label: &str) -> String {
         .replace('"', "#quot;")
         .replace('<', "#lt;")
         .replace('>', "#gt;")
+        .replace('\n', "#10;")
+        .replace('\r', "#13;")
 }
 
 fn render_capped(capped: &CappedGraph<'_>) -> String {
@@ -275,8 +277,10 @@ pub(crate) mod tests {
     #[test]
     fn test_render_gives_one_more_node_for_each_component_that_lost_nodes() {
         let text = render(&sample(), 1).unwrap();
-        assert!(text.contains("[\"+2 more\"]"), "{text}");
-        assert!(text.contains("[\"+1 more\"]"), "{text}");
+        assert!(
+            text.contains("[\"+1 more\"]") && text.contains("[\"+3 more\"]"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -286,6 +290,17 @@ pub(crate) mod tests {
         let text = render(&graph, 30).unwrap();
         check_subset(&text);
         assert!(text.contains("a#lt;#quot;b#quot;#gt;#amp;"), "{text}");
+    }
+
+    #[test]
+    fn test_render_escapes_line_breaks_of_a_label() {
+        let mut graph = sample();
+        graph.nodes[0].label = "a\nb\rc".to_string();
+        graph.nodes[0].component = "dir\nname".to_string();
+        let text = render(&graph, 30).unwrap();
+        check_subset(&text);
+        assert!(text.contains("a#10;b#13;c"), "{text}");
+        assert!(text.contains("dir#10;name"), "{text}");
     }
 
     #[test]

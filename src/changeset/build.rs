@@ -270,30 +270,42 @@ pub fn compute(repository: &Path, target: Option<&str>, config: &Config) -> Resu
         Side::load(repository, &base_sha, config)?,
         Side::load(repository, &head_sha, config)?,
     );
+    let renames = renames_between(repository, &base_sha, &head_sha)?;
     let changed_files: BTreeSet<String> = file_changes
         .iter()
         .map(|change| change.path.to_string_lossy().replace('\\', "/"))
+        .chain(renames.keys().cloned())
         .collect();
     let base_complexity = ComplexityMap::of(&base, &changed_files, config);
     let head_complexity = ComplexityMap::of(&head, &changed_files, config);
 
-    let symbols = compare_symbols(
+    let (symbols, alias) = compare_symbols(
         &base,
         &head,
         &changed_files,
+        &renames,
         &base_complexity,
         &head_complexity,
     );
-    let graph = build_graph(&base, &head, &symbols);
-    let new_findings = new_findings(&base, &head, &changed_files, config);
+    let graph = build_graph(&base, &head, &symbols, &alias);
+    let new_findings = new_findings(&base, &head, &changed_files, &renames, config);
+    let mut notes = Vec::new();
+    let hotspots = hotspots_of(repository).unwrap_or_else(|| {
+        notes.push(
+            "The hotspots were not read, because the working tree has uncommitted changes."
+                .to_string(),
+        );
+        BTreeMap::new()
+    });
     let files = file_entries(
-        repository,
         &repo,
         &file_changes,
         &base,
         &head,
+        &renames,
         &symbols,
         &head_complexity,
+        &hotspots,
     );
     let summary = summarize(&symbols, &files, &new_findings, &file_changes);
 
@@ -304,29 +316,178 @@ pub fn compute(repository: &Path, target: Option<&str>, config: &Config) -> Resu
         summary,
         symbols,
         files,
+        notes,
         new_findings,
         graph,
     })
 }
 
+/// The renames of git between two commits, from the old path to the new path.
+fn renames_between(repository: &Path, base: &str, head: &str) -> Result<BTreeMap<String, String>> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(["diff", "--name-status", "-M", "-z", base, head])
+        .output()
+        .map_err(crate::core::Error::Io)?;
+    if !output.status.success() {
+        return Err(crate::core::Error::git(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut tokens = text.split('\0').filter(|token| !token.is_empty());
+    let mut renames = BTreeMap::new();
+    while let Some(status) = tokens.next() {
+        match status.chars().next() {
+            Some('R') => {
+                if let (Some(old), Some(new)) = (tokens.next(), tokens.next()) {
+                    renames.insert(old.to_string(), new.to_string());
+                }
+            }
+            Some('C') => {
+                tokens.next();
+                tokens.next();
+            }
+            _ => {
+                tokens.next();
+            }
+        }
+    }
+    Ok(renames)
+}
+
+/// The key without the ordinal of a duplicate, for example `a.rs#plat~2`
+/// gives `a.rs#plat`.
+fn strip_ordinal(key: &str) -> &str {
+    match key.rsplit_once('~') {
+        Some((rest, digits))
+            if rest.contains('#')
+                && !digits.is_empty()
+                && digits.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            rest
+        }
+        _ => key,
+    }
+}
+
+/// The key with the path that the head has for the file of the key.
+fn renamed_key(key: &str, renames: &BTreeMap<String, String>) -> String {
+    match key.split_once('#') {
+        Some((file, name)) => format!("{}#{name}", renames.get(file).map_or(file, String::as_str)),
+        None => key.to_string(),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Entry<'a> {
+    key: &'a str,
+    file: &'a FileSymbols,
+    symbol: &'a Symbol,
+}
+
+type Plan<'a> = Vec<(ChangeState, Option<Entry<'a>>, Option<Entry<'a>>)>;
+
+/// Groups the symbols of the changed files by the key without the ordinal.
+/// The group of the base uses the paths of the head. Each group is in
+/// source order.
+fn group_symbols<'a>(
+    symbols: &BTreeMap<&'a str, (&'a FileSymbols, &'a Symbol)>,
+    changed_files: &BTreeSet<String>,
+    renames: &BTreeMap<String, String>,
+) -> BTreeMap<String, Vec<Entry<'a>>> {
+    let mut groups: BTreeMap<String, Vec<Entry<'a>>> = BTreeMap::new();
+    for (key, (file, symbol)) in symbols {
+        if !changed_files.contains(file.file.as_str()) {
+            continue;
+        }
+        let group = strip_ordinal(&renamed_key(key, renames)).to_string();
+        groups
+            .entry(group)
+            .or_default()
+            .push(Entry { key, file, symbol });
+    }
+    for entries in groups.values_mut() {
+        entries.sort_by_key(|entry| (entry.symbol.range.start_byte, entry.key));
+    }
+    groups
+}
+
+/// Pairs the definitions of one group. A definition that has the same
+/// signature and the same text as one of the other side is paired first,
+/// then one that has the same signature, and last, one that has the same
+/// position among the rest. A key with an ordinal changes when a
+/// definition is added before it, thus the ordinal is the last evidence.
+fn pair_group<'a>(
+    old: &[Entry<'a>],
+    new: &[Entry<'a>],
+    identical: &mut dyn FnMut(&Entry<'a>, &Entry<'a>) -> bool,
+    plan: &mut Plan<'a>,
+) {
+    let mut old_used = vec![false; old.len()];
+    let mut new_pair: Vec<Option<usize>> = vec![None; new.len()];
+    for require_same_text in [true, false] {
+        let mut matches = |left: &Entry<'a>, right: &Entry<'a>| {
+            left.symbol.signature == right.symbol.signature
+                && (!require_same_text || identical(left, right))
+        };
+        for (position, new_entry) in new.iter().enumerate() {
+            if new_pair[position].is_some() {
+                continue;
+            }
+            let found =
+                (0..old.len()).find(|index| !old_used[*index] && matches(&old[*index], new_entry));
+            if let Some(index) = found {
+                old_used[index] = true;
+                new_pair[position] = Some(index);
+            }
+        }
+    }
+    let mut rest = (0..old.len()).filter(|index| !old_used[*index]);
+    for slot in new_pair.iter_mut().filter(|slot| slot.is_none()) {
+        match rest.next() {
+            Some(index) => *slot = Some(index),
+            None => break,
+        }
+    }
+    let paired: BTreeSet<usize> = new_pair.iter().flatten().copied().collect();
+    for (position, new_entry) in new.iter().enumerate() {
+        match new_pair[position] {
+            Some(index) => {
+                let old_entry = old[index];
+                let same = old_entry.symbol.signature == new_entry.symbol.signature
+                    && identical(&old_entry, new_entry);
+                let state = if same {
+                    ChangeState::Unchanged
+                } else {
+                    ChangeState::Changed
+                };
+                plan.push((state, Some(old_entry), Some(*new_entry)));
+            }
+            None => plan.push((ChangeState::Added, None, Some(*new_entry))),
+        }
+    }
+    for (index, old_entry) in old.iter().enumerate() {
+        if !paired.contains(&index) {
+            plan.push((ChangeState::Removed, Some(*old_entry), None));
+        }
+    }
+}
+
+/// Compares the symbols of the changed files. The second result maps the
+/// key of a base symbol to the key of the head symbol that replaces it, for
+/// each pair whose keys differ.
 fn compare_symbols(
     base: &Side,
     head: &Side,
     changed_files: &BTreeSet<String>,
+    renames: &BTreeMap<String, String>,
     base_complexity: &ComplexityMap,
     head_complexity: &ComplexityMap,
-) -> Vec<SymbolChange> {
+) -> (Vec<SymbolChange>, BTreeMap<String, String>) {
     let before = base.symbols();
     let after = head.symbols();
-    let keys: BTreeSet<&str> = before
-        .keys()
-        .chain(after.keys())
-        .copied()
-        .filter(|key| {
-            let file = key.split_once('#').map_or(*key, |(file, _)| file);
-            changed_files.contains(file)
-        })
-        .collect();
 
     let mut contents: BTreeMap<(bool, String), Option<Vec<u8>>> = BTreeMap::new();
     let mut content = |is_head: bool, side: &Side, file: &str| {
@@ -336,33 +497,49 @@ fn compare_symbols(
             .clone()
     };
 
+    let mut identical = |old: &Entry<'_>, new: &Entry<'_>| {
+        !is_callable(new.symbol.kind)
+            || content(false, base, &old.file.file)
+                .zip(content(true, head, &new.file.file))
+                .is_some_and(|(old_content, new_content)| {
+                    text_of(&old_content, old.symbol) == text_of(&new_content, new.symbol)
+                })
+    };
+
+    let mut old_groups = group_symbols(&before, changed_files, renames);
+    let mut new_groups = group_symbols(&after, changed_files, &BTreeMap::new());
+    let group_ids: BTreeSet<String> = old_groups
+        .keys()
+        .chain(new_groups.keys())
+        .cloned()
+        .collect();
+    let mut plan: Plan<'_> = Vec::new();
+    for id in &group_ids {
+        let old = old_groups.remove(id).unwrap_or_default();
+        let new = new_groups.remove(id).unwrap_or_default();
+        pair_group(&old, &new, &mut identical, &mut plan);
+    }
+
+    let mut alias = BTreeMap::new();
     let mut changes = Vec::new();
-    for key in keys {
-        let (state, symbol_before, symbol_after) = match (before.get(key), after.get(key)) {
-            (None, Some((file, symbol))) => (ChangeState::Added, None, Some((*file, *symbol))),
-            (Some((file, symbol)), None) => (ChangeState::Removed, Some((*file, *symbol)), None),
-            (Some((file_before, old)), Some((file_after, new))) => {
-                let same_text = !is_callable(new.kind)
-                    || content(false, base, &file_before.file)
-                        .zip(content(true, head, &file_after.file))
-                        .is_some_and(|(old_content, new_content)| {
-                            text_of(&old_content, old) == text_of(&new_content, new)
-                        });
-                if old.signature == new.signature && same_text {
-                    continue;
-                }
-                (
-                    ChangeState::Changed,
-                    Some((*file_before, *old)),
-                    Some((*file_after, *new)),
-                )
+    for (state, entry_before, entry_after) in plan {
+        if let (Some(old), Some(new)) = (entry_before, entry_after) {
+            if old.key != new.key {
+                alias.insert(old.key.to_string(), new.key.to_string());
             }
-            (None, None) => continue,
-        };
-        let primary = symbol_after
+        }
+        if state == ChangeState::Unchanged {
+            continue;
+        }
+        let symbol_before = entry_before.map(|entry| (entry.file, entry.symbol));
+        let symbol_after = entry_after.map(|entry| (entry.file, entry.symbol));
+        let key = entry_after
+            .or(entry_before)
+            .map(|entry| entry.key)
+            .expect("one side has the symbol");
+        let (file, symbol) = symbol_after
             .or(symbol_before)
-            .expect("one side has the key");
-        let (file, symbol) = primary;
+            .expect("one side has the symbol");
         let (edges, definitions) = if state == ChangeState::Removed {
             (&base.edges, &before)
         } else {
@@ -408,13 +585,25 @@ fn compare_symbols(
     changes.sort_by(|left, right| {
         (&left.file, left.line, &left.key).cmp(&(&right.file, right.line, &right.key))
     });
-    changes
+    (changes, alias)
 }
 
 /// The changed symbols, their direct callers as context, and the calls
 /// between them. A call is added when only the head has it, and removed when
 /// only the base has it.
-fn build_graph(base: &Side, head: &Side, symbols: &[SymbolChange]) -> ChangeGraph {
+fn build_graph(
+    base: &Side,
+    head: &Side,
+    symbols: &[SymbolChange],
+    alias: &BTreeMap<String, String>,
+) -> ChangeGraph {
+    let unalias = |key: &String| alias.get(key).unwrap_or(key).clone();
+    let base_calls: BTreeSet<(String, String)> = base
+        .edges
+        .calls
+        .keys()
+        .map(|(from, to)| (unalias(from), unalias(to)))
+        .collect();
     let mut nodes: BTreeMap<String, GraphNode> = BTreeMap::new();
     let node_of = |key: &str, state: ChangeState| {
         let file = key.split_once('#').map_or(key, |(file, _)| file);
@@ -434,15 +623,20 @@ fn build_graph(base: &Side, head: &Side, symbols: &[SymbolChange]) -> ChangeGrap
     }
     for symbol in symbols {
         for caller in &symbol.direct_callers {
+            let key = if symbol.state == ChangeState::Removed {
+                unalias(&caller.key)
+            } else {
+                caller.key.clone()
+            };
             nodes
-                .entry(caller.key.clone())
-                .or_insert_with(|| node_of(&caller.key, ChangeState::Unchanged));
+                .entry(key.clone())
+                .or_insert_with(|| node_of(&key, ChangeState::Unchanged));
         }
     }
     let state_of = |from: &str, to: &str| {
         let pair = (from.to_string(), to.to_string());
         match (
-            base.edges.calls.contains_key(&pair),
+            base_calls.contains(&pair),
             head.edges.calls.contains_key(&pair),
         ) {
             (true, true) => ChangeState::Unchanged,
@@ -450,12 +644,8 @@ fn build_graph(base: &Side, head: &Side, symbols: &[SymbolChange]) -> ChangeGrap
             _ => ChangeState::Removed,
         }
     };
-    let pairs: BTreeSet<&(String, String)> = base
-        .edges
-        .calls
-        .keys()
-        .chain(head.edges.calls.keys())
-        .collect();
+    let pairs: BTreeSet<&(String, String)> =
+        base_calls.iter().chain(head.edges.calls.keys()).collect();
     let edges = pairs
         .into_iter()
         .filter(|(from, to)| nodes.contains_key(from) && nodes.contains_key(to))
@@ -478,10 +668,11 @@ fn new_findings(
     base: &Side,
     head: &Side,
     changed_files: &BTreeSet<String>,
+    renames: &BTreeMap<String, String>,
     config: &Config,
 ) -> Vec<NewFinding> {
     type Key = (FindingKind, String, String);
-    let collect = |side: &Side| -> Vec<(Key, u32)> {
+    let collect = |side: &Side, renames: &BTreeMap<String, String>| -> Vec<(Key, u32)> {
         let files = side.subset(changed_files);
         let context = AnalysisContext::new(&files, config, None)
             .with_content_source(Arc::new(side.source.clone()));
@@ -491,7 +682,7 @@ fn new_findings(
                 found.push((
                     (
                         FindingKind::Stub,
-                        stub.file.clone(),
+                        renames.get(&stub.file).unwrap_or(&stub.file).clone(),
                         stub.snippet.trim().to_string(),
                     ),
                     stub.line,
@@ -503,7 +694,7 @@ fn new_findings(
                 found.push((
                     (
                         FindingKind::Satd,
-                        item.file.clone(),
+                        renames.get(&item.file).unwrap_or(&item.file).clone(),
                         item.text.trim().to_string(),
                     ),
                     item.line,
@@ -514,11 +705,11 @@ fn new_findings(
         found
     };
     let mut old_counts: BTreeMap<Key, usize> = BTreeMap::new();
-    for (key, _) in collect(base) {
+    for (key, _) in collect(base, renames) {
         *old_counts.entry(key).or_default() += 1;
     }
     let mut findings = Vec::new();
-    for (key, line) in collect(head) {
+    for (key, line) in collect(head, &BTreeMap::new()) {
         match old_counts.get_mut(&key) {
             Some(count) if *count > 0 => *count -= 1,
             _ => findings.push(NewFinding {
@@ -544,35 +735,57 @@ fn relative_hotspot_path(root: &Path, file: &str) -> String {
         .replace('\\', "/")
 }
 
+/// The severity of each hotspot, by path. The analyzer reads the working
+/// tree, thus the function gives a result only when the working tree has the
+/// content of `HEAD`.
+fn hotspots_of(repository: &Path) -> Option<BTreeMap<String, String>> {
+    if has_uncommitted_changes(repository) {
+        return None;
+    }
+    let analysis = hotspot::Analyzer::new().analyze_project(repository).ok()?;
+    Some(
+        analysis
+            .hotspots
+            .into_iter()
+            .map(|entry| {
+                (
+                    relative_hotspot_path(repository, &entry.file),
+                    entry.severity.to_string(),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// Tells if a tracked file differs from `HEAD`. When git cannot tell, the
+/// answer is yes.
+fn has_uncommitted_changes(repository: &Path) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .output()
+        .map(|output| !output.status.success() || !output.stdout.is_empty())
+        .unwrap_or(true)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn file_entries(
-    repository: &Path,
     repo: &GitRepo,
     file_changes: &[crate::git::FileChange],
     base: &Side,
     head: &Side,
+    renames: &BTreeMap<String, String>,
     symbols: &[SymbolChange],
     head_complexity: &ComplexityMap,
+    hotspots: &BTreeMap<String, String>,
 ) -> Vec<FileChange> {
     let paths: Vec<String> = file_changes
         .iter()
         .map(|change| change.path.to_string_lossy().replace('\\', "/"))
         .collect();
     let owners = repo.file_churn(&paths).unwrap_or_default();
-    let hotspots: BTreeMap<String, String> = hotspot::Analyzer::new()
-        .analyze_project(repository)
-        .map(|analysis| {
-            analysis
-                .hotspots
-                .into_iter()
-                .map(|entry| {
-                    (
-                        relative_hotspot_path(repository, &entry.file),
-                        entry.severity.to_string(),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let renamed: BTreeSet<&str> = renames.values().map(String::as_str).collect();
 
     let mut files: Vec<FileChange> = file_changes
         .iter()
@@ -582,7 +795,7 @@ fn file_entries(
                 base.tree_files.contains(&file),
                 head.tree_files.contains(&file),
             ) {
-                (false, true) => ChangeState::Added,
+                (false, true) if !renamed.contains(file.as_str()) => ChangeState::Added,
                 (true, false) => ChangeState::Removed,
                 _ => ChangeState::Changed,
             };

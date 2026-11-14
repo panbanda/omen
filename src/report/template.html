@@ -1599,6 +1599,13 @@
             return chart;
         }
 
+        // ECharts shows the result of a tooltip formatter as HTML.
+        function escapeHtml(text) {
+            return String(text).replace(/[&<>"']/g, function(character) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character];
+            });
+        }
+
         function chartToken(styles, name, alpha) {
             const channels = styles.getPropertyValue(name).trim();
             return 'hsl(' + channels + (alpha === undefined ? '' : ' / ' + alpha) + ')';
@@ -1701,7 +1708,7 @@
             chart.setOption({
                 tooltip: {
                     formatter: function(params) {
-                        return params.dataType === 'node' ? params.data.name : '';
+                        return params.dataType === 'node' ? escapeHtml(params.data.name) : '';
                     }
                 },
                 legend: { show: false },

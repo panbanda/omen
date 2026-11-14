@@ -169,6 +169,9 @@ pub struct ChangeSet {
     pub summary: Summary,
     pub symbols: Vec<SymbolChange>,
     pub files: Vec<FileChange>,
+    /// Facts about the limits of this change set that the reader must know.
+    #[serde(default)]
+    pub notes: Vec<String>,
     pub new_findings: Vec<NewFinding>,
     pub graph: ChangeGraph,
 }

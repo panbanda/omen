@@ -965,7 +965,7 @@ fn run_diff_comment(
         max_bytes: args.max_bytes,
         max_nodes: args.max_nodes,
     };
-    let text = omen::changeset::markdown::render(&changes, &options, &[]);
+    let text = omen::changeset::markdown::render(&changes, &options, &[])?;
     stdout().write_all(text.as_bytes())?;
     Ok(())
 }
@@ -1249,12 +1249,16 @@ fn run_report(
             let metadata_path = args.data.join("metadata.json");
             std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
 
+            let changes_path = args.data.join("diff.json");
+            match std::fs::remove_file(&changes_path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(error.into())
+                }
+                _ => {}
+            }
             if let Some(reference) = git_ref {
                 let changes = omen::changeset::build::compute(path, Some(reference), config)?;
-                std::fs::write(
-                    args.data.join("diff.json"),
-                    serde_json::to_string_pretty(&changes)?,
-                )?;
+                std::fs::write(&changes_path, serde_json::to_string_pretty(&changes)?)?;
             }
 
             let skip_list: Vec<&str> = args

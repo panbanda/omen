@@ -30,22 +30,6 @@ _3 symbols omitted. Run `omen diff -t main -f markdown --max-bytes 0` for the fu
 
 _1 signature changes omitted. Run `omen diff -t main -f markdown --max-bytes 0` for the full list._
 
-### Call graph
-
-Legend: `+` added, `-` removed, `~` changed, no sign for context. A dashed line is a removed call.
-
-```mermaid
-flowchart LR
-  subgraph c0["src"]
-    n0["+7 more"]
-  end
-  classDef added fill:#dafbe1,stroke:#1a7f37,color:#1f2328
-  classDef removed fill:#ffebe9,stroke:#cf222e,color:#1f2328
-  classDef changed fill:#fff8c5,stroke:#9a6700,color:#1f2328
-  classDef unchanged fill:#f6f8fa,stroke:#8c959f,color:#1f2328
-  class n0 unchanged
-```
-
 <details>
 <summary>Changed files (2)</summary>
 

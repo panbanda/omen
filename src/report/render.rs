@@ -1670,6 +1670,36 @@ mod tests {
     }
 
     #[test]
+    fn test_changes_graph_tooltip_escapes_the_name_of_a_symbol() {
+        let mut fixture = changes_fixture();
+        let hostile = "<img src=x onerror=alert(1)>";
+        fixture["graph"]["nodes"][0]["label"] = json!(hostile);
+        let data_dir = tempfile::tempdir().unwrap();
+        write_fixture(&data_dir.path().join("diff.json"), fixture);
+        let mut output = Vec::new();
+        Renderer::new()
+            .unwrap()
+            .render(data_dir.path(), &mut output)
+            .unwrap();
+        let html = String::from_utf8(output).unwrap();
+        assert!(!html.contains(hostile));
+        assert!(html.contains("\\u003cimg src=x onerror=alert(1)\\u003e"));
+
+        let start = TEMPLATE_HTML
+            .find("getElementById('changesGraph')")
+            .expect("graph chart");
+        let script = &TEMPLATE_HTML[start..];
+        let tooltip = &script[script.find("tooltip:").expect("tooltip")..];
+        let formatter = &tooltip[..tooltip.find("legend:").expect("end of tooltip")];
+        assert!(formatter.contains("escapeHtml("), "{formatter}");
+        assert!(
+            !formatter.contains("return params.data.name"),
+            "{formatter}"
+        );
+        assert!(TEMPLATE_HTML.contains("function escapeHtml("));
+    }
+
+    #[test]
     fn test_changes_graph_data_uses_the_capped_view() {
         let html = render_with_changes();
         assert!(html.contains("window.__td_changes_graph="));

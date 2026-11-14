@@ -112,7 +112,7 @@ Top-level commands (flat structure):
 - `clones` - Code clone detection
 - `defect` - Defect probability prediction
 - `changes` - Commit-level change risk (JIT)
-- `diff` - Branch diff risk analysis. With `-f markdown` it writes the pull-request comment: it starts with `<!-- omen:diff -->`, and `--max-bytes` (default 60000, 0 = no limit) and `--max-nodes` (default 30) limit it. `report generate --ref REF` adds the "Changes since" view to the HTML report.
+- `diff` - Branch diff risk analysis. With `-f markdown` it writes the pull-request comment: it starts with `<!-- omen:diff -->`, and `--max-bytes` (default 60000, 0 = no limit) and `--max-nodes` (default 30) limit it. `report generate --ref REF` adds the "Changes since" view to the HTML report. A symbol that moved to another file, except in a file that git renamed, or that has a new name, shows as one removal and one addition. A budget below the size of the title and the summary is an error.
 - `tdg` - Technical Debt Gradient
 - `graph` - Dependency graph
 - `hotspot` - High churn + complexity files

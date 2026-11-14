@@ -23,9 +23,13 @@ pub struct CappedGraph<'a> {
     pub edges: Vec<&'a GraphEdge>,
 }
 
-/// Keeps at most `max_nodes` nodes. A node that changed has priority over a
+/// Draws at most `max_nodes` nodes, and the "more" node of each component
+/// that lost nodes counts as a node. A node that changed has priority over a
 /// node that gives context. In each group the nodes are in key order, thus
 /// two runs keep the same nodes.
+///
+/// When even the "more" nodes alone are too many, the result has no node
+/// that is kept and one "more" node for each component.
 pub fn cap(graph: &ChangeGraph, max_nodes: usize) -> CappedGraph<'_> {
     let mut ordered: Vec<&GraphNode> = graph.nodes.iter().collect();
     ordered.sort_by(|left, right| {
@@ -33,7 +37,18 @@ pub fn cap(graph: &ChangeGraph, max_nodes: usize) -> CappedGraph<'_> {
             .cmp(&(right.state == ChangeState::Unchanged))
             .then_with(|| left.key.cmp(&right.key))
     });
-    let (kept, left_out) = ordered.split_at(max_nodes.min(ordered.len()));
+    let more_nodes = |left_out: &[&GraphNode]| {
+        left_out
+            .iter()
+            .map(|node| node.component.as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
+    };
+    let keep = (0..=ordered.len().min(max_nodes))
+        .rev()
+        .find(|keep| keep + more_nodes(&ordered[*keep..]) <= max_nodes)
+        .unwrap_or(0);
+    let (kept, left_out) = ordered.split_at(keep);
     let kept_keys: BTreeSet<&str> = kept.iter().map(|node| node.key.as_str()).collect();
 
     let names: BTreeSet<&str> = graph
@@ -182,9 +197,23 @@ mod tests {
             .iter()
             .flat_map(|c| c.nodes.iter().map(|n| n.key.as_str()))
             .collect();
-        assert_eq!(kept, ["a/x.rs#alpha", "a/x.rs#beta", "b/x.rs#gamma"]);
+        assert_eq!(kept, ["a/x.rs#alpha", "a/x.rs#beta"]);
         let b = capped.components.iter().find(|c| c.name == "b").unwrap();
-        assert_eq!(b.omitted, 1);
+        assert_eq!(b.omitted, 2);
+    }
+
+    #[test]
+    fn test_cap_counts_the_more_nodes_as_nodes() {
+        let graph = sample();
+        for max_nodes in 0..=6 {
+            let capped = cap(&graph, max_nodes);
+            let kept: usize = capped.components.iter().map(|c| c.nodes.len()).sum();
+            let more = capped.components.iter().filter(|c| c.omitted > 0).count();
+            assert!(
+                kept + more <= max_nodes || kept == 0,
+                "{max_nodes}: {kept} + {more}"
+            );
+        }
     }
 
     #[test]
@@ -214,8 +243,8 @@ mod tests {
             .filter(|node| node.more)
             .map(|node| (node.id.as_str(), node.label.as_str()))
             .collect();
-        assert_eq!(more, [("more:b", "+1 more")]);
-        assert_eq!(view.nodes.len(), 4);
+        assert_eq!(more, [("more:b", "+2 more")]);
+        assert_eq!(view.nodes.len(), 3);
         assert_eq!(view.edges.len(), 1);
     }
 

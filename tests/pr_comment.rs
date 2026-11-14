@@ -6,7 +6,9 @@ mod fixture;
 
 use std::path::Path;
 
-use omen::changeset::markdown::{render, CommentOptions};
+use omen::changeset::markdown::{
+    minimum_bytes, render as try_render, CommentOptions, CommentSection,
+};
 use omen::changeset::model::{ChangeSet, ChangeState, FindingKind};
 use omen::config::Config;
 use tempfile::TempDir;
@@ -114,6 +116,146 @@ fn repository() -> TempDir {
     write(path, "src/report.rs", REPORT_HEAD);
     fixture::commit(path, "grace", second, "feat: scale the area");
     directory
+}
+
+fn render(changes: &ChangeSet, options: &CommentOptions, extra: &[&dyn CommentSection]) -> String {
+    try_render(changes, options, extra).expect("comment")
+}
+
+/// A repository whose `main` has the files `base`, and whose `feature`
+/// branch has the result of `change`. `HEAD` is `feature`.
+fn two_commits(base: &[(&str, &str)], change: impl FnOnce(&Path)) -> TempDir {
+    let directory = TempDir::new().expect("temporary directory");
+    let path = directory.path();
+    let first = "2024-02-01T12:00:00Z";
+    fixture::git(path, "ada", first, &["init", "--initial-branch", "main"]);
+    for (file, text) in base {
+        write(path, file, text);
+    }
+    fixture::commit(path, "ada", first, "feat: add the files");
+    let second = "2024-02-08T12:00:00Z";
+    fixture::git(path, "grace", second, &["checkout", "-b", "feature"]);
+    change(path);
+    fixture::commit(path, "grace", second, "feat: change the files");
+    directory
+}
+
+const PLATFORM_BASE: &str = "#[cfg(unix)]\npub fn plat() -> u32 {\n    1\n}\n\n#[cfg(not(unix))]\npub fn plat() -> u32 {\n    2\n}\n";
+const PLATFORM_HEAD: &str = "pub fn plat() -> u32 {\n    0\n}\n\n#[cfg(unix)]\npub fn plat() -> u32 {\n    1\n}\n\n#[cfg(not(unix))]\npub fn plat() -> u32 {\n    2\n}\n";
+
+#[test]
+fn test_new_overload_before_the_others_does_not_change_the_other_symbols() {
+    let directory = two_commits(&[("src/dup.rs", PLATFORM_BASE)], |path| {
+        write(path, "src/dup.rs", PLATFORM_HEAD);
+    });
+    let changes = changes(directory.path());
+    let states: Vec<ChangeState> = changes.symbols.iter().map(|symbol| symbol.state).collect();
+    assert_eq!(states, [ChangeState::Added], "{:?}", changes.symbols);
+}
+
+const RENAME_BASE: &str = "pub fn first(value: u32) -> u32 {\n    value + 1\n}\n\npub fn second(value: u32) -> u32 {\n    value * 2\n}\n\npub fn third(value: u32) -> u32 {\n    value - 1\n}\n\npub fn fourth(value: u32) -> u32 {\n    value / 2\n}\n";
+
+#[test]
+fn test_renamed_file_keeps_its_symbols_and_reports_only_real_changes() {
+    let directory = two_commits(&[("src/old_name.rs", RENAME_BASE)], |path| {
+        fixture::git(
+            path,
+            "grace",
+            "2024-02-08T12:00:00Z",
+            &["mv", "src/old_name.rs", "src/new_name.rs"],
+        );
+        write(
+            path,
+            "src/new_name.rs",
+            &RENAME_BASE.replace("value * 2", "value * 3"),
+        );
+    });
+    let changes = changes(directory.path());
+    let summary: Vec<(&str, ChangeState)> = changes
+        .symbols
+        .iter()
+        .map(|symbol| (symbol.key.as_str(), symbol.state))
+        .collect();
+    assert_eq!(
+        summary,
+        [("src/new_name.rs#second", ChangeState::Changed)],
+        "{summary:?}"
+    );
+}
+
+#[test]
+fn test_renamed_file_does_not_make_its_findings_new() {
+    let base = "// TODO: tidy this\npub fn first() -> u32 {\n    1\n}\n\npub fn second() -> u32 {\n    2\n}\n\npub fn third() -> u32 {\n    3\n}\n";
+    let directory = two_commits(&[("src/old_name.rs", base)], |path| {
+        fixture::git(
+            path,
+            "grace",
+            "2024-02-08T12:00:00Z",
+            &["mv", "src/old_name.rs", "src/new_name.rs"],
+        );
+    });
+    assert!(changes(directory.path()).new_findings.is_empty());
+}
+
+#[test]
+fn test_uncommitted_changes_are_named_and_hotspots_are_skipped() {
+    let directory = repository();
+    assert!(changes(directory.path()).notes.is_empty());
+    write(directory.path(), "src/report.rs", "pub fn other() {}\n");
+    let changes = changes(directory.path());
+    assert_eq!(changes.summary.hotspots_touched, 0);
+    assert!(changes.files.iter().all(|file| file.hotspot.is_none()));
+    assert_eq!(changes.notes.len(), 1, "{:?}", changes.notes);
+    let text = render(&changes, &CommentOptions::default(), &[]);
+    assert!(text.contains(&changes.notes[0]), "{text}");
+}
+
+#[test]
+fn test_comment_never_exceeds_the_budget_and_rejects_a_budget_below_the_header() {
+    let directory = repository();
+    let changes = changes(directory.path());
+    let minimum = minimum_bytes(&changes);
+    let below = CommentOptions {
+        max_bytes: minimum - 1,
+        ..CommentOptions::default()
+    };
+    assert!(try_render(&changes, &below, &[]).is_err());
+    let exact = CommentOptions {
+        max_bytes: minimum,
+        ..CommentOptions::default()
+    };
+    assert!(try_render(&changes, &exact, &[]).expect("comment").len() <= minimum);
+}
+
+#[test]
+fn test_cli_rejects_a_budget_below_the_header() {
+    let directory = repository();
+    let output = markdown_omen(directory.path())
+        .args(["diff", "-t", "main", "--max-bytes", "1"])
+        .output()
+        .expect("omen starts");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("minimum"));
+}
+
+#[test]
+fn test_report_generate_without_ref_removes_an_old_diff_file() {
+    let directory = repository();
+    let data = TempDir::new().expect("data directory");
+    std::fs::write(data.path().join("diff.json"), "{}").expect("old file");
+    let skip = "complexity,satd,stubs,deadcode,churn,clones,defect,changes,tdg,graph,hotspot,\
+                temporal,ownership,cohesion,repomap,smells,flags,score,trend";
+    let generate = std::process::Command::new(env!("CARGO_BIN_EXE_omen"))
+        .arg("-p")
+        .arg(directory.path())
+        .args(["report", "generate", "--skip", skip, "--data"])
+        .arg(data.path())
+        .current_dir(directory.path())
+        .output()
+        .expect("omen starts");
+    assert!(generate.status.success());
+    assert!(!data.path().join("diff.json").exists());
 }
 
 fn markdown_omen(repository: &Path) -> std::process::Command {

@@ -41,8 +41,9 @@ pub trait CommentSection {
     fn render(&self, budget: usize) -> String;
 }
 
-/// The text of the comment. The text is not longer than `options.max_bytes`,
-/// except when the title and the summary alone are longer.
+/// The text of the comment. The text is never longer than `options.max_bytes`.
+/// The function gives an error when the budget is less than the minimum,
+/// which is the size of the title, the summary, and the notes.
 ///
 /// The extra sections have priority over the own sections that can lose
 /// rows. An extra section is in the text with all of its content or not at all.
@@ -50,14 +51,20 @@ pub fn render(
     changes: &ChangeSet,
     options: &CommentOptions,
     extra: &[&dyn CommentSection],
-) -> String {
+) -> crate::core::Result<String> {
     let mut text = header(changes);
     let limit = if options.max_bytes == 0 {
         usize::MAX
     } else {
         options.max_bytes
     };
-    let mut remaining = limit.saturating_sub(text.len());
+    if text.len() > limit {
+        return Err(crate::core::Error::analysis(format!(
+            "The budget of {limit} bytes is less than the minimum of {} bytes for this comment.",
+            text.len()
+        )));
+    }
+    let mut remaining = limit - text.len();
 
     let mut extra_texts = Vec::new();
     for section in extra {
@@ -75,7 +82,7 @@ pub fn render(
     for section_text in extra_texts {
         text.push_str(&section_text);
     }
-    text
+    Ok(text)
 }
 
 type Section<'a> = (usize, Box<dyn Fn(usize) -> String + 'a>);
@@ -159,7 +166,16 @@ fn header(changes: &ChangeSet) -> String {
     for (name, value) in rows {
         text.push_str(&format!("| {name} | {value} |\n"));
     }
+    for note in &changes.notes {
+        text.push_str(&format!("\n{note}\n"));
+    }
     text
+}
+
+/// The size of the title, the summary, and the notes. The comment is never
+/// smaller.
+pub fn minimum_bytes(changes: &ChangeSet) -> usize {
+    header(changes).len()
 }
 
 fn own_sections<'a>(changes: &'a ChangeSet, options: &'a CommentOptions) -> Vec<Section<'a>> {
@@ -346,7 +362,7 @@ fn signatures_section(changes: &ChangeSet, budget: usize) -> String {
 fn graph_section(changes: &ChangeSet, options: &CommentOptions, budget: usize) -> String {
     let frame = |diagram: &str| {
         format!(
-            "\n### Call graph\n\nLegend: `+` added, `-` removed, `~` changed, no sign for context. A dashed line is a removed call.\n\n```mermaid\n{diagram}```\n"
+            "\n### Call graph\n\nLegend: `+` added, `-` removed, `~` changed, no sign for context. A dashed line is a removed call. A file that git renamed keeps its symbols. A symbol that moved to another file or has a new name shows as one removal and one addition.\n\n```mermaid\n{diagram}```\n"
         )
     };
     let mut nodes = options.max_nodes.min(changes.graph.nodes.len());
@@ -587,6 +603,7 @@ mod tests {
                 hotspot: Some("high".to_string()),
                 owners: vec!["ada".to_string(), "grace".to_string()],
             }],
+            notes: Vec::new(),
             new_findings: vec![NewFinding {
                 kind: FindingKind::Stub,
                 file: "src/a.rs".to_string(),
@@ -629,8 +646,62 @@ mod tests {
         changes
     }
 
+    fn render(
+        changes: &ChangeSet,
+        options: &CommentOptions,
+        extra: &[&dyn CommentSection],
+    ) -> String {
+        super::render(changes, options, extra).unwrap()
+    }
+
     fn default_render(changes: &ChangeSet) -> String {
         render(changes, &CommentOptions::default(), &[])
+    }
+
+    #[test]
+    fn test_budget_below_the_header_is_an_error_that_names_the_minimum() {
+        let changes = sample();
+        let minimum = minimum_bytes(&changes);
+        let options = CommentOptions {
+            max_bytes: minimum - 1,
+            ..CommentOptions::default()
+        };
+        let error = super::render(&changes, &options, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("minimum"), "{error}");
+        assert!(error.contains(&minimum.to_string()), "{error}");
+    }
+
+    #[test]
+    fn test_budget_equal_to_the_header_gives_the_header_only() {
+        let changes = sample();
+        let minimum = minimum_bytes(&changes);
+        let options = CommentOptions {
+            max_bytes: minimum,
+            ..CommentOptions::default()
+        };
+        let text = render(&changes, &options, &[]);
+        assert_eq!(text.len(), minimum);
+    }
+
+    #[test]
+    fn test_legend_names_the_limit_for_moved_and_renamed_symbols() {
+        let text = default_render(&sample());
+        assert!(
+            text.contains("A symbol that moved to another file or has a new name shows as one removal and one addition."),
+            "{text}"
+        );
+        assert!(text.contains("git renamed"), "{text}");
+    }
+
+    #[test]
+    fn test_notes_are_in_the_header() {
+        let mut changes = sample();
+        changes.notes = vec!["The hotspots were not read.".to_string()];
+        let text = default_render(&changes);
+        assert!(text.contains("\nThe hotspots were not read.\n"), "{text}");
+        assert!(minimum_bytes(&changes) > minimum_bytes(&sample()));
     }
 
     #[test]
@@ -841,12 +912,8 @@ mod tests {
     #[test]
     fn test_extra_section_that_is_too_long_is_dropped() {
         let extra = Extra("### Extra\nlong text\n");
-        let header_only = CommentOptions {
-            max_bytes: 1,
-            ..CommentOptions::default()
-        };
         let options = CommentOptions {
-            max_bytes: render(&sample(), &header_only, &[]).len() + 5,
+            max_bytes: minimum_bytes(&sample()) + 5,
             ..CommentOptions::default()
         };
         let text = render(&sample(), &options, &[&extra]);

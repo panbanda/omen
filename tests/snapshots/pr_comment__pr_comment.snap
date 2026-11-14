@@ -39,7 +39,7 @@ Base `7537d9d` (merge base with `main`), head `e0a576e`.
 
 ### Call graph
 
-Legend: `+` added, `-` removed, `~` changed, no sign for context. A dashed line is a removed call.
+Legend: `+` added, `-` removed, `~` changed, no sign for context. A dashed line is a removed call. A file that git renamed keeps its symbols. A symbol that moved to another file or has a new name shows as one removal and one addition.
 
 ```mermaid
 flowchart LR
