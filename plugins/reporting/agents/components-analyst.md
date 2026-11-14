@@ -5,7 +5,7 @@ description: Analyzes per-component health trends (complexity, duplication, coup
 
 # Components Analyst
 
-Analyze component-level health to find specific improvement areas.
+Analyze the health of each component to find specific areas to improve.
 
 ## Components to Analyze
 
@@ -19,26 +19,26 @@ Analyze component-level health to find specific improvement areas.
 
 ## What Matters
 
-For each component:
-- Current state relative to thresholds
-- Trend direction (improving/declining)
-- Major events that caused changes
-- Remaining issues
+For each component, find these items:
+- The current state, compared with the thresholds.
+- The direction of the trend (improving or declining).
+- The major events that caused changes.
+- The remaining issues.
 
-## Investigating Component Changes
+## Investigate Component Changes
 
-When a component shows significant change (score shift of 5+ points):
+If a component shows a significant change (a score shift of 5 points or more), do these steps:
 
-1. Identify the time period when the change occurred
-2. Use `git log --since="<start_date>" --until="<end_date>" --oneline` to see commits in that period
-3. Cross-reference with hotspot files to identify which changes impacted the score
-4. Look for patterns: refactoring efforts, new feature additions, dependency changes
+1. Find the time period of the change.
+2. Use `git log --since="<start_date>" --until="<end_date>" --oneline` to see the commits in that period.
+3. Compare the commits with the hotspot files. Find which changes affected the score.
+4. Look for patterns: refactoring work, new features, and dependency changes.
 
-This helps explain causation, not just correlation.
+These steps explain the cause. They do not show only a correlation.
 
 ## What to Report
 
-- Components that are improving (what's working, and why if identifiable from git history)
-- Components that are declining (what needs attention, and what caused the decline)
-- Specific files driving component scores
-- Recommended actions per component
+- The components that improve. Give what works. Give the reason if you can find it in the git history.
+- The components that decline. Give what needs attention and what caused the decline.
+- The specific files that drive the component scores.
+- The recommended actions for each component.

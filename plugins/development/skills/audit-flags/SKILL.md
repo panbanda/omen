@@ -5,11 +5,11 @@ description: Identify stale feature flags and prioritize cleanup. Use when clean
 
 # Audit Flags
 
-Identify stale feature flags and provide actionable cleanup recommendations.
+Identify the stale feature flags. Give actionable cleanup recommendations.
 
 ## Prerequisites
 
-Omen CLI must be installed and available in PATH.
+The Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
@@ -21,9 +21,9 @@ Run the flags analysis:
 omen -f json flags
 ```
 
-Returns all feature flag references with staleness information, grouped by provider.
+The command returns all the feature flag references with staleness information. It groups them by provider.
 
-### Step 2: Identify Ownership
+### Step 2: Identify the Ownership
 
 Run the ownership analysis:
 
@@ -31,9 +31,9 @@ Run the ownership analysis:
 omen -f json ownership
 ```
 
-Determine who owns the code containing flags - they should own cleanup.
+Find who owns the code that contains the flags. The owners must do the cleanup.
 
-### Step 3: Check Coupling
+### Step 3: Check the Coupling
 
 Run the temporal coupling analysis:
 
@@ -41,7 +41,7 @@ Run the temporal coupling analysis:
 omen -f json temporal
 ```
 
-Find files that change together with flag-containing files.
+Find the files that change together with the files that contain flags.
 
 ## Flag Lifecycle Reference
 
@@ -63,7 +63,7 @@ Find files that change together with flag-containing files.
 
 ## Output Format
 
-Generate a flag audit report:
+Make a flag audit report in this format:
 
 ```markdown
 # Feature Flag Audit Report
@@ -112,10 +112,10 @@ Generate a flag audit report:
 
 ## Cleanup Steps
 
-For each stale flag:
+For each stale flag, do these steps:
 
-1. Verify flag state in provider dashboard
-2. If serving 100%: Remove flag checks, keep enabled code path
-3. If serving 0%: Remove flag checks AND disabled code path
-4. Remove flag from provider dashboard
-5. Update tests that reference this flag
+1. Verify the state of the flag in the provider dashboard.
+2. If the flag serves 100%: remove the flag checks. Keep the enabled code path.
+3. If the flag serves 0%: remove the flag checks and the disabled code path.
+4. Remove the flag from the provider dashboard.
+5. Update the tests that reference the flag.

@@ -1,15 +1,20 @@
 # Coding-agent evaluation: separate outcomes from infrastructure
 
-`omen eval` (`src/eval/`) validates and scores complete paired run records.
-It **does not** call a model, execute patches, verify log contents, or establish
-that a model's code understanding improved. No real model trials were run in
-this pass; no model API credential was configured. Provider/model selection,
-authorized spending, a trusted execution runner, and independent held-out tasks
-are required before that claim can be made.
+The command `omen eval` (`src/eval/`) validates and scores complete paired run records.
+It does not call a model. It does not execute patches. It does not verify the contents of logs.
+It does not show that the code understanding of a model improved.
 
-## Register before collecting outcomes
+This pass did not run real model trials. No model API credential was configured.
+Before you can make that claim, you need these items:
 
-Commit a JSON registration containing:
+- A selected provider and model.
+- Authorized spending.
+- A trusted execution runner.
+- Independent held-out tasks.
+
+## Register before you collect outcomes
+
+Commit a JSON registration that contains these fields:
 
 ```json
 {
@@ -25,61 +30,87 @@ Commit a JSON registration containing:
 }
 ```
 
-The example is intentionally incomplete, not a claimed evaluation. Require at
-least 30 paired tasks spanning at least five repository clusters. Split by
-repository; declared development repositories cannot also be held out. Humans
-must verify independence, representativeness, registration timing, immutable
-model identifiers, and trusted project/test setup. JSON alone cannot prove them.
+The example is intentionally incomplete. It is not a claimed evaluation.
+Use at least 30 paired tasks. The tasks must span at least five repository clusters.
+Split the tasks by repository. A declared development repository cannot also be a held-out repository.
 
-For every registered task, collect exactly one `baseline` and one `candidate`
-run, including errors and timeouts. A run records:
+Humans must verify these items:
 
-- `case_id`, `repository`, `revision`, `language`, `variant`, and paired `seed`.
-- Registered `model_snapshot`, `prompt_sha256`, `token_budget`, and canonical
-  `registration_sha256` (computed by `omen::eval::digest`).
-- SHA-256 hashes of `tool_snapshot_sha256`, `patch_sha256`, `test_log_sha256`.
-- `status`: `completed`, `error`, or `timeout`; booleans `tests_pass` and
-  `patch_applies`; independently reviewed integer `unrelated_edits`.
-- Nonnegative integer `input_tokens`/`output_tokens`, positive `elapsed_ms`, and
-  finite nonnegative `cost_usd`. Record all model and tool-loop tokens.
+- Independence.
+- Representativeness.
+- Registration timing.
+- Immutable model identifiers.
+- Trusted project and test setup.
 
-Artifacts must be retained and checked independently. A hash-shaped string is
-not evidence that a patch passed its tests. The scorer always reports
-`outcomes_independently_verified: false` because that verification is external.
-Apply/execute only trusted, sandboxed fixtures with no ambient credentials.
-Use identical runner limits, model settings and prompts, and alternate run order.
+JSON alone cannot prove these items.
+
+For each registered task, collect exactly one `baseline` run and one `candidate` run.
+Include the runs that have errors and the runs that time out. A run records these fields:
+
+- `case_id`, `repository`, `revision`, `language`, `variant`, and the paired `seed`.
+- The registered `model_snapshot`, `prompt_sha256`, and `token_budget`.
+  Also the canonical `registration_sha256`, which `omen::eval::digest` calculates.
+- The SHA-256 hashes `tool_snapshot_sha256`, `patch_sha256`, and `test_log_sha256`.
+- `status`: `completed`, `error`, or `timeout`.
+- The booleans `tests_pass` and `patch_applies`.
+- The integer `unrelated_edits`, which a reviewer sets independently.
+- The non-negative integers `input_tokens` and `output_tokens`.
+- A positive `elapsed_ms`.
+- A finite, non-negative `cost_usd`.
+
+Record all the tokens of the model and of the tool loop.
+
+Keep the artifacts and check them independently. A string that has the form of a hash is not evidence that a patch passed its tests.
+The scorer always reports `outcomes_independently_verified: false`, because the verification is external.
+Apply and execute only trusted, sandboxed fixtures that have no ambient credentials.
+Use identical runner limits, model settings, and prompts. Alternate the run order.
 
 ## Gate
 
-Success requires completed execution, patch application, passing independent
-tests, and no unrelated edits. The scorer rejects missing/duplicate/unregistered
-runs, changed model/prompt/budget/revision/seed, missing hashes, invalid resources,
-and held-out/development overlap. Errors/timeouts remain failures.
+A run is a success when all these conditions are true:
 
-It computes 2000 repository-cluster bootstrap draws. Repositories are equally
-weighted; tasks within each repository are equally weighted. Clusters are
-visited in sorted repository order and drawn with a SplitMix64 generator seeded
-at zero, written out in `src/eval/` rather than taken from a crate, so the draws
-are reproducible across toolchains and releases. Four predeclared comparisons
-use Bonferroni-adjusted two-sided intervals:
+- The execution completed.
+- The patch applied.
+- The independent tests pass.
+- The run has no unrelated edits.
 
-1. Success-rate delta lower bound must be positive.
-2. Token-ratio upper bound must be at most 1.05.
-3. Elapsed-time-ratio upper bound must be at most 1.05.
-4. Cost-ratio upper bound must be at most 1.05.
+The scorer rejects these cases:
 
-No language may have a net success drop, and no candidate run may make any
-unrelated edit. The baseline's unrelated-edit count is not an allowance: a
-candidate is rejected on its own count.
-Zero-token connection failures remain in the sample. A positive token/cost
-increase from a zero baseline makes the ratio unmeasurable and fails the combined
-gate (reported interval is null). Development or insufficient
-samples never pass. Do not tune margins after observing results. These intervals
-do not remove dataset bias, benchmark contamination, or uncertain success labels.
+- A missing, duplicate, or unregistered run.
+- A changed model, prompt, budget, revision, or seed.
+- A missing hash.
+- An invalid resource value.
+- An overlap of held-out and development repositories.
 
-The report is written to stdout in the selected `--format`. A failed gate is a
-threshold violation, so the command exits 2 like every other omen gate; invalid
-evidence is an error and exits 1.
+An error or a timeout stays a failure.
+
+The scorer calculates 2000 repository-cluster bootstrap draws.
+Each repository has the same weight. Each task in a repository has the same weight.
+The scorer visits the clusters in sorted repository order.
+It draws with a SplitMix64 generator that starts at zero.
+The generator is written in `src/eval/`. It does not come from a crate.
+Thus the draws are the same across toolchains and releases.
+
+Four predeclared comparisons use Bonferroni-adjusted two-sided intervals:
+
+1. The lower bound of the success-rate delta must be positive.
+2. The upper bound of the token ratio must be at most 1.05.
+3. The upper bound of the elapsed-time ratio must be at most 1.05.
+4. The upper bound of the cost ratio must be at most 1.05.
+
+No language can have a net success drop. No candidate run can make an unrelated edit.
+The unrelated-edit count of the baseline is not an allowance. Omen rejects a candidate on its own count.
+
+A connection failure with zero tokens stays in the sample.
+If the token count or the cost increases from a zero baseline, the ratio cannot be measured.
+Then the combined gate fails, and the reported interval is null.
+A development sample or a sample that is too small never passes.
+Do not tune the margins after you observe the results.
+These intervals do not remove dataset bias, benchmark contamination, or uncertain success labels.
+
+The command writes the report to stdout in the selected `--format`.
+A failed gate is a threshold violation. Thus the command exits with status 2, as every other omen gate does.
+Invalid evidence is an error, and the command exits with status 1.
 
 ```sh
 cargo test eval::
@@ -87,19 +118,27 @@ omen -f json eval --registration registration.json \
   --runs complete-runs.json --output agent-results.json
 ```
 
-## Proof supplied by this implementation
+## Proof that this implementation supplies
 
-Twenty unit tests in `src/eval/mod.rs` validate scorer behavior, including
-rejection of missing observations, confounded pairs, malformed cases, invalid
-costs/tokens, token counts that overflow their sum, leaking held-out
-repositories, token/time/cost regressions, unapplied patches, candidate
-unrelated edits and false success on timeouts, plus canonical-digest and
-determinism checks. Three CLI tests in
-`tests/integration_tests.rs` cover both exit paths and a malformed runs file.
-Synthetic outcomes in tests are explicitly fixture data, not model results.
-These run in the existing `Test` CI job without running a model and without
-configuring any model credential. CI is not network-isolated: `actions/checkout`
-reaches GitHub. Isolation is limited to what the scorer does, not to the runner.
+Twenty unit tests in `src/eval/mod.rs` validate the behavior of the scorer. They cover these cases:
 
-The resulting flag is named `reported_outcome_gate`, not "understanding proven."
-Only independently collected and verified runs can support a coding-agent claim.
+- A missing observation.
+- A confounded pair.
+- A malformed case.
+- An invalid cost or token count.
+- A token count whose sum overflows.
+- A leak of a held-out repository.
+- A regression of tokens, time, or cost.
+- A patch that was not applied.
+- A candidate with unrelated edits.
+- A false success on a timeout.
+- The canonical digest and the determinism.
+
+Three CLI tests in `tests/integration_tests.rs` cover both exit paths and a malformed runs file.
+The synthetic outcomes in the tests are fixture data. They are not model results.
+The existing `Test` CI job runs these tests. They do not run a model, and they do not need a model credential.
+CI is not isolated from the network, because `actions/checkout` reaches GitHub.
+The isolation covers only what the scorer does. It does not cover the runner.
+
+The resulting flag has the name `reported_outcome_gate`. It does not have the name "understanding proven".
+Only runs that are collected and verified independently can support a coding-agent claim.

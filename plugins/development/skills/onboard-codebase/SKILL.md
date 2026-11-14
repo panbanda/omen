@@ -5,25 +5,25 @@ description: Generate onboarding guide with key symbols, architecture overview, 
 
 # Onboard Codebase
 
-Generate a comprehensive onboarding guide for a new developer joining the project, identifying key code, architecture, and people to talk to.
+Make a complete onboarding guide for a new developer who joins the project. The guide identifies the key code, the architecture, and the people to talk to.
 
 ## Prerequisites
 
-Omen CLI must be installed and available in PATH.
+The Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
 ### Step 1: Get a Quick Code Map
 
-Run the outline command for a token-cheap overview of every file's structure:
+Run the outline command for a token-cheap overview of the structure of each file:
 
 ```bash
 omen -f json outline --compact --top 50
 ```
 
-This returns imports, classes with methods, and top-level functions — much cheaper than reading full source files.
+The command returns the imports, the classes with their methods, and the top-level functions. This is much cheaper than a read of the full source files.
 
-### Step 2: Identify Key Symbols
+### Step 2: Identify the Key Symbols
 
 Run the repomap analysis to find the most important code:
 
@@ -31,19 +31,19 @@ Run the repomap analysis to find the most important code:
 omen -f json repomap --compact --top 25
 ```
 
-PageRank-ranked symbols show what's central to the codebase.
+The symbols that PageRank ranks show what is central to the codebase.
 
 ### Step 3: Map the Architecture
 
-Run the dependency graph analysis to understand structure:
+Run the dependency graph analysis to understand the structure:
 
 ```bash
 omen -f json graph
 ```
 
-This reveals how the codebase is organized and how modules relate.
+The result shows how the codebase is organized and how the modules relate.
 
-### Step 4: Identify Subject Matter Experts
+### Step 4: Identify the Subject Matter Experts
 
 Run the ownership analysis to find who knows what:
 
@@ -51,21 +51,21 @@ Run the ownership analysis to find who knows what:
 omen -f json ownership
 ```
 
-This shows who has expertise in each area of the code.
+The result shows who has expertise in each area of the code.
 
-### Step 5: Find Complexity Hotspots
+### Step 5: Find the Complexity Hotspots
 
-Run the complexity analysis to identify tricky areas:
+Run the complexity analysis to identify the difficult areas:
 
 ```bash
 omen -f json complexity
 ```
 
-New developers should be warned about complex areas.
+Warn new developers about the complex areas.
 
 ## Output Format
 
-Generate an onboarding guide:
+Make an onboarding guide in this format:
 
 ```markdown
 # Onboarding Guide: <Project Name>

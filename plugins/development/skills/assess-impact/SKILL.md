@@ -5,43 +5,43 @@ description: Analyze blast radius before changing specific files. Use before ref
 
 # Assess Impact
 
-Understand the potential blast radius of changes before making them by analyzing dependencies, coupling patterns, and ownership.
+Find the potential blast radius of a change before you make it. Analyze the dependencies, the coupling patterns, and the ownership.
 
 ## Prerequisites
 
-Omen CLI must be installed and available in PATH.
+The Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
-### Step 1: Check Symbol Blast Radius
+### Step 1: Check the Symbol Blast Radius
 
-Use the `impact` command to get transitive callers and callees in one call:
+Use the `impact` command to get the transitive callers and callees in one call:
 
 ```bash
 omen -f json impact <symbol-name> --depth 2
 ```
 
-This returns affected files, caller/callee BFS levels, and the total count — much faster than building the picture manually.
+The command returns the affected files, the caller and callee BFS levels, and the total count. This is much faster than a manual analysis.
 
-To inspect a specific symbol first:
+To inspect a specific symbol first, use this command:
 
 ```bash
 omen -f json symbol <symbol-name>
 ```
 
-### Step 2: Map File-Level Dependencies
+### Step 2: Map the File-Level Dependencies
 
-Run the dependency graph analysis for file-level coupling:
+Run the dependency graph analysis for the coupling between files:
 
 ```bash
 omen -f json graph --compact
 ```
 
-Identify:
-- Direct dependents (files that import the target)
-- Transitive dependents (files that import the dependents)
+Identify these items:
+- Direct dependents (the files that import the target).
+- Transitive dependents (the files that import the dependents).
 
-### Step 3: Check Temporal Coupling
+### Step 3: Check the Temporal Coupling
 
 Run the temporal coupling analysis:
 
@@ -49,9 +49,9 @@ Run the temporal coupling analysis:
 omen -f json temporal
 ```
 
-Files with high temporal coupling to the target often need to change together even without explicit imports.
+A file with high temporal coupling to the target often must change together with the target. This is true also if there are no explicit imports.
 
-### Step 3: Identify Stakeholders
+### Step 4: Identify the Stakeholders
 
 Run the ownership analysis:
 
@@ -59,14 +59,14 @@ Run the ownership analysis:
 omen -f json ownership
 ```
 
-Identify:
-- Primary owner of the target file
-- Owners of dependent files
-- Subject matter experts to consult
+Identify these items:
+- The primary owner of the target file.
+- The owners of the dependent files.
+- The subject matter experts to consult.
 
 ## Impact Categories
 
-Classify impact by type:
+Classify the impact by type:
 
 | Category | Description | Action |
 |----------|-------------|--------|
@@ -77,7 +77,7 @@ Classify impact by type:
 
 ## Output Format
 
-Present impact analysis as:
+Show the impact analysis in this format:
 
 ```markdown
 # Change Impact: `target/file.go:FunctionName`
@@ -112,11 +112,11 @@ Present impact analysis as:
 4. Notify bob and charlie before merging
 ```
 
-## Reducing Impact
+## Reduce the Impact
 
-Strategies to minimize blast radius:
+Use these strategies to make the blast radius smaller:
 
-1. **Add an adapter**: Wrap changes behind a stable interface
-2. **Deprecate first**: Add deprecation warnings before removing
-3. **Feature flag**: Gate changes behind a flag for gradual rollout
-4. **Split the change**: Break into smaller, reviewable pieces
+1. **Add an adapter**: Put the changes behind a stable interface.
+2. **Deprecate first**: Add deprecation warnings before you remove an item.
+3. **Use a feature flag**: Put the change behind a flag for a gradual rollout.
+4. **Split the change**: Break the change into smaller pieces that are easy to review.

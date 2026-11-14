@@ -5,15 +5,15 @@ description: Identify files and functions most needing test coverage based on ri
 
 # Target Tests
 
-Identify the highest-value targets for additional test coverage by combining risk, complexity, and behavioral signals.
+Identify the targets that give the most value for more test coverage. Combine the risk, complexity, and behavioral signals.
 
 ## Prerequisites
 
-Omen CLI must be installed and available in PATH.
+The Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
-### Step 1: Identify High-Risk Files
+### Step 1: Identify the High-Risk Files
 
 Run the defect prediction analysis:
 
@@ -21,9 +21,9 @@ Run the defect prediction analysis:
 omen -f json defect
 ```
 
-Files with high defect probability are statistically likely to contain bugs.
+A file with a high defect probability is statistically likely to contain bugs.
 
-### Step 2: Find Hotspots
+### Step 2: Find the Hotspots
 
 Run the hotspot analysis:
 
@@ -31,9 +31,9 @@ Run the hotspot analysis:
 omen -f json hotspot
 ```
 
-High-churn + high-complexity code needs regression protection.
+Code with high churn and high complexity needs protection against regressions.
 
-### Step 3: Analyze Complexity
+### Step 3: Analyze the Complexity
 
 Run the complexity analysis:
 
@@ -41,9 +41,9 @@ Run the complexity analysis:
 omen -f json complexity
 ```
 
-Complex functions have many code paths that need coverage.
+A complex function has many code paths. Each path needs coverage.
 
-### Step 4: Check Ownership
+### Step 4: Check the Ownership
 
 Run the ownership analysis:
 
@@ -51,11 +51,11 @@ Run the ownership analysis:
 omen -f json ownership
 ```
 
-Single-owner code needs tests as documentation for when others maintain it.
+Code with one owner needs tests as documentation. Other developers will maintain the code later.
 
 ## Test Priority Matrix
 
-Prioritize based on combined signals:
+Set the priority from the combined signals:
 
 | Priority | Signals | Why Test |
 |----------|---------|----------|
@@ -66,7 +66,7 @@ Prioritize based on combined signals:
 
 ## Test Case Estimation
 
-Use cyclomatic complexity to estimate test cases needed:
+Use the cyclomatic complexity to estimate the number of test cases:
 
 | Cyclomatic Complexity | Minimum Test Cases |
 |----------------------|-------------------|
@@ -77,7 +77,7 @@ Use cyclomatic complexity to estimate test cases needed:
 
 ## Output Format
 
-Generate a test targeting report:
+Make a test targeting report in this format:
 
 ```markdown
 # Test Targeting Report
@@ -142,9 +142,9 @@ Files where tests serve as critical documentation:
 
 ## Testing ROI
 
-Focus on tests that provide the most value:
+Write the tests that give the most value:
 
-1. **Risk reduction**: Test high-defect-probability code first
-2. **Regression protection**: Test frequently-changing code
-3. **Documentation**: Test single-owner complex code
-4. **Refactoring enablement**: Test before major changes
+1. **Risk reduction**: Test the code with a high defect probability first.
+2. **Regression protection**: Test the code that changes often.
+3. **Documentation**: Test complex code that has one owner.
+4. **Refactoring enablement**: Test before a major change.

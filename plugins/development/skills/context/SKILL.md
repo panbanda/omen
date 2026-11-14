@@ -10,7 +10,7 @@ arguments:
 
 # Context Skill
 
-Get metrics before modifying: `{{.focus}}`
+Get the metrics before you change: `{{.focus}}`
 
 ## Quick Start
 
@@ -27,9 +27,9 @@ omen -f json context
 
 ## What You Get
 
-- **Complexity**: Cyclomatic and cognitive scores per function
-- **Debt**: TODO/FIXME/HACK markers with severity
-- **Risk**: Combined assessment for the target
+- **Complexity**: The cyclomatic and cognitive scores of each function.
+- **Debt**: The TODO, FIXME, and HACK markers with their severity.
+- **Risk**: The combined assessment for the target.
 
 ## Thresholds
 
@@ -40,6 +40,6 @@ omen -f json context
 
 ## Next Actions
 
-1. **High complexity**: Consider refactoring before changes
-2. **Critical debt**: Address security/bug markers first
-3. **Clean**: Proceed with your modification
+1. **High complexity**: Refactor before you make changes.
+2. **Critical debt**: Address the security and bug markers first.
+3. **Clean**: Continue with your change.

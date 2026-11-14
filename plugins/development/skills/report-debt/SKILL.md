@@ -5,35 +5,35 @@ description: Generate comprehensive tech debt assessment with quantified metrics
 
 # Report Debt
 
-Generate a comprehensive technical debt assessment with quantified metrics, prioritized issues, and actionable recommendations.
+Make a complete technical debt assessment with quantified metrics, prioritized issues, and actionable recommendations.
 
 ## Prerequisites
 
-Omen CLI must be installed and available in PATH.
+The Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
 ### Step 1: Scan for Self-Admitted Debt
 
-Run the SATD analysis to find explicit debt markers:
+Run the SATD analysis to find the explicit debt markers:
 
 ```bash
 omen -f json satd
 ```
 
-Captures TODO, FIXME, HACK, XXX, and other debt markers with severity.
+The command finds TODO, FIXME, HACK, XXX, and other debt markers with their severity.
 
-### Step 2: Calculate TDG Scores
+### Step 2: Calculate the TDG Scores
 
-Run the TDG analysis for quality grades:
+Run the TDG analysis for the quality grades:
 
 ```bash
 omen -f json tdg
 ```
 
-TDG provides A-F grades based on complexity, churn, and health metrics.
+TDG gives grades from A to F. The grades are based on complexity, churn, and health metrics.
 
-### Step 3: Measure Duplication
+### Step 3: Measure the Duplication
 
 Run the clone detection analysis:
 
@@ -41,9 +41,9 @@ Run the clone detection analysis:
 omen -f json clones
 ```
 
-Calculate duplication ratio and identify clone clusters.
+Calculate the duplication ratio. Identify the clone clusters.
 
-### Step 4: Assess Defect Risk
+### Step 4: Assess the Defect Risk
 
 Run the defect prediction analysis:
 
@@ -51,9 +51,9 @@ Run the defect prediction analysis:
 omen -f json defect
 ```
 
-Identify files with high predicted defect probability.
+Identify the files with a high predicted defect probability.
 
-### Step 5: Check Complexity
+### Step 5: Check the Complexity
 
 Run the complexity analysis:
 
@@ -61,11 +61,11 @@ Run the complexity analysis:
 omen -f json complexity
 ```
 
-Find functions exceeding complexity thresholds.
+Find the functions that exceed the complexity thresholds.
 
 ## Debt Categories
 
-Organize findings by category:
+Organize the findings by category:
 
 | Category | Source | Impact |
 |----------|--------|--------|
@@ -77,7 +77,7 @@ Organize findings by category:
 
 ## Output Format
 
-Generate a stakeholder-ready report:
+Make a report for stakeholders in this format:
 
 ```markdown
 # Technical Debt Report

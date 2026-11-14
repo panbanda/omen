@@ -11,7 +11,7 @@ arguments:
 
 # Find Bugs Skill
 
-Hunt for bugs in: `{{.paths}}`
+Search for bugs in: `{{.paths}}`
 
 ## Quick Start
 
@@ -28,13 +28,13 @@ omen -f json satd | jq '.items[] | select(.category == "defect")'
 
 ## Priority Order
 
-1. **Defect probability > 0.8**: Investigate first
-2. **Hotspot score > 0.5**: Review complex logic
-3. **BUG/FIXME markers**: Known issues
-4. **Temporal coupling**: Check related files
+1. **Defect probability above 0.8**: Investigate first.
+2. **Hotspot score above 0.5**: Review the complex logic.
+3. **BUG and FIXME markers**: These are known issues.
+4. **Temporal coupling**: Check the related files.
 
 ## In Each File
 
-- Look for functions with cognitive > 20
-- Check error handling paths
-- Review boundary conditions
+- Look for functions with a cognitive complexity above 20.
+- Check the error-handling paths.
+- Review the boundary conditions.

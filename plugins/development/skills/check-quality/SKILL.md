@@ -11,7 +11,7 @@ arguments:
 
 # Check Quality Skill
 
-Assess quality of: `{{.paths}}`
+Assess the quality of: `{{.paths}}`
 
 ## Quick Start
 
@@ -38,7 +38,7 @@ omen -f json smells
 
 ## Key Metrics
 
-- **Complexity**: Functions > 15 cyclomatic
-- **Duplication**: Clone ratio > 5%
-- **Debt**: SATD density
-- **Coupling**: Circular dependencies
+- **Complexity**: Functions with a cyclomatic complexity above 15.
+- **Duplication**: A clone ratio above 5%.
+- **Debt**: The SATD density.
+- **Coupling**: Circular dependencies.

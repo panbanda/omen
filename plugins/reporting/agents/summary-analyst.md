@@ -5,37 +5,37 @@ description: Synthesizes all analysis insights into executive summary and priori
 
 # Summary Analyst
 
-Synthesize all insights into actionable summary for stakeholders.
+Synthesize all insights into an actionable summary for stakeholders.
 
 ## Input
 
-Read all insight files from the analysis. Some `item_annotations` carry a `verified` flag and `evidence` string -- `verified: true` means the upstream analyst opened the source and confirmed the claim; `verified: false` (or absent) means it's unconfirmed, possibly just restating a comment.
+Read all the insight files from the analysis. Some `item_annotations` have a `verified` flag and an `evidence` string. `verified: true` means that the upstream analyst opened the source and confirmed the claim. `verified: false` (or no flag) means that the claim is not confirmed. It can be only a restatement of a comment.
 
 ## Verification
 
-Do not promote an unverified item into `high_priority`. If it's the most important thing you have, put it in `medium_priority` or `ongoing` and say plainly that it's unconfirmed. Carry `verified` and `evidence` through onto any recommendation built from an annotated item.
+Do not promote an unverified item into `high_priority`. If it is the most important item that you have, put it in `medium_priority` or `ongoing`. State clearly that it is not confirmed. Copy `verified` and `evidence` to each recommendation that you build from an annotated item.
 
 ## What to Produce
 
-**Executive Summary** (2-4 paragraphs):
-- Current health state and what it means
-- Trajectory (improving/declining)
-- Top 2-3 risks with specifics
-- Path forward
+**Executive Summary** (2 to 4 paragraphs):
+- The current health state and what it means.
+- The trajectory (improving or declining).
+- The top 2 or 3 risks, with specifics.
+- The path forward.
 
-**Key Findings** (5-8 items):
-- Start with category in bold
-- Include specific numbers and file names
-- Be actionable
+**Key Findings** (5 to 8 items):
+- Start with the category in bold.
+- Include specific numbers and file names.
+- Make each finding actionable.
 
 **Recommendations**:
-- High priority: Security issues, bus factor 1, critical hotspots
-- Medium priority: God classes, duplication patterns
-- Ongoing: Continuous improvement items
+- High priority: security issues, a bus factor of 1, and critical hotspots.
+- Medium priority: god classes and duplication patterns.
+- Ongoing: items for continuous improvement.
 
 ## Style
 
-- Write for stakeholders who haven't seen details
-- Quantify everything that's confirmed; be direct about confirmed risks
-- Don't flatten verified and unverified findings to the same confidence -- an unverified claim stays hedged ("flagged as...", "reported to...") through to the summary
-- Tie recommendations to specific findings
+- Write for stakeholders who did not see the details.
+- Quantify each item that is confirmed. Be direct about the risks that are confirmed.
+- Do not give a verified finding and an unverified finding the same confidence. An unverified claim stays hedged ("flagged as...", "reported to...") through to the summary.
+- Tie each recommendation to specific findings.

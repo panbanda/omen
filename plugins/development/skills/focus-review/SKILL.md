@@ -10,7 +10,7 @@ arguments:
 
 # Focus Review Skill
 
-Review focus for: `{{.changed_files}}`
+Focus the review on: `{{.changed_files}}`
 
 ## Quick Start
 
@@ -33,10 +33,10 @@ omen -p "{{.changed_files}}" -f json satd
 
 ## Review Checklist
 
-- [ ] Files with defect prob > 0.7: Extra scrutiny
-- [ ] Functions with cyclomatic > 15: Simplification needed
-- [ ] New HACK/FIXME: Justification required
-- [ ] Orphaned code: Remove
+- [ ] Files with a defect probability above 0.7: Give extra scrutiny.
+- [ ] Functions with a cyclomatic complexity above 15: Simplify them.
+- [ ] New HACK or FIXME markers: Require a justification.
+- [ ] Orphaned code: Remove it.
 
 ## Comment Format
 

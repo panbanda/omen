@@ -11,7 +11,7 @@ arguments:
 
 # Plan Refactoring Skill
 
-Find refactoring targets in: `{{.paths}}`
+Find the refactoring targets in: `{{.paths}}`
 
 ## Quick Start
 
@@ -50,6 +50,6 @@ omen -f json impact <symbol-name> --depth 2
 
 ## Sequencing
 
-1. Quick wins: hotspot + low complexity
-2. Clone extraction
-3. God components (dedicated sprint)
+1. Quick wins: hotspot and low complexity.
+2. Clone extraction.
+3. God components (a dedicated sprint).
