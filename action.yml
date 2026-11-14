@@ -11,6 +11,10 @@ inputs:
     description: 'Omen version to install (for example, "4.20.3"), or "latest" for the newest stable release.'
     required: false
     default: 'latest'
+  binary:
+    description: 'Path of an omen binary to use, relative to the workflow workspace. If set, the action does not install a release, and it ignores "version".'
+    required: false
+    default: ''
   path:
     description: 'Repository path to analyze, relative to the workflow workspace.'
     required: false
@@ -79,7 +83,23 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Use the given omen binary
+      if: inputs.binary != ''
+      id: given
+      shell: bash
+      env:
+        INPUT_BINARY: ${{ inputs.binary }}
+      run: |
+        binary="$(realpath "$GITHUB_WORKSPACE/$INPUT_BINARY")"
+        if [ ! -x "$binary" ] || [ "$(basename "$binary")" != "omen" ]; then
+          echo "::error::The binary input must name an executable file called omen: $INPUT_BINARY"
+          exit 1
+        fi
+        dirname "$binary" >> "$GITHUB_PATH"
+        echo "version=$("$binary" --version | awk '{print $NF}')" >> "$GITHUB_OUTPUT"
+
     - name: Resolve omen version
+      if: inputs.binary == ''
       id: resolve
       uses: actions/github-script@v9
       env:
@@ -139,6 +159,7 @@ runs:
           }
 
     - name: Restore cached omen binary
+      if: inputs.binary == ''
       id: omen-cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -146,6 +167,7 @@ runs:
         key: omen-${{ steps.resolve.outputs.version }}-${{ steps.resolve.outputs.target }}
 
     - name: Install omen
+      if: inputs.binary == ''
       id: install
       uses: actions/github-script@v9
       env:
@@ -382,7 +404,7 @@ runs:
       env:
         DIFF_JSON: ${{ steps.diff.outputs.diff-json }}
         SCORE_JSON: ${{ steps.score.outputs.score-json }}
-        OMEN_VERSION: ${{ steps.install.outputs.version }}
+        OMEN_VERSION: ${{ steps.install.outputs.version || steps.given.outputs.version }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |

@@ -1,8 +1,1 @@
-[
-  {
-    "id": "cpp/n-heap",
-    "base_rank": 2,
-    "rank": 3,
-    "reason": "The shared index now gives C++ out-of-line methods as documents. One more Circle method ranks above heap for this query. The new documents are correct."
-  }
-]
+[]
