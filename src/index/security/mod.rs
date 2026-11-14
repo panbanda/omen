@@ -236,6 +236,11 @@ pub struct Sink {
     /// The key of the nearest function that contains the sink.
     pub enclosing: Option<String>,
     pub callee_text: String,
+    /// What the sink is, not how the source writes it: the resolved path of the callee, such
+    /// as `os.system` for `operating_system.system` after `import os as operating_system`.
+    /// A sink that is not a call has the text of the construct.
+    #[serde(default)]
+    pub target: String,
     pub basis: SinkBasis,
     pub flags: SinkFlags,
 }

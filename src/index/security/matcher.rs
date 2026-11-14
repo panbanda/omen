@@ -623,14 +623,17 @@ impl FileContext<'_> {
                 .map(|call| syntax::arguments(call, self.file.language))
                 .unwrap_or_default();
             for spec in named {
-                let basis = match (&spec.target, &owner) {
+                let matched: Option<(SinkBasis, String)> = match (&spec.target, &owner) {
                     (_, Owner::Repository) => None,
                     (Target::Method { .. }, _) => (reference.receiver.is_some()
                         && !self.resolver_selected_repository(reference))
-                    .then_some(SinkBasis::NameOnly),
+                    .then(|| (SinkBasis::NameOnly, format!("*.{}", reference.name))),
                     (Target::Path { module, callee }, Owner::Paths { paths, imported }) => paths
                         .iter()
-                        .find_map(|path| self.path_match(module, callee, path, *imported))
+                        .find_map(|path| {
+                            self.path_match(module, callee, path, *imported)
+                                .map(|basis| (basis, path.join(".")))
+                        })
                         .filter(|_| {
                             *imported
                                 || (written_length > 1 && !self.syntax.global_namespace)
@@ -638,7 +641,7 @@ impl FileContext<'_> {
                         }),
                     _ => None,
                 };
-                let Some(basis) = basis else {
+                let Some((basis, target)) = matched else {
                     continue;
                 };
                 let held = call.is_some()
@@ -666,14 +669,16 @@ impl FileContext<'_> {
                         .unwrap_or(reference.name.as_str())
                         .to_string()
                 };
-                sinks.push(self.sink(
+                let mut sink = self.sink(
                     spec.category,
                     reference.name_range,
                     reference.enclosing.clone(),
                     &callee_text,
                     basis,
                     !arguments.is_empty() && arguments.iter().all(|node| syntax::is_literal(*node)),
-                ));
+                );
+                sink.target = target;
+                sinks.push(sink);
             }
         }
     }
@@ -743,6 +748,7 @@ impl FileContext<'_> {
             cwe: category.cwe(),
             range,
             enclosing,
+            target: callee_text.clone(),
             callee_text,
             basis,
             flags: SinkFlags {

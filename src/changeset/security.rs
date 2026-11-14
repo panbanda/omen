@@ -80,7 +80,7 @@ fn sink_id(sink: &Sink, renames: &BTreeMap<String, String>) -> String {
         "{}|{}|{}",
         sink.category.name(),
         renamed(sink.enclosing.as_deref().unwrap_or(&sink.file), renames),
-        sink.callee_text
+        sink.target
     )
 }
 
@@ -608,6 +608,26 @@ mod tests {
             ["app.py#left".to_string(), "app.py#right".to_string()].into();
         let found = diff(&analysis, &analysis, &changed);
         assert_eq!(found.changed_on_path, ["app.py#left", "app.py#right"]);
+    }
+
+    #[test]
+    fn an_alias_of_the_module_does_not_add_a_sink() {
+        let base = "import os\n\n\ndef run(command):\n    os.system(command)\n";
+        let head = "import os as operating_system\n\n\ndef run(command):\n    operating_system.system(command)\n";
+        let base = analyze_sources(&[("app.py", base)], DEFAULT_MIN_BASIS);
+        let head = analyze_sources(&[("app.py", head)], DEFAULT_MIN_BASIS);
+        assert_eq!(base.sinks.len(), 1);
+        assert_eq!(head.sinks.len(), 1);
+        let found = diff(&base, &head, &BTreeSet::new());
+        assert!(found.is_empty(), "{found:?}");
+        let other = "import os\n\n\ndef run(command):\n    os.popen(command)\n";
+        let other = analyze_sources(&[("app.py", other)], DEFAULT_MIN_BASIS);
+        let changed = diff(&base, &other, &BTreeSet::new());
+        assert_eq!(
+            changed.sinks_added.len(),
+            1,
+            "another function is a new sink"
+        );
     }
 
     #[test]
