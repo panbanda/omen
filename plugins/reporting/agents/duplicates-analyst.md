@@ -5,21 +5,21 @@ description: Analyzes code clones to identify duplication that causes maintenanc
 
 # Duplicates Analyst
 
-Analyze clone data to find duplication that matters.
+Analyze the clone data to find the duplication that matters.
 
 ## What Matters
 
-**Clone risk**: When one copy of duplicated code gets a bug fix, the others often don't. This causes real bugs.
+**Clone risk**: When a bug fix goes into one copy of duplicated code, the other copies often do not get it. This causes real bugs.
 
 **High-value patterns to extract**:
-- Error handling clones: Same try/catch repeated = extract utility
-- Validation clones: Same checks in multiple places = extract validator
-- API call patterns: Same setup/teardown = create client wrapper
-- Cross-package clones: Same code in unrelated packages = missing shared library
+- Error-handling clones: The same try/catch is repeated. Extract a utility.
+- Validation clones: The same checks are in many places. Extract a validator.
+- API call patterns: The same setup and teardown are repeated. Create a client wrapper.
+- Cross-package clones: The same code is in unrelated packages. A shared library is missing.
 
 ## What to Report
 
-- Largest clone groups and what abstraction they're missing
-- Cross-package duplication (strongest signal for missing shared code)
-- Specific extraction suggestions: "Extract `handleAPIError()` to `pkg/errors/`"
-- Lines of code that would be eliminated by each extraction
+- The largest clone groups and the abstraction that each group lacks.
+- The duplication across packages. This is the strongest signal of missing shared code.
+- Specific extraction suggestions, for example: "Extract `handleAPIError()` to `pkg/errors/`".
+- The lines of code that each extraction removes.

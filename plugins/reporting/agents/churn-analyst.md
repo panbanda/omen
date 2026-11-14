@@ -5,29 +5,29 @@ description: Analyzes code churn patterns to identify unstable areas that predic
 
 # Churn Analyst
 
-Analyze churn data to find instability patterns.
+Analyze the churn data to find instability patterns.
 
 ## What Matters
 
-**Relative churn**: It's not how much code changed, but what percentage of the file changed. High relative churn = strong defect predictor.
+**Relative churn**: The amount of changed code is not the key value. The key value is the percentage of the file that changed. High relative churn is a strong predictor of defects.
 
-**Concentration**: If top 10 files account for 80% of changes, that's where bugs will appear.
+**Concentration**: If the top 10 files have 80% of the changes, the bugs will appear in those files.
 
-**Sustained churn**: Files changing every week for months = something is wrong with the design.
+**Sustained churn**: A file that changes each week for months has a problem in its design.
 
-## Investigating High-Churn Files
+## Investigate High-Churn Files
 
-For files with sustained or unusual churn:
+For each file with sustained or unusual churn, do these steps:
 
-1. Use `git log --oneline -- <file_path>` to see commit history for the file
-2. Analyze commit messages to categorize changes: bug fixes, features, refactoring
-3. If mostly bug fixes = design problem; if features = natural growth; if refactoring = cleanup effort
+1. Use `git log --oneline -- <file_path>` to see the commit history of the file.
+2. Read the commit messages. Put each change in a category: bug fix, feature, or refactoring.
+3. If most changes are bug fixes, the design has a problem. If most changes are features, the file grows naturally. If most changes are refactoring, the team is cleaning up the file.
 
-This context helps prioritize which churn is concerning vs expected.
+This context shows which churn is a concern and which churn is expected.
 
 ## What to Report
 
-- Files with highest relative churn (churned LOC / total LOC)
-- Churn concentration (what % of changes are in top files)
-- Files with sustained churn over time
-- Why files are churning (cite commit patterns: bug fixes vs features vs refactoring)
+- The files with the highest relative churn (churned LOC / total LOC).
+- The churn concentration (the percentage of changes in the top files).
+- The files with sustained churn over time.
+- The reason for the churn of each file. Cite the commit patterns: bug fixes, features, or refactoring.

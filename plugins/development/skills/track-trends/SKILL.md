@@ -5,25 +5,25 @@ description: Analyze repository health trends over time using historical git com
 
 # Track Trends
 
-Generate historical analysis of repository health metrics over time to identify improvement or degradation patterns.
+Make a historical analysis of the repository health metrics over time. Use it to find patterns of improvement or degradation.
 
 ## Prerequisites
 
-Omen CLI must be installed and available in PATH.
+The Omen CLI must be installed and available in PATH.
 
 ## When to Use
 
-- Quarterly engineering health reports
-- Release retrospectives
-- Tracking debt paydown initiatives
-- Justifying refactoring investments with data
-- Identifying gradual quality degradation
+- Quarterly engineering health reports.
+- Release retrospectives.
+- Debt paydown initiatives that you track.
+- Data to justify an investment in refactoring.
+- Gradual quality degradation that you must identify.
 
 ## Workflow
 
-### Step 1: Run Trend Analysis
+### Step 1: Run the Trend Analysis
 
-Use the Omen CLI to analyze historical scores:
+Use the Omen CLI to analyze the historical scores:
 
 ```bash
 # Last 3 months, weekly sampling (default)
@@ -37,27 +37,27 @@ omen score trend --since 1y --period monthly
 ```
 
 **Parameters:**
-- `--since`: How far back to analyze (3m, 6m, 1y, 2y, 30d, 4w, all). Defaults to `all` (full history).
-- `--period`: Sampling frequency (daily, weekly, monthly)
+- `--since`: How far back to analyze (3m, 6m, 1y, 2y, 30d, 4w, all). The default is `all` (the full history).
+- `--period`: The sampling frequency (daily, weekly, monthly).
 
-### Step 2: Interpret Results
+### Step 2: Interpret the Results
 
-The output includes:
+The output includes these fields:
 
 | Field | Meaning |
 |-------|---------|
 | Score | Composite health score (0-100) |
 | Slope | Points gained/lost per period |
 | R-squared | How consistent the trend is (0-1) |
-| Correlation | Direction and strength (-1 to 1) |
+| Correlation | Strength of the trend (0 to 1). The slope gives the direction. |
 
 **Trend interpretation:**
-- Positive slope = improving health
-- Negative slope = degrading health
-- High R-squared (>0.7) = consistent trend
-- Low R-squared (<0.3) = volatile/no clear trend
+- A positive slope shows improving health.
+- A negative slope shows degrading health.
+- A high R-squared (>0.7) shows a consistent trend.
+- A low R-squared (<0.3) shows a volatile trend or no clear trend.
 
-### Step 3: Analyze Component Trends
+### Step 3: Analyze the Component Trends
 
 Each component has its own trend statistics:
 
@@ -71,11 +71,11 @@ Each component has its own trend statistics:
 | Smells | Architectural issues |
 | Cohesion | Class cohesion (LCOM) |
 
-Look for diverging trends - overall score improving but one component degrading.
+Look for trends that diverge. For example, the overall score improves but one component degrades.
 
 ## Output Format
 
-Generate a trend report:
+Make a trend report in this format:
 
 ```markdown
 # Repository Health Trend Report
@@ -137,35 +137,35 @@ Period: [Start Date] to [End Date]
 
 ## CI/CD Integration
 
-Add trend checks to release pipelines:
+Add trend checks to the release pipelines:
 
 ```bash
 # Fail if score dropped more than 5 points in last month
 omen -f json score trend --since 1m | \
-  jq -e '.total_change >= -5'
+  jq -e '(.end_score - .start_score) >= -5'
 
 # Generate trend report for release notes
 omen -f markdown score trend --since 3m > TREND_REPORT.md
 ```
 
-## Interpreting Patterns
+## Interpret Patterns
 
 ### Healthy Repository
-- Stable or improving score over time
-- No component consistently degrading
-- Occasional dips followed by recovery
+- The score is stable or improves over time.
+- No component degrades consistently.
+- Occasional dips are followed by recovery.
 
 ### Technical Debt Accumulation
-- Gradual score decline (negative slope)
-- Multiple components trending down
-- SATD count increasing
+- The score declines gradually (negative slope).
+- Many components trend down.
+- The SATD count increases.
 
 ### Successful Refactoring Initiative
-- Score jump at specific point in time
-- Sustained improvement after intervention
-- TDG and complexity improving together
+- The score jumps at a specific point in time.
+- The improvement continues after the intervention.
+- TDG and complexity improve together.
 
 ### Feature Rush Pattern
-- Score drops during crunch periods
-- Duplication spikes (copy-paste coding)
-- Recovery during stabilization sprints
+- The score drops during crunch periods.
+- Duplication spikes (copy-paste coding).
+- The score recovers during stabilization sprints.

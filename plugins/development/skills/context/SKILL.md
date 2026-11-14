@@ -10,7 +10,7 @@ arguments:
 
 # Context Skill
 
-Get metrics before modifying: `{{.focus}}`
+Get the metrics before you change: `{{.focus}}`
 
 ## Quick Start
 
@@ -21,15 +21,15 @@ omen -f json outline --compact --file "{{.focus}}"
 # Inspect a specific symbol's definition and callers
 omen -f json symbol "{{.focus}}"
 
-# Get full deep context for LLM-assisted editing
+# Get the deep context of the whole repository (the command has no target argument)
 omen -f json context
 ```
 
 ## What You Get
 
-- **Complexity**: Cyclomatic and cognitive scores per function
-- **Debt**: TODO/FIXME/HACK markers with severity
-- **Risk**: Combined assessment for the target
+- **Complexity**: The functions with a cyclomatic complexity of 10 or more, or a cognitive complexity of 15 or more.
+- **Debt**: The TODO, FIXME, and HACK markers with their severity.
+- **Risk**: The ranked symbols and risks of the whole repository. The `context` command has no target argument.
 
 ## Thresholds
 
@@ -40,6 +40,6 @@ omen -f json context
 
 ## Next Actions
 
-1. **High complexity**: Consider refactoring before changes
-2. **Critical debt**: Address security/bug markers first
-3. **Clean**: Proceed with your modification
+1. **High complexity**: Find the risks that are in the target file. Refactor before you make changes.
+2. **Critical debt**: Address the security and bug markers first.
+3. **Clean**: Continue with your change.

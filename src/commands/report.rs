@@ -25,13 +25,50 @@ fn check_writes(errors: &std::sync::Mutex<Vec<String>>) -> crate::core::Result<(
     )))
 }
 
-/// Writes the file in one step: the old file stays until the new text is complete.
+/// The one history window of `report generate`. Each part reads it.
+struct GenerateWindow {
+    /// The text of the window in `metadata.json`.
+    label: String,
+    /// The window as a `--since` value, for the trend.
+    since: String,
+    days: u32,
+}
+
+/// `--since` wins over `--days`, which is the alias. Without the two flags, the window is one
+/// year.
+fn generate_window(since: Option<&str>, days: Option<u32>) -> crate::core::Result<GenerateWindow> {
+    let since = match (since, days) {
+        (Some(since), _) if crate::git::is_since_all(since) => "all".to_string(),
+        (Some(since), _) => since.trim().to_lowercase(),
+        (None, Some(days)) => format!("{days}d"),
+        (None, None) => "1y".to_string(),
+    };
+    Ok(GenerateWindow {
+        days: super::analyzers::since_flag_days(&since)?,
+        label: since.clone(),
+        since,
+    })
+}
+
+/// Writes the file in one step: the old file stays until the new text is complete. The
+/// temporary file has a random name and is new, so a link at a guessed name is not followed.
 fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    let mut pending = path.as_os_str().to_owned();
-    pending.push(".tmp");
-    let pending = std::path::PathBuf::from(pending);
-    std::fs::write(&pending, text)?;
-    std::fs::rename(&pending, path)
+    use std::io::Write;
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let mut pending = tempfile::NamedTempFile::new_in(directory)?;
+    pending.write_all(text.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        pending
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o644))?;
+    }
+    pending.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 /// The data files that `report generate` writes and that `report validate` expects.
@@ -69,7 +106,7 @@ pub fn run(
 
     match subcommand {
         ReportSubcommand::Generate(args) => {
-            let since_days = super::analyzers::since_flag_days(&args.since)?;
+            let window = generate_window(args.since.as_deref(), args.days)?;
             // The reference is checked before the first write, so a failed run keeps
             // the files of an earlier run.
             let changes = git_ref
@@ -102,28 +139,20 @@ pub fn run(
                 .ok()
                 .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
                 .unwrap_or_else(|| "unknown".to_string());
-            // Use --days if provided, otherwise use --since
-            let since_str = if let Some(days) = args.days {
-                format!("{} days", days)
-            } else {
-                args.since.clone()
-            };
             let metadata = json!({
                 "repository": repo_name,
                 "generated_at": chrono::Utc::now().to_rfc3339(),
-                "since": since_str,
+                "since": window.label,
                 "omen_version": env!("CARGO_PKG_VERSION"),
                 "paths": [path.display().to_string()]
             });
             let metadata_path = args.data.join("metadata.json");
-            std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
+            let metadata_text = serde_json::to_string_pretty(&metadata)?;
 
             let changes_path = args.data.join("diff.json");
             match changes {
                 Some(changes) => {
-                    let pending_path = args.data.join("diff.json.tmp");
-                    std::fs::write(&pending_path, serde_json::to_string_pretty(&changes)?)?;
-                    std::fs::rename(&pending_path, &changes_path)?;
+                    write_atomically(&changes_path, &serde_json::to_string_pretty(&changes)?)?;
                 }
                 None => match std::fs::remove_file(&changes_path) {
                     Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
@@ -186,6 +215,17 @@ pub fn run(
             let completed = std::sync::atomic::AtomicU64::new(0);
             let write_errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
             let output_dir = &args.data;
+            match write_atomically(&metadata_path, &metadata_text) {
+                Ok(()) => {
+                    if progress.is_none() {
+                        eprintln!("Generated: {}", metadata_path.display());
+                    }
+                }
+                Err(error) => write_errors
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(format!("{}: {error}", metadata_path.display())),
+            }
 
             // Helper: run an analyzer and save its JSON output
             macro_rules! run_analyzer {
@@ -224,7 +264,6 @@ pub fn run(
             // Group A: File-parsing analyzers (CPU-bound, share tree-sitter work)
             // Group B: Git-heavy analyzers (I/O-bound, overlap with CPU work)
             // Group C: Mixed analyzers (benefit from warm OS caches)
-            let churn_days = args.days.unwrap_or(since_days);
             let security_analyzer = crate::analyzers::security::Analyzer::from_config(config)?;
 
             std::thread::scope(|s| {
@@ -268,7 +307,7 @@ pub fn run(
                         "ownership"
                     );
                     run_analyzer!(
-                        crate::analyzers::churn::Analyzer::new().with_days(churn_days),
+                        crate::analyzers::churn::Analyzer::new().with_days(window.days),
                         "churn",
                         "churn"
                     );
@@ -332,12 +371,19 @@ pub fn run(
                     Err(e) => json!({"error": e.to_string()}),
                 };
                 let output_path = output_dir.join("score.json");
-                std::fs::write(&output_path, serde_json::to_string_pretty(&result)?)?;
-                let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                if let Some(ref bar) = progress {
-                    bar.set_position(done);
-                } else {
-                    eprintln!("Generated: {}", output_path.display());
+                match write_atomically(&output_path, &serde_json::to_string_pretty(&result)?) {
+                    Ok(()) => {
+                        let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        if let Some(ref bar) = progress {
+                            bar.set_position(done);
+                        } else {
+                            eprintln!("Generated: {}", output_path.display());
+                        }
+                    }
+                    Err(error) => write_errors
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(format!("{}: {error}", output_path.display())),
                 }
             }
 
@@ -348,17 +394,17 @@ pub fn run(
                 }
                 let samples = args.samples.or_else(|| {
                     // All the history has no number of days. Use 50 years.
-                    let days = if since_days == u32::MAX {
+                    let days = if window.days == u32::MAX {
                         (365 * 50) as f64
                     } else {
-                        since_days as f64
+                        window.days as f64
                     };
                     Some(crate::score::default_sample_count(days))
                 });
                 match crate::score::analyze_trend(
                     path,
                     config,
-                    &args.since,
+                    &window.since,
                     crate::cli::TrendPeriod::Monthly,
                     samples,
                 ) {

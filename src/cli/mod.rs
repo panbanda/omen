@@ -578,11 +578,12 @@ pub struct ReportGenerateArgs {
     #[arg(long)]
     pub skip: Option<String>,
 
-    /// Time period for analysis (e.g., 1m, 3m, 6m, 1y, 2y, all)
-    #[arg(long, default_value = "1y")]
-    pub since: String,
+    /// Time period for analysis (e.g., 1m, 3m, 6m, 1y, 2y, all). The default is 1y. If both
+    /// `--since` and `--days` are given, `--since` wins
+    #[arg(long)]
+    pub since: Option<String>,
 
-    /// Number of days for git-based analyzers (alternative to --since)
+    /// Number of days for git-based analyzers (alias for --since)
     #[arg(long)]
     pub days: Option<u32>,
 
@@ -1574,7 +1575,7 @@ mod tests {
         if let ReportSubcommand::Generate(args) =
             parse_report_subcommand(&["omen", "report", "generate", "--since", "6m"])
         {
-            assert_eq!(args.since, "6m");
+            assert_eq!(args.since.as_deref(), Some("6m"));
         }
     }
 
@@ -1588,11 +1589,11 @@ mod tests {
     }
 
     #[test]
-    fn test_report_generate_default_since_is_one_year() {
+    fn test_report_generate_without_since_leaves_the_default_to_the_window() {
         if let ReportSubcommand::Generate(args) =
             parse_report_subcommand(&["omen", "report", "generate"])
         {
-            assert_eq!(args.since, "1y");
+            assert_eq!(args.since, None);
         }
     }
 

@@ -1,5 +1,7 @@
 # Deprecations
 
+The [migration guide](docs/MIGRATING-5.0.md) explains how to move from 4.x to 5.0.
+
 Single source of truth for everything scheduled for removal. When cutting a
 breaking (major) release, work this list top to bottom and remove each entry
 plus its code.
@@ -18,8 +20,9 @@ placed in a doc comment or code comment at each site.
 
 No entries.
 
-Note: `--days` (churn) is a **kept** alias for `--since`, not scheduled for
-removal, so it carries no marker.
+Note: `--days` is a **kept** alias for `--since` on `churn`, `hotspot`,
+`defect`, and `report generate`. It is not scheduled for removal, so it carries
+no marker.
 
 ## Removed in 5.0
 

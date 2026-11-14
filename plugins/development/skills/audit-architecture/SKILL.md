@@ -5,15 +5,15 @@ description: Audit module coupling, cohesion, hidden dependencies, and design sm
 
 # Audit Architecture
 
-Analyze the structural health of a codebase by examining coupling, cohesion, hidden dependencies, and design patterns.
+Analyze the structural health of a codebase. Examine the coupling, the cohesion, the hidden dependencies, and the design patterns.
 
 ## Prerequisites
 
-Omen CLI must be installed and available in PATH.
+The Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
-### Step 1: Map Module Dependencies
+### Step 1: Map the Module Dependencies
 
 Run the dependency graph analysis:
 
@@ -21,12 +21,12 @@ Run the dependency graph analysis:
 omen -f json graph
 ```
 
-Look for:
-- Circular dependencies
-- God modules (too many dependents)
-- Orphan modules (no connections)
+Look for these items:
+- Circular dependencies.
+- God modules (too many dependents).
+- Orphan modules (no connections).
 
-### Step 2: Detect Architectural Smells
+### Step 2: Detect the Architectural Smells
 
 Run the smells analysis:
 
@@ -34,22 +34,22 @@ Run the smells analysis:
 omen -f json smells
 ```
 
-Detects cyclic dependencies, hub modules, unstable dependencies, and central connectors using Tarjan's SCC algorithm.
+The command detects cyclic dependencies, hub modules, unstable dependencies, and central connectors. It uses the Tarjan SCC algorithm.
 
-### Step 3: Measure Cohesion
+### Step 3: Measure the Cohesion
 
-Run the cohesion analysis for CK metrics:
+Run the cohesion analysis for the CK metrics:
 
 ```bash
 omen -f json cohesion
 ```
 
-Metrics to watch:
-- **LCOM** (Lack of Cohesion): > 0.7 indicates class doing too many things
-- **WMC** (Weighted Methods per Class): > 30 indicates too complex
-- **CBO** (Coupling Between Objects): > 10 indicates too many dependencies
+Watch these metrics:
+- **LCOM** (Lack of Cohesion): A value above 1 shows that a class does too many things.
+- **WMC** (Weighted Methods per Class): A value above 24 shows that a class is too complex.
+- **CBO** (Coupling Between Objects): A value above 14 shows that a class has too many dependencies.
 
-### Step 4: Find Hidden Dependencies
+### Step 4: Find the Hidden Dependencies
 
 Run the temporal coupling analysis:
 
@@ -57,12 +57,12 @@ Run the temporal coupling analysis:
 omen -f json temporal
 ```
 
-Files that always change together but don't have explicit imports indicate:
-- Shared global state
-- Implicit contracts
-- Missing abstractions
+Files that always change together but have no explicit imports show one of these problems:
+- Shared global state.
+- Implicit contracts.
+- Missing abstractions.
 
-### Step 5: Check Ownership Distribution
+### Step 5: Check the Ownership Distribution
 
 Run the ownership analysis:
 
@@ -70,14 +70,14 @@ Run the ownership analysis:
 omen -f json ownership
 ```
 
-Look for:
-- Modules with no clear owner
-- Over-concentrated ownership (bus factor = 1)
-- Fragmented ownership (many contributors, none dominant)
+Look for these items:
+- Modules with no clear owner.
+- Ownership that is too concentrated (bus factor = 1).
+- Fragmented ownership (many contributors, none dominant).
 
 ## Architecture Smells
 
-Common issues to identify:
+These are the common issues to identify:
 
 | Smell | Detection | Impact |
 |-------|-----------|--------|
@@ -89,7 +89,7 @@ Common issues to identify:
 
 ## Output Format
 
-Present architecture review as:
+Show the architecture review in this format:
 
 ```markdown
 # Architecture Review
@@ -113,13 +113,13 @@ Present architecture review as:
 
 ## Cohesion Analysis
 
-### Low Cohesion Classes (LCOM > 0.7)
+### Low Cohesion Classes (LCOM > 1)
 | Class | LCOM | WMC | Recommendation |
 |-------|------|-----|----------------|
-| UserService | 0.85 | 45 | Split into UserAuth, UserProfile |
-| DataProcessor | 0.78 | 38 | Extract strategies for each type |
+| UserService | 3 | 45 | Split into UserAuth, UserProfile |
+| DataProcessor | 2 | 38 | Extract strategies for each type |
 
-### High Coupling (CBO > 10)
+### High Coupling (CBO > 14)
 - `api/handlers.go` - CBO: 15
   - Depends on too many internal modules
   - Consider facade pattern

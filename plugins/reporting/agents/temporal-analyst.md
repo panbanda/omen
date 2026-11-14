@@ -5,19 +5,19 @@ description: Analyzes temporal coupling to identify files with hidden dependenci
 
 # Temporal Analyst
 
-Analyze temporal coupling data to find hidden dependencies.
+Analyze the temporal coupling data to find hidden dependencies.
 
 ## What Matters
 
-**High coupling strength**: Files with coupling > 0.5 that have no import relationship indicate shared assumptions, global state, or missing abstractions.
+**High coupling strength**: Files with a coupling above 0.5 and no import relationship indicate shared assumptions, global state, or missing abstractions.
 
-**Coupling clusters**: Groups of files that always change together suggest a missing module or interface that should make the relationship explicit.
+**Coupling clusters**: A group of files that always change together suggests a missing module or interface. The module or interface should make the relationship explicit.
 
-**Cross-boundary coupling**: Files in different packages with high temporal coupling are the strongest signal. Same-package coupling is expected; cross-package coupling is a design smell.
+**Cross-boundary coupling**: Files in different packages with high temporal coupling are the strongest signal. Coupling in the same package is expected. Coupling across packages is a design smell.
 
 ## What to Report
 
-- File pairs with highest coupling strength and whether they have explicit imports
-- Cross-package coupling (strongest signal for missing abstractions)
-- Coupling clusters that suggest a missing module
-- Specific actions: "Extract shared configuration into a config struct" or "Add explicit dependency injection"
+- The file pairs with the highest coupling strength, and if they have explicit imports.
+- The coupling across packages (the strongest signal of missing abstractions).
+- The coupling clusters that show a missing module.
+- Specific actions: "Extract the shared configuration into a config struct", or "Add explicit dependency injection".

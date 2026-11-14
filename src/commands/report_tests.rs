@@ -166,3 +166,121 @@ fn test_generate_fails_when_trend_json_cannot_be_written() {
     let message = format!("{:?}", result.expect_err("the write fails"));
     assert!(message.contains("trend.json"), "{message}");
 }
+
+#[test]
+fn test_since_wins_over_days_in_the_one_window() {
+    let window = generate_window(Some("6m"), Some(30)).expect("window");
+    assert_eq!(window.label, "6m");
+    assert_eq!(window.since, "6m");
+    assert_eq!(window.days, 180);
+}
+
+#[test]
+fn test_days_alone_gives_the_window_for_every_part() {
+    let window = generate_window(None, Some(30)).expect("window");
+    assert_eq!(window.label, "30d");
+    assert_eq!(window.since, "30d");
+    assert_eq!(window.days, 30);
+}
+
+#[test]
+fn test_the_label_is_the_normalised_window() {
+    assert_eq!(
+        generate_window(None, Some(30)).expect("window").label,
+        "30d"
+    );
+    assert_eq!(
+        generate_window(Some(" 1Y "), None).expect("window").label,
+        "1y"
+    );
+    assert_eq!(
+        generate_window(Some(" Forever "), None)
+            .expect("window")
+            .label,
+        "all"
+    );
+    assert_eq!(generate_window(None, None).expect("window").label, "1y");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_symlink_at_the_old_temporary_path_is_not_followed() {
+    let directory = tempfile::tempdir().expect("directory");
+    let victim = directory.path().join("victim.txt");
+    std::fs::write(&victim, "keep").expect("write");
+    let target = directory.path().join("metadata.json");
+    let old_temporary = directory.path().join("metadata.json.tmp");
+    std::os::unix::fs::symlink(&victim, &old_temporary).expect("symlink");
+    write_atomically(&target, "{}").expect("write");
+    assert_eq!(std::fs::read_to_string(&victim).expect("read"), "keep");
+    assert_eq!(std::fs::read_to_string(&target).expect("read"), "{}");
+}
+
+#[test]
+fn test_no_flag_gives_the_default_window_of_one_year() {
+    let window = generate_window(None, None).expect("window");
+    assert_eq!(window.since, "1y");
+    assert_eq!(window.days, 365);
+}
+
+#[test]
+fn test_a_window_of_zero_days_is_an_error() {
+    assert!(generate_window(None, Some(0)).is_err());
+}
+
+fn generate_with_data_file_as_directory(name: &str) -> String {
+    let (directory, path) = repository();
+    let data = directory.path().join("data");
+    std::fs::create_dir_all(data.join(name)).expect("a directory in the place of the file");
+    let result = run(
+        &path,
+        &Config::default(),
+        &subcommand(&[
+            "generate",
+            "--data",
+            data.to_str().expect("utf-8"),
+            "--skip",
+            "trend,churn,changes,ownership,temporal,hotspot,defect,tdg",
+        ]),
+        None,
+    );
+    format!("{:?}", result.expect_err("the write fails"))
+}
+
+#[test]
+fn test_generate_fails_when_metadata_json_cannot_be_written() {
+    let message = generate_with_data_file_as_directory("metadata.json");
+    assert!(message.contains("metadata.json"), "{message}");
+}
+
+#[test]
+fn test_generate_fails_when_score_json_cannot_be_written() {
+    let message = generate_with_data_file_as_directory("score.json");
+    assert!(message.contains("score.json"), "{message}");
+}
+
+#[test]
+fn test_generate_writes_the_one_window_into_metadata() {
+    let (directory, path) = repository();
+    let data = directory.path().join("data");
+    run(
+        &path,
+        &Config::default(),
+        &subcommand(&[
+            "generate",
+            "--data",
+            data.to_str().expect("utf-8"),
+            "--since",
+            "6m",
+            "--days",
+            "30",
+            "--skip",
+            "trend,churn,changes,ownership,temporal,hotspot,defect,tdg",
+        ]),
+        None,
+    )
+    .expect("generate");
+    let text = std::fs::read_to_string(data.join("metadata.json")).expect("metadata.json");
+    let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+    assert_eq!(value["since"], "6m");
+}
