@@ -29,6 +29,23 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "severity": "string"
     }
   ],
+  "security": {
+    "coverage": "string",
+    "paths": [],
+    "summary": {
+      "entry_points": "number",
+      "entry_points_by_kind": {
+        "cli_main": "number"
+      },
+      "invalid_suppressions": "number",
+      "paths": "number",
+      "sinks": "number",
+      "sinks_by_category": {},
+      "sinks_with_no_known_entry": "number",
+      "sinks_with_path": "number",
+      "suppressed": "number"
+    }
+  },
   "top_symbols": [
     {
       "file": "string",

@@ -21,7 +21,20 @@ pub struct Context {
     pub entry_points: Vec<EntryPoint>,
     pub top_symbols: Vec<SymbolSummary>,
     pub risks: Vec<RiskSummary>,
+    pub security: SecuritySummary,
     pub hints: Vec<String>,
+}
+
+/// How many paths of the security analysis the context shows.
+const SECURITY_PATHS: usize = 5;
+
+/// The security analysis in short. The statement of the coverage says what omen
+/// recognises. A sink without a path is not safe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecuritySummary {
+    pub summary: crate::analyzers::security::Summary,
+    pub paths: Vec<crate::index::security::reach::SinkPath>,
+    pub coverage: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +243,14 @@ pub fn build_context_with_source(
         .collect();
 
     let (risks, total_risks) = summarize_risks(&ctx, risk_limit);
+    let report = crate::analyzers::security::Report::from_analysis(
+        crate::analyzers::security::analyze_context(&ctx)?,
+    );
+    let security = SecuritySummary {
+        summary: report.summary,
+        paths: report.paths.into_iter().take(SECURITY_PATHS).collect(),
+        coverage: report.coverage.statement,
+    };
     let hints = build_hints(files, &languages, &risks);
     let totals = ListTotals {
         top_symbols: repomap.symbols.len(),
@@ -245,6 +266,7 @@ pub fn build_context_with_source(
             entry_points,
             top_symbols,
             risks,
+            security,
             hints,
         },
         totals,
@@ -362,6 +384,20 @@ impl Context {
             }
             out.push('\n');
         }
+
+        // Security
+        out.push_str("## Security\n\n");
+        out.push_str(&format!(
+            "{} sink(s), {} entry point(s), {} path(s), {} sink(s) with no known entry point.\n\n",
+            self.security.summary.sinks,
+            self.security.summary.entry_points,
+            self.security.summary.paths,
+            self.security.summary.sinks_with_no_known_entry,
+        ));
+        for path in &self.security.paths {
+            out.push_str(&format!("- `{}` reaches `{}`\n", path.entry, path.sink));
+        }
+        out.push_str(&format!("\n{}\n\n", self.security.coverage));
 
         // Risks
         if !self.risks.is_empty() {
@@ -525,6 +561,30 @@ mod tests {
         assert!(context.top_symbols.iter().any(|s| s.name == "entrypoint"));
         assert!(context.risks.iter().any(|r| r.kind == "satd"));
         assert!(context.hints.iter().any(|h| h.contains("Start with")));
+    }
+
+    #[test]
+    fn test_context_has_a_security_summary_with_the_coverage() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("app.py"),
+            "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n\n@app.route(\"/run\")\ndef run(command):\n    os.system(\"x\" + command)\n\n\ndef orphan(text):\n    eval(text)\n",
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let files = FileSet::from_path(temp.path(), &config).unwrap();
+        let context = build_context(temp.path(), &files, &config, None, None).unwrap();
+
+        let security = &context.security;
+        assert_eq!(security.summary.sinks, 2);
+        assert_eq!(security.summary.entry_points, 1);
+        assert_eq!(security.summary.sinks_with_no_known_entry, 1);
+        assert_eq!(security.paths.len(), 1);
+        assert!(security
+            .coverage
+            .contains("does not mean that the code is safe"));
+        assert!(context.render_markdown().contains("## Security"));
     }
 
     #[test]
