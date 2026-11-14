@@ -965,6 +965,89 @@ expression: "responses[0]"
           "type": "object"
         },
         "name": "impact"
+      },
+      {
+        "description": "Gives the sinks, the entry points, and the paths from the entry points to the sinks. A sink is a call, a member, or a literal that the table of sinks names, for example a command or a weak hash. The result gives facts. It does not say that the code has a vulnerability, and it does not follow data. A sink with the state `no_known_entry` has no known path. That state does not say that the sink is safe. The `coverage` field says what omen recognises. The limit applies to the sinks.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "description": "Keep the sinks of one category.",
+              "enum": [
+                "command_execution",
+                "code_evaluation",
+                "unsafe_deserialization",
+                "sql_string_construction",
+                "weak_hash",
+                "weak_cipher",
+                "tls_verification_disabled",
+                "hardcoded_credential",
+                "memory_unsafe"
+              ],
+              "type": "string"
+            },
+            "entry": {
+              "description": "Keep the paths of this entry point. Give the key of an entry point. Use it with the section `paths`.",
+              "type": "string"
+            },
+            "experimental": {
+              "description": "Look for the sinks of the experimental categories also. The default is the value of `security.experimental` in the configuration.",
+              "type": "boolean"
+            },
+            "limit": {
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "min_basis": {
+              "description": "The weakest basis of an edge of a path. The default is the value of `security.min_basis` in the configuration.",
+              "enum": [
+                "name_only",
+                "same_package",
+                "imported_module",
+                "qualified_path",
+                "receiver_declared_type",
+                "enclosing_type",
+                "imported_alias",
+                "imported_name",
+                "same_file",
+                "lexical_scope",
+                "scip"
+              ],
+              "type": "string"
+            },
+            "offset": {
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "path": {
+              "description": "The file or directory to analyze. The default is the repository root.",
+              "type": "string"
+            },
+            "section": {
+              "default": "all",
+              "description": "The section of the report: the sinks, the entry points (`surface`), or the paths.",
+              "enum": [
+                "all",
+                "sinks",
+                "surface",
+                "paths"
+              ],
+              "type": "string"
+            },
+            "sink": {
+              "description": "Keep the paths to this sink. Give the key of a sink. Use it with the section `paths`.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "security"
       }
     ]
   }

@@ -38,6 +38,10 @@ pub struct SymbolReport {
     pub cognitive: Option<u32>,
     /// Qualified names of other matching symbols when the query was ambiguous.
     pub candidates: Vec<String>,
+    /// The security facts of the symbol. The caller adds them, because they need a
+    /// full analysis of the files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<crate::index::security::SymbolSecurity>,
 }
 
 /// Options for `get_symbol`.
@@ -216,6 +220,7 @@ pub fn report_with_reader(
         cyclomatic,
         cognitive,
         candidates,
+        security: None,
     })
 }
 

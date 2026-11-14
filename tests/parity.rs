@@ -86,6 +86,7 @@ const MIRRORS: &[Mirror] = &[
         r#"{"provider": "unleash", "stale_days": 7}"#,
     ),
     mirror("score", &["score"]).not_paged(),
+    mirror("security", &["security"]),
     // `--top` of `search query` is `top_k`, and the two have the default 10.
     mirror("search", &["search", "query", "helper"])
         .not_paged()
@@ -386,16 +387,27 @@ const PRIMARY_LISTS: &[(&str, &str)] = &[
     ("flags", "/flags"),
     ("score", "/components"),
     ("search", "/results"),
+    ("security", "/sinks"),
     ("get_symbol", "/callees"),
     ("impact", "/callers"),
 ];
 
 /// The tools whose primary list is permitted to be empty on the fixture,
 /// each with the configuration label and the reason.
-const ALLOWED_EMPTY: &[((&str, &str), &str)] = &[(
-    ("defaults", "flags"),
-    "No flag provider is on by default. The configuration test and the option of `flags` give items.",
-)];
+const ALLOWED_EMPTY: &[((&str, &str), &str)] = &[
+    (
+        ("defaults", "flags"),
+        "No flag provider is on by default. The configuration test and the option of `flags` give items.",
+    ),
+    (
+        ("defaults", "security"),
+        "The fixture has no sink, and the snapshots of other commands read the fixture. The file tests/security_cli.rs gives sinks to the command.",
+    ),
+    (
+        ("configuration", "security"),
+        "The fixture has no sink, and the snapshots of other commands read the fixture. The file tests/security_cli.rs gives sinks to the command.",
+    ),
+];
 
 /// Gives a problem when the primary list of the tool is empty on the two
 /// sides and the table does not permit that.
@@ -548,6 +560,12 @@ const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
     (("impact", "depth"), "depth"),
     (("impact", "direction"), "direction"),
     (("impact", "min_basis"), "min_basis"),
+    (("security", "section"), "section"),
+    (("security", "entry"), "entry"),
+    (("security", "sink"), "sink"),
+    (("security", "category"), "category"),
+    (("security", "min_basis"), "min_basis"),
+    (("security", "experimental"), "experimental"),
 ];
 
 /// The parameters that each paged tool has, with the flag of the command.
@@ -645,6 +663,10 @@ const CLI_ONLY: &[((&str, &str), &str)] = &[
     (("complexity", "max_cognitive"), GATE),
     (("stubs", "gate"), GATE),
     (("stubs", "gate_severity"), GATE),
+    (("security", "gate"), GATE),
+    (("security", "target"), GATE),
+    (("security", "gate_category"), GATE),
+    (("security", "gate_basis"), GATE),
     (("score", "gate"), GATE),
     (("score", "fail_under"), GATE),
     (

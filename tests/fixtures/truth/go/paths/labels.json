@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Go. The harness does not run the code.",
+  "closed_world": false,
+  "paths": [
+    {
+      "label": "handler_to_command",
+      "entry_file": "main.go",
+      "entry_line": 25,
+      "sink_file": "main.go",
+      "sink_line": 17,
+      "steps": [
+        "main.go#run",
+        "main.go#prepare",
+        "main.go#execute"
+      ],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "guards": [],
+      "choke_points": [
+        "main.go#prepare",
+        "main.go#run"
+      ]
+    },
+    {
+      "label": "orphan_has_no_entry",
+      "entry_file": "main.go",
+      "entry_line": 25,
+      "sink_file": "main.go",
+      "sink_line": 21,
+      "flagged": false
+    }
+  ]
+}

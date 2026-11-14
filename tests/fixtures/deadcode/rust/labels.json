@@ -7,13 +7,16 @@
     {"label": "dead_caller", "file": "main.rs", "name": "dead_caller"},
     {"label": "dead_callee", "file": "main.rs", "name": "dead_callee"},
     {"label": "dead_unresolved", "file": "main.rs", "name": "dead_unresolved"},
-    {"label": "dead_method", "file": "main.rs", "name": "dead_method"}
+    {"label": "dead_method", "file": "main.rs", "name": "dead_method"},
+    {"label": "serde_string_is_not_a_function", "file": "main.rs", "name": "serde_renamed"}
   ],
   "alive": [
     {"label": "live_direct", "file": "main.rs", "name": "live_direct"},
     {"label": "live_value", "file": "main.rs", "name": "live_value"},
     {"label": "live_public", "file": "main.rs", "name": "live_public"},
     {"label": "live_method", "file": "main.rs", "name": "live_method"},
-    {"label": "main", "file": "main.rs", "name": "main"}
+    {"label": "main", "file": "main.rs", "name": "main"},
+    {"label": "serde_default", "file": "main.rs", "name": "serde_fallback"},
+    {"label": "serde_skip_serializing_if", "file": "main.rs", "name": "serde_is_zero"}
   ]
 }

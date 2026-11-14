@@ -293,7 +293,8 @@ expression: "shape(&output, case.dynamic_key_objects)"
         },
         "reachable_count": "number",
         "total_definitions": "number",
-        "total_items": "number"
+        "total_items": "number",
+        "unresolved_paths": "number"
       }
     },
     "defect": {
@@ -527,6 +528,63 @@ expression: "shape(&output, case.dynamic_key_objects)"
         "critical_issues": "number",
         "files_analyzed": "number"
       }
+    },
+    "security": {
+      "choke_points": [],
+      "coverage": {
+        "experimental_off": [
+          "string"
+        ],
+        "frameworks": [
+          "string"
+        ],
+        "languages": [
+          "string"
+        ],
+        "sink_categories": [
+          "string"
+        ],
+        "statement": "string"
+      },
+      "entry_points": [
+        {
+          "basis": "string",
+          "file": "string",
+          "framework": "string",
+          "guards": [],
+          "in_test": "bool",
+          "key": "string",
+          "kind": "string",
+          "range": {
+            "end_byte": "number",
+            "end_column": "number",
+            "end_line": "number",
+            "start_byte": "number",
+            "start_column": "number",
+            "start_line": "number"
+          },
+          "route": "null",
+          "symbol": "string"
+        }
+      ],
+      "invalid_suppressions": [],
+      "no_known_entry": [],
+      "paths": [],
+      "sinks": [],
+      "summary": {
+        "entry_points": "number",
+        "entry_points_by_kind": {
+          "cli_main": "number"
+        },
+        "invalid_suppressions": "number",
+        "paths": "number",
+        "sinks": "number",
+        "sinks_by_category": {},
+        "sinks_with_no_known_entry": "number",
+        "sinks_with_path": "number",
+        "suppressed": "number"
+      },
+      "suppressed": []
     },
     "smells": {
       "components": [

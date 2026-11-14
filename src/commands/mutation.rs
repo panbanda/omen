@@ -121,7 +121,7 @@ pub fn run(
 
     // Output results
     match format {
-        Format::Json | Format::JsonCompact => {
+        Format::Json | Format::JsonCompact | Format::Mermaid => {
             let value = serde_json::to_value(&result)?;
             format_with_limits(
                 value,

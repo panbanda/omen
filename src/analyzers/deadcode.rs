@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::index::extract::FileSymbols;
+use crate::index::imports::RustModules;
 use crate::index::model::{Exported, Receiver, Reference, ResolutionStatus, Symbol, SymbolKind};
+use crate::index::security::entry::find_entry_points_with;
 use crate::parser::{self, Parser};
 
 /// Dead code analyzer.
@@ -91,22 +93,46 @@ impl AnalyzerTrait for Analyzer {
         // decorators, visibility modifiers, and uses as a value). Cargo results
         // supplement this with compiler-level dead code warnings when available.
         let index = ctx.code_index()?;
-        let file_results: Vec<FileDeadCode> = index
+        let parsed: Vec<Option<(parser::ParseResult, FileDeadCode)>> = index
             .files
             .par_iter()
-            .filter_map(|facts| {
+            .map(|facts| {
                 let path = Path::new(&facts.file);
                 let content = ctx.read_file(path).ok()?;
                 let result = self.parser.parse(&content, facts.language, path).ok()?;
-                Some(collect_file_data(&result, facts))
+                let data = collect_file_data(&result, facts);
+                Some((result, data))
             })
             .collect();
+        let mut trees: Vec<parser::ParseResult> = Vec::new();
+        let mut file_results: Vec<FileDeadCode> = Vec::new();
+        let mut parsed_facts: Vec<&FileSymbols> = Vec::new();
+        for (facts, item) in index.files.iter().zip(parsed) {
+            if let Some((tree, data)) = item {
+                parsed_facts.push(facts);
+                trees.push(tree);
+                file_results.push(data);
+            }
+        }
+        // An entry point is alive, and its callees are reachable. The entry points are those
+        // of the security analysis, with the rows of the configuration.
+        let entry_rules = crate::analyzers::security::options_of(&ctx.config.security)?.entry_rules;
+        let entry_keys: HashSet<String> = if parsed_facts.len() == index.files.len() {
+            find_entry_points_with(&trees, &index.files, &entry_rules)
+        } else {
+            let facts: Vec<FileSymbols> = parsed_facts.iter().copied().cloned().collect();
+            find_entry_points_with(&trees, &facts, &entry_rules)
+        }
+        .into_iter()
+        .filter_map(|entry| entry.symbol)
+        .collect();
 
         // Phase 2: Build the global tables. A definition is known by the key
         // of the shared index, which is unique for each definition.
         let mut all_definitions: HashMap<String, Definition> = HashMap::new();
         let mut all_usages: HashSet<String> = HashSet::new();
         let mut value_references: Vec<CallReference> = Vec::new();
+        let mut path_uses: Vec<PathUse> = Vec::new();
         let mut keys_by_name: HashMap<String, Vec<String>> = HashMap::new();
 
         for fdc in &file_results {
@@ -119,6 +145,7 @@ impl AnalyzerTrait for Analyzer {
             }
             all_usages.extend(fdc.usages.iter().cloned());
             value_references.extend(fdc.calls.iter().cloned());
+            path_uses.extend(fdc.path_uses.iter().cloned());
         }
         for keys in keys_by_name.values_mut() {
             keys.sort();
@@ -177,6 +204,38 @@ impl AnalyzerTrait for Analyzer {
                 None => roots.extend(targets),
             }
         }
+        let manifests = crate::index::imports::Manifests::default();
+        let rust_paths = RustPaths {
+            modules: RustModules::new(&index.files, &manifests),
+            files: index
+                .files
+                .iter()
+                .map(|facts| (facts.file.as_str(), facts))
+                .collect(),
+            trees: parsed_facts
+                .iter()
+                .zip(&trees)
+                .map(|(facts, tree)| (facts.file.as_str(), tree))
+                .collect(),
+            by_name: &keys_by_name,
+        };
+        let mut unresolved_paths = 0usize;
+        for path_use in &path_uses {
+            let found = rust_paths.resolve(path_use);
+            if !found.is_empty() {
+                roots.extend(found);
+                continue;
+            }
+            // The path does not resolve. A function with the last name can be the one.
+            unresolved_paths += 1;
+            if let Some(keys) = path_use
+                .segments
+                .last()
+                .and_then(|name| keys_by_name.get(name))
+            {
+                roots.extend(keys.iter().cloned());
+            }
+        }
         for call in &value_references {
             let callees: Vec<String> = match keys_by_name.get(&call.callee) {
                 Some(keys) => {
@@ -223,6 +282,7 @@ impl AnalyzerTrait for Analyzer {
         let mut reachable: HashSet<String> = HashSet::new();
         let mut queue: Vec<String> = Vec::new();
 
+        roots.extend(entry_keys.iter().cloned());
         for root in roots {
             if all_definitions.contains_key(&root) && reachable.insert(root.clone()) {
                 queue.push(root);
@@ -279,7 +339,7 @@ impl AnalyzerTrait for Analyzer {
             let simple_name = def.name.as_str();
 
             // Skip entry points
-            if is_entry_point(simple_name, def) {
+            if is_entry_point(simple_name, def) || entry_keys.contains(key) {
                 continue;
             }
 
@@ -338,6 +398,7 @@ impl AnalyzerTrait for Analyzer {
                 by_kind,
                 total_definitions: all_definitions.len(),
                 reachable_count: reachable.len(),
+                unresolved_paths,
             },
         };
 
@@ -362,6 +423,7 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
         definitions: Vec::new(),
         usages: HashSet::new(),
         calls: Vec::new(),
+        path_uses: Vec::new(),
     };
 
     // The index holds only definitions that have a name. An anonymous callback
@@ -997,6 +1059,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
     // function in the same body loses its caller.
     let mut scopes: Vec<(u32, Option<String>)> = Vec::new();
     let mut value_uses: BTreeSet<(String, String, bool)> = BTreeSet::new();
+    let mut path_uses: Vec<PathUse> = Vec::new();
 
     // Iterative pre-order traversal
     loop {
@@ -1049,6 +1112,24 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             }
         }
 
+        // `#[serde(default = "path")]` names a function in a string. The derive calls it.
+        if lang == Language::Rust && kind == "attribute_item" {
+            if let Ok(text) = node.utf8_text(source) {
+                let chain = rust_module_chain(&node, source);
+                for path in serde_function_names(text) {
+                    let segments: Vec<String> = path.split("::").map(str::to_string).collect();
+                    if let Some(name) = segments.last() {
+                        fdc.usages.insert(name.clone());
+                    }
+                    path_uses.push(PathUse {
+                        file: fdc.path.clone(),
+                        chain: chain.clone(),
+                        segments,
+                    });
+                }
+            }
+        }
+
         // `Util.replacer` reads the function `replacer` as a property.
         if kind == "property_identifier" && is_read_as_property(&node) {
             if let Ok(name) = node.utf8_text(source) {
@@ -1081,10 +1162,257 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                         from_module_scope,
                     })
                     .collect();
+                fdc.path_uses = path_uses;
                 return; // Done traversing
             }
         }
     }
+}
+
+/// The keys of a serde attribute whose string is the path of a function. For `with`, the
+/// path is a module, and the derive calls its `serialize` and `deserialize`.
+const SERDE_FUNCTION_KEYS: [&str; 6] = [
+    "default",
+    "skip_serializing_if",
+    "serialize_with",
+    "deserialize_with",
+    "getter",
+    "with",
+];
+
+/// The paths of the functions that the strings of a `serde` attribute name, with `::`
+/// between the segments. A `with` string names a module, so it gives the paths of its
+/// `serialize` and `deserialize`.
+fn serde_function_names(attribute: &str) -> Vec<String> {
+    let Some(start) = attribute.find("serde(") else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    let mut rest = &attribute[start..];
+    while let Some(quote) = rest.find('"') {
+        let before = rest[..quote].trim_end();
+        let Some(before) = before.strip_suffix('=') else {
+            // A string that no `=` precedes. Skip it.
+            let Some(end) = rest[quote + 1..].find('"') else {
+                break;
+            };
+            rest = &rest[quote + end + 2..];
+            continue;
+        };
+        let key: String = before
+            .trim_end()
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let Some(end) = rest[quote + 1..].find('"') else {
+            break;
+        };
+        let value = &rest[quote + 1..quote + 1 + end];
+        if SERDE_FUNCTION_KEYS.contains(&key.as_str()) {
+            if value.is_empty() {
+            } else if key == "with" {
+                names.push(format!("{value}::serialize"));
+                names.push(format!("{value}::deserialize"));
+            } else {
+                names.push(value.to_string());
+            }
+        }
+        rest = &rest[quote + end + 2..];
+    }
+    names
+}
+
+/// Resolves the path of a Rust attribute through the module tree of the index: the `mod`
+/// items, in files and inline, and the `use` bindings, also across files.
+struct RustPaths<'a> {
+    modules: RustModules<'a>,
+    files: HashMap<&'a str, &'a FileSymbols>,
+    trees: HashMap<&'a str, &'a parser::ParseResult>,
+    /// The keys of the definitions, by name.
+    by_name: &'a HashMap<String, Vec<String>>,
+}
+
+impl<'a> RustPaths<'a> {
+    /// Whether the file has an inline `mod` with the path `chain`.
+    fn has_inline_module(&self, file: &str, chain: &[String]) -> bool {
+        let wanted = chain.join(".");
+        self.files.get(file).is_some_and(|facts| {
+            facts
+                .symbols
+                .iter()
+                .any(|symbol| symbol.kind == SymbolKind::Module && key_path(&symbol.key) == wanted)
+        })
+    }
+
+    /// The module that the segments name from `(file, chain)`. The segments start with
+    /// `crate`, `self`, or `super`, or they name a child module.
+    fn module(
+        &self,
+        file: &str,
+        chain: &[String],
+        segments: &[String],
+    ) -> Option<(String, Vec<String>)> {
+        let mut file = file.to_string();
+        let mut chain = chain.to_vec();
+        let mut position = 0;
+        match segments.first().map(String::as_str) {
+            Some("crate") => {
+                // A file outside a crate that the index knows is the root of its own module tree.
+                file = self.modules.root(&file).unwrap_or(file);
+                chain.clear();
+                position = 1;
+            }
+            Some("self") => position = 1,
+            _ => {}
+        }
+        while segments.get(position).map(String::as_str) == Some("super") {
+            if chain.pop().is_none() {
+                file = self.modules.parent(&file)?;
+            }
+            position += 1;
+        }
+        for segment in &segments[position..] {
+            chain.push(segment.clone());
+            if !self.has_inline_module(&file, &chain) {
+                chain.pop();
+                file = self.modules.child(&file, segment)?;
+                chain.clear();
+            }
+        }
+        Some((file, chain))
+    }
+
+    /// The keys of the functions that the path names from `(file, chain)`. Conditional
+    /// definitions of one name, as `#[cfg(...)]` alternatives, have the ordinals `~2`, `~3`.
+    /// Each of them is a function that the path can name.
+    fn function(&self, file: &str, chain: &[String], segments: &[String]) -> Vec<String> {
+        let Some((name, modules)) = segments.split_last() else {
+            return Vec::new();
+        };
+        let Some((file, chain)) = self.module(file, chain, modules) else {
+            return Vec::new();
+        };
+        let path = chain
+            .iter()
+            .chain(std::iter::once(name))
+            .cloned()
+            .collect::<Vec<String>>()
+            .join(".");
+        let prefix = format!("{file}#");
+        self.by_name
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter(|key| key.starts_with(&prefix) && key_path(key) == path)
+            .cloned()
+            .collect()
+    }
+
+    /// The `use` bindings that sit in the module `(file, chain)`.
+    fn bindings(
+        &self,
+        file: &str,
+        chain: &[String],
+    ) -> Vec<&'a crate::index::model::ImportBinding> {
+        let (Some(facts), Some(tree)) = (self.files.get(file), self.trees.get(file)) else {
+            return Vec::new();
+        };
+        facts
+            .imports
+            .iter()
+            .filter(|binding| {
+                let at = binding.range.start_byte;
+                tree.tree
+                    .root_node()
+                    .descendant_for_byte_range(at, at)
+                    .is_some_and(|node| rust_module_chain(&node, &tree.source) == chain)
+            })
+            .collect()
+    }
+
+    /// The keys of the function that the path names in the module `(file, chain)`: first
+    /// through the `use` bindings of the module, then in the module itself, then through
+    /// its glob imports.
+    fn resolve(&self, path_use: &PathUse) -> Vec<String> {
+        use crate::index::model::ImportKind;
+        let file = &path_use.file;
+        let chain = &path_use.chain;
+        let segments = &path_use.segments;
+        let first = segments.first().map(String::as_str).unwrap_or("");
+        if matches!(first, "crate" | "self" | "super") {
+            return self.function(file, chain, segments);
+        }
+        let bindings = self.bindings(file, chain);
+        for binding in &bindings {
+            if binding.local_name.as_deref() != Some(first)
+                || !matches!(binding.kind, ImportKind::Named | ImportKind::Module)
+            {
+                continue;
+            }
+            // The path of a `use` ends with the name that it brings.
+            let mut full: Vec<String> = binding
+                .module_path
+                .split("::")
+                .map(str::to_string)
+                .collect();
+            full.extend(segments[1..].iter().cloned());
+            let found = self.function(file, chain, &full);
+            if !found.is_empty() {
+                return found;
+            }
+        }
+        let found = self.function(file, chain, segments);
+        if !found.is_empty() {
+            return found;
+        }
+        for binding in &bindings {
+            if binding.kind != ImportKind::Wildcard {
+                continue;
+            }
+            let glob: Vec<String> = binding
+                .module_path
+                .split("::")
+                .map(str::to_string)
+                .collect();
+            let Some((glob_file, glob_chain)) = self.module(file, chain, &glob) else {
+                continue;
+            };
+            let found = self.function(&glob_file, &glob_chain, segments);
+            if !found.is_empty() {
+                return found;
+            }
+        }
+        Vec::new()
+    }
+}
+
+/// The path of a key without the file and the ordinal, for example `codec.serialize`.
+fn key_path(key: &str) -> &str {
+    let path = key.split_once('#').map_or(key, |(_, path)| path);
+    path.split('~').next().unwrap_or(path)
+}
+
+/// The names of the `mod` items around a node, from the outermost to the innermost.
+fn rust_module_chain(node: &tree_sitter::Node<'_>, source: &[u8]) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == "mod_item" {
+            if let Some(name) = parent
+                .child_by_field_name("name")
+                .and_then(|name| name.utf8_text(source).ok())
+            {
+                chain.push(name.to_string());
+            }
+        }
+        current = parent.parent();
+    }
+    chain.reverse();
+    chain
 }
 
 /// Whether a property name is read as a value: it is the member of a member
@@ -1188,6 +1516,8 @@ fn is_definition_context(node: &tree_sitter::Node<'_>) -> bool {
                         | "static_item"
                         | "class_declaration"
                         | "struct_item"
+                        | "function_item"
+                        | "mod_item"
                 );
             }
         }
@@ -1509,6 +1839,19 @@ struct FileDeadCode {
     /// The uses of a function as a value, as `register("data", handler)` does.
     /// A call has its own reference in the shared index.
     calls: Vec<CallReference>,
+    /// The functions that a Rust attribute names with a path.
+    path_uses: Vec<PathUse>,
+}
+
+/// A function that a path names, such as the string of `#[serde(default = "paths::fallback")]`.
+#[derive(Clone)]
+struct PathUse {
+    /// The file of the attribute.
+    file: String,
+    /// The names of the inline `mod` items around the attribute, from the outermost.
+    chain: Vec<String>,
+    /// The segments of the path.
+    segments: Vec<String>,
 }
 
 #[cfg(test)]
@@ -1584,6 +1927,10 @@ pub struct AnalysisSummary {
     pub by_kind: HashMap<String, usize>,
     pub total_definitions: usize,
     pub reachable_count: usize,
+    /// The serde paths of attributes that the module tree could not resolve. Deadcode keeps
+    /// each function with the last name of such a path alive.
+    #[serde(default)]
+    pub unresolved_paths: usize,
 }
 
 #[cfg(test)]
@@ -3375,5 +3722,424 @@ mod index_tests {
         let analysis = Analyzer::new().analyze(&ctx).unwrap();
 
         assert_eq!(analysis.summary.total_definitions, 2);
+    }
+
+    struct EntryCase {
+        language: &'static str,
+        files: &'static [(&'static str, &'static str)],
+        alive: &'static [&'static str],
+        dead: &'static [&'static str],
+    }
+
+    const ENTRY_CASES: &[EntryCase] = &[
+        EntryCase {
+            language: "python fastapi",
+            files: &[(
+                "api.py",
+                "from fastapi import FastAPI\n\napi = FastAPI()\n\n\ndef helper():\n    return 1\n\n\n@api.get(\"/items\")\nasync def read():\n    return helper()\n\n\ndef _unused_control():\n    return 2\n",
+            )],
+            alive: &["read", "helper"],
+            dead: &["_unused_control"],
+        },
+        EntryCase {
+            language: "python flask",
+            files: &[(
+                "app.py",
+                "from flask import Flask\n\napp = Flask(__name__)\n\n\ndef helper():\n    return 1\n\n\n@app.route(\"/items\")\ndef show():\n    return helper()\n\n\ndef _unused_control():\n    return 2\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["_unused_control"],
+        },
+        EntryCase {
+            language: "javascript express",
+            files: &[(
+                "server.js",
+                "const express = require('express');\nconst app = express();\n\nfunction helper() { return 1; }\nfunction show(req, res) { res.send(helper()); }\nfunction register() { app.get('/items', show); }\nfunction unusedControl() { return 2; }\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unusedControl"],
+        },
+        EntryCase {
+            language: "typescript express",
+            files: &[(
+                "server.ts",
+                "import express from 'express';\nconst app = express();\n\nfunction helper(): number { return 1; }\nfunction show(req: any, res: any) { res.send(helper()); }\nfunction register() { app.get('/items', show); }\nfunction unusedControl(): number { return 2; }\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unusedControl"],
+        },
+        EntryCase {
+            language: "java spring",
+            files: &[(
+                "ItemController.java",
+                "import org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\nclass ItemController {\n    @GetMapping(\"/items\")\n    String show() { return helper(); }\n\n    private String helper() { return \"x\"; }\n\n    private String unusedControl() { return \"y\"; }\n}\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unusedControl"],
+        },
+        EntryCase {
+            language: "go net/http",
+            files: &[(
+                "main.go",
+                "package main\n\nimport \"net/http\"\n\nfunc helper() int { return 1 }\n\nfunc show(w http.ResponseWriter, r *http.Request) { helper() }\n\nfunc register() { http.HandleFunc(\"/items\", show) }\n\nfunc unusedControl() int { return 2 }\n\nfunc main() {}\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unusedControl"],
+        },
+        EntryCase {
+            language: "rust axum",
+            files: &[(
+                "routes.rs",
+                "use axum::{routing::get, Router};\n\nfn helper() -> u32 { 1 }\n\nasync fn show() -> u32 { helper() }\n\nfn routes() -> Router { Router::new().route(\"/items\", get(show)) }\n\nfn unused_control() -> u32 { 2 }\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unused_control"],
+        },
+        EntryCase {
+            language: "rust actix",
+            files: &[(
+                "routes.rs",
+                "use actix_web::get;\n\nfn helper() -> u32 { 1 }\n\n#[get(\"/items\")]\nasync fn show() -> u32 { helper() }\n\nfn unused_control() -> u32 { 2 }\n",
+            )],
+            alive: &["show", "helper"],
+            dead: &["unused_control"],
+        },
+        EntryCase {
+            language: "csharp aspnet",
+            files: &[(
+                "ItemsController.cs",
+                "using Microsoft.AspNetCore.Mvc;\n\n[ApiController]\n[Route(\"api/items\")]\nclass ItemsController : ControllerBase {\n    [HttpGet]\n    int Show() { return Helper(); }\n\n    private int Helper() { return 1; }\n\n    private int UnusedControl() { return 2; }\n}\n",
+            )],
+            alive: &["Show", "Helper"],
+            dead: &["UnusedControl"],
+        },
+        EntryCase {
+            language: "php laravel",
+            files: &[
+                (
+                    "routes/web.php",
+                    "<?php\nuse App\\Http\\Controllers\\ItemController;\n\nRoute::get('/items', [ItemController::class, 'show']);\n",
+                ),
+                (
+                    "app/Http/Controllers/ItemController.php",
+                    "<?php\nclass ItemController {\n    private function helper() { return 1; }\n\n    private function show() { return $this->helper(); }\n\n    private function unusedControl() { return 2; }\n}\n",
+                ),
+            ],
+            alive: &["show", "helper"],
+            dead: &["unusedControl"],
+        },
+        EntryCase {
+            language: "ruby rails",
+            files: &[
+                (
+                    "config/routes.rb",
+                    "Rails.application.routes.draw do\n  get '/items', to: 'items#show'\nend\n",
+                ),
+                (
+                    "app/controllers/items_controller.rb",
+                    "class ItemsController < ApplicationController\n  def show\n    helper\n  end\n\n  private\n\n  def helper\n    1\n  end\n\n  def unused_control\n    2\n  end\nend\n",
+                ),
+            ],
+            alive: &["show", "helper"],
+            dead: &["unused_control"],
+        },
+        EntryCase {
+            language: "c main",
+            files: &[(
+                "main.c",
+                "static int helper(void) { return 1; }\n\nstatic int unused_control(void) { return 2; }\n\nint main(void) { return helper(); }\n",
+            )],
+            alive: &["main", "helper"],
+            dead: &["unused_control"],
+        },
+        EntryCase {
+            language: "cpp main",
+            files: &[(
+                "main.cpp",
+                "static int helper() { return 1; }\n\nstatic int unused_control() { return 2; }\n\nint main() { return helper(); }\n",
+            )],
+            alive: &["main", "helper"],
+            dead: &["unused_control"],
+        },
+        EntryCase {
+            language: "bash script",
+            files: &[(
+                "run.sh",
+                "#!/bin/bash\n\nhelper() {\n    echo 1\n}\n\n_unused_control() {\n    echo 2\n}\n\nhelper\n",
+            )],
+            alive: &["helper"],
+            dead: &[],
+        },
+    ];
+
+    #[test]
+    fn test_a_configured_entry_point_is_alive_in_deadcode() {
+        use crate::config::{Config, SecurityEntryConfig};
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let source = "def _helper():\n    return 1\n\n\ndef _handle_request():\n    return _helper()\n\n\ndef _unused():\n    return 2\n";
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("app.py"), source).unwrap();
+        let files = FileSet::from_files(
+            directory.path().to_path_buf(),
+            vec![PathBuf::from("app.py")],
+        );
+        let dead = |config: &Config| {
+            let ctx = AnalysisContext::new(&files, config, Some(directory.path()));
+            let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+            result
+                .items
+                .iter()
+                .map(|item| item.name.clone())
+                .collect::<Vec<String>>()
+        };
+        let without = dead(&Config::default());
+        assert!(
+            without.contains(&"_handle_request".to_string()),
+            "{without:?}"
+        );
+        let mut config = Config::default();
+        config.security.entry_points.push(SecurityEntryConfig {
+            kind: "http_handler".to_string(),
+            framework: "acme-web".to_string(),
+            languages: vec!["python".to_string()],
+            symbols: vec!["_handle_request".to_string()],
+        });
+        let with = dead(&config);
+        assert_eq!(with, ["_unused"], "{with:?}");
+    }
+
+    #[test]
+    fn test_a_serde_path_roots_only_the_function_that_it_names() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let source = "mod codec {\n    fn serialize() {}\n    fn deserialize() {}\n}\n\nmod unused {\n    fn serialize() {}\n    fn deserialize() {}\n}\n\nmod paths {\n    fn fallback() -> u32 {\n        1\n    }\n}\n\nmod other {\n    fn fallback() -> u32 {\n        2\n    }\n}\n\nstruct Holder {\n    #[serde(with = \"codec\", default = \"paths::fallback\")]\n    value: u32,\n}\n";
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("holder.rs"), source).unwrap();
+        let files = FileSet::from_files(
+            directory.path().to_path_buf(),
+            vec![PathBuf::from("holder.rs")],
+        );
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(directory.path()));
+        let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+        let mut dead: Vec<(u32, &str)> = result
+            .items
+            .iter()
+            .filter(|item| item.kind != "class" && item.kind != "struct")
+            .map(|item| (item.line, item.name.as_str()))
+            .collect();
+        dead.sort();
+        assert_eq!(
+            dead,
+            [(7, "serialize"), (8, "deserialize"), (18, "fallback")],
+            "only the functions that no path names"
+        );
+    }
+
+    fn dead_functions_of(source: &str) -> Vec<(u32, String)> {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("holder.rs"), source).unwrap();
+        let files = FileSet::from_files(
+            directory.path().to_path_buf(),
+            vec![PathBuf::from("holder.rs")],
+        );
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(directory.path()));
+        let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+        let mut dead: Vec<(u32, String)> = result
+            .items
+            .iter()
+            .filter(|item| item.kind == "function")
+            .map(|item| (item.line, item.name.clone()))
+            .collect();
+        dead.sort();
+        dead
+    }
+
+    fn dead_of_files(files: &[(&str, &str)]) -> (Vec<(String, u32)>, usize) {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut names: Vec<PathBuf> = Vec::new();
+        for (name, text) in files {
+            let path = directory.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            names.push(PathBuf::from(name));
+        }
+        names.sort();
+        let set = FileSet::from_files(directory.path().to_path_buf(), names);
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&set, &config, Some(directory.path()));
+        let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+        let mut dead: Vec<(String, u32)> = result
+            .items
+            .iter()
+            .filter(|item| item.kind == "function")
+            .map(|item| (item.file.clone(), item.line))
+            .collect();
+        dead.sort();
+        (dead, result.summary.unresolved_paths)
+    }
+
+    #[test]
+    fn test_a_serde_path_roots_each_conditional_definition_of_the_function() {
+        let source = "#[cfg(feature = \"a\")]\nfn fallback() -> u32 {\n    1\n}\n\n#[cfg(not(feature = \"a\"))]\nfn fallback() -> u32 {\n    2\n}\n\nfn unused() {}\n\nstruct Holder {\n    #[serde(default = \"crate::fallback\")]\n    value: u32,\n}\n";
+        let (dead, unresolved) = dead_of_files(&[("lib.rs", source)]);
+        assert_eq!(dead, [("lib.rs".to_string(), 11)]);
+        assert_eq!(unresolved, 0);
+    }
+
+    #[test]
+    fn test_a_serde_path_resolves_through_the_module_tree_of_other_files() {
+        let holder = "mod config;\nmod unused;\n\nstruct Holder {\n    #[serde(default = \"crate::config::defaults::fallback\")]\n    value: u32,\n}\n";
+        let config = "mod defaults;\n";
+        let defaults = "fn fallback() -> u32 {\n    1\n}\n";
+        let unused = "mod defaults {\n    fn fallback() -> u32 {\n        2\n    }\n}\n";
+        let (dead, unresolved) = dead_of_files(&[
+            ("lib.rs", holder),
+            ("config.rs", config),
+            ("config/defaults.rs", defaults),
+            ("unused.rs", unused),
+        ]);
+        assert_eq!(dead, [("unused.rs".to_string(), 2)]);
+        assert_eq!(unresolved, 0);
+    }
+
+    #[test]
+    fn test_a_glob_import_brings_the_function_that_a_serde_name_gives() {
+        let root =
+            "mod child;\n\nfn fallback() -> u32 {\n    1\n}\n\nfn unused() -> u32 {\n    2\n}\n";
+        let child = "use super::*;\n\nstruct Holder {\n    #[serde(default = \"fallback\")]\n    value: u32,\n}\n";
+        let (dead, unresolved) = dead_of_files(&[("lib.rs", root), ("child.rs", child)]);
+        assert_eq!(dead, [("lib.rs".to_string(), 7)]);
+        assert_eq!(unresolved, 0);
+        let inline = "fn fallback() -> u32 {\n    1\n}\n\nmod inner {\n    use super::*;\n\n    struct Holder {\n        #[serde(default = \"fallback\")]\n        value: u32,\n    }\n}\n";
+        let (dead, _) = dead_of_files(&[("lib.rs", inline)]);
+        assert!(dead.is_empty(), "{dead:?}");
+    }
+
+    #[test]
+    fn test_a_use_binding_brings_the_function_that_a_serde_path_names() {
+        let root = "mod other;\nmod config;\n\nstruct Holder {\n    #[serde(default = \"defaults::fallback\")]\n    value: u32,\n}\n\nuse config::defaults;\n";
+        let other = "mod defaults {\n    fn fallback() -> u32 {\n        2\n    }\n}\n";
+        let config = "mod defaults;\n";
+        let defaults = "fn fallback() -> u32 {\n    1\n}\n";
+        let (dead, _) = dead_of_files(&[
+            ("lib.rs", root),
+            ("other.rs", other),
+            ("config.rs", config),
+            ("config/defaults.rs", defaults),
+        ]);
+        assert_eq!(dead, [("other.rs".to_string(), 2)]);
+    }
+
+    #[test]
+    fn test_a_path_that_does_not_resolve_keeps_each_function_with_that_name_alive() {
+        let root = "mod a;\nmod b;\n\nstruct Holder {\n    #[serde(default = \"missing::fallback\")]\n    value: u32,\n}\n";
+        let a = "fn fallback() -> u32 {\n    1\n}\n";
+        let b = "fn fallback() -> u32 {\n    2\n}\n\nfn unused() {}\n";
+        let (dead, unresolved) = dead_of_files(&[("lib.rs", root), ("a.rs", a), ("b.rs", b)]);
+        assert_eq!(dead, [("b.rs".to_string(), 5)]);
+        assert_eq!(unresolved, 1);
+    }
+
+    #[test]
+    fn test_a_crate_path_resolves_from_the_crate_root_exactly() {
+        let source = "mod paths {\n    fn fallback() -> u32 {\n        1\n    }\n}\n\nmod unused {\n    mod paths {\n        fn fallback() -> u32 {\n            2\n        }\n    }\n}\n\nstruct Holder {\n    #[serde(default = \"crate::paths::fallback\")]\n    value: u32,\n}\n";
+        assert_eq!(
+            dead_functions_of(source),
+            [(9, "fallback".to_string())],
+            "`unused::paths::fallback` is not `crate::paths::fallback`"
+        );
+    }
+
+    #[test]
+    fn test_self_super_and_bare_paths_resolve_from_the_current_module() {
+        let source = "mod paths {\n    fn fallback() -> u32 {\n        0\n    }\n}\n\nmod outer {\n    mod paths {\n        fn fallback() -> u32 {\n            1\n        }\n    }\n\n    struct Own {\n        #[serde(default = \"self::paths::fallback\")]\n        value: u32,\n    }\n\n    mod inner {\n        struct Child {\n            #[serde(default = \"super::paths::fallback\")]\n            value: u32,\n        }\n    }\n\n    struct Bare {\n        #[serde(default = \"paths::fallback\")]\n        value: u32,\n    }\n}\n";
+        assert_eq!(
+            dead_functions_of(source),
+            [(2, "fallback".to_string())],
+            "only the function of the root module is dead"
+        );
+    }
+
+    #[test]
+    fn test_a_function_named_in_a_serde_attribute_string_is_alive() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let source = "use serde::{Deserialize, Serialize};\n\nfn is_zero(value: &u32) -> bool {\n    *value == 0\n}\n\nfn fallback() -> u32 {\n    7\n}\n\nfn encode_count(value: &u32) -> String {\n    value.to_string()\n}\n\nfn decode_count(text: &str) -> u32 {\n    text.len() as u32\n}\n\nmod codec {\n    fn serialize(value: &u32) -> u32 {\n        *value\n    }\n\n    fn deserialize(value: u32) -> u32 {\n        value\n    }\n}\n\nfn unused_control() {}\n\n#[derive(Serialize, Deserialize)]\nstruct Holder {\n    #[serde(default = \"fallback\", skip_serializing_if = \"is_zero\")]\n    count: u32,\n    #[serde(serialize_with = \"crate::encode_count\", deserialize_with = \"decode_count\")]\n    text: u32,\n    #[serde(with = \"codec\", rename = \"unused_control\")]\n    coded: u32,\n}\n";
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("holder.rs"), source).unwrap();
+        let files = FileSet::from_files(
+            directory.path().to_path_buf(),
+            vec![PathBuf::from("holder.rs")],
+        );
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(directory.path()));
+        let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+        let reported: Vec<&str> = result.items.iter().map(|item| item.name.as_str()).collect();
+        for name in [
+            "is_zero",
+            "fallback",
+            "encode_count",
+            "decode_count",
+            "serialize",
+            "deserialize",
+        ] {
+            assert!(
+                !reported.contains(&name),
+                "`{name}` is reported: {reported:?}"
+            );
+        }
+        assert!(reported.contains(&"unused_control"), "{reported:?}");
+    }
+
+    #[test]
+    fn test_an_entry_point_is_alive_and_its_callees_are_reachable() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let mut failures: Vec<String> = Vec::new();
+        for case in ENTRY_CASES {
+            let directory = tempfile::tempdir().unwrap();
+            let mut names: Vec<PathBuf> = Vec::new();
+            for (name, text) in case.files {
+                let path = directory.path().join(name);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, text).unwrap();
+                names.push(PathBuf::from(name));
+            }
+            names.sort();
+            let files = FileSet::from_files(directory.path().to_path_buf(), names);
+            let config = Config::default();
+            let ctx = AnalysisContext::new(&files, &config, Some(directory.path()));
+            let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+            let reported: Vec<&str> = result.items.iter().map(|item| item.name.as_str()).collect();
+            for name in case.alive {
+                if reported.contains(name) {
+                    failures.push(format!("{}: `{name}` is reported as dead", case.language));
+                }
+            }
+            for name in case.dead {
+                if !reported.contains(name) {
+                    failures.push(format!("{}: `{name}` is not reported", case.language));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 }

@@ -296,6 +296,17 @@ impl CallView {
         edges.into_iter().collect()
     }
 
+    /// The position of the definition with the key.
+    pub fn position_of(&self, key: &str) -> Option<usize> {
+        self.by_key.get(key).copied()
+    }
+
+    /// The definitions that one definition calls, with the basis of each call. A target
+    /// can occur with more than one basis. The list is in the order of the definitions.
+    pub fn callee_edges(&self, symbol: usize) -> &[(usize, ResolutionBasis)] {
+        &self.callees[symbol]
+    }
+
     /// The call sites in the body of one definition, in source order.
     pub fn calls_of(&self, symbol: usize) -> &[CallEvidence] {
         &self.call_resolutions[self.call_resolution_ranges[symbol].clone()]

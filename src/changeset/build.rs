@@ -319,11 +319,16 @@ pub fn compute(repository: &Path, target: Option<&str>, config: &Config) -> Resu
         notes,
         new_findings,
         graph,
+        security: None,
     })
 }
 
 /// The renames of git between two commits, from the old path to the new path.
-fn renames_between(repository: &Path, base: &str, head: &str) -> Result<BTreeMap<String, String>> {
+pub(crate) fn renames_between(
+    repository: &Path,
+    base: &str,
+    head: &str,
+) -> Result<BTreeMap<String, String>> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(repository)
@@ -373,7 +378,7 @@ fn strip_ordinal(key: &str) -> &str {
 }
 
 /// The key with the path that the head has for the file of the key.
-fn renamed_key(key: &str, renames: &BTreeMap<String, String>) -> String {
+pub(crate) fn renamed_key(key: &str, renames: &BTreeMap<String, String>) -> String {
     match key.split_once('#') {
         Some((file, name)) => format!("{}#{name}", renames.get(file).map_or(file, String::as_str)),
         None => key.to_string(),

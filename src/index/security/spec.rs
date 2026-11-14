@@ -38,6 +38,8 @@ pub enum Predicate {
         index: usize,
     },
     AnyArgIn(&'static [&'static str]),
+    /// An argument is one of the values, with the case of the source.
+    AnyArgExact(&'static [&'static str]),
     AnyArgStartsWith(&'static [&'static str]),
     /// The loader argument is missing, or the imports resolve it to a loader that is not safe.
     /// A loader that the imports cannot resolve is not a sink.
@@ -53,6 +55,14 @@ pub enum Predicate {
     All(&'static [Predicate]),
     /// At least one of the predicates holds.
     AnyOf(&'static [Predicate]),
+    /// The inner predicate does not hold.
+    Without(&'static Predicate),
+    /// The call has an argument at the index.
+    HasArgument {
+        index: usize,
+    },
+    /// An argument passes a block, as `&block` does in Ruby.
+    BlockPass,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,7 +141,9 @@ const ALL: &[Language] = &[
     Language::Bash,
 ];
 
-use Predicate::{All, Always, AnyArgIn, AnyArgStartsWith, ArgContains, ArgIn, ArgStartsWith};
+use Predicate::{
+    All, Always, AnyArgExact, AnyArgIn, AnyArgStartsWith, ArgContains, ArgIn, ArgStartsWith,
+};
 use SinkCategory::{
     CodeEvaluation, CommandExecution, HardcodedCredential, MemoryUnsafe, SqlStringConstruction,
     TlsVerificationDisabled, UnsafeDeserialization, WeakCipher, WeakHash,
@@ -228,6 +240,12 @@ const fn built(index: usize) -> Predicate {
     Predicate::BuiltString { index }
 }
 
+/// `hashlib.md5(data, usedforsecurity=False)` declares that no security property rests on the digest.
+const NOT_FOR_SECURITY: Predicate = Predicate::Without(&Predicate::Keyword {
+    name: "usedforsecurity",
+    value: "false",
+});
+
 const WEAK_DIGESTS: &[&str] = &["md5", "sha1", "sha-1", "md2", "md4"];
 const WEAK_CIPHERS: &[&str] = &["des", "rc4", "rc2", "bf", "blowfish", "arcfour"];
 const CURL_VERIFY: &[&str] = &["curlopt_ssl_verifypeer", "curlopt_ssl_verifyhost"];
@@ -256,16 +274,19 @@ pub const SPECS: &[SinkSpec] = &[
     ),
     path(UnsafeDeserialization, PYTHON, "yaml", "unsafe_load|unsafe_load_all", Always),
     method(SqlStringConstruction, PYTHON, "execute|executemany|executescript", built(0)),
-    path(WeakHash, PYTHON, "hashlib", "md5|sha1", Always),
+    path(WeakHash, PYTHON, "hashlib", "md5|sha1", NOT_FOR_SECURITY),
     path(
         WeakHash,
         PYTHON,
         "hashlib",
         "new",
-        ArgIn {
-            index: 0,
-            values: WEAK_DIGESTS,
-        },
+        All(&[
+            ArgIn {
+                index: 0,
+                values: WEAK_DIGESTS,
+            },
+            NOT_FOR_SECURITY,
+        ]),
     ),
     path(
         WeakCipher,
@@ -555,7 +576,17 @@ pub const SPECS: &[SinkSpec] = &[
         Always,
     ),
     path(CommandExecution, RUBY, "IO", "popen", Always),
-    path(CodeEvaluation, RUBY, "", "eval|instance_eval|class_eval|module_eval", Always),
+    path(CodeEvaluation, RUBY, "", "eval", Always),
+    path(
+        CodeEvaluation,
+        RUBY,
+        "",
+        "instance_eval|class_eval|module_eval",
+        All(&[
+            Predicate::HasArgument { index: 0 },
+            Predicate::Without(&Predicate::BlockPass),
+        ]),
+    ),
     path(UnsafeDeserialization, RUBY, "Marshal", "load|restore", Always),
     path(UnsafeDeserialization, RUBY, "YAML", "unsafe_load|unsafe_load_file", Always),
     method(
@@ -701,7 +732,7 @@ pub const SPECS: &[SinkSpec] = &[
         "openssl",
         AnyArgStartsWith(&["-des", "-rc4", "-rc2", "-bf"]),
     ),
-    path(TlsVerificationDisabled, BASH, "", "curl", AnyArgIn(&["-k", "--insecure"])),
+    path(TlsVerificationDisabled, BASH, "", "curl", AnyArgExact(&["-k", "--insecure"])),
     path(
         TlsVerificationDisabled,
         BASH,

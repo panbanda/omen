@@ -62,6 +62,12 @@ expression: "shape(&response, &dynamic_key_objects)"
             "resolved": [
               "string"
             ],
+            "security": {
+              "entry_point": "null",
+              "reachable_from": [],
+              "reaches": [],
+              "sinks_in_body": []
+            },
             "suggestions": [],
             "symbol": "string",
             "total_callees": "number",

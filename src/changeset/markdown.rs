@@ -160,8 +160,10 @@ fn header(changes: &ChangeSet) -> String {
         ("Hotspots touched", summary.hotspots_touched.to_string()),
     ];
     let mut text = format!(
-        "{MARKER}\n## Omen diff\n\nBase `{}` (merge base with `{}`), head `{}`.\n\n| Measure | Value |\n| --- | --- |\n",
-        changes.base, changes.target, changes.head
+        "{MARKER}\n## Omen diff\n\nBase {} (merge base with {}), head {}.\n\n| Measure | Value |\n| --- | --- |\n",
+        code(&changes.base),
+        code(&changes.target),
+        code(&changes.head)
     );
     for (name, value) in rows {
         text.push_str(&format!("| {name} | {value} |\n"));
@@ -193,12 +195,46 @@ fn own_sections<'a>(changes: &'a ChangeSet, options: &'a CommentOptions) -> Vec<
     ]
 }
 
-fn cell(text: &str) -> String {
-    text.replace('|', "\\|").replace(['\n', '\r'], " ")
+/// Text for a table cell. Each character that Markdown or HTML reads is escaped, so a
+/// name from the repository stays text.
+pub(crate) fn cell(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '\n' | '\r' => escaped.push(' '),
+            '\\' | '`' | '*' | '_' | '[' | ']' | '|' => {
+                escaped.push('\\');
+                escaped.push(character);
+            }
+            _ => escaped.push(character),
+        }
+    }
+    escaped
 }
 
-fn code(text: &str) -> String {
-    format!("`{}`", cell(text))
+/// A code span for a table cell. The fence is longer than the longest run of backticks in
+/// the text, so a backtick in a file name does not end the span.
+pub(crate) fn code(text: &str) -> String {
+    let text = text.replace('|', "\\|").replace(['\n', '\r'], " ");
+    let mut longest = 0;
+    let mut run = 0;
+    for character in text.chars() {
+        if character == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    let fence = "`".repeat(longest + 1);
+    if text.starts_with('`') || text.ends_with('`') {
+        format!("{fence} {text} {fence}")
+    } else {
+        format!("{fence}{text}{fence}")
+    }
 }
 
 /// The key of a symbol without the file, for example `Circle.area`.
@@ -268,7 +304,10 @@ fn details(title: &str, count: usize) -> String {
 const DETAILS_END: &str = "\n</details>\n";
 
 fn omitted(count: usize, what: &str, command: &str) -> String {
-    format!("\n_{count} {what} omitted. Run `{command}` for the full list._\n")
+    format!(
+        "\n_{count} {what} omitted. Run {} for the full list._\n",
+        code(command)
+    )
 }
 
 fn full_command(changes: &ChangeSet) -> String {
@@ -532,6 +571,25 @@ mod tests {
     use super::super::mermaid::tests::check_subset;
     use super::super::model::*;
     use super::*;
+
+    #[test]
+    fn a_code_span_uses_a_fence_longer_than_the_backticks_in_the_text() {
+        assert_eq!(code("a.py"), "`a.py`");
+        assert_eq!(
+            code("bad` [r](http://x) `y.py"),
+            "``bad` [r](http://x) `y.py``"
+        );
+        assert_eq!(code("`edge"), "`` `edge ``");
+        assert_eq!(code("a|b\nc"), "`a\\|b c`");
+    }
+
+    #[test]
+    fn a_plain_cell_escapes_the_markdown_and_html_metacharacters() {
+        assert_eq!(
+            cell("a*b_c[d](e)<f>&`g`|h\ni"),
+            "a\\*b\\_c\\[d\\](e)&lt;f&gt;&amp;\\`g\\`\\|h i"
+        );
+    }
     use crate::index::model::SymbolKind;
 
     fn symbol(
@@ -621,6 +679,7 @@ mod tests {
                     edge("src/a.rs#run", "src/a.rs#helper", ChangeState::Added),
                 ],
             },
+            security: None,
         }
     }
 

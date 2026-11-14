@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "language": "javascript",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid JavaScript. The imports need packages that the case does not include. The harness does not run the code.",
+  "closed_world": false,
+  "paths": [
+    {
+      "label": "handler_to_command",
+      "entry_file": "app.js",
+      "entry_line": 23,
+      "sink_file": "app.js",
+      "sink_line": 16,
+      "steps": [
+        "app.js#runCommand",
+        "app.js#prepare",
+        "app.js#execute"
+      ],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "guards": [
+        "requireAuth"
+      ],
+      "choke_points": [
+        "app.js#prepare",
+        "app.js#runCommand"
+      ]
+    },
+    {
+      "label": "orphan_has_no_entry",
+      "entry_file": "app.js",
+      "entry_line": 23,
+      "sink_file": "app.js",
+      "sink_line": 20,
+      "flagged": false
+    }
+  ]
+}

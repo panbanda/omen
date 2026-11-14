@@ -58,8 +58,8 @@ public class Sinks {
     }
 
     void hardcodedCredential() {
-        String token = "AKIAIOSFODNN7EXAMPLE";
+        String token = "AKIAJ3KD92LQ7MZP5XWB";
         String name = "AKIAEXAMPLE";
-        // AKIAIOSFODNN7EXAMPLE
+        // AKIAJ3KD92LQ7MZP5XWB
     }
 }

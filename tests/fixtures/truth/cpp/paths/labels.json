@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "language": "cpp",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid C++. The harness does not run the code.",
+  "closed_world": false,
+  "paths": [
+    {
+      "label": "handler_to_command",
+      "entry_file": "main.cpp",
+      "entry_line": 15,
+      "sink_file": "main.cpp",
+      "sink_line": 4,
+      "steps": [
+        "main.cpp#main",
+        "main.cpp#prepare",
+        "main.cpp#execute"
+      ],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "guards": [],
+      "choke_points": [
+        "main.cpp#prepare"
+      ]
+    },
+    {
+      "label": "orphan_has_no_entry",
+      "entry_file": "main.cpp",
+      "entry_line": 15,
+      "sink_file": "main.cpp",
+      "sink_line": 12,
+      "flagged": false
+    }
+  ]
+}

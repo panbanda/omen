@@ -47,9 +47,9 @@ pub fn tls_verification_disabled() {
 }
 
 pub fn hardcoded_credential() {
-    let token = "AKIAIOSFODNN7EXAMPLE";
+    let token = "AKIAJ3KD92LQ7MZP5XWB";
     let name = "AKIAEXAMPLE";
-    // AKIAIOSFODNN7EXAMPLE
+    // AKIAJ3KD92LQ7MZP5XWB
 }
 
 pub fn memory_unsafe(pointer: *const u32, bits: u32) {
@@ -78,7 +78,7 @@ mod tests {
         md5::compute(program);
         rc4::Rc4::new(program);
         reqwest::ClientBuilder::new().danger_accept_invalid_certs(true);
-        let token = "AKIAIOSFODNN7EXAMPLE";
+        let token = "AKIAJ3KD92LQ7MZP5XWB";
         let first = unsafe { *program.as_ptr() };
     }
 }

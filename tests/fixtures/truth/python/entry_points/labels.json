@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "language": "python",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Python 3. The imports need packages that the case does not include. The harness does not run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "flask_update", "file": "app.py", "line": 7, "kind": "http_handler", "framework": "flask", "method": "POST", "path": "/users/<int:user_id>", "parameters": ["user_id"], "guards": ["login_required"]},
+    {"label": "script_main", "file": "app.py", "line": 13, "kind": "cli_main", "framework": "python"},
+    {"label": "fastapi_read", "file": "api.py", "line": 6, "kind": "http_handler", "framework": "fastapi", "method": "GET", "path": "/items/{item_id}", "parameters": ["item_id"]}
+  ]
+}

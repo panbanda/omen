@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "language": "python",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Python 3. The imports need packages that the case does not include. The harness does not run the code.",
+  "closed_world": false,
+  "paths": [
+    {
+      "label": "handler_to_command",
+      "entry_file": "app.py",
+      "entry_line": 8,
+      "sink_file": "app.py",
+      "sink_line": 19,
+      "steps": [
+        "app.py#run_command",
+        "app.py#prepare",
+        "app.py#execute"
+      ],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "guards": [
+        "login_required"
+      ],
+      "choke_points": [
+        "app.py#prepare",
+        "app.py#run_command"
+      ]
+    },
+    {
+      "label": "orphan_has_no_entry",
+      "entry_file": "app.py",
+      "entry_line": 8,
+      "sink_file": "app.py",
+      "sink_line": 23,
+      "flagged": false
+    }
+  ]
+}

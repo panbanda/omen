@@ -41,7 +41,12 @@ pub fn run(
         min_basis: request.min_basis,
     };
     let read = |file: &Path| ctx.read_file(file);
-    let report = report_with_reader(&view, &request.name, &options, None, &read)?;
+    let mut report = report_with_reader(&view, &request.name, &options, None, &read)?;
+    let analysis = crate::analyzers::security::analyze_context(&ctx)?;
+    report.security = Some(crate::index::security::symbol_security(
+        &analysis,
+        &report.qualified_name,
+    ));
     let mut value = serde_json::to_value(&report)?;
     // `--top` and `--offset` page only the callers, as the MCP tool does.
     let scope = &request.scope;

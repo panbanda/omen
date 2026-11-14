@@ -75,6 +75,8 @@ pub fn run(
         }};
     }
 
+    let security_analyzer = crate::analyzers::security::Analyzer::from_config(config)?;
+
     // Run analyzers in parallel using std::thread::scope.
     //
     // Group A: file-based analyzers (no git dependency)
@@ -94,6 +96,7 @@ pub fn run(
                 run_and_collect!(&ctx, crate::analyzers::repomap::Analyzer, "repomap"),
                 run_and_collect!(&ctx, crate::analyzers::smells::Analyzer, "smells"),
                 run_and_collect!(&ctx, crate::analyzers::flags::Analyzer, "flags"),
+                run_instance_and_collect!(&ctx, security_analyzer, "security"),
                 run_and_collect!(&ctx, crate::analyzers::duplicates::Analyzer, "clones"),
             ]
         });
@@ -112,7 +115,7 @@ pub fn run(
         )
     });
 
-    let mut results: Vec<Value> = Vec::with_capacity(17);
+    let mut results: Vec<Value> = Vec::with_capacity(18);
     results.extend(group_a);
     results.extend(group_b);
 
@@ -190,7 +193,7 @@ pub fn run(
     }
 
     let combined = match format {
-        Format::Json | Format::JsonCompact | Format::Sarif => {
+        Format::Json | Format::JsonCompact | Format::Sarif | Format::Mermaid => {
             json!({ "analyzers": results })
         }
         // One object with a key for each analyzer gives one section for
@@ -240,5 +243,33 @@ mod tests {
         for expected in ["complexity", "satd", "stubs", "score", "tdg", "hotspot"] {
             assert!(names.contains(&expected), "{expected}: {names:?}");
         }
+    }
+
+    #[test]
+    fn test_all_has_the_security_analysis_with_the_configuration() {
+        let directory = tempfile::tempdir().expect("directory");
+        std::fs::write(
+            directory.path().join("app.py"),
+            "import os\n\ntoken = \"AKIAJ3KD92LQ7MZP5XWB\"\n\n\ndef run(command):\n    os.system(command)\n",
+        )
+        .expect("write");
+        let path = directory.path().to_path_buf();
+        let security_of = |config: &Config| {
+            let mut out = Vec::new();
+            run(&path, config, &Scope::default(), Format::Json, &mut out).expect("all");
+            let value: serde_json::Value = serde_json::from_slice(&out).expect("json");
+            value["analyzers"]
+                .as_array()
+                .expect("analyzers")
+                .iter()
+                .find(|entry| entry["analyzer"] == "security")
+                .expect("a security entry")["result"]["summary"]["sinks"]
+                .as_u64()
+                .expect("sinks")
+        };
+        assert_eq!(security_of(&Config::default()), 1);
+        let mut experimental = Config::default();
+        experimental.security.experimental = true;
+        assert_eq!(security_of(&experimental), 2);
     }
 }

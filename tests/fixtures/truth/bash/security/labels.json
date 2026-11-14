@@ -42,6 +42,7 @@
     {"label": "hardcoded_credential.real_call", "category": "hardcoded_credential", "scenario": "real_call", "file": "sinks.sh", "line": 32, "basis": "builtin"},
     {"label": "hardcoded_credential.safe_variant", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "sinks.sh", "line": 33, "flagged": false},
     {"label": "hardcoded_credential.name_in_comment", "category": "hardcoded_credential", "scenario": "name_in_comment", "file": "sinks.sh", "line": 34, "flagged": false},
-    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/sinks_test.sh", "line": 8, "basis": "builtin", "in_test": true}
+    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/sinks_test.sh", "line": 8, "basis": "builtin", "in_test": true},
+    {"label": "tls_verification_disabled.safe_variant.config_file_option", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "curl_config.sh", "line": 4, "flagged": false}
   ]
 }

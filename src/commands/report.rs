@@ -10,6 +10,55 @@ use crate::config::Config;
 use crate::core::progress::is_tty;
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 
+/// Gives an error that lists the files that a run could not write.
+fn check_writes(errors: &std::sync::Mutex<Vec<String>>) -> crate::core::Result<()> {
+    let failed = errors
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    if failed.is_empty() {
+        return Ok(());
+    }
+    Err(crate::core::Error::analysis(format!(
+        "The report data was not written: {}",
+        failed.join("; ")
+    )))
+}
+
+/// Writes the file in one step: the old file stays until the new text is complete.
+fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let mut pending = path.as_os_str().to_owned();
+    pending.push(".tmp");
+    let pending = std::path::PathBuf::from(pending);
+    std::fs::write(&pending, text)?;
+    std::fs::rename(&pending, path)
+}
+
+/// The data files that `report generate` writes and that `report validate` expects.
+pub(crate) const EXPECTED_DATA_FILES: [&str; 21] = [
+    "metadata",
+    "complexity",
+    "satd",
+    "stubs",
+    "deadcode",
+    "churn",
+    "clones",
+    "defect",
+    "changes",
+    "tdg",
+    "graph",
+    "hotspot",
+    "temporal",
+    "ownership",
+    "cohesion",
+    "repomap",
+    "smells",
+    "flags",
+    "security",
+    "score",
+    "trend",
+];
+
 pub fn run(
     path: &PathBuf,
     config: &Config,
@@ -24,7 +73,17 @@ pub fn run(
             // The reference is checked before the first write, so a failed run keeps
             // the files of an earlier run.
             let changes = git_ref
-                .map(|reference| crate::changeset::build::compute(path, Some(reference), config))
+                .map(|reference| -> crate::core::Result<_> {
+                    let mut changes =
+                        crate::changeset::build::compute(path, Some(reference), config)?;
+                    changes.security = Some(crate::changeset::security::compute(
+                        path,
+                        Some(reference),
+                        config,
+                        &changes,
+                    )?);
+                    Ok(changes)
+                })
                 .transpose()?;
             std::fs::create_dir_all(&args.data)?;
 
@@ -100,6 +159,7 @@ pub fn run(
                 "repomap",
                 "smells",
                 "flags",
+                "security",
                 "score",
                 "trend",
             ];
@@ -124,6 +184,7 @@ pub fn run(
             };
 
             let completed = std::sync::atomic::AtomicU64::new(0);
+            let write_errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
             let output_dir = &args.data;
 
             // Helper: run an analyzer and save its JSON output
@@ -136,15 +197,24 @@ pub fn run(
                             Err(e) => json!({"error": e.to_string()}),
                         };
                         let output_path = output_dir.join(format!("{}.json", $filename));
-                        let _ = std::fs::write(
+                        match write_atomically(
                             &output_path,
-                            serde_json::to_string_pretty(&result).unwrap_or_default(),
-                        );
-                        let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        if let Some(ref bar) = progress {
-                            bar.set_position(done);
-                        } else {
-                            eprintln!("Generated: {}", output_path.display());
+                            &serde_json::to_string_pretty(&result).unwrap_or_default(),
+                        ) {
+                            Ok(()) => {
+                                let done =
+                                    completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                        + 1;
+                                if let Some(ref bar) = progress {
+                                    bar.set_position(done);
+                                } else {
+                                    eprintln!("Generated: {}", output_path.display());
+                                }
+                            }
+                            Err(error) => write_errors
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .push(format!("{}: {error}", output_path.display())),
                         }
                     }
                 }};
@@ -155,6 +225,7 @@ pub fn run(
             // Group B: Git-heavy analyzers (I/O-bound, overlap with CPU work)
             // Group C: Mixed analyzers (benefit from warm OS caches)
             let churn_days = args.days.unwrap_or(since_days);
+            let security_analyzer = crate::analyzers::security::Analyzer::from_config(config)?;
 
             std::thread::scope(|s| {
                 // Group A: file-based analyzers
@@ -166,6 +237,7 @@ pub fn run(
                     );
                     run_analyzer!(crate::analyzers::satd::Analyzer::default(), "satd", "satd");
                     run_analyzer!(crate::analyzers::stubs::Analyzer::new(), "stubs", "stubs");
+                    run_analyzer!(security_analyzer, "security", "security");
                     run_analyzer!(
                         crate::analyzers::deadcode::Analyzer::default(),
                         "deadcode",
@@ -243,6 +315,8 @@ pub fn run(
                 });
             });
 
+            check_writes(&write_errors)?;
+
             // Phase 2: Score (reads pre-generated JSON files, nearly instant)
             if !skip_list.contains(&"score") {
                 if let Some(ref bar) = progress {
@@ -290,10 +364,14 @@ pub fn run(
                 ) {
                     Ok(trend_data) => {
                         let output_path = output_dir.join("trend.json");
-                        if let Err(e) =
-                            std::fs::write(&output_path, serde_json::to_string_pretty(&trend_data)?)
-                        {
-                            eprintln!("Warning: failed to write trend.json: {}", e);
+                        if let Err(e) = write_atomically(
+                            &output_path,
+                            &serde_json::to_string_pretty(&trend_data)?,
+                        ) {
+                            write_errors
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .push(format!("{}: {e}", output_path.display()));
                         } else {
                             let done =
                                 completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -313,33 +391,13 @@ pub fn run(
             if let Some(bar) = progress {
                 bar.finish_with_message("done");
             }
+            check_writes(&write_errors)?;
             eprintln!("Report data generated in: {}", output_dir.display());
         }
         ReportSubcommand::Validate(args) => {
             // Basic validation: check that expected JSON files exist and are valid JSON
             // File list matches Go version
-            let expected_files = [
-                "metadata",
-                "complexity",
-                "satd",
-                "stubs",
-                "deadcode",
-                "churn",
-                "clones",
-                "defect",
-                "changes",
-                "tdg",
-                "graph",
-                "hotspot",
-                "temporal",
-                "ownership",
-                "cohesion",
-                "repomap",
-                "smells",
-                "flags",
-                "score",
-                "trend",
-            ];
+            let expected_files = EXPECTED_DATA_FILES;
 
             let mut errors = Vec::new();
             let mut valid_count = 0;

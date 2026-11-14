@@ -23,11 +23,21 @@ use crate::parser::{cfg_test_module_ranges, ParseResult};
 /// `parsed[i]` is the syntax tree of `files[i]`. Give the files after
 /// `resolve_imports` and `resolve_references`.
 pub fn find_sinks(parsed: &[ParseResult], files: &[FileSymbols]) -> Vec<Sink> {
+    find_sinks_with(parsed, files, &[])
+}
+
+/// Like [`find_sinks`], with more rows for the sinks of the user, for example the
+/// wrappers of a company. The rows apply to the languages that they name.
+pub fn find_sinks_with(
+    parsed: &[ParseResult],
+    files: &[FileSymbols],
+    extra: &'static [SinkSpec],
+) -> Vec<Sink> {
     assert_eq!(parsed.len(), files.len(), "each file needs its syntax tree");
     let repository = Repository::new(files);
     let per_file: Vec<Vec<Sink>> = (0..files.len())
         .into_par_iter()
-        .map(|position| file_sinks(&parsed[position], &files[position], &repository))
+        .map(|position| file_sinks(&parsed[position], &files[position], &repository, extra))
         .collect();
     per_file.into_iter().flatten().collect()
 }
@@ -226,7 +236,12 @@ struct FileContext<'a> {
     call_kinds: Vec<&'static str>,
 }
 
-fn file_sinks(parsed: &ParseResult, file: &FileSymbols, repository: &Repository<'_>) -> Vec<Sink> {
+fn file_sinks(
+    parsed: &ParseResult,
+    file: &FileSymbols,
+    repository: &Repository<'_>,
+    extra: &'static [SinkSpec],
+) -> Vec<Sink> {
     let language = file.language;
     let source = parsed.source.as_slice();
     let test_ranges = if language == Language::Rust {
@@ -240,7 +255,13 @@ fn file_sinks(parsed: &ParseResult, file: &FileSymbols, repository: &Repository<
         file,
         repository,
         syntax: syntax_of(language),
-        specs: specs_for(language).collect(),
+        specs: specs_for(language)
+            .chain(
+                extra
+                    .iter()
+                    .filter(|spec| spec.languages.contains(&language)),
+            )
+            .collect(),
         source,
         test_ranges,
         call_kinds: language_spec(language).call_syntax().call_kinds(),
@@ -508,6 +529,17 @@ impl FileContext<'_> {
             .collect()
     }
 
+    /// The target of a sink: the path without the module that the language gives without
+    /// an import. `builtins.eval` and `eval` are one target.
+    fn target_of(&self, path: &[String]) -> String {
+        for module in self.implicit_modules() {
+            if path.len() > module.len() && path.starts_with(&module) {
+                return path[module.len()..].join(".");
+            }
+        }
+        path.join(".")
+    }
+
     /// Tells how a path matches a row, if it does.
     fn path_match(
         &self,
@@ -602,14 +634,17 @@ impl FileContext<'_> {
                 .map(|call| syntax::arguments(call, self.file.language))
                 .unwrap_or_default();
             for spec in named {
-                let basis = match (&spec.target, &owner) {
+                let matched: Option<(SinkBasis, String)> = match (&spec.target, &owner) {
                     (_, Owner::Repository) => None,
                     (Target::Method { .. }, _) => (reference.receiver.is_some()
                         && !self.resolver_selected_repository(reference))
-                    .then_some(SinkBasis::NameOnly),
+                    .then(|| (SinkBasis::NameOnly, format!("*.{}", reference.name))),
                     (Target::Path { module, callee }, Owner::Paths { paths, imported }) => paths
                         .iter()
-                        .find_map(|path| self.path_match(module, callee, path, *imported))
+                        .find_map(|path| {
+                            self.path_match(module, callee, path, *imported)
+                                .map(|basis| (basis, self.target_of(path)))
+                        })
                         .filter(|_| {
                             *imported
                                 || (written_length > 1 && !self.syntax.global_namespace)
@@ -617,7 +652,7 @@ impl FileContext<'_> {
                         }),
                     _ => None,
                 };
-                let Some(basis) = basis else {
+                let Some((basis, target)) = matched else {
                     continue;
                 };
                 let held = call.is_some()
@@ -645,14 +680,16 @@ impl FileContext<'_> {
                         .unwrap_or(reference.name.as_str())
                         .to_string()
                 };
-                sinks.push(self.sink(
+                let mut sink = self.sink(
                     spec.category,
                     reference.name_range,
                     reference.enclosing.clone(),
                     &callee_text,
                     basis,
                     !arguments.is_empty() && arguments.iter().all(|node| syntax::is_literal(*node)),
-                ));
+                );
+                sink.target = target;
+                sinks.push(sink);
             }
         }
     }
@@ -722,6 +759,7 @@ impl FileContext<'_> {
             cwe: category.cwe(),
             range,
             enclosing,
+            target: callee_text.clone(),
             callee_text,
             basis,
             flags: SinkFlags {

@@ -9,3 +9,4 @@ pub mod graph;
 pub mod markdown;
 pub mod mermaid;
 pub mod model;
+pub mod security;

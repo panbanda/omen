@@ -115,6 +115,12 @@
                 Incomplete Code
             </a>
             {% endif %}
+            {% if Security %}
+            <a href="#attack-surface" class="nav-link">
+                <span class="nav-dot {% if Security.summary.paths > 0 %}warning{% else %}good{% endif %}"></span>
+                Attack Surface
+            </a>
+            {% endif %}
             {% if Changes %}
             <a href="#changes" class="nav-link">
                 <span class="nav-dot {% if Changes.summary.cyclomatic_after > Changes.summary.cyclomatic_before %}warning{% else %}good{% endif %}"></span>
@@ -945,6 +951,156 @@
         </section>
         {% endif %}
 
+        <!-- Attack surface -->
+        {% if Security %}
+        <section id="attack-surface" class="card report-section">
+            <div class="section-header">
+                <h2 class="section-title">Attack surface</h2>
+                <p class="section-description">Where input enters the code, which calls of risk exist, and the paths between them. The section reports facts, not vulnerabilities.</p>
+            </div>
+
+            {% if SecurityInsight %}
+            <div class="insight">
+                <div class="narrative">{{ SecurityInsight.section_insight | markdown }}</div>
+            </div>
+            {% endif %}
+
+            <p class="muted"><strong>Coverage.</strong> {{ Security.coverage.statement }}</p>
+
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Security.summary.entry_points }}</div>
+                    <div class="metric-label">Entry points</div>
+                </div>
+                {% for kind, count in Security.summary.entry_points_by_kind | items %}
+                <div class="metric-tile">
+                    <div class="metric-value">{{ count }}</div>
+                    <div class="metric-label">Entry points: {{ kind }}</div>
+                </div>
+                {% endfor %}
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Security.summary.sinks }}</div>
+                    <div class="metric-label">Sinks</div>
+                </div>
+                {% for category, count in Security.summary.sinks_by_category | items %}
+                <div class="metric-tile">
+                    <div class="metric-value">{{ count }}</div>
+                    <div class="metric-label">Sinks: {{ category }}</div>
+                </div>
+                {% endfor %}
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Security.summary.sinks_with_path }}</div>
+                    <div class="metric-label">Sinks with a path from an entry point</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Security.summary.sinks_with_no_known_entry }}</div>
+                    <div class="metric-label"><span class="tooltip" data-tooltip="No known entry point reaches the sink. This does not mean that the sink is safe.">Sinks with no known entry</span></div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Security.summary.suppressed }}</div>
+                    <div class="metric-label">Suppressed sinks</div>
+                </div>
+            </div>
+
+            {% if SecurityJson and SecurityJson.kinds %}
+            <h3>Paths by entry kind and sink category</h3>
+            <div class="table-wrap">
+                <table class="report-table" id="security-matrix">
+                    <thead>
+                        <tr>
+                            <th>Entry kind</th>
+                            {% for category in SecurityJson.categories %}<th class="num">{{ category }}</th>{% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for kind in SecurityJson.kinds %}
+                        {% set row = SecurityJson.matrix[loop.index0] %}
+                        <tr>
+                            <td>{{ kind }}</td>
+                            {% for cell in row %}<td class="num">{{ cell }}</td>{% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div style="margin-top: 1.5rem;">
+                <div id="securitySankey" style="width:100%;height:360px"></div>
+                <script>window.__td_security={{ SecurityJson | tojson }};</script>
+            </div>
+            {% endif %}
+
+            {% if SecurityJson and SecurityJson.entries %}
+            <h3>Entry points</h3>
+            <div class="table-wrap">
+                <table class="report-table" id="security-entries-table" data-numeric-columns="5">
+                    <thead>
+                        <tr>
+                            <th>Route</th>
+                            <th>Handler</th>
+                            <th><span class="tooltip" data-tooltip="Decorators, annotations, and middleware that the code attaches to the handler. A guard is a declared fact. It does not mean that the handler is authenticated.">Declared guards</span></th>
+                            <th>Sink categories reached</th>
+                            <th>Framework</th>
+                            <th class="num">Shortest path</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in SecurityJson.entries %}
+                        <tr>
+                            <td>{% if entry.route %}<code>{{ entry.route }}</code>{% else %}{{ entry.kind }}{% endif %}<br><span class="muted">{{ entry.location }}</span></td>
+                            <td>{{ entry.handler or "-" }}</td>
+                            <td>{{ entry.guards | join(", ") or "none declared" }}</td>
+                            <td>{{ entry.categories | join(", ") or "none" }}</td>
+                            <td>{{ entry.framework }}</td>
+                            <td class="num">{{ entry.shortest if entry.shortest is not none else "-" }}</td>
+                        </tr>
+                        {% if entry.hops %}
+                        <tr>
+                            <td colspan="6"><details><summary>Hops to the sinks</summary>
+                                {% for hop in entry.hops %}<p><code>{{ hop.steps | join(" -> ") }}</code> -> {{ hop.sink }} at <code>{{ hop.location }}</code></p>{% endfor %}
+                            </details></td>
+                        </tr>
+                        {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            {% if Security.choke_points %}
+            <h3>Choke points</h3>
+            <p class="muted">Each known path to the listed sinks goes through the symbol. It is a good place to validate input.</p>
+            <div class="table-wrap">
+                <table class="report-table" id="security-choke-table" data-numeric-columns="1,2">
+                    <thead>
+                        <tr><th>Symbol</th><th class="num">Entry points</th><th class="num">Sinks</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for point in Security.choke_points %}
+                        <tr><td><code>{{ point.symbol }}</code></td><td class="num">{{ point.entries }}</td><td class="num">{{ point.sinks }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            {% if Changes and Changes.security and Changes.security.sinks_added %}
+            <h3>Sinks added since <code>{{ Changes.target }}</code></h3>
+            <div class="table-wrap">
+                <table class="report-table" id="security-added-table">
+                    <thead>
+                        <tr><th>Category</th><th>CWE</th><th>Location</th><th>Basis</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for sink in Changes.security.sinks_added %}
+                        <tr><td>{{ sink.category }}</td><td>{{ sink.cwe }}</td><td><code>{{ sink.file }}:{{ sink.range.start_line }}</code></td><td>{{ sink.basis }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
         <!-- Changes since --ref -->
         {% if Changes %}
         <section id="changes" class="card report-section">
@@ -990,6 +1146,24 @@
                     <div class="metric-value">{{ Changes.summary.hotspots_touched }}</div>
                     <div class="metric-label">Hotspots touched</div>
                 </div>
+                {% if Changes.security %}
+                <div class="metric-tile">
+                    <div class="metric-value"><span class="diff-added diff-label">+{{ Changes.security.sinks_added | length }}</span> <span class="diff-removed diff-label">-{{ Changes.security.sinks_removed | length }}</span></div>
+                    <div class="metric-label">Security sinks</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value"><span class="diff-added diff-label">+{{ Changes.security.entry_points_added | length }}</span> <span class="diff-removed diff-label">-{{ Changes.security.entry_points_removed | length }}</span></div>
+                    <div class="metric-label">Entry points</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value"><span class="diff-added diff-label">+{{ Changes.security.paths_added | length }}</span> <span class="diff-removed diff-label">-{{ Changes.security.paths_removed | length }}</span></div>
+                    <div class="metric-label">Entry-to-sink paths</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Changes.security.changed_on_path | length }}</div>
+                    <div class="metric-label">Changed symbols on a path</div>
+                </div>
+                {% endif %}
             </div>
 
             {% if ChangesGraphJson and ChangesGraphJson.nodes %}
@@ -1740,6 +1914,27 @@
                             lineStyle: { color: color, width: 2, type: edge.state === 'removed' ? 'dashed' : 'solid' }
                         };
                     })
+                }]
+            });
+        });
+        {% endif %}
+
+        // --- Attack surface: entry kind, component, sink category ---
+        {% if SecurityJson and SecurityJson.sankey.links %}
+        registerChart(function() {
+            const el = document.getElementById('securitySankey');
+            const data = window.__td_security;
+            if (!el || !data) return;
+            const chart = initChart(el);
+            chart.setOption({
+                tooltip: { trigger: 'item' },
+                series: [{
+                    type: 'sankey',
+                    data: data.sankey.nodes,
+                    links: data.sankey.links,
+                    emphasis: { focus: 'adjacency' },
+                    lineStyle: { color: 'gradient', curveness: 0.5 },
+                    label: { color: palette.textPrimary, fontSize: 11 }
                 }]
             });
         });

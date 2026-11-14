@@ -21,8 +21,8 @@ use omen::benchmark::accepted::{check_accepted_facts, load_accepted, AcceptedFac
 use omen::benchmark::truth::{
     bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth,
     render_sink_table, render_table, summarize, summarize_sinks, Assertion, ImportedName, Kind,
-    Labels, LedgerEntry, Location, Observed, ObservedCall, ObservedImport, ObservedSink,
-    ObservedSymbol,
+    Labels, LedgerEntry, Location, Observed, ObservedCall, ObservedEntryPoint, ObservedImport,
+    ObservedPath, ObservedSink, ObservedSymbol,
 };
 use omen::core::Language;
 use omen::index::extract::{extract_file, link_files, FileSymbols};
@@ -32,6 +32,8 @@ use omen::index::model::{
     SymbolKind,
 };
 use omen::index::resolve::resolve_references;
+use omen::index::security::analysis::analyze_files;
+use omen::index::security::entry::find_entry_points;
 use omen::index::security::find_sinks;
 use omen::parser::Parser;
 
@@ -286,6 +288,28 @@ fn observed_sinks(trees: &[omen::parser::ParseResult], files: &[FileSymbols]) ->
         .collect()
 }
 
+fn observed_entry_points(
+    trees: &[omen::parser::ParseResult],
+    files: &[FileSymbols],
+) -> Vec<ObservedEntryPoint> {
+    find_entry_points(trees, files)
+        .into_iter()
+        .map(|entry| ObservedEntryPoint {
+            file: entry.file,
+            line: entry.range.start_line,
+            kind: entry.kind.name().to_string(),
+            framework: entry.framework,
+            method: entry.route.as_ref().map(|route| route.method.clone()),
+            path: entry.route.as_ref().map(|route| route.path.clone()),
+            parameters: entry
+                .route
+                .map(|route| route.parameters)
+                .unwrap_or_default(),
+            guards: entry.guards,
+        })
+        .collect()
+}
+
 /// Convert the facts that omen reports for one case into the label model.
 ///
 /// The symbols, the imports, and the calls come from the shared index.
@@ -312,11 +336,73 @@ fn index_case(dir: &Path) -> (Vec<omen::parser::ParseResult>, Vec<FileSymbols>) 
     (trees, index_files)
 }
 
-fn observe(dir: &Path) -> Observed {
+/// The key of an entry point or of a sink is `file:line:column:name`, and an HTTP handler
+/// has a method after the name. The file comes first, then two numbers.
+fn place_of(key: &str) -> (String, u32) {
+    let parts: Vec<&str> = key.split(':').collect();
+    let position = (1..parts.len().saturating_sub(1))
+        .find(|position| {
+            parts[*position].parse::<u32>().is_ok() && parts[*position + 1].parse::<u32>().is_ok()
+        })
+        .unwrap_or(1);
+    (
+        parts[..position].join(":"),
+        parts[position].parse().unwrap_or(0),
+    )
+}
+
+/// The paths and the choke points of the security analysis of one case.
+fn observed_paths(dir: &Path) -> Vec<ObservedPath> {
+    let mut files = Vec::new();
+    source_files(dir, &mut files);
+    let analysis = analyze_files(dir, &files);
+    let paths = analysis
+        .reachability
+        .paths
+        .iter()
+        .map(|path| {
+            let (entry_file, entry_line) = place_of(&path.entry);
+            let (sink_file, sink_line) = place_of(&path.sink);
+            let guards = analysis
+                .entry_points
+                .iter()
+                .find(|entry| entry.key == path.entry)
+                .map(|entry| entry.guards.clone())
+                .unwrap_or_default();
+            ObservedPath {
+                entry_file,
+                entry_line,
+                sink_file,
+                sink_line,
+                steps: path.steps.iter().map(|step| step.symbol.clone()).collect(),
+                weakest_basis: path.weakest_basis.map(|basis| basis.name().to_string()),
+                path_count: path.path_count,
+                guards,
+                choke_points: analysis
+                    .reachability
+                    .choke_points
+                    .iter()
+                    .filter(|point| point.sink_keys.contains(&path.sink))
+                    .filter(|point| path.steps.iter().any(|step| step.symbol == point.symbol))
+                    .map(|point| point.symbol.clone())
+                    .collect(),
+            }
+        })
+        .collect();
+    paths
+}
+
+fn observe(dir: &Path, with_paths: bool) -> Observed {
     let (trees, index_files) = index_case(dir);
+    let paths = if with_paths {
+        observed_paths(dir)
+    } else {
+        Vec::new()
+    };
     let mut imports = Vec::new();
     let calls = observed_calls(&index_files);
     let sinks = observed_sinks(&trees, &index_files);
+    let entry_points = observed_entry_points(&trees, &index_files);
     let mut symbols = Vec::new();
     for index_file in index_files {
         imports.extend(observed_imports(&index_file.imports));
@@ -334,13 +420,15 @@ fn observe(dir: &Path) -> Observed {
         calls,
         imports,
         sinks,
+        entry_points,
+        paths,
     }
 }
 
 fn run_cases(cases: &[Case]) -> Vec<Assertion> {
     let mut assertions = Vec::new();
     for case in cases {
-        let observed = observe(&case.dir);
+        let observed = observe(&case.dir, !case.labels.paths.is_empty());
         assertions.extend(
             compare(&case.id, &case.labels, &observed)
                 .unwrap_or_else(|error| panic!("{}: {error}", case.id)),
@@ -404,7 +492,7 @@ fn reported_facts_agree_with_labels_or_the_ledger() {
 }
 
 /// The secret in the fixtures. A sink must not hold it, or a part of it.
-const FIXTURE_SECRET: &str = "AKIAIOSFODNN7EXAMPLE";
+const FIXTURE_SECRET: &str = "AKIAJ3KD92LQ7MZP5XWB";
 
 #[test]
 fn no_sink_holds_a_fixture_secret() {

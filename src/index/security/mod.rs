@@ -4,15 +4,114 @@
 //! [`spec`] names. The matcher reports the fact that the sink exists. It does
 //! not say that the code has a vulnerability, and it does not follow data.
 
+pub mod analysis;
+pub mod entry;
 mod matcher;
+pub mod reach;
 pub mod spec;
+pub mod suppress;
 mod syntax;
 
 use serde::{Deserialize, Serialize};
 
 use super::model::Span;
 
-pub use matcher::find_sinks;
+pub use matcher::{find_sinks, find_sinks_with};
+
+/// What the security analysis says about one symbol. The analysis gives facts. A path is a
+/// path in the call graph that the index resolves.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolSecurity {
+    /// The entry point that the symbol is, if it is the handler of one.
+    pub entry_point: Option<EntrySummary>,
+    /// The sinks in the body of the symbol.
+    pub sinks_in_body: Vec<SinkSummary>,
+    /// The keys of the entry points that have a path through the symbol.
+    pub reachable_from: Vec<String>,
+    /// The keys of the sinks that a path through the symbol reaches.
+    pub reaches: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntrySummary {
+    pub key: String,
+    pub kind: String,
+    pub framework: String,
+    pub route: Option<String>,
+    pub guards: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SinkSummary {
+    pub key: String,
+    pub category: String,
+    pub cwe: u32,
+    pub line: u32,
+    pub basis: String,
+}
+
+/// The security facts of the symbol with the key `symbol_key`.
+pub fn symbol_security(analysis: &analysis::Analysis, symbol_key: &str) -> SymbolSecurity {
+    let entry_point = analysis
+        .entry_points
+        .iter()
+        .find(|entry| entry.symbol.as_deref() == Some(symbol_key))
+        .map(|entry| EntrySummary {
+            key: entry.key.clone(),
+            kind: entry.kind.name().to_string(),
+            framework: entry.framework.clone(),
+            route: entry
+                .route
+                .as_ref()
+                .map(|route| format!("{} {}", route.method, route.path)),
+            guards: entry.guards.clone(),
+        });
+    let sinks_in_body = analysis
+        .sinks
+        .iter()
+        .filter(|sink| sink.enclosing.as_deref() == Some(symbol_key))
+        .map(|sink| SinkSummary {
+            key: sink.key.clone(),
+            category: sink.category.name().to_string(),
+            cwe: sink.cwe,
+            line: sink.range.start_line,
+            basis: sink.basis.name().to_string(),
+        })
+        .collect();
+    let through: Vec<&reach::SinkPath> = analysis
+        .reachability
+        .paths
+        .iter()
+        .filter(|path| path.members.iter().any(|member| member == symbol_key))
+        .collect();
+    let mut reachable_from: Vec<String> = through.iter().map(|path| path.entry.clone()).collect();
+    reachable_from.sort();
+    reachable_from.dedup();
+    let mut reaches: Vec<String> = through.iter().map(|path| path.sink.clone()).collect();
+    reaches.sort();
+    reaches.dedup();
+    SymbolSecurity {
+        entry_point,
+        sinks_in_body,
+        reachable_from,
+        reaches,
+    }
+}
+
+/// The sinks of one parsed file, with the imports and the references of that file only.
+///
+/// The index of one file cannot see a repository definition. Thus the result can have
+/// a sink that a repository index does not have.
+pub fn sinks_of_source(parsed: &crate::parser::ParseResult, file: &str) -> Vec<Sink> {
+    use super::extract::{extract_file, link_files};
+    use super::imports::{resolve_imports, Manifests};
+    use super::resolve::resolve_references;
+    let mut files = vec![extract_file(parsed, file)];
+    link_files(&mut files);
+    resolve_imports(&mut files, &Manifests::default());
+    resolve_references(&mut files);
+    find_sinks(std::slice::from_ref(parsed), &files)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,6 +154,26 @@ impl SinkCategory {
             Self::HardcodedCredential => "hardcoded_credential",
             Self::MemoryUnsafe => "memory_unsafe",
         }
+    }
+
+    /// Tells if a sink of this category is a critical defect for `tdg`. Weak
+    /// cryptography, a disabled certificate check, and a token in the source are
+    /// findings of `security`, and they do not fail the score.
+    pub fn is_critical_defect(self) -> bool {
+        matches!(
+            self,
+            Self::CommandExecution
+                | Self::CodeEvaluation
+                | Self::UnsafeDeserialization
+                | Self::MemoryUnsafe
+        )
+    }
+
+    /// Tells if the category is off unless the caller asks for it. The review of
+    /// real repositories found that almost each token in the source of a test is
+    /// a made-up value. Thus the category is below the precision that omen needs.
+    pub fn is_experimental(self) -> bool {
+        matches!(self, Self::HardcodedCredential)
     }
 
     /// The number of the Common Weakness Enumeration entry for the category.
@@ -117,6 +236,11 @@ pub struct Sink {
     /// The key of the nearest function that contains the sink.
     pub enclosing: Option<String>,
     pub callee_text: String,
+    /// What the sink is, not how the source writes it: the resolved path of the callee, such
+    /// as `os.system` for `operating_system.system` after `import os as operating_system`.
+    /// A sink that is not a call has the text of the construct.
+    #[serde(default)]
+    pub target: String,
     pub basis: SinkBasis,
     pub flags: SinkFlags,
 }
@@ -276,10 +400,64 @@ mod tests {
     #[test]
     fn a_token_with_a_provider_prefix_is_a_credential() {
         let source =
-            "token = \"AKIAIOSFODNN7EXAMPLE\"\nname = \"AKIAEXAMPLE\"\n# AKIAIOSFODNN7EXAMPLE\n";
+            "token = \"AKIAJ3KD92LQ7MZP5XWB\"\nname = \"AKIAEXAMPLE\"\n# AKIAJ3KD92LQ7MZP5XWB\n";
         assert_eq!(
             found(Language::Python, &[("a.py", source)]),
             [one("a.py", 1, "hardcoded_credential", "builtin")]
+        );
+    }
+
+    #[test]
+    fn the_example_token_of_the_provider_documentation_is_not_a_credential() {
+        let source = "token = \"AKIAIOSFODNN7EXAMPLE\"\nother = \"AKIAJ3KD92LQ7MZP5XWB\"\n";
+        assert_eq!(
+            found(Language::Python, &[("a.py", source)]),
+            [one("a.py", 2, "hardcoded_credential", "builtin")]
+        );
+    }
+
+    #[test]
+    fn a_sql_string_that_the_driver_composes_is_not_a_sql_sink() {
+        let source = "from psycopg import sql\n\ndef run(cursor, name, query):\n    cursor.execute(sql.SQL(\"DROP TABLE {}\").format(sql.Identifier(name)))\n    cursor.execute(DELETE.format(table=sql.Identifier(name)))\n    cursor.execute(sql.SQL(query).format(sql.Identifier(name)))\n    cursor.execute(\"DROP TABLE {}\".format(name))\n    cursor.execute(sql.SQL(\"SELECT {} WHERE \").format(sql.Identifier(name)) + condition)\n    cursor.execute(sql.SQL(\"SELECT \") + condition)\n";
+        assert_eq!(
+            found(Language::Python, &[("a.py", source)]),
+            [one("a.py", 7, "sql_string_construction", "name_only")]
+        );
+    }
+
+    #[test]
+    fn a_digest_that_declares_it_is_not_for_security_is_not_a_weak_hash() {
+        let source = "import hashlib\n\ndef run(data):\n    hashlib.md5(data, usedforsecurity=False)\n    hashlib.sha1(data)\n    hashlib.new(\"md5\", data, usedforsecurity=False)\n    hashlib.new(\"md5\", data)\n";
+        assert_eq!(
+            found(Language::Python, &[("a.py", source)]),
+            [
+                one("a.py", 5, "weak_hash", "imported_symbol"),
+                one("a.py", 7, "weak_hash", "imported_symbol"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_curl_option_for_a_configuration_file_is_not_the_insecure_option() {
+        let source = "curl -K - http://a\ncurl -k http://b\ncurl --insecure http://c\n";
+        assert_eq!(
+            found(Language::Bash, &[("a.sh", source)]),
+            [
+                one("a.sh", 2, "tls_verification_disabled", "builtin"),
+                one("a.sh", 3, "tls_verification_disabled", "builtin"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_ruby_eval_of_a_block_is_not_code_evaluation() {
+        let source = "def run(block, text)\n  instance_eval(&block)\n  instance_eval { 1 }\n  instance_eval(text)\n  eval(text)\nend\n";
+        assert_eq!(
+            found(Language::Ruby, &[("a.rb", source)]),
+            [
+                one("a.rb", 4, "code_evaluation", "builtin"),
+                one("a.rb", 5, "code_evaluation", "builtin"),
+            ]
         );
     }
 
@@ -360,7 +538,7 @@ mod tests {
 
     #[test]
     fn the_callee_text_of_a_constructed_receiver_has_no_arguments() {
-        let java = "import java.io.ObjectInputStream;\n\npublic class A {\n    void run() throws Exception {\n        (new ObjectInputStream(new Secret(\"AKIAIOSFODNN7EXAMPLE\"))).readObject();\n    }\n}\n";
+        let java = "import java.io.ObjectInputStream;\n\npublic class A {\n    void run() throws Exception {\n        (new ObjectInputStream(new Secret(\"AKIAJ3KD92LQ7MZP5XWB\"))).readObject();\n    }\n}\n";
         let result = sinks(Language::Java, &[("A.java", java)]);
         let callees: Vec<(&str, &str)> = result
             .iter()
@@ -435,6 +613,26 @@ mod tests {
         );
         let own = "int system(const char *command) {\n    return 0;\n}\n\nint run(const char *command) {\n    return system(command);\n}\n";
         assert_eq!(found(Language::C, &[("b.c", own)]), []);
+    }
+
+    #[test]
+    fn a_symbol_has_its_entry_point_its_sinks_and_the_paths_through_it() {
+        let source = "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.route(\"/run\")\ndef entry():\n    return helper()\n\ndef helper():\n    os.system(\"x\" + os.environ[\"A\"])\n\ndef other():\n    return 1\n";
+        let analysis =
+            analysis::analyze_sources(&[("app.py", source)], crate::index::view::DEFAULT_MIN_BASIS);
+        let entry = symbol_security(&analysis, "app.py#entry");
+        assert_eq!(
+            entry.entry_point.as_ref().unwrap().route.as_deref(),
+            Some("GET /run")
+        );
+        assert_eq!(entry.reaches.len(), 1);
+        let helper = symbol_security(&analysis, "app.py#helper");
+        assert!(helper.entry_point.is_none());
+        assert_eq!(helper.sinks_in_body.len(), 1);
+        assert_eq!(helper.sinks_in_body[0].category, "command_execution");
+        assert_eq!(helper.reachable_from.len(), 1);
+        let other = symbol_security(&analysis, "app.py#other");
+        assert_eq!(other, SymbolSecurity::default());
     }
 
     #[test]

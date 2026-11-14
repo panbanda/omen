@@ -14,6 +14,6 @@ public class SinksTest {
         MessageDigest.getInstance("MD5");
         Cipher.getInstance("DES");
         HttpsURLConnection.setDefaultHostnameVerifier((host, session) -> true);
-        String token = "AKIAIOSFODNN7EXAMPLE";
+        String token = "AKIAJ3KD92LQ7MZP5XWB";
     }
 }

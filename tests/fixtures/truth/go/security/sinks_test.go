@@ -15,6 +15,6 @@ func TestEverything(t *testing.T, db *sql.DB, name string, key []byte) {
 	md5.New()
 	des.NewCipher(key)
 	_ = &tls.Config{InsecureSkipVerify: true}
-	token := "AKIAIOSFODNN7EXAMPLE"
+	token := "AKIAJ3KD92LQ7MZP5XWB"
 	_ = token
 }

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "language": "typescript",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid TypeScript. The imports need packages that the case does not include. The harness does not run the code.",
+  "closed_world": false,
+  "paths": [
+    {
+      "label": "handler_to_command",
+      "entry_file": "app.ts",
+      "entry_line": 23,
+      "sink_file": "app.ts",
+      "sink_line": 16,
+      "steps": [
+        "app.ts#runCommand",
+        "app.ts#prepare",
+        "app.ts#execute"
+      ],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "guards": [
+        "requireAuth"
+      ],
+      "choke_points": [
+        "app.ts#prepare",
+        "app.ts#runCommand"
+      ]
+    },
+    {
+      "label": "orphan_has_no_entry",
+      "entry_file": "app.ts",
+      "entry_line": 23,
+      "sink_file": "app.ts",
+      "sink_line": 20,
+      "flagged": false
+    }
+  ]
+}

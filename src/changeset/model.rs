@@ -174,4 +174,8 @@ pub struct ChangeSet {
     pub notes: Vec<String>,
     pub new_findings: Vec<NewFinding>,
     pub graph: ChangeGraph,
+    /// The sinks, the entry points, and the paths that the change adds or removes.
+    /// The function `compute` leaves it empty. `changeset::security::compute` gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<super::security::SecurityChanges>,
 }

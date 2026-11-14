@@ -583,3 +583,29 @@ fn test_failed_report_generate_with_a_bad_ref_keeps_the_existing_changes() {
         .collect();
     assert_eq!(leftovers, ["diff.json"]);
 }
+
+#[test]
+fn test_comment_has_a_security_section_when_the_change_adds_a_sink_on_a_path() {
+    let base = [("app.py", "from flask import Flask\n\napp = Flask(__name__)\n\n@app.get(\"/a\")\ndef entry():\n    return helper()\n\ndef helper():\n    return 1\n")];
+    let directory = two_commits(&base, |path| {
+        write(
+            path,
+            "app.py",
+            "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.get(\"/a\")\ndef entry():\n    return helper()\n\ndef helper():\n    os.system(\"x\" + os.environ[\"A\"])\n",
+        );
+    });
+    let output = markdown_omen(directory.path())
+        .args(["diff", "-t", "main"])
+        .output()
+        .expect("omen starts");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(text.contains("### Security"), "{text}");
+    assert!(text.contains("| Sinks added | 1 |"), "{text}");
+    assert!(text.contains("| Paths added | 1 |"), "{text}");
+    assert!(text.contains("```mermaid"), "{text}");
+}

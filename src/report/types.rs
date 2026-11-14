@@ -865,6 +865,16 @@ pub struct SmellsInsight {
     pub section_insight: String,
 }
 
+/// SecurityData represents the security.json structure.
+pub type SecurityData = crate::analyzers::security::Report;
+
+/// SecurityInsight contains the narrative of the attack surface section.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SecurityInsight {
+    #[serde(default)]
+    pub section_insight: String,
+}
+
 /// StubsInsight contains incomplete-code (stubs) analysis narrative.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StubsInsight {
@@ -977,6 +987,7 @@ pub struct RenderData {
     pub temporal_insight: Option<TemporalInsight>,
     pub smells_insight: Option<SmellsInsight>,
     pub stubs_insight: Option<StubsInsight>,
+    pub security_insight: Option<SecurityInsight>,
     pub graph_insight: Option<GraphInsight>,
     pub tdg_insight: Option<TdgInsight>,
     pub component_trends: HashMap<String, ComponentTrendStats>,
@@ -986,6 +997,7 @@ pub struct RenderData {
     pub graph: Option<GraphData>,
     pub tdg: Option<TdgData>,
     pub stubs: Option<StubsData>,
+    pub security: Option<SecurityData>,
 }
 
 impl RenderData {

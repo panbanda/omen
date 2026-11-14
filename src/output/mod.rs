@@ -16,6 +16,8 @@ pub enum Format {
     Markdown,
     Text,
     Sarif,
+    /// A Mermaid flowchart. Only `security paths` gives it. Other commands give JSON.
+    Mermaid,
 }
 
 impl Format {
@@ -26,6 +28,7 @@ impl Format {
             Format::Markdown => format_markdown(value, writer),
             Format::Text => format_text(value, writer),
             Format::Sarif => format_sarif(value, writer),
+            Format::Mermaid => format_json(value, writer),
         }
     }
 
