@@ -6,9 +6,11 @@ use std::path::{Path, PathBuf};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::entry::{find_entry_points, EntryPoint};
+use super::entry::{find_entry_points_with, EntryPoint, EntryRule};
 use super::reach::{coverage, reachability, Coverage, Reachability};
-use super::{find_sinks, Sink};
+use super::spec::SinkSpec;
+use super::suppress::{self, InvalidSuppression, Suppressed};
+use super::{find_sinks_with, Sink};
 use crate::core::Language;
 use crate::index::build::{list_directory, CodeIndex, ListDirectory, ReadFile};
 use crate::index::extract::FileSymbols;
@@ -19,7 +21,10 @@ use crate::parser::ParseResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Analysis {
+    /// The sinks that no comment suppresses.
     pub sinks: Vec<Sink>,
+    pub suppressed: Vec<Suppressed>,
+    pub invalid_suppressions: Vec<InvalidSuppression>,
     pub entry_points: Vec<EntryPoint>,
     pub reachability: Reachability,
     pub coverage: Coverage,
@@ -30,6 +35,27 @@ fn relative(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+/// The options of an analysis.
+#[derive(Debug, Clone)]
+pub struct Options {
+    /// An edge of a path has this basis or a stronger basis.
+    pub min_basis: ResolutionBasis,
+    /// More rows for sinks, from the configuration. The rows live as long as the process.
+    pub sink_rows: &'static [SinkSpec],
+    /// More entry points, from the configuration.
+    pub entry_rules: Vec<EntryRule>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            min_basis: DEFAULT_MIN_BASIS,
+            sink_rows: &[],
+            entry_rules: Vec::new(),
+        }
+    }
 }
 
 /// Analyzes `files`. The paths in the result are relative to `root`.
@@ -43,6 +69,21 @@ pub fn analyze(
     min_basis: ResolutionBasis,
 ) -> Analysis {
     let index = CodeIndex::build(root, files, read, list);
+    let options = Options {
+        min_basis,
+        ..Options::default()
+    };
+    analyze_with_index(&index, root, files, read, &options)
+}
+
+/// Analyzes `files` with an index that the caller already built from the same files.
+pub fn analyze_with_index(
+    index: &CodeIndex,
+    root: &Path,
+    files: &[PathBuf],
+    read: ReadFile<'_>,
+    options: &Options,
+) -> Analysis {
     let by_relative: BTreeMap<String, &PathBuf> = files
         .iter()
         .map(|path| (relative(root, path), path))
@@ -64,10 +105,12 @@ pub fn analyze(
             trees.push(tree);
         }
     }
-    let sinks = find_sinks(&trees, &kept);
-    let entry_points = find_entry_points(&trees, &kept);
-    let view = CallView::from_index(&index);
-    let reach = reachability(&view, &sinks, &entry_points, min_basis);
+    let all_sinks = find_sinks_with(&trees, &kept, options.sink_rows);
+    let names: Vec<String> = kept.iter().map(|file| file.file.clone()).collect();
+    let (sinks, suppressed, invalid_suppressions) = suppress::apply(all_sinks, &trees, &names);
+    let entry_points = find_entry_points_with(&trees, &kept, &options.entry_rules);
+    let view = CallView::from_index(index);
+    let reach = reachability(&view, &sinks, &entry_points, options.min_basis);
     let mut languages: Vec<Language> = Vec::new();
     for file in &kept {
         if !languages.contains(&file.language) {
@@ -76,6 +119,8 @@ pub fn analyze(
     }
     Analysis {
         sinks,
+        suppressed,
+        invalid_suppressions,
         entry_points,
         reachability: reach,
         coverage: coverage(&languages),
@@ -231,5 +276,57 @@ mod tests {
             .coverage
             .statement
             .contains("does not mean that the code is safe"));
+    }
+
+    #[test]
+    fn a_comment_with_a_reason_suppresses_the_sink_on_the_next_line_and_counts_it() {
+        let source = "import os\n\ndef run(command):\n    # omen:allow command_execution: the command comes from the build script\n    os.system(command)\n";
+        let analysis = run(&[("a.py", source)], DEFAULT_MIN_BASIS);
+        assert!(analysis.sinks.is_empty());
+        assert_eq!(analysis.suppressed.len(), 1);
+        assert_eq!(
+            analysis.suppressed[0].reason,
+            "the command comes from the build script"
+        );
+        assert_eq!(analysis.suppressed[0].comment_line, 4);
+        assert!(analysis.invalid_suppressions.is_empty());
+    }
+
+    #[test]
+    fn a_comment_on_the_same_line_suppresses_the_sink() {
+        let source = "import os\n\ndef run(command):\n    os.system(command)  # omen:allow command_execution: fixed input\n";
+        let analysis = run(&[("a.py", source)], DEFAULT_MIN_BASIS);
+        assert!(analysis.sinks.is_empty());
+        assert_eq!(analysis.suppressed.len(), 1);
+    }
+
+    #[test]
+    fn a_suppression_without_a_reason_does_not_suppress_and_is_reported() {
+        let source = "import os\n\ndef run(command):\n    # omen:allow command_execution:\n    os.system(command)\n    # omen:allow\n    # omen:allow unknown_category: x\n";
+        let analysis = run(&[("a.py", source)], DEFAULT_MIN_BASIS);
+        assert_eq!(analysis.sinks.len(), 1);
+        assert!(analysis.suppressed.is_empty());
+        let problems: Vec<(u32, bool)> = analysis
+            .invalid_suppressions
+            .iter()
+            .map(|invalid| (invalid.line, invalid.problem.contains("reason")))
+            .collect();
+        assert_eq!(problems, [(4, true), (6, true), (7, false)]);
+    }
+
+    #[test]
+    fn a_suppression_of_one_category_does_not_hide_another_category() {
+        let source = "import os\n\ndef run(command):\n    # omen:allow weak_hash: not a password\n    os.system(command)\n";
+        let analysis = run(&[("a.py", source)], DEFAULT_MIN_BASIS);
+        assert_eq!(analysis.sinks.len(), 1);
+        assert!(analysis.suppressed.is_empty());
+    }
+
+    #[test]
+    fn the_marker_in_a_string_is_not_a_suppression() {
+        let source = "import os\n\ndef run(command):\n    text = \"omen:allow command_execution: x\"\n    os.system(command)\n    return text\n";
+        let analysis = run(&[("a.py", source)], DEFAULT_MIN_BASIS);
+        assert_eq!(analysis.sinks.len(), 1);
+        assert!(analysis.invalid_suppressions.is_empty());
     }
 }

@@ -190,7 +190,7 @@ pub fn run(
     }
 
     let combined = match format {
-        Format::Json | Format::JsonCompact | Format::Sarif => {
+        Format::Json | Format::JsonCompact | Format::Sarif | Format::Mermaid => {
             json!({ "analyzers": results })
         }
         // One object with a key for each analyzer gives one section for

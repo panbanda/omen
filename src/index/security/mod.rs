@@ -9,13 +9,94 @@ pub mod entry;
 mod matcher;
 pub mod reach;
 pub mod spec;
+pub mod suppress;
 mod syntax;
 
 use serde::{Deserialize, Serialize};
 
 use super::model::Span;
 
-pub use matcher::find_sinks;
+pub use matcher::{find_sinks, find_sinks_with};
+
+/// What the security analysis says about one symbol. The analysis gives facts. A path is a
+/// path in the call graph that the index resolves.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolSecurity {
+    /// The entry point that the symbol is, if it is the handler of one.
+    pub entry_point: Option<EntrySummary>,
+    /// The sinks in the body of the symbol.
+    pub sinks_in_body: Vec<SinkSummary>,
+    /// The keys of the entry points that have a path through the symbol.
+    pub reachable_from: Vec<String>,
+    /// The keys of the sinks that a path through the symbol reaches.
+    pub reaches: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntrySummary {
+    pub key: String,
+    pub kind: String,
+    pub framework: String,
+    pub route: Option<String>,
+    pub guards: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SinkSummary {
+    pub key: String,
+    pub category: String,
+    pub cwe: u32,
+    pub line: u32,
+    pub basis: String,
+}
+
+/// The security facts of the symbol with the key `symbol_key`.
+pub fn symbol_security(analysis: &analysis::Analysis, symbol_key: &str) -> SymbolSecurity {
+    let entry_point = analysis
+        .entry_points
+        .iter()
+        .find(|entry| entry.symbol.as_deref() == Some(symbol_key))
+        .map(|entry| EntrySummary {
+            key: entry.key.clone(),
+            kind: entry.kind.name().to_string(),
+            framework: entry.framework.clone(),
+            route: entry
+                .route
+                .as_ref()
+                .map(|route| format!("{} {}", route.method, route.path)),
+            guards: entry.guards.clone(),
+        });
+    let sinks_in_body = analysis
+        .sinks
+        .iter()
+        .filter(|sink| sink.enclosing.as_deref() == Some(symbol_key))
+        .map(|sink| SinkSummary {
+            key: sink.key.clone(),
+            category: sink.category.name().to_string(),
+            cwe: sink.cwe,
+            line: sink.range.start_line,
+            basis: sink.basis.name().to_string(),
+        })
+        .collect();
+    let through: Vec<&reach::SinkPath> = analysis
+        .reachability
+        .paths
+        .iter()
+        .filter(|path| path.steps.iter().any(|step| step.symbol == symbol_key))
+        .collect();
+    let mut reachable_from: Vec<String> = through.iter().map(|path| path.entry.clone()).collect();
+    reachable_from.sort();
+    reachable_from.dedup();
+    let mut reaches: Vec<String> = through.iter().map(|path| path.sink.clone()).collect();
+    reaches.sort();
+    reaches.dedup();
+    SymbolSecurity {
+        entry_point,
+        sinks_in_body,
+        reachable_from,
+        reaches,
+    }
+}
 
 /// The sinks of one parsed file, with the imports and the references of that file only.
 ///
@@ -466,6 +547,26 @@ mod tests {
         );
         let own = "int system(const char *command) {\n    return 0;\n}\n\nint run(const char *command) {\n    return system(command);\n}\n";
         assert_eq!(found(Language::C, &[("b.c", own)]), []);
+    }
+
+    #[test]
+    fn a_symbol_has_its_entry_point_its_sinks_and_the_paths_through_it() {
+        let source = "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.route(\"/run\")\ndef entry():\n    return helper()\n\ndef helper():\n    os.system(\"x\" + os.environ[\"A\"])\n\ndef other():\n    return 1\n";
+        let analysis =
+            analysis::analyze_sources(&[("app.py", source)], crate::index::view::DEFAULT_MIN_BASIS);
+        let entry = symbol_security(&analysis, "app.py#entry");
+        assert_eq!(
+            entry.entry_point.as_ref().unwrap().route.as_deref(),
+            Some("GET /run")
+        );
+        assert_eq!(entry.reaches.len(), 1);
+        let helper = symbol_security(&analysis, "app.py#helper");
+        assert!(helper.entry_point.is_none());
+        assert_eq!(helper.sinks_in_body.len(), 1);
+        assert_eq!(helper.sinks_in_body[0].category, "command_execution");
+        assert_eq!(helper.reachable_from.len(), 1);
+        let other = symbol_security(&analysis, "app.py#other");
+        assert_eq!(other, SymbolSecurity::default());
     }
 
     #[test]

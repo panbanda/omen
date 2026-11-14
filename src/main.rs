@@ -26,6 +26,7 @@ use omen::commands::impact::ImpactRequest;
 use omen::commands::outline::OutlineRequest;
 use omen::commands::scope::Scope;
 use omen::commands::score::{ScoreRequest, TrendRequest};
+use omen::commands::security::SecurityRequest;
 use omen::commands::stubs::StubsRequest;
 use omen::commands::symbol::SymbolRequest;
 use omen::config::Config;
@@ -102,6 +103,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         (OutputFormat::Markdown, _) => Format::Markdown,
         (OutputFormat::Text, _) => Format::Text,
         (OutputFormat::Sarif, _) => Format::Sarif,
+        (OutputFormat::Mermaid, _) => Format::Mermaid,
     };
 
     match &cli.command {
@@ -370,6 +372,21 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 git_ref: commands::repository::local_ref(cli).map(str::to_string),
             };
             commands::symbol::run(path, &config, &request, format, &mut stdout())?;
+        }
+        Command::Security(args) => {
+            let request = SecurityRequest {
+                section: args.section,
+                category: args.category.clone(),
+                entry: args.entry.clone(),
+                sink: args.sink.clone(),
+                min_basis: args.min_basis.clone(),
+                scope: Scope::from(&args.common),
+                gate: args.gate.mode,
+                gate_categories: args.gate_category.clone(),
+                gate_basis: args.gate_basis.clone(),
+                target: args.target.clone(),
+            };
+            commands::security::run(path, &config, &request, format, &mut stdout())?;
         }
         Command::Eval(args) => {
             let request = EvalRequest {

@@ -111,11 +111,30 @@ pub struct EntryPoint {
 /// `parsed[i]` is the syntax tree of `files[i]`. Give the files after
 /// `resolve_imports`.
 pub fn find_entry_points(parsed: &[ParseResult], files: &[FileSymbols]) -> Vec<EntryPoint> {
+    find_entry_points_with(parsed, files, &[])
+}
+
+/// An entry point rule of the user: each function with one of the names is an entry
+/// point of the kind and the framework.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryRule {
+    pub kind: EntryKind,
+    pub framework: &'static str,
+    pub languages: Vec<Language>,
+    pub symbols: Vec<String>,
+}
+
+/// Like [`find_entry_points`], with the rules of the user.
+pub fn find_entry_points_with(
+    parsed: &[ParseResult],
+    files: &[FileSymbols],
+    rules: &[EntryRule],
+) -> Vec<EntryPoint> {
     assert_eq!(parsed.len(), files.len(), "each file needs its syntax tree");
     let per_file: Vec<Vec<EntryPoint>> = (0..files.len())
         .into_par_iter()
         .map(|position| {
-            let context = Context::new(&parsed[position], &files[position], files, parsed);
+            let context = Context::new(&parsed[position], &files[position], files, parsed, rules);
             let mut found = context.detect();
             found.sort_by(|left, right| {
                 (left.range.start_byte, &left.key).cmp(&(right.range.start_byte, &right.key))
@@ -238,6 +257,7 @@ struct Context<'a> {
     file: &'a FileSymbols,
     all: &'a [FileSymbols],
     all_parsed: &'a [ParseResult],
+    rules: &'a [EntryRule],
     source: &'a [u8],
     test_ranges: Vec<Range<usize>>,
 }
@@ -258,6 +278,7 @@ impl<'a> Context<'a> {
         file: &'a FileSymbols,
         all: &'a [FileSymbols],
         all_parsed: &'a [ParseResult],
+        rules: &'a [EntryRule],
     ) -> Self {
         let test_ranges = if file.language == Language::Rust {
             let text = std::str::from_utf8(&parsed.source).unwrap_or("");
@@ -270,6 +291,7 @@ impl<'a> Context<'a> {
             file,
             all,
             all_parsed,
+            rules,
             source: &parsed.source,
             test_ranges,
         }
@@ -435,6 +457,27 @@ impl<'a> Context<'a> {
     /// The entries that a name or a file location gives.
     fn convention_entries(&self, out: &mut Vec<Draft>) {
         let language = self.file.language;
+        for rule in self
+            .rules
+            .iter()
+            .filter(|rule| rule.languages.contains(&language))
+        {
+            for symbol in &self.file.symbols {
+                if matches!(symbol.kind, SymbolKind::Function | SymbolKind::Method)
+                    && rule.symbols.contains(&symbol.name)
+                {
+                    out.push(Draft {
+                        range: symbol.range,
+                        kind: rule.kind,
+                        symbol: Some(symbol.key.clone()),
+                        framework: rule.framework,
+                        route: None,
+                        guards: Vec::new(),
+                        basis: EntryBasis::Convention,
+                    });
+                }
+            }
+        }
         if language == Language::Bash {
             if self.source.starts_with(b"#!") {
                 out.push(Draft {

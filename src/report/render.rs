@@ -110,6 +110,8 @@ impl Renderer {
             .ok()
         });
 
+        let security_json = data.security.as_ref().map(build_security_json);
+
         let tmpl = self.env.get_template("report")?;
         let rendered = tmpl.render(context! {
             ReportCss => Value::from_safe_string(REPORT_CSS.to_string()),
@@ -143,6 +145,9 @@ impl Renderer {
             ChangesGraphJson => changes_graph_json,
             Stubs => data.stubs,
             StubsInsight => data.stubs_insight,
+            Security => data.security,
+            SecurityInsight => data.security_insight,
+            SecurityJson => security_json,
             Graph => data.graph,
             GraphInsight => data.graph_insight,
             Tdg => data.tdg,
@@ -319,6 +324,11 @@ impl Renderer {
             data.temporal = Some(temporal);
         }
 
+        // Load the attack surface
+        if let Ok(security) = load_json::<SecurityData>(&data_dir.join("security.json")) {
+            data.security = Some(security);
+        }
+
         // Load architectural smells
         if let Ok(smells) = load_json::<SmellsData>(&data_dir.join("smells.json")) {
             data.smells = Some(smells);
@@ -404,6 +414,9 @@ impl Renderer {
             if let Ok(insight) = load_json::<SmellsInsight>(&insights_dir.join("smells.json")) {
                 data.smells_insight = Some(insight);
             }
+            if let Ok(insight) = load_json::<SecurityInsight>(&insights_dir.join("security.json")) {
+                data.security_insight = Some(insight);
+            }
             if let Ok(insight) = load_json::<StubsInsight>(&insights_dir.join("stubs.json")) {
                 data.stubs_insight = Some(insight);
             }
@@ -417,6 +430,145 @@ impl Renderer {
 
         Ok(data)
     }
+}
+
+/// The directory of a file, or `.` for a file in the root.
+fn component_of(file: &str) -> String {
+    match file.rsplit_once('/') {
+        Some((directory, _)) => directory.to_string(),
+        None => ".".to_string(),
+    }
+}
+
+fn symbol_name(key: &str) -> &str {
+    key.rsplit_once('#').map_or(key, |(_, name)| name)
+}
+
+/// The data of the section "Attack surface": the matrix of entry kind by sink category, the
+/// Sankey flow (entry kind, component, sink category), the rows of the entry point table,
+/// and nothing that is not in `security.json`. The Sankey does not draw the call graph.
+fn build_security_json(report: &SecurityData) -> serde_json::Value {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let entries: BTreeMap<&str, &crate::index::security::entry::EntryPoint> = report
+        .entry_points
+        .iter()
+        .map(|entry| (entry.key.as_str(), entry))
+        .collect();
+    let sinks: BTreeMap<&str, &crate::index::security::Sink> = report
+        .sinks
+        .iter()
+        .map(|sink| (sink.key.as_str(), sink))
+        .collect();
+    let mut cells: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut entry_to_component: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut component_to_category: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut by_entry: BTreeMap<&str, Vec<&crate::index::security::reach::SinkPath>> =
+        BTreeMap::new();
+    for path in &report.paths {
+        let (Some(entry), Some(sink)) = (
+            entries.get(path.entry.as_str()),
+            sinks.get(path.sink.as_str()),
+        ) else {
+            continue;
+        };
+        let kind = entry.kind.name().to_string();
+        let category = sink.category.name().to_string();
+        let component = component_of(&sink.file);
+        *cells.entry((kind.clone(), category.clone())).or_insert(0) += 1;
+        *entry_to_component
+            .entry((kind, component.clone()))
+            .or_insert(0) += 1;
+        *component_to_category
+            .entry((component, category))
+            .or_insert(0) += 1;
+        by_entry.entry(path.entry.as_str()).or_default().push(path);
+    }
+    let kinds: BTreeSet<&str> = cells.keys().map(|(kind, _)| kind.as_str()).collect();
+    let categories: BTreeSet<&str> = cells
+        .keys()
+        .map(|(_, category)| category.as_str())
+        .collect();
+    let rows: Vec<Vec<usize>> = kinds
+        .iter()
+        .map(|kind| {
+            categories
+                .iter()
+                .map(|category| {
+                    cells
+                        .get(&(kind.to_string(), category.to_string()))
+                        .copied()
+                        .unwrap_or(0)
+                })
+                .collect()
+        })
+        .collect();
+    let mut node_names: BTreeSet<String> = BTreeSet::new();
+    let mut links = Vec::new();
+    for ((kind, component), value) in &entry_to_component {
+        let (source, target) = (format!("entry: {kind}"), format!("component: {component}"));
+        node_names.insert(source.clone());
+        node_names.insert(target.clone());
+        links.push(serde_json::json!({"source": source, "target": target, "value": value}));
+    }
+    for ((component, category), value) in &component_to_category {
+        let (source, target) = (
+            format!("component: {component}"),
+            format!("sink: {category}"),
+        );
+        node_names.insert(source.clone());
+        node_names.insert(target.clone());
+        links.push(serde_json::json!({"source": source, "target": target, "value": value}));
+    }
+    let entry_rows: Vec<serde_json::Value> = report
+        .entry_points
+        .iter()
+        .filter(|entry| !entry.in_test)
+        .map(|entry| {
+            let paths = by_entry.get(entry.key.as_str()).cloned().unwrap_or_default();
+            let reached: BTreeSet<&str> = paths
+                .iter()
+                .filter_map(|path| sinks.get(path.sink.as_str()))
+                .map(|sink| sink.category.name())
+                .collect();
+            let shortest = paths.iter().map(|path| path.steps.len()).min();
+            let hops: Vec<serde_json::Value> = paths
+                .iter()
+                .filter_map(|path| {
+                    let sink = sinks.get(path.sink.as_str())?;
+                    Some(serde_json::json!({
+                        "sink": format!("{} (CWE-{})", sink.category.name(), sink.cwe),
+                        "location": format!("{}:{}", sink.file, sink.range.start_line),
+                        "steps": path.steps.iter().map(|step| match step.basis {
+                            Some(basis) => format!("{} ({})", symbol_name(&step.symbol), basis.name()),
+                            None => symbol_name(&step.symbol).to_string(),
+                        }).collect::<Vec<_>>(),
+                    }))
+                })
+                .collect();
+            serde_json::json!({
+                "kind": entry.kind.name(),
+                "framework": entry.framework,
+                "route": entry.route.as_ref().map(|route| format!("{} {}", route.method, route.path)),
+                "handler": entry.symbol.as_deref().map(symbol_name),
+                "guards": entry.guards,
+                "categories": reached,
+                "shortest": shortest,
+                "hops": hops,
+                "location": format!("{}:{}", entry.file, entry.range.start_line),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "kinds": kinds,
+        "categories": categories,
+        "matrix": rows,
+        "sankey": {
+            "nodes": node_names.iter().map(|name| serde_json::json!({"name": name})).collect::<Vec<_>>(),
+            "links": links,
+        },
+        "entries": entry_rows,
+    })
 }
 
 fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
@@ -1609,6 +1761,95 @@ mod tests {
                 ]
             }
         })
+    }
+
+    const SECURITY_APP: &str = "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.route(\"/run\", methods=[\"POST\"])\ndef run_command():\n    return helper()\n\ndef helper():\n    os.system(\"x\" + os.environ[\"A\"])\n\ndef dead(expression):\n    eval(expression)\n";
+
+    fn security_report() -> crate::analyzers::security::Report {
+        crate::analyzers::security::Report::from_analysis(
+            crate::index::security::analysis::analyze_sources(
+                &[("src/app.py", SECURITY_APP)],
+                crate::index::view::DEFAULT_MIN_BASIS,
+            ),
+        )
+    }
+
+    fn render_directory(data_dir: &std::path::Path) -> String {
+        let mut output = Vec::new();
+        Renderer::new()
+            .unwrap()
+            .render(data_dir, &mut output)
+            .unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    #[test]
+    fn test_security_data_round_trips_through_json() {
+        let text = serde_json::to_string(&security_report()).unwrap();
+        let back: std::result::Result<crate::analyzers::security::Report, serde_json::Error> =
+            serde_json::from_str(&text);
+        assert!(back.is_ok(), "{:?}", back.err());
+    }
+
+    #[test]
+    fn test_renderer_includes_the_attack_surface_section() {
+        let data_dir = tempfile::tempdir().unwrap();
+        write_fixture(
+            &data_dir.path().join("security.json"),
+            serde_json::to_value(security_report()).unwrap(),
+        );
+        let html = render_directory(data_dir.path());
+        assert!(html.contains("id=\"attack-surface\"") || html.contains("id=attack-surface"));
+        assert!(html.contains("Attack surface"));
+        assert!(
+            html.contains("does not mean that the code is safe"),
+            "the coverage statement"
+        );
+        assert!(html.contains("window.__td_security="));
+        assert!(html.contains("securitySankey"));
+        assert!(html.contains("POST /run"));
+        assert!(html.contains("command_execution"));
+        assert!(html.contains("Sinks with no known entry"));
+        assert!(html.contains("Choke points"));
+        assert!(html.contains("entry: http_handler"));
+        assert!(html.contains("component: src"));
+        assert!(html.contains("Declared guards"));
+    }
+
+    #[test]
+    fn test_renderer_omits_the_attack_surface_without_security_data() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let html = render_directory(data_dir.path());
+        assert!(!html.contains("id=\"attack-surface\"") && !html.contains("id=attack-surface"));
+    }
+
+    #[test]
+    fn test_changes_section_shows_the_security_block_of_the_change() {
+        let base = crate::index::security::analysis::analyze_sources(
+            &[("src/app.py", "from flask import Flask\n\napp = Flask(__name__)\n\n@app.route(\"/run\")\ndef run_command():\n    return 1\n")],
+            crate::index::view::DEFAULT_MIN_BASIS,
+        );
+        let head = crate::index::security::analysis::analyze_sources(
+            &[("src/app.py", SECURITY_APP)],
+            crate::index::view::DEFAULT_MIN_BASIS,
+        );
+        let security = crate::changeset::security::diff(&base, &head, &Default::default());
+        let mut changes = changes_fixture();
+        changes["security"] = serde_json::to_value(&security).unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        write_fixture(&data_dir.path().join("diff.json"), changes);
+        write_fixture(
+            &data_dir.path().join("security.json"),
+            serde_json::to_value(security_report()).unwrap(),
+        );
+        let html = render_directory(data_dir.path());
+        assert!(html.contains("Entry-to-sink paths"));
+        assert!(html.contains("Security sinks"));
+        assert!(html.contains("Sinks added since"));
+        assert!(
+            html.contains("id=security-added-table")
+                || html.contains("id=\"security-added-table\"")
+        );
     }
 
     fn render_with_changes() -> String {

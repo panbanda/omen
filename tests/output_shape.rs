@@ -325,6 +325,7 @@ const CLI_CASES: &[CliCase] = &[
     cli("outline", &["outline"]),
     cli("impact", &["impact", "run"]),
     cli("symbol", &["symbol", "run"]),
+    cli("security", &["security"]),
     cli("search_query", &["search", "query", "helper"]),
     cli("mcp_manifest", &["mcp", "manifest"]),
     cli_keyed(
@@ -422,6 +423,7 @@ const MCP_CASES: &[McpCase] = &[
     mcp("get_symbol", r#"{"name": "run"}"#),
     mcp("task_context", r#"{"name": "run"}"#),
     mcp("impact", r#"{"symbol": "run"}"#),
+    mcp("security", "{}"),
 ];
 
 /// The MCP tools that have no snapshot, each with the reason.

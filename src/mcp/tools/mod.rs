@@ -201,7 +201,7 @@ impl ToolSpec {
 }
 
 /// The tools in the sequence that `tools/list` shows them.
-static TOOLS: [&ToolSpec; 25] = [
+static TOOLS: [&ToolSpec; 26] = [
     &navigation::CONTEXT,
     &navigation::OUTLINE,
     &analysis::COMPLEXITY,
@@ -227,6 +227,7 @@ static TOOLS: [&ToolSpec; 25] = [
     &navigation::GET_SYMBOL,
     &navigation::TASK_CONTEXT,
     &navigation::IMPACT,
+    &analysis::SECURITY,
 ];
 
 pub(super) fn all() -> &'static [&'static ToolSpec] {

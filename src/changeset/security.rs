@@ -18,7 +18,6 @@ use crate::index::security::analysis::{analyze, Analysis};
 use crate::index::security::entry::EntryPoint;
 use crate::index::security::reach::SinkPath;
 use crate::index::security::Sink;
-use crate::index::view::DEFAULT_MIN_BASIS;
 
 /// The rows of a table that the comment lists. The counts in the summary are complete.
 const LISTED_ROWS: usize = 20;
@@ -226,12 +225,13 @@ fn analyze_revision(
     ))
 }
 
-/// Computes the security block for the change set of `HEAD` against `target`.
-pub fn compute(
+/// Computes the security block of `HEAD` against the merge base with `target`.
+/// `changed` has the keys of the symbols that the change added or changed.
+pub fn compute_with(
     repository: &Path,
     target: Option<&str>,
     config: &Config,
-    changes: &ChangeSet,
+    changed: &BTreeSet<String>,
 ) -> Result<SecurityChanges> {
     let target = match target {
         Some(target) => target.to_string(),
@@ -240,15 +240,26 @@ pub fn compute(
     let repo = GitRepo::open(repository)?;
     let base_sha = repo.merge_base(&target, "HEAD")?;
     let head_sha = repo.head_sha()?;
-    let base = analyze_revision(repository, &base_sha, config, DEFAULT_MIN_BASIS)?;
-    let head = analyze_revision(repository, &head_sha, config, DEFAULT_MIN_BASIS)?;
+    let min_basis = crate::analyzers::security::options_of(&config.security)?.min_basis;
+    let base = analyze_revision(repository, &base_sha, config, min_basis)?;
+    let head = analyze_revision(repository, &head_sha, config, min_basis)?;
+    Ok(diff(&base, &head, changed))
+}
+
+/// Computes the security block for the change set of `HEAD` against `target`.
+pub fn compute(
+    repository: &Path,
+    target: Option<&str>,
+    config: &Config,
+    changes: &ChangeSet,
+) -> Result<SecurityChanges> {
     let changed: BTreeSet<String> = changes
         .symbols
         .iter()
         .filter(|symbol| matches!(symbol.state, ChangeState::Added | ChangeState::Changed))
         .map(|symbol| symbol.key.clone())
         .collect();
-    Ok(diff(&base, &head, &changed))
+    compute_with(repository, target, config, &changed)
 }
 
 /// The section "Security" of the pull-request comment.
@@ -476,6 +487,7 @@ impl CommentSection for SecuritySection<'_> {
 mod tests {
     use super::*;
     use crate::index::security::analysis::analyze_sources;
+    use crate::index::view::DEFAULT_MIN_BASIS;
 
     const BASE: &str = "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.get(\"/a\")\ndef entry():\n    return helper()\n\ndef helper():\n    return 1\n";
     const HEAD: &str = "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.get(\"/a\")\ndef entry():\n    return helper()\n\n@app.post(\"/b\")\ndef extra(command):\n    return helper()\n\ndef helper():\n    os.system(\"x\" + os.environ[\"A\"])\n";

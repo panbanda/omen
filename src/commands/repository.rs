@@ -57,6 +57,7 @@ pub fn reads_repository(command: &Command) -> bool {
         Command::Complexity(_)
         | Command::Satd(_)
         | Command::Stubs(_)
+        | Command::Security(_)
         | Command::Deadcode(_)
         | Command::Churn(_)
         | Command::Clones(_)

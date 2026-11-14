@@ -14,7 +14,7 @@ Generate a complete HTML health report with LLM-generated insights.
 
 ## Step 3: Spawn Analysts (In Parallel)
 
-Use the Task tool to spawn all 13 agents simultaneously. Each agent reads its data file and writes an insight file with the schema below.
+Use the Task tool to spawn all 14 agents simultaneously. Each agent reads its data file and writes an insight file with the schema below.
 
 ---
 
@@ -82,6 +82,13 @@ Use the Task tool to spawn all 13 agents simultaneously. Each agent reads its da
 ---
 
 **Use the smells-analyst agent** to analyze `<dir>/smells.json` and write `<dir>/insights/smells.json`:
+```json
+{"section_insight": "string"}
+```
+
+---
+
+**Use the security-analyst agent** to analyze `<dir>/security.json` only and write `<dir>/insights/security.json`:
 ```json
 {"section_insight": "string"}
 ```

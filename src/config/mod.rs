@@ -72,6 +72,8 @@ pub struct Config {
     pub stubs: StubsConfig,
     /// Mutation testing configuration.
     pub mutation: MutationConfig,
+    /// Security findings: the options of the gate and the rows of the user.
+    pub security: SecurityConfig,
 }
 
 impl Default for Config {
@@ -91,6 +93,7 @@ impl Default for Config {
             changes: ChangesConfig::default(),
             stubs: StubsConfig::default(),
             mutation: MutationConfig::default(),
+            security: SecurityConfig::default(),
         }
     }
 }
@@ -419,6 +422,70 @@ pub enum GateMode {
     Warn,
     /// Give the report and exit with status 2
     Error,
+}
+
+/// The options of `omen security`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct SecurityConfig {
+    /// Gate mode of `omen security`. The gate counts the sinks that the change adds.
+    /// The `--gate` flag overrides it.
+    pub gate: GateMode,
+    /// An edge of a path has this resolution basis or a stronger one. The name is
+    /// a resolution basis, for example `same_package` or `imported_name`.
+    pub min_basis: String,
+    /// The sink categories that the gate counts. An empty list means each category.
+    pub gate_categories: Vec<String>,
+    /// The gate counts a sink with this basis or a stronger one: `name_only`,
+    /// `builtin`, or `imported_symbol`.
+    pub gate_basis: String,
+    /// More sinks, for example the wrappers of a company.
+    pub sinks: Vec<SecuritySinkConfig>,
+    /// More entry points, for example the handlers of an in-house framework.
+    pub entry_points: Vec<SecurityEntryConfig>,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            gate: GateMode::Off,
+            min_basis: "same_package".to_string(),
+            gate_categories: Vec::new(),
+            gate_basis: "builtin".to_string(),
+            sinks: Vec::new(),
+            entry_points: Vec::new(),
+        }
+    }
+}
+
+/// A sink that the user adds: a call of `callee` in `module`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SecuritySinkConfig {
+    /// A sink category, for example `command_execution`.
+    pub category: String,
+    /// The languages of the rule, for example `["python"]`.
+    pub languages: Vec<String>,
+    /// The module of the callee, as an import path. An empty text means a name that the
+    /// language gives without an import.
+    #[serde(default)]
+    pub module: String,
+    /// The name of the callee. `|` separates alternatives.
+    pub callee: String,
+}
+
+/// An entry point that the user adds: each function with one of the names.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityEntryConfig {
+    /// `http_handler`, `cli_main`, `message_consumer`, `scheduled_job`,
+    /// `serverless_handler`, or `ffi_export`.
+    pub kind: String,
+    /// The name of the framework in the output.
+    pub framework: String,
+    pub languages: Vec<String>,
+    /// The names of the functions.
+    pub symbols: Vec<String>,
 }
 
 /// Output format.

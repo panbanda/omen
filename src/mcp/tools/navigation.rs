@@ -215,21 +215,23 @@ pub(super) static GET_SYMBOL: ToolSpec = ToolSpec {
 
 /// The basis names from the weakest evidence to the strongest evidence, in the
 /// order of `ResolutionBasis::RANKED`.
+pub(super) const BASIS_NAMES: &[&str] = &[
+    "name_only",
+    "same_package",
+    "imported_module",
+    "qualified_path",
+    "receiver_declared_type",
+    "enclosing_type",
+    "imported_alias",
+    "imported_name",
+    "same_file",
+    "lexical_scope",
+    "scip",
+];
+
 const MIN_BASIS: Param = Param::choice(
     "min_basis",
-    &[
-        "name_only",
-        "same_package",
-        "imported_module",
-        "qualified_path",
-        "receiver_declared_type",
-        "enclosing_type",
-        "imported_alias",
-        "imported_name",
-        "same_file",
-        "lexical_scope",
-        "scip",
-    ],
+    BASIS_NAMES,
     "The weakest basis of a call that gives a caller or a callee. \
      The value `name_only` adds each call whose one candidate has only the name.",
 )
@@ -280,7 +282,13 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         return Err(symbol_ambiguous("get_symbol", name, choices));
     }
     match report_from_index(&scope.path, index, name, &options, start_line) {
-        Ok(report) => {
+        Ok(mut report) => {
+            let analysis =
+                crate::analyzers::security::analyze_paths(&scope.path, &files, &server.config)?;
+            report.security = Some(crate::index::security::symbol_security(
+                &analysis,
+                &report.qualified_name,
+            ));
             let mut truncated = Vec::new();
             if report.source_truncated {
                 truncated.push(Truncation {
@@ -551,10 +559,15 @@ fn impact(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     };
     let files = absolute_files(&scope.path, &scope.file_set);
     let view = server.load_view(&scope.path, &files)?;
-    let report = analyze_view(&view, symbol, depth, direction, min_basis(arguments));
+    let mut report = analyze_view(&view, symbol, depth, direction, min_basis(arguments));
     if report.resolved.is_empty() {
         return Err(symbol_not_found("symbol", symbol, report.suggestions));
     }
+    let analysis = crate::analyzers::security::analyze_paths(&scope.path, &files, &server.config)?;
+    report.security = Some(crate::index::security::symbol_security(
+        &analysis,
+        &report.resolved[0],
+    ));
     // The traversal stops at `depth`. The totals without a limit tell if
     // the limit cut callers or callees.
     let all = analyze_view(&view, symbol, usize::MAX, direction, min_basis(arguments));

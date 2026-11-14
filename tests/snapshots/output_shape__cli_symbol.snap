@@ -52,6 +52,12 @@ expression: "shape(&output, case.dynamic_key_objects)"
   "kind": "string",
   "name": "string",
   "qualified_name": "string",
+  "security": {
+    "entry_point": "null",
+    "reachable_from": [],
+    "reaches": [],
+    "sinks_in_body": []
+  },
   "signature": "string",
   "source": "string",
   "source_truncated": "bool",

@@ -59,6 +59,7 @@ src/
     outline.rs    - File and symbol outlines
     impact.rs     - Symbol blast-radius analysis
     smells.rs     - Architectural smells (Tarjan SCC)
+    security.rs   - Sinks, entry points, and paths (report, SARIF, Mermaid)
     flags.rs      - Feature flag detection
     mutation/    - Mutation testing (21 operators, parallel execution)
   benchmark/     - Paired quality benchmark comparing two omen binaries
@@ -129,19 +130,20 @@ Top-level commands (flat structure):
 - `outline` - Token-cheap file map: imports, classes, top-level functions
 - `impact` - Blast-radius analysis for a symbol (transitive callers/callees)
 - `symbol` - One-call symbol report: source, location, callers/callees, complexity
+- `security` - Sinks, entry points, and the paths between them (`sinks`, `surface`, `paths`; `--gate off|warn|error` on new sinks; `-f sarif`; `-f mermaid` for `paths`)
 - `eval` - Score registered, paired coding-agent outcome records (exits 2 on a failed gate)
 - `benchmark` - Paired quality benchmark over a fixed corpus; `--enforce` exits 2 on regression
 - `report` - HTML health reports
 - `search` - Semantic symbol search (`index` and `query`)
 - `mcp` - Start MCP server
 
-**Global options**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--compact`, `--ref`, and `--shallow` are clap global flags. Put them before or after the subcommand. `-p` is always the repository path. The `complexity`, `score`, `stubs`, and `mutation` commands take `--gate off|warn|error`; if the flag is absent, the `gate` key in the table of the command gives the mode. A gated command writes its report to stdout first and the gate result to stderr. `--output` is the file that receives the report on `report render`, `eval`, and `mutation`. With `--compact`, with `-f json` it emits minified single-line JSON and is ignored for other formats.
+**Global options**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--compact`, `--ref`, and `--shallow` are clap global flags. Put them before or after the subcommand. `-p` is always the repository path. The `complexity`, `score`, `stubs`, `mutation`, and `security` commands take `--gate off|warn|error`; if the flag is absent, the `gate` key in the table of the command gives the mode. A gated command writes its report to stdout first and the gate result to stderr. `--output` is the file that receives the report on `report render`, `eval`, and `mutation`. With `--compact`, with `-f json` it emits minified single-line JSON and is ignored for other formats.
 
 **Pagination flags** (most analyzers): `--top N` (limit to N results), `--offset N` (skip first N results). Combine for pagination.
 
 **Special safety flags**: `deadcode --cargo-check` executes `cargo check`, including build scripts, and is for trusted repositories only. Mutation testing refuses dirty working trees unless `mutation --allow-dirty` is supplied. MCP transport is stdio-only; `mcp --allow-external-paths` permits tool paths outside the configured repository root.
 
-**MCP tool list**: `context`, `outline`, `complexity`, `satd`, `deadcode`, `stubs`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `search`, `get_symbol`, `task_context`, `impact`. A test compares this line with `McpServer::tool_names()`.
+**MCP tool list**: `context`, `outline`, `complexity`, `satd`, `deadcode`, `stubs`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `search`, `get_symbol`, `task_context`, `impact`, `security`. A test compares this line with `McpServer::tool_names()`.
 
 **MCP contract** (see `docs/MCP_CONTEXT.md`):
 
@@ -160,7 +162,7 @@ Key files:
 - `assets/report/input.css` -- Tailwind v4 + shadcn design-token source for the report stylesheet
 - `src/report/report.css` -- stylesheet compiled from `assets/report/input.css`, embedded into the template as `ReportCss`
 - `plugins/reporting/commands/generate-report.md` -- orchestration command (runs analyzers, spawns agents)
-- `plugins/reporting/agents/` -- 12 analyst agents that produce `{section_insight: string}` JSON
+- `plugins/reporting/agents/` -- the analyst agents, one for each section, that produce `{section_insight: string}` JSON
 
 When adding a new report section: add the insight type to `types.rs`, add a field to `RenderData`, add loading logic in `render.rs`, add the template section in `template.html`, and create an analyst agent.
 

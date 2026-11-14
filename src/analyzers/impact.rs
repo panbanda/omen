@@ -48,6 +48,9 @@ pub struct ImpactReport {
     pub total_callees: usize,
     /// Suggestions when the symbol was not found (by_name keys that share substrings).
     pub suggestions: Vec<String>,
+    /// The security facts of the first resolved symbol. The caller adds them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<crate::index::security::SymbolSecurity>,
 }
 
 /// Direction of impact traversal.
@@ -110,6 +113,7 @@ pub fn analyze_view(
             total_callers: 0,
             total_callees: 0,
             suggestions,
+            security: None,
         };
     }
 
@@ -188,6 +192,7 @@ pub fn analyze_view(
         total_callers,
         total_callees,
         suggestions: vec![],
+        security: None,
     }
 }
 

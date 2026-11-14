@@ -51,7 +51,7 @@ pub fn run_trend(
     )?;
     let mut out = out;
     match format {
-        Format::Json | Format::JsonCompact => {
+        Format::Json | Format::JsonCompact | Format::Mermaid => {
             format.format(&trend_data, &mut out)?;
         }
         Format::Markdown => {

@@ -158,6 +158,62 @@ pub enum Command {
     /// One-call symbol report: source, signature, location, callers/callees, complexity
     #[command(alias = "sym")]
     Symbol(SymbolArgs),
+
+    /// Sinks, entry points, and the paths between them (facts, not vulnerabilities)
+    #[command(alias = "sec")]
+    Security(SecurityArgs),
+}
+
+/// The sections of the report of `security`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum SecuritySection {
+    /// The sinks, with the suppressed sinks
+    Sinks,
+    /// The entry points, with their routes and guards
+    Surface,
+    /// The paths from the entry points to the sinks, the choke points, and the sinks without a known entry
+    Paths,
+}
+
+#[derive(Args)]
+pub struct SecurityArgs {
+    /// The section of the report (default: all sections)
+    #[arg(value_enum)]
+    pub section: Option<SecuritySection>,
+
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+
+    /// Keep the paths of this entry point (the key of an entry point). Use it with `paths`.
+    #[arg(long, value_name = "KEY")]
+    pub entry: Option<String>,
+
+    /// Keep the paths to this sink (the key of a sink). Use it with `paths`.
+    #[arg(long, value_name = "KEY")]
+    pub sink: Option<String>,
+
+    /// Keep the sinks of one category
+    #[arg(long, value_name = "CATEGORY")]
+    pub category: Option<String>,
+
+    /// The weakest resolution basis of an edge of a path (default: the `[security]` value)
+    #[arg(long, value_name = "BASIS")]
+    pub min_basis: Option<String>,
+
+    #[command(flatten)]
+    pub gate: GateArgs,
+
+    /// With `--gate`: the branch to compare with (default: main or master)
+    #[arg(short, long)]
+    pub target: Option<String>,
+
+    /// With `--gate`: count only the sinks of this category. Repeat the flag for more categories.
+    #[arg(long, value_name = "CATEGORY", action = clap::ArgAction::Append)]
+    pub gate_category: Vec<String>,
+
+    /// With `--gate`: count only a sink with this basis or a stronger one
+    #[arg(long, value_name = "BASIS")]
+    pub gate_basis: Option<String>,
 }
 
 /// The `--top` and `--offset` flags of each command that gives a list.
@@ -868,6 +924,8 @@ pub enum OutputFormat {
     Markdown,
     Text,
     Sarif,
+    /// A flowchart. Only `security paths` gives it. Other commands give JSON.
+    Mermaid,
 }
 
 #[derive(Clone, Copy, ValueEnum)]

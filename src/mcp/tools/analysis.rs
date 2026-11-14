@@ -4,6 +4,7 @@ use super::{
     Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolOutput, ToolSpec, COMPACT,
     MAX_COUNT, PATH,
 };
+use crate::mcp::error::{ErrorCode, ToolError};
 use crate::mcp::McpServer;
 
 /// The largest history window: 100 years.
@@ -351,3 +352,91 @@ pub(super) static SCORE: ToolSpec = ToolSpec {
         )
     },
 };
+
+const SECURITY_CATEGORIES: &[&str] = &[
+    "command_execution",
+    "code_evaluation",
+    "unsafe_deserialization",
+    "sql_string_construction",
+    "weak_hash",
+    "weak_cipher",
+    "tls_verification_disabled",
+    "hardcoded_credential",
+    "memory_unsafe",
+];
+
+pub(super) static SECURITY: ToolSpec = ToolSpec {
+    name: "security",
+    description: "Gives the sinks, the entry points, and the paths from the entry points to the sinks. \
+        A sink is a call, a member, or a literal that the table of sinks names, for example a command \
+        or a weak hash. The result gives facts. It does not say that the code has a vulnerability, \
+        and it does not follow data. A sink with the state `no_known_entry` has no known path. \
+        That state does not say that the sink is safe. The `coverage` field says what omen recognises. \
+        The limit applies to the sinks.",
+    params: &[
+        PATH,
+        Param::choice(
+            "section",
+            &["all", "sinks", "surface", "paths"],
+            "The section of the report: the sinks, the entry points (`surface`), or the paths.",
+        )
+        .with_default(ParamDefault::String("all")),
+        Param::string(
+            "entry",
+            "Keep the paths of this entry point. Give the key of an entry point. Use it with the section `paths`.",
+        ),
+        Param::string(
+            "sink",
+            "Keep the paths to this sink. Give the key of a sink. Use it with the section `paths`.",
+        ),
+        Param::choice("category", SECURITY_CATEGORIES, "Keep the sinks of one category."),
+        Param::choice(
+            "min_basis",
+            super::navigation::BASIS_NAMES,
+            "The weakest basis of an edge of a path. The default is the value of `security.min_basis` in the configuration.",
+        ),
+    ],
+    paginated: Pagination::Field("sinks"),
+    handler: security,
+};
+
+fn security(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
+    use crate::analyzers::security::{Analyzer, Report, Section};
+
+    let section = arguments
+        .string("section")
+        .and_then(Section::from_name)
+        .unwrap_or(Section::All);
+    if section != Section::Paths
+        && (arguments.string("entry").is_some() || arguments.string("sink").is_some())
+    {
+        return Err(ToolError::new(
+            ErrorCode::InvalidArgument,
+            "`entry` and `sink` apply to the section `paths` only.".to_string(),
+        )
+        .with_param("section")
+        .with_expected("paths")
+        .with_next("Call the tool again with `section` set to `paths`."));
+    }
+    let mut analyzer = Analyzer::from_config(&server.config)?;
+    if let Some(basis) = arguments
+        .string("min_basis")
+        .and_then(crate::index::model::ResolutionBasis::from_name)
+    {
+        analyzer = analyzer.with_min_basis(basis);
+    }
+    let ToolOutput::Data(mut data) = server.analyze(arguments, analyzer)? else {
+        return Err(ToolError::new(
+            ErrorCode::Internal,
+            "The analyzer gave no data.".to_string(),
+        ));
+    };
+    let report: Report = serde_json::from_value(data.result)?;
+    let report = report.restricted(
+        arguments.string("category"),
+        arguments.string("entry"),
+        arguments.string("sink"),
+    );
+    data.result = report.section(section);
+    Ok(ToolOutput::Data(data))
+}

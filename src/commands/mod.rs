@@ -31,6 +31,7 @@ pub mod repository;
 pub mod scope;
 pub mod score;
 pub mod search;
+pub mod security;
 pub mod stubs;
 pub mod symbol;
 #[cfg(test)]

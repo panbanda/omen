@@ -34,13 +34,17 @@ pub fn run(
         ctx = ctx.with_content_source(source);
     }
     let view = CallView::from_index(&*ctx.code_index()?);
-    let report = analyze_view(
+    let mut report = analyze_view(
         &view,
         &request.symbol,
         request.depth,
         request.direction,
         request.min_basis,
     );
+    if let Some(first) = report.resolved.first() {
+        let analysis = crate::analyzers::security::analyze_context(&ctx)?;
+        report.security = Some(crate::index::security::symbol_security(&analysis, first));
+    }
     let mut out = out;
     format_with_limits(
         serde_json::to_value(&report)?,

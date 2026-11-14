@@ -114,7 +114,9 @@ pub fn run(
             );
 
             match format {
-                Format::Json | Format::JsonCompact => format.format(&output, &mut out)?,
+                Format::Json | Format::JsonCompact | Format::Mermaid => {
+                    format.format(&output, &mut out)?
+                }
                 Format::Markdown | Format::Text => {
                     say!(out, "Query: {}", output.query);
                     say!(out, "Total symbols indexed: {}", output.total_symbols);

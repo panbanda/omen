@@ -23,11 +23,21 @@ use crate::parser::{cfg_test_module_ranges, ParseResult};
 /// `parsed[i]` is the syntax tree of `files[i]`. Give the files after
 /// `resolve_imports` and `resolve_references`.
 pub fn find_sinks(parsed: &[ParseResult], files: &[FileSymbols]) -> Vec<Sink> {
+    find_sinks_with(parsed, files, &[])
+}
+
+/// Like [`find_sinks`], with more rows for the sinks of the user, for example the
+/// wrappers of a company. The rows apply to the languages that they name.
+pub fn find_sinks_with(
+    parsed: &[ParseResult],
+    files: &[FileSymbols],
+    extra: &'static [SinkSpec],
+) -> Vec<Sink> {
     assert_eq!(parsed.len(), files.len(), "each file needs its syntax tree");
     let repository = Repository::new(files);
     let per_file: Vec<Vec<Sink>> = (0..files.len())
         .into_par_iter()
-        .map(|position| file_sinks(&parsed[position], &files[position], &repository))
+        .map(|position| file_sinks(&parsed[position], &files[position], &repository, extra))
         .collect();
     per_file.into_iter().flatten().collect()
 }
@@ -226,7 +236,12 @@ struct FileContext<'a> {
     call_kinds: Vec<&'static str>,
 }
 
-fn file_sinks(parsed: &ParseResult, file: &FileSymbols, repository: &Repository<'_>) -> Vec<Sink> {
+fn file_sinks(
+    parsed: &ParseResult,
+    file: &FileSymbols,
+    repository: &Repository<'_>,
+    extra: &'static [SinkSpec],
+) -> Vec<Sink> {
     let language = file.language;
     let source = parsed.source.as_slice();
     let test_ranges = if language == Language::Rust {
@@ -240,7 +255,13 @@ fn file_sinks(parsed: &ParseResult, file: &FileSymbols, repository: &Repository<
         file,
         repository,
         syntax: syntax_of(language),
-        specs: specs_for(language).collect(),
+        specs: specs_for(language)
+            .chain(
+                extra
+                    .iter()
+                    .filter(|spec| spec.languages.contains(&language)),
+            )
+            .collect(),
         source,
         test_ranges,
         call_kinds: language_spec(language).call_syntax().call_kinds(),

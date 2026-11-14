@@ -91,3 +91,35 @@ providers = []
 #     (simple_symbol) @flag_key))
 # '''
 custom_providers = []
+
+# Security findings: `omen security`
+[security]
+# Gate mode of `omen security`: "off", "warn", or "error".
+# The `--gate` flag overrides the value.
+gate = "off"
+# An edge of a path has this resolution basis or a stronger one.
+min_basis = "same_package"
+# The sink categories that the gate counts. An empty list means each category.
+# Categories: command_execution, code_evaluation, unsafe_deserialization,
+# sql_string_construction, weak_hash, weak_cipher, tls_verification_disabled,
+# hardcoded_credential, memory_unsafe
+gate_categories = []
+# The gate counts a sink with this basis or a stronger one:
+# name_only, builtin, or imported_symbol.
+gate_basis = "builtin"
+
+# More sinks, for example the wrappers of a company. Each row is a table:
+sinks = []
+# [[security.sinks]]
+# category = "command_execution"
+# languages = ["python"]
+# module = "acme.shell"
+# callee = "run|run_checked"
+
+# More entry points, for example the handlers of an in-house framework.
+entry_points = []
+# [[security.entry_points]]
+# kind = "http_handler"
+# framework = "acme-web"
+# languages = ["python"]
+# symbols = ["handle_request"]

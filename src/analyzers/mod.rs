@@ -17,6 +17,7 @@ pub mod outline;
 pub mod ownership;
 pub mod repomap;
 pub mod satd;
+pub mod security;
 pub mod smells;
 pub mod stubs;
 pub mod tdg;

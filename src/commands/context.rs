@@ -37,7 +37,7 @@ pub fn run(
 
     match format {
         Format::Markdown | Format::Text => write!(out, "{}", context.render_markdown())?,
-        Format::Json | Format::JsonCompact | Format::Sarif => {
+        Format::Json | Format::JsonCompact | Format::Sarif | Format::Mermaid => {
             let mut out = out;
             format.format(&context, &mut out)?
         }
