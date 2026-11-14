@@ -291,10 +291,9 @@ fn observed_sinks(trees: &[omen::parser::ParseResult], files: &[FileSymbols]) ->
 ///
 /// If omen does not report a fact, the adapter gives `None`. It does not
 /// calculate a value that omen does not report.
-fn observe(dir: &Path) -> Observed {
+fn index_case(dir: &Path) -> (Vec<omen::parser::ParseResult>, Vec<FileSymbols>) {
     let mut files = Vec::new();
     source_files(dir, &mut files);
-    let mut imports = Vec::new();
     let mut index_files = Vec::new();
     let mut trees = Vec::new();
     for path in &files {
@@ -309,6 +308,12 @@ fn observe(dir: &Path) -> Observed {
     read_manifests(dir, dir, &mut manifests);
     resolve_imports(&mut index_files, &manifests);
     resolve_references(&mut index_files);
+    (trees, index_files)
+}
+
+fn observe(dir: &Path) -> Observed {
+    let (trees, index_files) = index_case(dir);
+    let mut imports = Vec::new();
     let calls = observed_calls(&index_files);
     let sinks = observed_sinks(&trees, &index_files);
     let mut symbols = Vec::new();
@@ -394,6 +399,36 @@ fn reported_facts_agree_with_labels_or_the_ledger() {
         "{} ledger violations:\n{}",
         violations.len(),
         report.join("\n")
+    );
+}
+
+/// The secret in the fixtures. A sink must not hold it, or a part of it.
+const FIXTURE_SECRET: &str = "AKIAIOSFODNN7EXAMPLE";
+
+#[test]
+fn no_sink_holds_a_fixture_secret() {
+    let mut sources_with_secret = 0;
+    let tail = &FIXTURE_SECRET[4..];
+    for case in load_cases(&truth_root()) {
+        let (trees, files) = index_case(&case.dir);
+        sources_with_secret += trees
+            .iter()
+            .filter(|tree| String::from_utf8_lossy(&tree.source).contains(FIXTURE_SECRET))
+            .count();
+        let serialized = serde_json::to_string(&find_sinks(&trees, &files)).unwrap();
+        assert!(!serialized.contains(FIXTURE_SECRET), "{}", case.id);
+        for start in 0..=tail.len() - 6 {
+            let part = &tail[start..start + 6];
+            assert!(
+                !serialized.contains(part),
+                "{}: a sink holds a part of the secret: {part}",
+                case.id
+            );
+        }
+    }
+    assert!(
+        sources_with_secret > 10,
+        "the fixtures must hold the secret"
     );
 }
 

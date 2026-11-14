@@ -80,6 +80,8 @@
     {"label": "unsafe_deserialization.safe_variant.safe_alias", "category": "unsafe_deserialization", "scenario": "safe_variant", "file": "extra.py", "line": 12, "flagged": false},
     {"label": "unsafe_deserialization.aliased_import.unsafe_alias", "category": "unsafe_deserialization", "scenario": "aliased_import", "file": "extra.py", "line": 13, "basis": "imported_symbol"},
     {"label": "unsafe_deserialization.real_call.missing_loader", "category": "unsafe_deserialization", "scenario": "real_call", "file": "extra.py", "line": 14, "basis": "imported_symbol"},
-    {"label": "unsafe_deserialization.safe_variant.unresolved_loader", "category": "unsafe_deserialization", "scenario": "safe_variant", "file": "extra.py", "line": 15, "flagged": false}
+    {"label": "unsafe_deserialization.safe_variant.unresolved_loader", "category": "unsafe_deserialization", "scenario": "safe_variant", "file": "extra.py", "line": 15, "flagged": false},
+    {"label": "unsafe_deserialization.real_call.last_binding", "category": "unsafe_deserialization", "scenario": "real_call", "file": "rebind_unsafe.py", "line": 7, "basis": "imported_symbol"},
+    {"label": "unsafe_deserialization.safe_variant.last_binding", "category": "unsafe_deserialization", "scenario": "safe_variant", "file": "rebind_safe.py", "line": 7, "flagged": false}
   ]
 }

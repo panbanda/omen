@@ -359,6 +359,51 @@ mod tests {
     }
 
     #[test]
+    fn the_callee_text_of_a_constructed_receiver_has_no_arguments() {
+        let java = "import java.io.ObjectInputStream;\n\npublic class A {\n    void run() throws Exception {\n        (new ObjectInputStream(new Secret(\"AKIAIOSFODNN7EXAMPLE\"))).readObject();\n    }\n}\n";
+        let result = sinks(Language::Java, &[("A.java", java)]);
+        let callees: Vec<(&str, &str)> = result
+            .iter()
+            .map(|sink| (sink.category.name(), sink.callee_text.as_str()))
+            .collect();
+        assert_eq!(
+            callees,
+            [
+                ("hardcoded_credential", "AKIA"),
+                ("unsafe_deserialization", "ObjectInputStream.readObject"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_literal_in_parentheses_is_a_literal() {
+        let source =
+            "int run(void *db) {\n    return sqlite3_exec(db, (\"SELECT 1\"), 0, 0, 0);\n}\n";
+        assert_eq!(found(Language::C, &[("a.c", source)]), []);
+    }
+
+    #[test]
+    fn a_validator_is_a_sink_only_when_its_whole_body_is_true() {
+        let source = "using System.Net.Http;\n\npublic class A {\n    void Run(HttpClientHandler handler) {\n        handler.ServerCertificateCustomValidationCallback = (m, c, ch, e) => true && e == 0;\n        handler.ServerCertificateCustomValidationCallback = (m, c, ch, e) => { return true; };\n        handler.ServerCertificateCustomValidationCallback = (m, c, ch, e) => (true);\n    }\n}\n";
+        let lines: Vec<u32> = sinks(Language::CSharp, &[("A.cs", source)])
+            .iter()
+            .map(|sink| sink.range.start_line)
+            .collect();
+        assert_eq!(lines, [6, 7]);
+    }
+
+    #[test]
+    fn the_last_import_before_the_call_binds_the_name() {
+        let unsafe_last = "import yaml\nfrom yaml import SafeLoader as Chosen\nfrom yaml import FullLoader as Chosen\n\ndef run(text):\n    yaml.load(text, Loader=Chosen)\n";
+        assert_eq!(
+            found(Language::Python, &[("a.py", unsafe_last)]),
+            [one("a.py", 6, "unsafe_deserialization", "imported_symbol")]
+        );
+        let safe_last = "import yaml\nfrom yaml import FullLoader as Chosen\nfrom yaml import SafeLoader as Chosen\n\ndef run(text):\n    yaml.load(text, Loader=Chosen)\n";
+        assert_eq!(found(Language::Python, &[("b.py", safe_last)]), []);
+    }
+
+    #[test]
     fn a_csharp_using_directive_gives_the_namespace_of_a_type() {
         let source = "using System.Diagnostics;\n\npublic class A {\n    public void Run(string command) {\n        Process.Start(command);\n    }\n}\n";
         assert_eq!(

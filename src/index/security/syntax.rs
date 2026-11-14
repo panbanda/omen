@@ -204,6 +204,9 @@ pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -
 /// A literal without an interpolation.
 pub fn is_literal(node: Node<'_>) -> bool {
     let kind = node.kind();
+    if matches!(kind, "parenthesized_expression" | "argument") {
+        return node.named_child(0).is_some_and(is_literal);
+    }
     if kind.contains("string") {
         return !has_interpolation(node);
     }

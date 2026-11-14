@@ -52,6 +52,7 @@
     {"label": "sql_string_construction.safe_variant", "category": "sql_string_construction", "scenario": "safe_variant", "file": "sql.c", "line": 8, "flagged": false},
     {"label": "sql_string_construction.name_in_string", "category": "sql_string_construction", "scenario": "name_in_string", "file": "sql.c", "line": 9, "flagged": false},
     {"label": "sql_string_construction.name_in_comment", "category": "sql_string_construction", "scenario": "name_in_comment", "file": "sql.c", "line": 10, "flagged": false},
-    {"label": "sql_string_construction.in_test", "category": "sql_string_construction", "scenario": "in_test", "file": "tests/sql_test.c", "line": 4, "basis": "builtin", "in_test": true}
+    {"label": "sql_string_construction.in_test", "category": "sql_string_construction", "scenario": "in_test", "file": "tests/sql_test.c", "line": 4, "basis": "builtin", "in_test": true},
+    {"label": "sql_string_construction.safe_variant.parenthesized_literal", "category": "sql_string_construction", "scenario": "safe_variant", "file": "sql.c", "line": 14, "flagged": false}
   ]
 }

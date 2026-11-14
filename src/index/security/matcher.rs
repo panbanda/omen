@@ -138,9 +138,46 @@ fn chain_segments(text: &str) -> Option<Vec<String>> {
     Some(segments)
 }
 
+fn unwrap_parentheses(node: Node<'_>) -> Node<'_> {
+    let mut node = node;
+    while node.kind() == "parenthesized_expression" && node.named_child_count() == 1 {
+        match node.named_child(0) {
+            Some(inner) => node = inner,
+            None => break,
+        }
+    }
+    node
+}
+
+/// The text without the parentheses that enclose all of it.
+fn without_outer_parentheses(text: &str) -> &str {
+    let mut text = text.trim();
+    while let Some(inner) = text
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        let mut depth = 0i32;
+        let balanced = inner.chars().all(|character| {
+            match character {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            depth >= 0
+        }) && depth == 0;
+        if !balanced {
+            break;
+        }
+        text = inner.trim();
+    }
+    text
+}
+
 /// The type that `new Type(arguments)` makes, when the text is only that expression.
 fn constructed_type(text: &str) -> Option<Vec<String>> {
-    let rest = text.trim().strip_prefix("new ")?.trim_start();
+    let rest = without_outer_parentheses(text)
+        .strip_prefix("new ")?
+        .trim_start();
     let open = rest.find(['(', '<', '{'])?;
     if !rest[open..].starts_with('(') {
         return None;
@@ -354,7 +391,7 @@ impl FileContext<'_> {
             || (self.syntax.roots.contains(&"*") && !matches!(head, "crate" | "self" | "super"))
     }
 
-    fn resolve(&self, written: &[String], chain: &[usize]) -> Owner {
+    fn resolve(&self, written: &[String], chain: &[usize], at: usize) -> Owner {
         let mut written = written.to_vec();
         for _ in 0..2 {
             let Some(local) = self.find_local(&written[0], chain) else {
@@ -373,7 +410,12 @@ impl FileContext<'_> {
         let head = written[0].clone();
         let rest = &written[1..];
         let imports = &self.file.imports;
-        if let Some(binding) = imports.iter().find(|binding| Self::binds(binding, &head)) {
+        let in_effect = imports
+            .iter()
+            .rfind(|binding| Self::binds(binding, &head) && binding.range.start_byte <= at);
+        let binding =
+            in_effect.or_else(|| imports.iter().find(|binding| Self::binds(binding, &head)));
+        if let Some(binding) = binding {
             if binding.kind == ImportKind::ModuleDeclaration
                 || Self::is_repository_target(&binding.target_file)
             {
@@ -561,7 +603,7 @@ impl FileContext<'_> {
             };
             let chain = self.owner_chain(facts.owner);
             let owner = match &written {
-                Some(path) => self.resolve(path, &chain),
+                Some(path) => self.resolve(path, &chain, facts.start_byte),
                 None => Owner::Unknown,
             };
             let written_length = written.as_ref().map_or(0, Vec::len);
@@ -595,21 +637,29 @@ impl FileContext<'_> {
                     continue;
                 }
                 if spec.predicate == Predicate::NotSafeLoader
-                    && !self.loader_is_unsafe(&arguments, &chain)
+                    && !self.loader_is_unsafe(&arguments, &chain, facts.start_byte)
                 {
                     continue;
                 }
-                let callee_start = facts.start_byte.min(reference.name_range.start_byte);
-                let callee_text = self
-                    .source
-                    .get(callee_start..reference.name_range.end_byte)
-                    .and_then(|bytes| std::str::from_utf8(bytes).ok())
-                    .unwrap_or(reference.name.as_str());
+                // A receiver that is an expression can hold literals, and a literal can be a
+                // secret. Thus the text of the callee has only the names, never the arguments.
+                let callee_text = if matches!(reference.receiver, Some(Receiver::Expression)) {
+                    written
+                        .as_ref()
+                        .map_or_else(|| reference.name.clone(), |path| path.join("."))
+                } else {
+                    let callee_start = facts.start_byte.min(reference.name_range.start_byte);
+                    self.source
+                        .get(callee_start..reference.name_range.end_byte)
+                        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                        .unwrap_or(reference.name.as_str())
+                        .to_string()
+                };
                 sinks.push(self.sink(
                     spec.category,
                     reference.name_range,
                     reference.enclosing.clone(),
-                    callee_text,
+                    &callee_text,
                     basis,
                     !arguments.is_empty() && arguments.iter().all(|node| syntax::is_literal(*node)),
                 ));
@@ -620,7 +670,7 @@ impl FileContext<'_> {
     /// A missing loader is not safe. A loader is not safe when the imports resolve it to
     /// a PyYAML loader that builds arbitrary objects. A loader that the imports cannot
     /// resolve, such as a variable, is not a sink.
-    fn loader_is_unsafe(&self, arguments: &[Node<'_>], chain: &[usize]) -> bool {
+    fn loader_is_unsafe(&self, arguments: &[Node<'_>], chain: &[usize], at: usize) -> bool {
         let keyword = arguments.iter().find_map(|argument| {
             let named = argument.kind() == "keyword_argument"
                 && argument.child_by_field_name("name").is_some_and(|name| {
@@ -647,7 +697,7 @@ impl FileContext<'_> {
         {
             return false;
         }
-        match self.resolve(&written, chain) {
+        match self.resolve(&written, chain, at) {
             Owner::Paths { paths, .. } => paths.iter().any(|path| {
                 path.len() >= 2
                     && path[0] == "yaml"
@@ -794,7 +844,7 @@ impl FileContext<'_> {
                     return false;
                 }
                 let chain = self.owner_chain(self.enclosing_position(node.start_byte()));
-                return match self.resolve(&written, &chain) {
+                return match self.resolve(&written, &chain, node.start_byte()) {
                     Owner::Paths { paths, imported } => paths
                         .iter()
                         .any(|path| self.path_match(module, owner, path, imported).is_some()),
@@ -804,6 +854,52 @@ impl FileContext<'_> {
             parent = candidate.parent();
         }
         false
+    }
+
+    /// The assigned value is one that a row names. The value `=>true` means a lambda whose
+    /// whole body is `true`, or a block whose only statement is `return true;`. Any other
+    /// value is a name, and the last segment of the assigned path must be that name.
+    fn value_matches(&self, right: Node<'_>, values: &[&str]) -> bool {
+        let right = unwrap_parentheses(right);
+        values.iter().any(|wanted| {
+            if *wanted == "=>true" {
+                return self.is_constant_true_lambda(right);
+            }
+            let compact: String = syntax::text(right, self.source)
+                .split_whitespace()
+                .collect::<String>()
+                .to_lowercase();
+            split_path(&compact).last().map(String::as_str) == Some(*wanted)
+        })
+    }
+
+    fn is_constant_true_lambda(&self, node: Node<'_>) -> bool {
+        if !matches!(
+            node.kind(),
+            "lambda_expression" | "anonymous_method_expression"
+        ) {
+            return false;
+        }
+        let Some(body) = node.child_by_field_name("body") else {
+            return false;
+        };
+        let is_true = |expression: Node<'_>| {
+            syntax::text(unwrap_parentheses(expression), self.source).trim() == "true"
+        };
+        if body.kind() != "block" {
+            return is_true(body);
+        }
+        let mut cursor = body.walk();
+        let statements: Vec<Node<'_>> = body
+            .named_children(&mut cursor)
+            .filter(|statement| !statement.kind().contains("comment"))
+            .collect();
+        match statements.as_slice() {
+            [statement] if statement.kind() == "return_statement" => {
+                statement.named_child(0).is_some_and(is_true)
+            }
+            _ => false,
+        }
     }
 
     /// Reports an assignment to a member that a row names.
@@ -823,12 +919,9 @@ impl FileContext<'_> {
         {
             return;
         }
-        let value: String = syntax::text(right, self.source)
-            .split_whitespace()
-            .collect::<String>()
-            .to_lowercase();
         let chain = self.owner_chain(self.enclosing_position(node.start_byte()));
-        let Owner::Paths { paths, imported } = self.resolve(&written, &chain) else {
+        let Owner::Paths { paths, imported } = self.resolve(&written, &chain, node.start_byte())
+        else {
             return;
         };
         for spec in &self.specs {
@@ -841,7 +934,7 @@ impl FileContext<'_> {
                 continue;
             };
             if written.last().map(String::as_str) != Some(name)
-                || !values.iter().any(|wanted| value.contains(wanted))
+                || !self.value_matches(right, values)
             {
                 continue;
             }
@@ -873,7 +966,7 @@ impl FileContext<'_> {
             return false;
         }
         let chain = self.owner_chain(self.enclosing_position(node.start_byte()));
-        let owner = self.resolve(&written, &chain);
+        let owner = self.resolve(&written, &chain, node.start_byte());
         let Owner::Paths { paths, imported } = owner else {
             return false;
         };

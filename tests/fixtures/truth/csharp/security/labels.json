@@ -71,6 +71,8 @@
     {"label": "memory_unsafe.safe_variant", "category": "memory_unsafe", "scenario": "safe_variant", "file": "UnsafeCode.cs", "line": 13, "flagged": false},
     {"label": "memory_unsafe.name_in_string", "category": "memory_unsafe", "scenario": "name_in_string", "file": "UnsafeCode.cs", "line": 21, "flagged": false},
     {"label": "memory_unsafe.name_in_comment", "category": "memory_unsafe", "scenario": "name_in_comment", "file": "UnsafeCode.cs", "line": 22, "flagged": false},
-    {"label": "memory_unsafe.in_test", "category": "memory_unsafe", "scenario": "in_test", "file": "tests/UnsafeTests.cs", "line": 5, "basis": "builtin", "in_test": true}
+    {"label": "memory_unsafe.in_test", "category": "memory_unsafe", "scenario": "in_test", "file": "tests/UnsafeTests.cs", "line": 5, "basis": "builtin", "in_test": true},
+    {"label": "tls_verification_disabled.safe_variant.conjunction", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "Validators.cs", "line": 8, "flagged": false},
+    {"label": "tls_verification_disabled.real_call.block_body", "category": "tls_verification_disabled", "scenario": "real_call", "file": "Validators.cs", "line": 9, "basis": "imported_symbol"}
   ]
 }
