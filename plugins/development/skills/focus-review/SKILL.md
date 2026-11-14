@@ -22,13 +22,13 @@ omen -f json outline --compact --top 30
 omen -f json impact <changed-symbol> --depth 2
 
 # Check risk of changed files
-omen -p "{{.changed_files}}" -f json defect
+omen -f json defect --glob "{{.changed_files}}"
 
 # Check complexity
-omen -p "{{.changed_files}}" -f json complexity
+omen -f json complexity --glob "{{.changed_files}}"
 
 # Check for new debt
-omen -p "{{.changed_files}}" -f json satd
+omen -f json satd --glob "{{.changed_files}}"
 ```
 
 ## Review Checklist
