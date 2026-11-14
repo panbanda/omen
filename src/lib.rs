@@ -27,6 +27,7 @@ pub mod analyzers;
 pub mod benchmark;
 pub mod changeset;
 pub mod cli;
+pub mod commands;
 pub mod config;
 pub mod context;
 pub mod core;
