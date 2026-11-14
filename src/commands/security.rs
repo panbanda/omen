@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use super::gate::{gate_dispatch, resolve_gate_mode};
 use super::scope::{build_context, scoped_file_set, Scope};
 use crate::analyzers::security::{
-    basis_of, mermaid, sarif, Analyzer as SecurityAnalyzer, Report, Section,
+    basis_of, category_of, mermaid, sarif, Analyzer as SecurityAnalyzer, Report, Section,
 };
 use crate::cli::SecuritySection;
 use crate::config::{Config, GateMode};
@@ -43,15 +43,24 @@ pub fn run(
     format: Format,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let mut analyzer = SecurityAnalyzer::from_config(config)?;
+    // The report and the gate use this one configuration.
+    let mut effective = config.clone();
     if request.experimental {
-        analyzer = analyzer.with_experimental(true);
+        effective.security.experimental = true;
     }
     if let Some(name) = &request.min_basis {
-        let basis = ResolutionBasis::from_name(name)
+        ResolutionBasis::from_name(name)
             .ok_or_else(|| Error::config(format!("`{name}` is not a resolution basis.")))?;
-        analyzer = analyzer.with_min_basis(basis);
+        effective.security.min_basis = name.clone();
     }
+    for category in &request.gate_categories {
+        category_of(category)?;
+    }
+    if let Some(basis) = &request.gate_basis {
+        basis_of(basis)?;
+    }
+    let config = &effective;
+    let analyzer = SecurityAnalyzer::from_config(config)?;
     if let Some(category) = &request.category {
         if !SinkCategory::ALL
             .iter()

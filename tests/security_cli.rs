@@ -40,15 +40,19 @@ fn project(source: &str) -> TempDir {
 }
 
 fn two_commits() -> TempDir {
+    two_commits_of(BASE, HEAD)
+}
+
+fn two_commits_of(base: &str, head: &str) -> TempDir {
     let directory = TempDir::new().expect("temporary directory");
     let path = directory.path();
     let first = "2024-02-01T12:00:00Z";
     fixture::git(path, "ada", first, &["init", "--initial-branch", "main"]);
-    std::fs::write(path.join("app.py"), BASE).expect("write");
+    std::fs::write(path.join("app.py"), base).expect("write");
     fixture::commit(path, "ada", first, "feat: add the app");
     let second = "2024-02-08T12:00:00Z";
     fixture::git(path, "grace", second, &["checkout", "-b", "feature"]);
-    std::fs::write(path.join("app.py"), HEAD).expect("write");
+    std::fs::write(path.join("app.py"), head).expect("write");
     fixture::commit(path, "grace", second, "feat: add a command");
     directory
 }
@@ -174,6 +178,50 @@ fn test_the_gate_is_off_by_default_and_the_modes_follow_the_new_sinks() {
         ],
     );
     assert!(strong.status.success(), "the builtin `eval` has no import");
+}
+
+#[test]
+fn test_an_unknown_gate_category_or_basis_is_an_error_that_lists_the_valid_values() {
+    let directory = two_commits();
+    let path = directory.path();
+    let category = omen(
+        path,
+        &[
+            "security",
+            "-t",
+            "main",
+            "--gate",
+            "error",
+            "--gate-category",
+            "command_execuion",
+        ],
+    );
+    assert_eq!(category.status.code(), Some(1));
+    let message = String::from_utf8_lossy(&category.stderr);
+    assert!(message.contains("command_execuion"), "{message}");
+    assert!(message.contains("command_execution"), "{message}");
+    let basis = omen(
+        path,
+        &[
+            "security",
+            "-t",
+            "main",
+            "--gate",
+            "error",
+            "--gate-basis",
+            "strong",
+        ],
+    );
+    assert_eq!(basis.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&basis.stderr).contains("imported_symbol"));
+    std::fs::write(
+        path.join("omen.toml"),
+        "[security]\ngate_categories = [\"command_execuion\"]\n",
+    )
+    .expect("write");
+    let configured = omen(path, &["security"]);
+    assert!(!configured.status.success());
+    assert!(String::from_utf8_lossy(&configured.stderr).contains("command_execution"));
 }
 
 #[test]

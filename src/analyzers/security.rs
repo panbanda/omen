@@ -227,12 +227,18 @@ fn language_of(name: &str) -> Result<Language> {
         .map_err(|_| Error::config(format!("security: `{name}` is not a language.")))
 }
 
-fn category_of(name: &str) -> Result<SinkCategory> {
+pub fn category_of(name: &str) -> Result<SinkCategory> {
     SinkCategory::ALL
         .iter()
         .copied()
         .find(|category| category.name() == name)
-        .ok_or_else(|| Error::config(format!("security: `{name}` is not a sink category.")))
+        .ok_or_else(|| {
+            let valid: Vec<&str> = SinkCategory::ALL.iter().map(|c| c.name()).collect();
+            Error::config(format!(
+                "security: `{name}` is not a sink category. Use one of: {}.",
+                valid.join(", ")
+            ))
+        })
 }
 
 pub fn basis_of(name: &str) -> Result<SinkBasis> {
