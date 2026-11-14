@@ -506,8 +506,8 @@ mod tests {
                 ("churn", "days", "churn.since"),
                 ("clones", "min_tokens", "duplicates.min_tokens"),
                 ("clones", "similarity", "duplicates.min_similarity"),
-                ("defect", "days", "defect.churn_days"),
-                ("hotspot", "days", "hotspot.days"),
+                ("defect", "days", "defect.since"),
+                ("hotspot", "days", "hotspot.since"),
                 ("flags", "provider", "feature_flags.providers"),
                 ("flags", "stale_days", "feature_flags.stale_days"),
             ]

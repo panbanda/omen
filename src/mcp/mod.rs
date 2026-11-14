@@ -1502,22 +1502,6 @@ mod tests {
     }
 
     #[test]
-    fn churn_with_an_invalid_configured_window_is_an_error() {
-        let dir = TempDir::new().unwrap();
-        let mut config = Config::default();
-        config.churn.since = "nonsense".to_string();
-        let server = McpServer::new(dir.path().to_path_buf(), config);
-        let body = error_of(&server, "churn", json!({}));
-        let message = body["error"]["message"].as_str().unwrap();
-        assert!(message.contains("churn.since"), "{message}");
-        assert!(message.contains("\"nonsense\""), "{message}");
-        // The argument has priority, thus the configured value is not read.
-        let with_days = call(&server, "churn", json!({"days": 30}));
-        let text = with_days["content"][0]["text"].as_str().unwrap();
-        assert!(!text.contains("churn.since"), "{text}");
-    }
-
-    #[test]
     fn initialize_gives_instructions_for_an_agent() {
         let (server, _dir) = create_test_server();
         let result = server.handle_initialize().unwrap();

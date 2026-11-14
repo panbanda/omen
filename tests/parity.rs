@@ -147,13 +147,13 @@ min_tokens = 10
 min_similarity = 0.8
 
 [hotspot]
-days = 36000
+since = "36000d"
 
 [defect]
-churn_days = 36000
+since = "36000d"
 
 [changes]
-days = 36000
+since = "36000d"
 
 [feature_flags]
 providers = ["unleash"]
@@ -982,25 +982,25 @@ const CONFIGURED_KEYS: &[ConfiguredKey] = &[
         probe: "/clones",
     },
     ConfiguredKey {
-        key: "defect.churn_days",
+        key: "defect.since",
         base: "",
-        configured: "[defect]\nchurn_days = 3\n",
+        configured: "[defect]\nsince = \"3d\"\n",
         tool: "defect",
         command: &["defect"],
         probe: "/files",
     },
     ConfiguredKey {
-        key: "hotspot.days",
+        key: "hotspot.since",
         base: "",
-        configured: "[hotspot]\ndays = 3\n",
+        configured: "[hotspot]\nsince = \"3d\"\n",
         tool: "hotspot",
         command: &["hotspot"],
         probe: "/hotspots",
     },
     ConfiguredKey {
-        key: "changes.days",
+        key: "changes.since",
         base: "",
-        configured: "[changes]\ndays = 3\n",
+        configured: "[changes]\nsince = \"3d\"\n",
         tool: "changes",
         command: &["changes"],
         probe: "/commits",
@@ -1148,9 +1148,9 @@ fn each_configuration_key_of_the_tools_has_a_discriminating_case() {
         "duplicates.min_tokens",
         "duplicates.min_similarity",
         "duplicates.exclude_tests",
-        "defect.churn_days",
-        "hotspot.days",
-        "changes.days",
+        "defect.since",
+        "hotspot.since",
+        "changes.since",
         "satd.markers",
         "feature_flags.providers",
         "feature_flags.stale_days",

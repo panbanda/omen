@@ -115,20 +115,62 @@ impl Config {
     /// Reject configuration that cannot mean anything, rather than silently
     /// substituting a value the user did not ask for.
     pub fn validate(&self) -> Result<()> {
-        for (key, days) in [
-            ("hotspot.days", self.hotspot.days),
-            ("defect.churn_days", self.defect.churn_days),
-        ] {
-            if days == 0 {
-                return Err(crate::core::Error::Config(format!(
-                    "{key} = 0: a window of 0 days contains no history"
-                )));
-            }
+        if self.changes.since.is_all() {
+            return Err(crate::core::Error::Config(
+                "changes.since: \"all\" is not a window of `changes`. Use a duration such as 30d."
+                    .to_string(),
+            ));
         }
-        // Text that is not a window must not become all the history.
-        crate::git::since_to_days(&self.churn.since)
-            .map_err(|error| crate::core::Error::Config(format!("churn.since: {error}")))?;
         Ok(())
+    }
+}
+
+/// A history window: a duration such as `30d`, `3m`, or `1y`, or the value
+/// `all`. The `--since` flag of the commands uses the same syntax.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct HistoryWindow {
+    text: String,
+    days: u32,
+}
+
+impl HistoryWindow {
+    /// Parse a window. A value that is empty, not a window, or 0 days is an
+    /// error, and it never means all the history.
+    pub fn parse(text: &str) -> std::result::Result<Self, String> {
+        let days = crate::git::since_to_days(text)?;
+        Ok(Self {
+            text: text.to_string(),
+            days,
+        })
+    }
+
+    fn built_in(text: &str) -> Self {
+        Self::parse(text).expect("the built-in window is valid")
+    }
+
+    /// The number of days of the window. `u32::MAX` is all the history.
+    pub fn days(&self) -> u32 {
+        self.days
+    }
+
+    /// True if the window is all the history.
+    pub fn is_all(&self) -> bool {
+        self.days == u32::MAX
+    }
+}
+
+impl TryFrom<String> for HistoryWindow {
+    type Error = String;
+
+    fn try_from(text: String) -> std::result::Result<Self, Self::Error> {
+        Self::parse(&text)
+    }
+}
+
+impl From<HistoryWindow> for String {
+    fn from(window: HistoryWindow) -> Self {
+        window.text
     }
 }
 
@@ -166,17 +208,14 @@ pub struct SatdConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ChurnConfig {
-    /// Time period to analyze (e.g., "6m", "1y").
-    pub since: String,
-    /// Number of top files to report.
-    pub top: usize,
+    /// History window to analyze, such as `6m`, `1y`, or `all`.
+    pub since: HistoryWindow,
 }
 
 impl Default for ChurnConfig {
     fn default() -> Self {
         Self {
-            since: "6m".to_string(),
-            top: 20,
+            since: HistoryWindow::built_in("6m"),
         }
     }
 }
@@ -208,16 +247,16 @@ impl Default for DuplicatesConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HotspotConfig {
-    /// Number of top hotspots to report.
-    pub top: usize,
-    /// Days of history to measure churn over, ending at the analyzed
-    /// revision's own date.
-    pub days: u32,
+    /// History window to measure churn over, such as `90d` or `all`. The
+    /// window ends at the date of the analyzed revision.
+    pub since: HistoryWindow,
 }
 
 impl Default for HotspotConfig {
     fn default() -> Self {
-        Self { top: 20, days: 90 }
+        Self {
+            since: HistoryWindow::built_in("90d"),
+        }
     }
 }
 
@@ -225,14 +264,16 @@ impl Default for HotspotConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DefectConfig {
-    /// Days of history to measure churn over, ending at the analyzed
-    /// revision's own date.
-    pub churn_days: u32,
+    /// History window to measure churn over, such as `30d` or `all`. The
+    /// window ends at the date of the analyzed revision.
+    pub since: HistoryWindow,
 }
 
 impl Default for DefectConfig {
     fn default() -> Self {
-        Self { churn_days: 30 }
+        Self {
+            since: HistoryWindow::built_in("30d"),
+        }
     }
 }
 
@@ -327,13 +368,15 @@ impl Default for TemporalConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ChangesConfig {
-    /// Number of days of history to analyze.
-    pub days: u32,
+    /// History window to analyze, such as `30d`. The value `all` is not valid.
+    pub since: HistoryWindow,
 }
 
 impl Default for ChangesConfig {
     fn default() -> Self {
-        Self { days: 30 }
+        Self {
+            since: HistoryWindow::built_in("30d"),
+        }
     }
 }
 
@@ -387,7 +430,7 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.complexity.cyclomatic_max, 20);
-        assert_eq!(config.churn.top, 20);
+        assert_eq!(config.churn.since.days(), 180);
         assert!(config.exclude_built_assets);
     }
 
@@ -456,9 +499,9 @@ mod tests {
     fn test_config_load_default_dot_omen() {
         Jail::expect_with(|jail| {
             std::fs::create_dir(jail.directory().join(".omen")).unwrap();
-            jail.create_file(".omen/omen.toml", "[hotspot]\ntop = 30")?;
+            jail.create_file(".omen/omen.toml", "[hotspot]\nsince = \"30d\"")?;
             let config = Config::load_default(".").unwrap();
-            assert_eq!(config.hotspot.top, 30);
+            assert_eq!(config.hotspot.since.days(), 30);
             Ok(())
         });
     }
@@ -517,8 +560,7 @@ mod tests {
     #[test]
     fn test_churn_config_default() {
         let config = ChurnConfig::default();
-        assert_eq!(config.since, "6m");
-        assert_eq!(config.top, 20);
+        assert_eq!(config.since.days(), 180);
     }
 
     #[test]
@@ -532,7 +574,7 @@ mod tests {
     #[test]
     fn test_hotspot_config_default() {
         let config = HotspotConfig::default();
-        assert_eq!(config.top, 20);
+        assert_eq!(config.since.days(), 90);
     }
 
     #[test]
@@ -630,37 +672,84 @@ mod tests {
     }
 
     #[test]
-    fn test_an_invalid_churn_window_is_rejected_at_load() {
-        let mut config = Config::default();
-        config.churn.since = "all".to_string();
-        assert!(config.validate().is_ok());
-
-        config.churn.since = "nonsense".to_string();
-        let error = config.validate().unwrap_err().to_string();
-        assert!(error.contains("churn.since"), "got {error}");
-        assert!(error.contains("\"nonsense\""), "got {error}");
-    }
-
-    #[test]
-    fn test_zero_day_windows_are_rejected_at_load() {
-        // Otherwise an aggregate path would silently substitute a window the
-        // user never asked for.
-        let mut config = Config::default();
-        assert!(config.validate().is_ok());
-
-        config.hotspot.days = 0;
-        assert!(config.validate().is_err());
-
-        let mut config = Config::default();
-        config.defect.churn_days = 0;
-        let error = config.validate().unwrap_err().to_string();
-        assert!(error.contains("defect.churn_days"), "got {error}");
-    }
-
-    #[test]
-    fn test_churn_window_defaults() {
+    fn test_window_defaults() {
         let config = Config::default();
-        assert_eq!(config.hotspot.days, 90);
-        assert_eq!(config.defect.churn_days, 30);
+        assert_eq!(config.churn.since.days(), 180);
+        assert_eq!(config.hotspot.since.days(), 90);
+        assert_eq!(config.defect.since.days(), 30);
+        assert_eq!(config.changes.since.days(), 30);
+    }
+
+    #[test]
+    fn test_each_window_key_accepts_the_units_of_the_since_flag() {
+        Jail::expect_with(|jail| {
+            jail.create_file(
+                "omen.toml",
+                "[churn]\nsince = \"1y\"\n[hotspot]\nsince = \"2w\"\n[defect]\nsince = \"10d\"\n[changes]\nsince = \"3m\"\n",
+            )?;
+            let config = Config::from_file("omen.toml").unwrap();
+            assert_eq!(config.churn.since.days(), 365);
+            assert_eq!(config.hotspot.since.days(), 14);
+            assert_eq!(config.defect.since.days(), 10);
+            assert_eq!(config.changes.since.days(), 90);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_all_is_a_window_where_the_since_flag_accepts_it() {
+        Jail::expect_with(|jail| {
+            jail.create_file(
+                "omen.toml",
+                "[churn]\nsince = \"all\"\n[hotspot]\nsince = \"all\"\n[defect]\nsince = \"all\"\n",
+            )?;
+            let config = Config::from_file("omen.toml").unwrap();
+            assert_eq!(config.churn.since.days(), u32::MAX);
+            assert_eq!(config.hotspot.since.days(), u32::MAX);
+            assert_eq!(config.defect.since.days(), u32::MAX);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_all_is_not_a_window_of_changes() {
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.toml", "[changes]\nsince = \"all\"\n")?;
+            let error = Config::from_file("omen.toml").unwrap_err().to_string();
+            assert!(error.contains("changes.since"), "{error}");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_a_window_that_is_empty_or_not_a_window_is_rejected_with_its_key() {
+        Jail::expect_with(|jail| {
+            for table in ["churn", "hotspot", "defect", "changes"] {
+                for value in ["0d", "nonsense", "", "2024-01-01"] {
+                    jail.create_file("omen.toml", &format!("[{table}]\nsince = \"{value}\"\n"))?;
+                    let error = Config::from_file("omen.toml").unwrap_err().to_string();
+                    assert!(
+                        error.contains(&format!("{table}.since")),
+                        "{table} {value:?}: {error}"
+                    );
+                    assert!(
+                        error.contains(&format!("{value:?}")),
+                        "{table} {value:?}: {error}"
+                    );
+                }
+            }
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_env_var_overrides_a_nested_window() {
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.toml", "[hotspot]\nsince = \"30d\"\n")?;
+            jail.set_env("OMEN_HOTSPOT__SINCE", "1y");
+            let config = Config::from_file("omen.toml").unwrap();
+            assert_eq!(config.hotspot.since.days(), 365);
+            Ok(())
+        });
     }
 }

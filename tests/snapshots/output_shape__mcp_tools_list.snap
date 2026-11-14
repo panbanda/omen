@@ -297,7 +297,7 @@ expression: "responses[0]"
           "additionalProperties": false,
           "properties": {
             "days": {
-              "description": "The number of days of git history to read. The default is `defect.churn_days` in the configuration.",
+              "description": "The number of days of git history to read. The default is `defect.since` in the configuration.",
               "maximum": 36500,
               "minimum": 1,
               "type": "integer"
@@ -326,7 +326,7 @@ expression: "responses[0]"
         "name": "defect"
       },
       {
-        "description": "Gives the risk of each recent commit. The tool uses just-in-time risk analysis. `changes.days` of the configuration gives the number of days of history.",
+        "description": "Gives the risk of each recent commit. The tool uses just-in-time risk analysis. `changes.since` of the configuration gives the window of history.",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -451,7 +451,7 @@ expression: "responses[0]"
           "additionalProperties": false,
           "properties": {
             "days": {
-              "description": "The number of days of git history to read. The default is `hotspot.days` in the configuration.",
+              "description": "The number of days of git history to read. The default is `hotspot.since` in the configuration.",
               "maximum": 36500,
               "minimum": 1,
               "type": "integer"

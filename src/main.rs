@@ -47,6 +47,9 @@ fn resolve_gate_mode(flag: Option<GateMode>, configured: GateMode) -> GateMode {
     flag.unwrap_or(configured)
 }
 
+/// The number of results that `churn` and `hotspot` give if `--top` is absent.
+const DEFAULT_TOP: usize = 20;
+
 /// The number of results that `search query` gives if `--top` is absent.
 const DEFAULT_SEARCH_RESULTS: usize = 10;
 
@@ -344,8 +347,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             } else if let Some(days) = args.days {
                 days
             } else {
-                omen::git::since_to_days(&config.churn.since)
-                    .map_err(|error| omen::core::Error::config(format!("churn.since: {error}")))?
+                config.churn.since.days()
             };
             run_churn_analyzer(path, &config, format, days, &args.common)?;
         }
@@ -777,7 +779,7 @@ fn dispatch_analyzer(
         )
         .map(drop),
         Command::Defect(args) => {
-            let window = resolve_churn_window(&args.window, config.defect.churn_days)?;
+            let window = resolve_churn_window(&args.window, config.defect.since.days())?;
             run_analyzer_instance(
                 path,
                 config,
@@ -796,7 +798,7 @@ fn dispatch_analyzer(
                 .map(drop)
         }
         Command::Hotspot(args) => {
-            let window = resolve_churn_window(&args.window, config.hotspot.days)?;
+            let window = resolve_churn_window(&args.window, config.hotspot.since.days())?;
             run_analyzer_instance(
                 path,
                 config,
@@ -889,7 +891,7 @@ fn run_analyzer_instance<A: Analyzer>(
 
     let top = args
         .and_then(|a| a.pagination.top)
-        .or_else(|| (analyzer_name == "hotspot").then_some(config.hotspot.top));
+        .or_else(|| (analyzer_name == "hotspot").then_some(DEFAULT_TOP));
     let offset = args.and_then(|a| a.pagination.offset);
     let value = serde_json::to_value(&result)?;
     format_with_limits(value, format, top, offset, &mut stdout())?;
@@ -938,7 +940,7 @@ fn run_changes_analyzer(
     let path_buf = path.to_path_buf();
     let file_set = filtered_file_set(&path_buf, config, Some(args))?;
     let ctx = build_context(&path_buf, &file_set, config);
-    let analyzer = omen::analyzers::changes::Analyzer::new().with_days(config.changes.days);
+    let analyzer = omen::analyzers::changes::Analyzer::new().with_days(config.changes.since.days());
     let result = analyzer.analyze(&ctx)?;
     let value = serde_json::to_value(&result)?;
     format_with_limits(
@@ -1126,7 +1128,7 @@ fn run_churn_analyzer(
     format_with_limits(
         value,
         format,
-        args.pagination.top.or(Some(config.churn.top)),
+        args.pagination.top.or(Some(DEFAULT_TOP)),
         args.pagination.offset,
         &mut stdout(),
     )?;
