@@ -72,6 +72,12 @@ fn unmatched_problem(id: &str) -> String {
     format!("{id}: the accepted entry matches no regression against the base branch; remove it")
 }
 
+fn inherited_problem(id: &str) -> String {
+    format!(
+        "{id}: the base branch has this accepted entry, so it cannot accept a new regression; add a new reviewed entry"
+    )
+}
+
 fn inherited_note(id: &str) -> String {
     format!("{id}: the base branch has this accepted entry and it matches no regression; a later pull request can remove it")
 }
@@ -138,6 +144,12 @@ pub fn check_accepted_ranks(
                 rank_text(regression.rank),
                 rank_text(regression.base_rank)
             ));
+        } else if base_accepted.iter().any(|base| {
+            base.id == regression.id
+                && base.base_rank == regression.base_rank
+                && base.rank == regression.rank
+        }) {
+            problems.insert(inherited_problem(&regression.id));
         }
     }
     for entry in accepted {
@@ -189,16 +201,18 @@ pub fn check_accepted_facts(
         &mut problems,
     );
     let accepted_ids: BTreeSet<&str> = accepted.iter().map(|entry| entry.id.as_str()).collect();
-    for id in grown {
-        if !accepted_ids.contains(id.as_str()) {
-            problems.insert(id.clone());
-        }
-    }
-    let grown_ids: BTreeSet<&str> = grown.iter().map(String::as_str).collect();
     let base_ids: BTreeSet<&str> = base_accepted
         .iter()
         .map(|entry| entry.id.as_str())
         .collect();
+    for id in grown {
+        if !accepted_ids.contains(id.as_str()) {
+            problems.insert(id.clone());
+        } else if base_ids.contains(id.as_str()) {
+            problems.insert(inherited_problem(id));
+        }
+    }
+    let grown_ids: BTreeSet<&str> = grown.iter().map(String::as_str).collect();
     for entry in accepted {
         if grown_ids.contains(entry.id.as_str()) {
             continue;
@@ -407,6 +421,33 @@ mod tests {
         let report = check_accepted_facts(&[], &accepted, &[]);
         assert_eq!(report.problems.len(), 1, "{:?}", report.problems);
         assert!(report.problems[0].contains("matches no regression"));
+    }
+
+    #[test]
+    fn an_inherited_fact_entry_does_not_accept_a_grown_fact() {
+        let grown = ["go/a/symbols/x/found".to_string()];
+        let entry = [accepted_fact("go/a/symbols/x/found", "old regression")];
+        let report = check_accepted_facts(&grown, &entry, &entry);
+        assert_eq!(report.problems.len(), 1, "{:?}", report.problems);
+        assert!(report.problems[0].contains("go/a/symbols/x/found"));
+        assert!(report.problems[0].contains("new reviewed entry"));
+    }
+
+    #[test]
+    fn an_inherited_rank_entry_does_not_accept_a_grown_regression() {
+        let entry = [accepted_rank("go/q", Some(1), Some(3), "old regression")];
+        let report = check_accepted_ranks(&[regression("go/q", Some(1), Some(3))], &entry, &entry);
+        assert_eq!(report.problems.len(), 1, "{:?}", report.problems);
+        assert!(report.problems[0].contains("new reviewed entry"));
+    }
+
+    #[test]
+    fn a_new_rank_pair_accepts_a_grown_regression_over_an_inherited_id() {
+        let base = [accepted_rank("go/q", Some(1), Some(3), "old regression")];
+        let accepted = [accepted_rank("go/q", Some(1), Some(5), "new reason")];
+        let report =
+            check_accepted_ranks(&[regression("go/q", Some(1), Some(5))], &accepted, &base);
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
     }
 
     #[test]

@@ -83,6 +83,9 @@ After the merge, the base branch has the regression and the entry. The next pull
 request has no regression against the base branch. The entry is then an
 inherited entry. The check prints a note for an inherited entry that matches no
 regression, and it does not fail. A later pull request can delete the entry.
+An inherited entry never accepts a new regression of the same fact. If the fact
+gets worse again, add a new reviewed entry. For a rank entry, a new rank pair
+makes a new entry.
 Do not use an administrator merge to pass the check.
 
 ## Reproducible experiments
