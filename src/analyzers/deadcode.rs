@@ -9,7 +9,7 @@
 //! Variable declarations, class/struct definitions, module-level
 //! constants, and type aliases are not yet analyzed.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
@@ -131,6 +131,7 @@ impl AnalyzerTrait for Analyzer {
         let mut all_definitions: HashMap<String, Definition> = HashMap::new();
         let mut all_usages: HashSet<String> = HashSet::new();
         let mut value_references: Vec<CallReference> = Vec::new();
+        let mut path_uses: Vec<PathUse> = Vec::new();
         let mut keys_by_name: HashMap<String, Vec<String>> = HashMap::new();
 
         for fdc in &file_results {
@@ -143,6 +144,7 @@ impl AnalyzerTrait for Analyzer {
             }
             all_usages.extend(fdc.usages.iter().cloned());
             value_references.extend(fdc.calls.iter().cloned());
+            path_uses.extend(fdc.path_uses.iter().cloned());
         }
         for keys in keys_by_name.values_mut() {
             keys.sort();
@@ -201,18 +203,27 @@ impl AnalyzerTrait for Analyzer {
                 None => roots.extend(targets),
             }
         }
+        for path_use in &path_uses {
+            let Some(keys) = keys_by_name.get(&path_use.callee) else {
+                continue;
+            };
+            let exact = path_use.candidates.iter().find_map(|candidate| {
+                let found: Vec<&String> = keys
+                    .iter()
+                    .filter(|key| key_path(key) == candidate)
+                    .collect();
+                (!found.is_empty()).then_some(found)
+            });
+            match exact {
+                Some(found) => roots.extend(found.into_iter().cloned()),
+                None if path_use.by_name_if_unresolved => roots.extend(keys.iter().cloned()),
+                None => {}
+            }
+        }
         for call in &value_references {
             let callees: Vec<String> = match keys_by_name.get(&call.callee) {
                 Some(keys) => {
-                    let named: Vec<String> = match &call.qualifier {
-                        Some(qualifier) => keys
-                            .iter()
-                            .filter(|key| is_in_module(key, qualifier, &call.callee))
-                            .cloned()
-                            .collect(),
-                        None => keys.clone(),
-                    };
-                    let local: Vec<String> = named
+                    let local: Vec<String> = keys
                         .iter()
                         .filter(|key| {
                             all_definitions
@@ -222,7 +233,7 @@ impl AnalyzerTrait for Analyzer {
                         .cloned()
                         .collect();
                     if local.is_empty() {
-                        named
+                        keys.clone()
                     } else {
                         local
                     }
@@ -395,6 +406,7 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
         definitions: Vec::new(),
         usages: HashSet::new(),
         calls: Vec::new(),
+        path_uses: Vec::new(),
     };
 
     // The index holds only definitions that have a name. An anonymous callback
@@ -1030,6 +1042,12 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
     // function in the same body loses its caller.
     let mut scopes: Vec<(u32, Option<String>)> = Vec::new();
     let mut value_uses: BTreeSet<(String, String, bool)> = BTreeSet::new();
+    let mut path_uses: Vec<PathUse> = Vec::new();
+    let rust_uses = if lang == Language::Rust {
+        rust_use_bindings(result.tree.root_node(), source)
+    } else {
+        BTreeMap::new()
+    };
 
     // Iterative pre-order traversal
     loop {
@@ -1085,16 +1103,13 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         // `#[serde(default = "path")]` names a function in a string. The derive calls it.
         if lang == Language::Rust && kind == "attribute_item" {
             if let Ok(text) = node.utf8_text(source) {
+                let chain = rust_module_chain(&node, source);
                 for path in serde_function_names(text) {
-                    let mut segments: Vec<&str> = path.split("::").collect();
-                    while segments.len() > 1 && matches!(segments[0], "crate" | "self" | "super") {
-                        segments.remove(0);
-                    }
+                    let segments: Vec<String> = path.split("::").map(str::to_string).collect();
                     if let Some(name) = segments.last() {
-                        fdc.usages.insert(name.to_string());
+                        fdc.usages.insert(name.clone());
                     }
-                    // The path is the callee, with `.` between the segments.
-                    value_uses.insert((MODULE_SCOPE.to_string(), segments.join("."), true));
+                    path_uses.push(rust_path_use(&segments, &chain, &rust_uses));
                 }
             }
         }
@@ -1124,22 +1139,14 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             if !cursor.goto_parent() {
                 fdc.calls = value_uses
                     .into_iter()
-                    .map(|(caller, callee, from_module_scope)| {
-                        let (qualifier, callee) = match callee.rsplit_once('.') {
-                            Some((qualifier, name)) => {
-                                (Some(qualifier.to_string()), name.to_string())
-                            }
-                            None => (None, callee),
-                        };
-                        CallReference {
-                            caller,
-                            callee,
-                            qualifier,
-                            file: fdc.path.clone(),
-                            from_module_scope,
-                        }
+                    .map(|(caller, callee, from_module_scope)| CallReference {
+                        caller,
+                        callee,
+                        file: fdc.path.clone(),
+                        from_module_scope,
                     })
                     .collect();
+                fdc.path_uses = path_uses;
                 return; // Done traversing
             }
         }
@@ -1203,13 +1210,149 @@ fn serde_function_names(attribute: &str) -> Vec<String> {
     names
 }
 
-/// Whether the key of a definition is `name` inside the module path `qualifier`, where the
-/// path has `.` between the segments. The path can start in a parent module.
-fn is_in_module(key: &str, qualifier: &str, name: &str) -> bool {
+/// The path of a key without the file and the ordinal, for example `codec.serialize`.
+fn key_path(key: &str) -> &str {
     let path = key.split_once('#').map_or(key, |(_, path)| path);
-    let path = path.split('~').next().unwrap_or(path);
-    let wanted = format!("{qualifier}.{name}");
-    path == wanted || path.ends_with(&format!(".{wanted}"))
+    path.split('~').next().unwrap_or(path)
+}
+
+/// The names of the `mod` items around a node, from the outermost to the innermost.
+fn rust_module_chain(node: &tree_sitter::Node<'_>, source: &[u8]) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == "mod_item" {
+            if let Some(name) = parent
+                .child_by_field_name("name")
+                .and_then(|name| name.utf8_text(source).ok())
+            {
+                chain.push(name.to_string());
+            }
+        }
+        current = parent.parent();
+    }
+    chain.reverse();
+    chain
+}
+
+/// The names that the `use` items of a Rust file bind, each with its full path. A group
+/// such as `use a::{b, c as d};` gives `b` and `d`.
+fn rust_use_bindings(root: tree_sitter::Node<'_>, source: &[u8]) -> BTreeMap<String, Vec<String>> {
+    fn expand(text: &str, prefix: &[String], out: &mut BTreeMap<String, Vec<String>>) {
+        let text = text.trim();
+        if let Some((head, group)) = text.split_once('{') {
+            let mut path: Vec<String> = prefix.to_vec();
+            path.extend(
+                head.trim()
+                    .trim_end_matches("::")
+                    .split("::")
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_string),
+            );
+            let group = group.trim_end_matches('}');
+            let mut depth = 0;
+            let mut start = 0;
+            let mut parts = Vec::new();
+            for (position, character) in group.char_indices() {
+                match character {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    ',' if depth == 0 => {
+                        parts.push(&group[start..position]);
+                        start = position + 1;
+                    }
+                    _ => {}
+                }
+            }
+            parts.push(&group[start..]);
+            for part in parts {
+                expand(part, &path, out);
+            }
+            return;
+        }
+        let (path_text, alias) = match text.split_once(" as ") {
+            Some((path_text, alias)) => (path_text.trim(), Some(alias.trim())),
+            None => (text, None),
+        };
+        let mut path: Vec<String> = prefix.to_vec();
+        path.extend(path_text.split("::").map(str::to_string));
+        if let Some(name) = alias.or_else(|| path.last().map(String::as_str)) {
+            if name != "self" && name != "*" {
+                out.insert(name.to_string(), path.clone());
+            }
+        }
+    }
+
+    let mut bindings = BTreeMap::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "use_declaration" {
+            if let Ok(text) = node.utf8_text(source) {
+                let text = text.trim().trim_start_matches("pub").trim();
+                let text = text.strip_prefix("use").unwrap_or(text);
+                let text = text.trim().trim_end_matches(';');
+                expand(text, &[], &mut bindings);
+            }
+            continue;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    bindings
+}
+
+/// The candidates for a path that an attribute of a module `chain` names. A path that
+/// starts with `crate` is exact from the root of the file, `self` is the current module, and
+/// `super` is its parent. Another path starts in the current module, then in the path that
+/// a `use` binds to its first segment.
+fn rust_path_use(
+    segments: &[String],
+    chain: &[String],
+    uses: &BTreeMap<String, Vec<String>>,
+) -> PathUse {
+    let callee = segments.last().cloned().unwrap_or_default();
+    let join = |module: &[String], rest: &[String]| -> String {
+        module
+            .iter()
+            .chain(rest.iter())
+            .cloned()
+            .collect::<Vec<String>>()
+            .join(".")
+    };
+    let mut candidates = Vec::new();
+    let mut by_name_if_unresolved = false;
+    match segments.first().map(String::as_str) {
+        Some("crate") => candidates.push(join(&[], &segments[1..])),
+        Some("self") => candidates.push(join(chain, &segments[1..])),
+        Some("super") => {
+            let mut module = chain.to_vec();
+            let mut rest = segments;
+            while rest.first().is_some_and(|segment| segment == "super") {
+                module.pop();
+                rest = &rest[1..];
+            }
+            candidates.push(join(&module, rest));
+        }
+        _ => {
+            candidates.push(join(chain, segments));
+            if let Some(bound) = segments.first().and_then(|first| uses.get(first)) {
+                let mut full: Vec<String> = bound.clone();
+                full.extend(segments[1..].iter().cloned());
+                let mut expanded: Vec<String> = full.clone();
+                if expanded.first().is_some_and(|first| first == "crate") {
+                    expanded.remove(0);
+                }
+                candidates.push(expanded.join("."));
+                candidates.push(join(chain, &full));
+            }
+            by_name_if_unresolved = segments.len() == 1;
+        }
+    }
+    PathUse {
+        callee,
+        candidates,
+        by_name_if_unresolved,
+    }
 }
 
 /// Whether a property name is read as a value: it is the member of a member
@@ -1636,6 +1779,20 @@ struct FileDeadCode {
     /// The uses of a function as a value, as `register("data", handler)` does.
     /// A call has its own reference in the shared index.
     calls: Vec<CallReference>,
+    /// The functions that a Rust attribute names with a path.
+    path_uses: Vec<PathUse>,
+}
+
+/// A function that a path names, such as the string of `#[serde(default = "paths::fallback")]`.
+#[derive(Clone)]
+struct PathUse {
+    /// The last segment of the path.
+    callee: String,
+    /// The module paths of the function that the path can mean, from the first to the last.
+    /// A path is `.` between the modules and the name, as the key of a definition has it.
+    candidates: Vec<String>,
+    /// A path of one name that no candidate names can still be a name that a `use` brings.
+    by_name_if_unresolved: bool,
 }
 
 #[cfg(test)]
@@ -1679,9 +1836,6 @@ struct Definition {
 struct CallReference {
     caller: String,
     callee: String,
-    /// The modules of a path such as `codec::serialize`, joined with `.`. A path of one
-    /// segment has none.
-    qualifier: Option<String>,
     file: String,
     /// Whether the call was made at module scope rather than inside a
     /// function. Structural rather than a reserved caller name, which a
@@ -3720,6 +3874,50 @@ mod index_tests {
             dead,
             [(7, "serialize"), (8, "deserialize"), (18, "fallback")],
             "only the functions that no path names"
+        );
+    }
+
+    fn dead_functions_of(source: &str) -> Vec<(u32, String)> {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("holder.rs"), source).unwrap();
+        let files = FileSet::from_files(
+            directory.path().to_path_buf(),
+            vec![PathBuf::from("holder.rs")],
+        );
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(directory.path()));
+        let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+        let mut dead: Vec<(u32, String)> = result
+            .items
+            .iter()
+            .filter(|item| item.kind == "function")
+            .map(|item| (item.line, item.name.clone()))
+            .collect();
+        dead.sort();
+        dead
+    }
+
+    #[test]
+    fn test_a_crate_path_resolves_from_the_crate_root_exactly() {
+        let source = "mod paths {\n    fn fallback() -> u32 {\n        1\n    }\n}\n\nmod unused {\n    mod paths {\n        fn fallback() -> u32 {\n            2\n        }\n    }\n}\n\nstruct Holder {\n    #[serde(default = \"crate::paths::fallback\")]\n    value: u32,\n}\n";
+        assert_eq!(
+            dead_functions_of(source),
+            [(9, "fallback".to_string())],
+            "`unused::paths::fallback` is not `crate::paths::fallback`"
+        );
+    }
+
+    #[test]
+    fn test_self_super_and_bare_paths_resolve_from_the_current_module() {
+        let source = "mod paths {\n    fn fallback() -> u32 {\n        0\n    }\n}\n\nmod outer {\n    mod paths {\n        fn fallback() -> u32 {\n            1\n        }\n    }\n\n    struct Own {\n        #[serde(default = \"self::paths::fallback\")]\n        value: u32,\n    }\n\n    mod inner {\n        struct Child {\n            #[serde(default = \"super::paths::fallback\")]\n            value: u32,\n        }\n    }\n\n    struct Bare {\n        #[serde(default = \"paths::fallback\")]\n        value: u32,\n    }\n}\n";
+        assert_eq!(
+            dead_functions_of(source),
+            [(2, "fallback".to_string())],
+            "only the function of the root module is dead"
         );
     }
 
