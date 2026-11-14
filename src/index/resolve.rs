@@ -1151,10 +1151,17 @@ impl<'a> Resolver<'a> {
 
     fn with_qualifier(&self, file: usize, reference: &Reference, qualifier: &str) -> Outcome {
         let name = reference.name.as_str();
-        let qualifier = match self.family(file) {
-            Family::C => self.namespace_alias(file, qualifier).unwrap_or(qualifier),
-            _ => qualifier,
+        // A C++ namespace alias can be the qualifier, or its first name.
+        let expanded = match self.family(file) {
+            Family::C => match qualifier.split_once("::") {
+                Some((first, rest)) => self
+                    .namespace_alias(file, first)
+                    .map(|namespace| format!("{namespace}::{rest}")),
+                None => self.namespace_alias(file, qualifier).map(str::to_string),
+            },
+            _ => None,
         };
+        let qualifier = expanded.as_deref().unwrap_or(qualifier);
         let path = segments(qualifier);
         let facts = &self.files[file];
         let binding = facts.imports.iter().find(|binding| {
@@ -1217,7 +1224,7 @@ impl<'a> Resolver<'a> {
     fn bare(&self, file: usize, reference: &Reference, chain: &[Id], start: usize) -> Outcome {
         let name = reference.name.as_str();
         // A local name is not in scope in its own first value or before it.
-        let in_scope = |local: &Local| !local.name.value_start.is_some_and(|value| value >= start);
+        let in_scope = |local: &Local| local.name.value_start.is_none_or(|value| value < start);
         let arity = reference.arity;
         let family = self.family(file);
         let callable = |id: &Id| {
@@ -1501,7 +1508,10 @@ impl<'a> Resolver<'a> {
                 continue;
             }
             let path = &self.facts(id).container_path;
-            let declared_in_c = self.files[id.0].language == Language::C;
+            // The language of the caller gives the linkage of the call. A
+            // header that a C++ file includes is C++ in the index, also when
+            // a C file includes it too.
+            let c_call = self.files[file].language == Language::C;
             let bodies: Vec<Id> = self
                 .named(&symbol.name, file)
                 .filter(|other| {
@@ -1511,7 +1521,7 @@ impl<'a> Resolver<'a> {
                         && self.facts(*other).container_path == *path
                         && (other.0 == file
                             || definition.exported != super::model::Exported::NotExported)
-                        && (!declared_in_c || self.has_c_linkage(*other))
+                        && (!c_call || self.has_c_linkage(*other))
                 })
                 .collect();
             if bodies.is_empty() {
@@ -1526,17 +1536,18 @@ impl<'a> Resolver<'a> {
     }
 
     /// Tells if a function has C linkage: it is C, it is in `extern "C"`, or
-    /// a C++ declaration in `extern "C"` declares it. A C++ declaration in
-    /// a header whose `extern "C"` block is in a preprocessor condition can
-    /// lack the mark, thus the resolver does not use this rule for a C++
-    /// declaration of a C definition.
+    /// an `extern "C"` declaration declares it. That declaration must be in
+    /// the file of the definition or in a file that this file includes. A
+    /// declaration in a different translation unit declares a different
+    /// function.
     fn has_c_linkage(&self, id: Id) -> bool {
         if self.files[id.0].language == Language::C || self.facts(id).c_linkage {
             return true;
         }
+        let included = self.visible_files(id.0);
         let name = &self.symbol(id).name;
         self.named(name, id.0).any(|other| {
-            self.files[other.0].language == Language::Cpp
+            (other.0 == id.0 || included.contains(&other.0))
                 && self.symbol(other).body_range.is_none()
                 && self.facts(other).c_linkage
                 && self.facts(other).container_path.is_empty()
@@ -2221,6 +2232,45 @@ mod tests {
                 "5 main>exported UniqueCandidate ImportedModule [impl.cpp#exported]",
                 "6 main>blocked UniqueCandidate ImportedModule [impl.cpp#blocked]",
                 "7 main>declared UniqueCandidate ImportedModule [impl.cpp#declared~2]",
+            ]
+        );
+    }
+
+    /// A namespace alias at the start of a qualifier names its namespace.
+    #[test]
+    fn test_namespace_alias_before_a_nested_type_cpp() {
+        let source = "namespace vendor {\nstruct Widget {\n    static int run() { return 1; }\n};\n}\n\nnamespace v = vendor;\n\nint go() {\n    return v::Widget::run();\n}\n";
+        assert_eq!(
+            rows(&[("a.cpp", source)], "a.cpp"),
+            ["10 go>v::Widget::run UniqueCandidate QualifiedPath [a.cpp#vendor.Widget.run]"]
+        );
+    }
+
+    /// An `extern "C"` declaration gives C linkage only to the definition
+    /// that it declares: a definition in its file, or in a file that
+    /// includes it. A C++ definition in a different translation unit keeps
+    /// C++ linkage.
+    #[test]
+    fn test_extern_c_declaration_marks_only_its_own_definition() {
+        let header = "void shared(void);\nvoid linked(void);\n";
+        let caller = "#include \"api.h\"\n\nint main(void) {\n    shared();\n    linked();\n    return 0;\n}\n";
+        let user = "extern \"C\" void shared();\n\nvoid use() {\n    shared();\n}\n";
+        let unrelated = "void shared() {}\n";
+        let library_header = "extern \"C\" void linked();\n";
+        let library = "#include \"lib.hpp\"\n\nvoid linked() {}\n";
+        let files = [
+            ("api.h", header),
+            ("main.c", caller),
+            ("user.cpp", user),
+            ("unrelated.cpp", unrelated),
+            ("lib.hpp", library_header),
+            ("lib.cpp", library),
+        ];
+        assert_eq!(
+            rows(&files, "main.c"),
+            [
+                "4 main>shared UniqueCandidate ImportedModule [api.h#shared]",
+                "5 main>linked UniqueCandidate ImportedModule [lib.cpp#linked]",
             ]
         );
     }

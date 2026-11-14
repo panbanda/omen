@@ -142,6 +142,53 @@ mod tests {
     use crate::index::model::ImportTarget;
 
     #[test]
+    fn test_c_call_through_a_header_that_cpp_includes_keeps_c_linkage() {
+        // A C++ file includes `api.h`, thus the index parses it as C++. The
+        // call in `main.c` is still a C call, and the C++ definition without
+        // `extern "C"` is a different function.
+        let sources = [
+            ("api.h", "void shared(void);\n"),
+            (
+                "main.c",
+                "#include \"api.h\"\n\nint main(void) {\n    shared();\n    return 0;\n}\n",
+            ),
+            (
+                "use.cpp",
+                "#include \"api.h\"\n\nvoid use() {\n    shared();\n}\n",
+            ),
+            ("impl.cpp", "void shared() {}\n"),
+        ];
+        let read = |path: &Path| {
+            sources
+                .iter()
+                .find(|(name, _)| Path::new(name) == path)
+                .map(|(_, text)| text.as_bytes().to_vec())
+                .ok_or_else(|| crate::core::Error::git("no such file".to_string()))
+        };
+        let list = |_: &Path| -> Vec<PathBuf> { Vec::new() };
+        let files: Vec<PathBuf> = sources
+            .iter()
+            .map(|(name, _)| PathBuf::from(name))
+            .collect();
+
+        let index = CodeIndex::build(Path::new("."), &files, &read, &list);
+
+        let candidates = |file: &str| -> Vec<String> {
+            index
+                .files
+                .iter()
+                .find(|facts| facts.file == file)
+                .into_iter()
+                .flat_map(|facts| &facts.references)
+                .flat_map(|reference| reference.resolution.candidates.clone())
+                .collect()
+        };
+        assert_eq!(index.files[0].language, crate::core::Language::Cpp);
+        assert_eq!(candidates("main.c"), ["api.h#shared"]);
+        assert_eq!(candidates("use.cpp"), ["impl.cpp#shared"]);
+    }
+
+    #[test]
     fn test_manifests_come_from_the_content_reader() {
         let sources = [
             (
