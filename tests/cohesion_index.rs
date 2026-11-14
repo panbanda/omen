@@ -417,6 +417,41 @@ fn test_rfc_counts_a_called_method_one_time() {
 }
 
 #[test]
+fn test_rfc_is_the_union_of_the_methods_and_the_called_methods() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "Door.java",
+            "class Door {\n    void open() { close(); }\n    void close() {}\n}\n",
+        ),
+        (
+            "door.py",
+            "class Door:\n    def open(self):\n        self.close()\n\n    def close(self):\n        pass\n",
+        ),
+        (
+            "door.rs",
+            "struct Door;\nimpl Door {\n    fn open(&self) {\n        self.close();\n    }\n\n    fn close(&self) {}\n}\n",
+        ),
+        (
+            "door.ts",
+            "class Door {\n  open() {\n    this.close();\n  }\n\n  close() {}\n}\n",
+        ),
+    ];
+    for (file, source) in cases {
+        let analysis = analyze(&[(file, source)]);
+        let door = class(&analysis, "Door");
+        assert_eq!(door.nom, 2, "{file}");
+        assert_eq!(door.rfc, 2, "{file}");
+    }
+}
+
+#[test]
+fn test_rfc_counts_a_method_that_the_class_does_not_have() {
+    let source = "class Door {\n    void open() { close(); lock(); }\n    void close() {}\n}\n";
+    let analysis = analyze(&[("Door.java", source)]);
+    assert_eq!(class(&analysis, "Door").rfc, 3);
+}
+
+#[test]
 fn test_rfc_counts_two_resolved_methods_with_one_name_two_times() {
     let source = "package shop\n\ntype Door struct{}\n\nfunc (d Door) Lock() {}\n\ntype Window struct{}\n\nfunc (w Window) Lock() {}\n\ntype Shop struct{}\n\nfunc (s Shop) Close(door Door, window Window) {\n\tdoor.Lock()\n\twindow.Lock()\n}\n";
     let analysis = analyze(&[("shop.go", source)]);

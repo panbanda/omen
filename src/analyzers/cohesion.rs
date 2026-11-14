@@ -201,6 +201,9 @@ struct Builder {
     end_line: u32,
 }
 
+/// The start of the text of a call on the object itself that the index did not resolve.
+const OWN_PREFIX: &str = "\u{0}own:";
+
 /// The method that a call names, as far as the index can tell.
 enum Callee {
     /// The index resolved the call to this symbol.
@@ -451,6 +454,9 @@ impl<'a, 'v> Classes<'a, 'v> {
                     // the same qualifier and the same name.
                     let callee = match call.resolution.candidates.as_slice() {
                         [only] if resolved => only.to_string(),
+                        _ if call.receiver == Some(Receiver::SelfValue) => {
+                            format!("{OWN_PREFIX}{}", call.name)
+                        }
                         _ => format!("{}::{}", call.qualifier.as_deref().unwrap_or(""), call.name),
                     };
                     self.builders[found.class].called.insert(callee);
@@ -631,7 +637,21 @@ impl<'a, 'v> Classes<'a, 'v> {
 
                 let nom = method_infos.len() as u32;
                 let wmc: u32 = method_infos.iter().map(|method| method.complexity).sum();
-                let rfc = nom + builder.called.len() as u32;
+                // RFC is the size of the union of the methods and the called methods.
+                let method_keys: HashSet<&str> = builder
+                    .methods
+                    .iter()
+                    .map(|method| facts_of(views, method).key.as_str())
+                    .collect();
+                let outside = builder
+                    .called
+                    .iter()
+                    .filter(|callee| match callee.strip_prefix(OWN_PREFIX) {
+                        Some(name) => !method_names.contains(name),
+                        None => !method_keys.contains(callee.as_str()),
+                    })
+                    .count();
+                let rfc = nom + outside as u32;
                 let mut coupled: Vec<String> = builder
                     .coupled
                     .iter()
