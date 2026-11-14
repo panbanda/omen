@@ -773,7 +773,7 @@ fn dispatch_analyzer(
             omen::analyzers::duplicates::Analyzer::new()
                 .with_min_tokens(config.duplicates.min_tokens)
                 .with_similarity_threshold(config.duplicates.min_similarity)
-                .with_exclude_tests(!args.include_tests && config.duplicates.exclude_tests),
+                .with_exclude_tests(!args.include_tests && config.exclude_tests),
         )
         .map(drop),
         Command::Defect(args) => {

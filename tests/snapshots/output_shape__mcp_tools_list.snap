@@ -253,7 +253,7 @@ expression: "responses[0]"
           "properties": {
             "include_tests": {
               "default": false,
-              "description": "If true, the tool also reads test code. If false, `duplicates.exclude_tests` of the configuration applies.",
+              "description": "If true, the tool also reads test code. If false, `exclude_tests` of the configuration applies.",
               "type": "boolean"
             },
             "limit": {

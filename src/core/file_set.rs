@@ -28,7 +28,7 @@ impl FileSet {
         Self::from_path_with_patterns(
             path,
             config.exclude_patterns.clone(),
-            config.exclude_built_assets,
+            !config.include_generated,
         )
     }
 
@@ -70,7 +70,7 @@ impl FileSet {
                     return false;
                 }
                 // Exclude built/minified assets
-                if config.exclude_built_assets
+                if !config.include_generated
                     && (is_built_asset(path) || is_default_ignored_path(path))
                 {
                     return false;
@@ -998,15 +998,15 @@ mod tests {
 
         let tree_source = TreeSource::new(temp.path(), &sha).unwrap();
 
-        // With exclude_built_assets enabled (default)
+        // With include_generated false (default)
         let config = Config::default();
         let file_set = FileSet::from_tree_source(&tree_source, &config).unwrap();
         assert_eq!(file_set.len(), 1);
         assert!(file_set.files()[0].to_string_lossy().contains("app.js"));
 
-        // With exclude_built_assets disabled
+        // With include_generated true
         let config_disabled = Config {
-            exclude_built_assets: false,
+            include_generated: true,
             ..Config::default()
         };
         let file_set = FileSet::from_tree_source(&tree_source, &config_disabled).unwrap();
