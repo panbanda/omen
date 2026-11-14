@@ -210,7 +210,7 @@ pub fn diff_with_renames(
         .reachability
         .paths
         .iter()
-        .flat_map(|path| path.steps.iter().map(|step| step.symbol.as_str()))
+        .flat_map(|path| path.members.iter().map(String::as_str))
         .collect();
     let changed_on_path = changed
         .iter()
@@ -598,6 +598,16 @@ mod tests {
             [("old.py".to_string(), "new.py".to_string())].into();
         let paired = diff_with_renames(&base, &head, &BTreeSet::new(), &renames);
         assert!(paired.is_empty(), "{paired:?}");
+    }
+
+    #[test]
+    fn a_changed_branch_of_a_diamond_is_on_a_path() {
+        let source = "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.get(\"/a\")\ndef entry():\n    left()\n    right()\n\ndef left():\n    leaf()\n\ndef right():\n    leaf()\n\ndef leaf():\n    os.system(\"x\" + os.environ[\"A\"])\n";
+        let analysis = analyze_sources(&[("app.py", source)], DEFAULT_MIN_BASIS);
+        let changed: BTreeSet<String> =
+            ["app.py#left".to_string(), "app.py#right".to_string()].into();
+        let found = diff(&analysis, &analysis, &changed);
+        assert_eq!(found.changed_on_path, ["app.py#left", "app.py#right"]);
     }
 
     #[test]
