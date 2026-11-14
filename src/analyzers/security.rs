@@ -123,6 +123,8 @@ impl Report {
     ) -> Self {
         if let Some(category) = category {
             self.sinks.retain(|found| found.category.name() == category);
+            self.suppressed
+                .retain(|found| found.sink.category.name() == category);
             let keys: std::collections::BTreeSet<&str> =
                 self.sinks.iter().map(|found| found.key.as_str()).collect();
             self.paths.retain(|path| keys.contains(path.sink.as_str()));
@@ -617,6 +619,23 @@ mod tests {
             1,
             "the builtin `eval` has a weaker basis than an import"
         );
+    }
+
+    #[test]
+    fn the_category_filter_also_filters_the_suppressed_sinks() {
+        let source = "import hashlib\nimport os\n\n# omen:allow command_execution: reviewed wrapper\nos.system(user)\nhashlib.md5(user)\n";
+        let analysis = crate::index::security::analysis::analyze_sources(
+            &[("a.py", source)],
+            crate::index::view::DEFAULT_MIN_BASIS,
+        );
+        let report = Report::from_analysis(analysis);
+        assert_eq!(report.suppressed.len(), 1);
+        let weak = report.clone().restricted(Some("weak_hash"), None, None);
+        assert_eq!(weak.sinks.len(), 1);
+        assert!(weak.suppressed.is_empty());
+        let command = report.restricted(Some("command_execution"), None, None);
+        assert!(command.sinks.is_empty());
+        assert_eq!(command.suppressed.len(), 1);
     }
 
     #[test]
