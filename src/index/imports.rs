@@ -120,6 +120,9 @@ pub struct Manifests {
     pub ruby_load_roots: BTreeSet<String>,
     /// The library name of each `Cargo.toml` file, by the directory of the file.
     pub rust_crates: BTreeMap<String, String>,
+    /// The names with which Rust source refers to the dependencies of each
+    /// `Cargo.toml` file, by the directory of the file.
+    pub rust_dependencies: BTreeMap<String, BTreeSet<String>>,
     /// The packages that the `package.json` files of the repository name.
     pub node_packages: Vec<NodePackage>,
 }
@@ -194,6 +197,7 @@ impl Default for Manifests {
             go_modules: BTreeMap::new(),
             ruby_load_roots: [String::new(), "lib".to_string()].into(),
             rust_crates: BTreeMap::new(),
+            rust_dependencies: BTreeMap::new(),
             node_packages: Vec::new(),
         }
     }
@@ -220,8 +224,78 @@ impl Manifests {
         } else if file_name(path) == "Cargo.toml" {
             self.rust_crates
                 .extend(rust_library_name(text).map(|name| (here.to_string(), name)));
+            self.rust_dependencies
+                .insert(here.to_string(), rust_dependency_names(text));
         }
     }
+
+    /// Tells if the `Cargo.toml` file nearest to `file` declares a dependency
+    /// that Rust source calls `name`.
+    pub fn declares_rust_dependency(&self, file: &str, name: &str) -> bool {
+        let mut here = directory(file);
+        loop {
+            if let Some(names) = self.rust_dependencies.get(here) {
+                return names.contains(name);
+            }
+            if here.is_empty() {
+                return false;
+            }
+            here = directory(here);
+        }
+    }
+}
+
+/// The names with which Rust source refers to the dependencies in a
+/// `Cargo.toml` file. A name has `_` for `-`. The key of a dependency is its
+/// name in the source, also when `package` renames it. The tables are
+/// `dependencies`, `dev-dependencies`, `build-dependencies`, and
+/// `workspace.dependencies`, and the same tables of `target.<condition>`.
+pub fn rust_dependency_names(cargo_toml: &str) -> BTreeSet<String> {
+    const KINDS: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
+    let unquote = |name: &str| {
+        name.trim()
+            .trim_matches(|quote| quote == '"' || quote == '\'')
+            .replace('-', "_")
+    };
+    let mut names = BTreeSet::new();
+    let mut in_table = false;
+    for line in cargo_toml.lines().map(str::trim) {
+        if let Some(header) = line.strip_prefix('[') {
+            let header = header.trim_start_matches('[');
+            let header = header.split(']').next().unwrap_or_default().trim();
+            in_table = false;
+            // The kind is a whole segment: `dependencies`, `workspace.dependencies`,
+            // or `target.<condition>.dev-dependencies`. A segment after it names one dependency.
+            let found = KINDS.iter().find_map(|kind| {
+                let after = header.rfind(&format!("{kind}"))? + kind.len();
+                let before = header[..after - kind.len()].chars().last();
+                let whole = before.is_none_or(|character| character == '.')
+                    && header[after..]
+                        .chars()
+                        .next()
+                        .is_none_or(|character| character == '.');
+                whole.then_some(after)
+            });
+            if let Some(after) = found {
+                match header[after..].strip_prefix('.') {
+                    Some(name) => {
+                        names.insert(unquote(name));
+                    }
+                    None => in_table = true,
+                }
+            }
+            continue;
+        }
+        if in_table && !line.starts_with('#') {
+            if let Some((key, _)) = line.split_once('=') {
+                let key = key.trim().split('.').next().unwrap_or_default();
+                if !key.is_empty() {
+                    names.insert(unquote(key));
+                }
+            }
+        }
+    }
+    names
 }
 
 /// The name with which Rust source refers to the library of a `Cargo.toml`
@@ -1096,6 +1170,11 @@ pub(crate) mod testing {
 
     /// Extracts and resolves the files. Each tuple is a path and a source.
     pub(crate) fn index(files: &[(&str, &str)]) -> Vec<FileSymbols> {
+        index_with_manifests(files).0
+    }
+
+    /// Like `index`. The manifests are the second part of the result.
+    pub(crate) fn index_with_manifests(files: &[(&str, &str)]) -> (Vec<FileSymbols>, Manifests) {
         let mut manifests = Manifests::default();
         let mut facts = Vec::new();
         for (file, source) in files {
@@ -1114,7 +1193,7 @@ pub(crate) mod testing {
         facts.sort_by(|left, right| left.file.cmp(&right.file));
         link_files(&mut facts);
         resolve_imports(&mut facts, &manifests);
-        facts
+        (facts, manifests)
     }
 
     /// One line for each import of `file`:

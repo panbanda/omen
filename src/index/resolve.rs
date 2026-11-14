@@ -16,6 +16,7 @@ use rayon::prelude::*;
 
 use super::calls::{element_type, one_result, required_type, split_list, split_type, Argument};
 use super::extract::{name_path, FileSymbols, LinkFacts, Local};
+use super::imports::Manifests;
 use super::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ReferenceKind, Resolution,
     ResolutionBasis as Basis, ResolutionStatus as Status, SharedStr, Symbol, SymbolKind,
@@ -195,6 +196,7 @@ fn segments(path: &str) -> Vec<&str> {
 
 struct Resolver<'a> {
     files: &'a [FileSymbols],
+    manifests: &'a Manifests,
     by_name: HashMap<&'a str, Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
@@ -214,7 +216,7 @@ struct Resolver<'a> {
 type TypeQuery = (usize, String, Option<String>);
 
 impl<'a> Resolver<'a> {
-    fn new(files: &'a [FileSymbols]) -> Self {
+    fn new(files: &'a [FileSymbols], manifests: &'a Manifests) -> Self {
         let mut by_name: HashMap<&str, Vec<Id>> = HashMap::new();
         let mut by_file = HashMap::new();
         for (file, facts) in files.iter().enumerate() {
@@ -254,6 +256,7 @@ impl<'a> Resolver<'a> {
             .collect();
         Self {
             files,
+            manifests,
             by_name,
             by_file,
             locals_by_name,
@@ -2120,9 +2123,15 @@ impl<'a> Resolver<'a> {
 /// `resolve_imports` first. The function puts `files` in path order, thus the
 /// result does not depend on the order of the input.
 pub fn resolve_references(files: &mut [FileSymbols]) {
+    resolve_references_with(files, &Manifests::default());
+}
+
+/// Like `resolve_references`. The manifests give the dependencies that Rust
+/// source can name without an import.
+pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests) {
     files.sort_by(|left, right| left.file.cmp(&right.file));
     let resolutions: Vec<Vec<Resolution>> = {
-        let resolver = Resolver::new(files);
+        let resolver = Resolver::new(files, manifests);
         (0..files.len())
             .into_par_iter()
             .map(|file| {
@@ -2350,7 +2359,7 @@ mod tests {
                 "5 run>crate::other::Cart::open UniqueCandidate QualifiedPath [src/other.rs#Cart.open]",
                 "6 run>crate::other::missing Unresolved - []",
                 "7 run>crate::other::Gone::open Unresolved - []",
-                "8 run>serde::other::thing External - []",
+                "8 run>serde::other::thing Unresolved - []",
             ]
         );
         assert_eq!(
@@ -2699,8 +2708,8 @@ pub(crate) mod testing {
     /// One line for each call in `file`:
     /// `line caller>callee status basis [candidate keys]`.
     pub(crate) fn rows(files: &[(&str, &str)], file: &str) -> Vec<String> {
-        let mut facts = index(files);
-        resolve_references(&mut facts);
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(files);
+        resolve_references_with(&mut facts, &manifests);
         let facts = facts.iter().find(|facts| facts.file == file).unwrap();
         facts
             .references

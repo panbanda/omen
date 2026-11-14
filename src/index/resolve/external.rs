@@ -156,7 +156,7 @@ const RUST_TYPES: &[&str] = &[
 ];
 
 /// The names that a Rust path can start with, and that no `use` binds.
-const RUST_ROOTS: &[&str] = &["alloc", "core", "std"];
+const RUST_ROOTS: &[&str] = &["alloc", "core", "proc_macro", "std", "test"];
 
 const ECMA_BUILTINS: &[&str] = &[
     "Array",
@@ -696,7 +696,7 @@ impl<'a> Resolver<'a> {
             return !qualifier.contains('.')
                 && (RUST_ROOTS.contains(&head)
                     || RUST_RECEIVERS.contains(&head)
-                    || self.is_unbound_crate_name(head));
+                    || self.is_declared_dependency(scope.file, head));
         }
         !self.has_repository_wildcard(scope.file)
             && (rules.receivers.contains(head) || self.is_provided(scope.file, head, rules))
@@ -712,19 +712,13 @@ impl<'a> Resolver<'a> {
             && self.has_callable_named(name, scope.file)
     }
 
-    /// A Rust path that starts with a lower case name that nothing in the
-    /// repository binds: a `use`, a module, a file, or a function. The name
-    /// then belongs to a crate of the extern prelude.
-    fn is_unbound_crate_name(&self, head: &str) -> bool {
-        let starts_lower = head.chars().next().is_some_and(char::is_lowercase);
-        starts_lower
+    /// A Rust path that starts with a name that nothing in the module binds.
+    /// The name is external only when the nearest `Cargo.toml` declares a
+    /// dependency with the name. A macro can bind any other name.
+    fn is_declared_dependency(&self, file: usize, head: &str) -> bool {
+        self.manifests
+            .declares_rust_dependency(&self.files[file].file, head)
             && !["crate", "self", "super"].contains(&head)
-            && !self.files.iter().any(|facts| {
-                facts
-                    .file
-                    .split('/')
-                    .any(|part| part == head || part.strip_suffix(".rs") == Some(head))
-            })
     }
 
     fn external_receiver(
@@ -1012,7 +1006,8 @@ mod tests {
     #[test]
     fn test_rust_prelude_and_paths() {
         let main = "fn run() {\n    let v: Vec<i32> = Vec::new();\n    v.len();\n    serde_json::from_str(\"1\");\n    std::fs::read(\"x\");\n    Some(1);\n}\n";
-        let files = [("main.rs", main)];
+        let cargo = "[dependencies]\nserde_json = \"1\"\n";
+        let files = [("main.rs", main), ("Cargo.toml", cargo)];
         assert!(external(&files, "main.rs", "new"));
         assert!(external(&files, "main.rs", "len"));
         assert!(external(&files, "main.rs", "from_str"));
@@ -1230,6 +1225,49 @@ mod tests {
     fn test_a_receiver_without_a_binding_abstains_when_a_repository_method_has_the_call_name() {
         let app = "function run() { return Math.max(1); }\nclass Repo { max() { return 1; } }\n";
         assert!(!external(&[("a.ts", app)], "a.ts", "max"));
+    }
+
+    #[test]
+    fn test_rust_path_head_is_external_only_for_a_declared_dependency() {
+        let main = "fn run() {\n    serde_json::from_str(\"1\");\n    std::fs::read(\"x\");\n}\n";
+        let without = [("main.rs", main)];
+        assert!(external(&without, "main.rs", "read"));
+        assert!(!external(&without, "main.rs", "from_str"));
+        let cargo = "[package]\nname = \"demo\"\n\n[dependencies]\nserde_json = \"1\"\n";
+        let with = [("main.rs", main), ("Cargo.toml", cargo)];
+        assert!(external(&with, "main.rs", "from_str"));
+    }
+
+    #[test]
+    fn test_rust_dependency_tables() {
+        let cargo = "[package]\nname = \"demo\"\n\n[dependencies]\nserde-json = \"1\"\njson = { package = \"simd-json\", version = \"0.1\" }\nshared.workspace = true\n\n[dev-dependencies]\ntempfile = \"3\"\n\n[build-dependencies]\ncc = \"1\"\n\n[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n\n[dependencies.rand]\nversion = \"0.8\"\n\n[workspace.dependencies]\nanyhow = \"1\"\n";
+        let main = "fn run() {\n    serde_json::a();\n    json::b();\n    simd_json::c();\n    shared::d();\n    tempfile::e();\n    cc::f();\n    libc::g();\n    rand::h();\n    anyhow::i();\n    other::j();\n}\n";
+        let files = [("main.rs", main), ("Cargo.toml", cargo)];
+        for name in ["a", "b", "d", "e", "f", "g", "h", "i"] {
+            assert!(external(&files, "main.rs", name), "{name}");
+        }
+        for name in ["c", "j"] {
+            assert!(!external(&files, "main.rs", name), "{name}");
+        }
+    }
+
+    #[test]
+    fn test_rust_dependency_belongs_to_the_nearest_manifest() {
+        let main = "fn run() {\n    serde_json::a();\n}\n";
+        let files = [
+            ("one/src/main.rs", main),
+            ("one/Cargo.toml", "[dependencies]\nserde_json = \"1\"\n"),
+            ("two/src/main.rs", main),
+            ("two/Cargo.toml", "[dependencies]\nrand = \"1\"\n"),
+        ];
+        assert!(external(&files, "one/src/main.rs", "a"));
+        assert!(!external(&files, "two/src/main.rs", "a"));
+    }
+
+    #[test]
+    fn test_rust_macro_can_bind_a_path_head() {
+        let main = "mod local {\n    pub(crate) fn run() {}\n}\nmacro_rules! expose {\n    () => { use crate::local as generated; }\n}\nexpose!();\n\nfn main() {\n    generated::run();\n}\n";
+        assert!(!external(&[("main.rs", main)], "main.rs", "run"));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use rayon::prelude::*;
 
 use super::extract::{extract_file, link_files, FileSymbols};
 use super::imports::{resolve_imports, Manifests};
-use super::resolve::resolve_references;
+use super::resolve::resolve_references_with;
 use crate::core::{Language, Result};
 
 /// The facts of each file, in path order.
@@ -120,8 +120,9 @@ impl CodeIndex {
         facts.sort_by(|left, right| left.file.cmp(&right.file));
         facts.dedup_by(|later, earlier| later.file == earlier.file);
         link_files(&mut facts);
-        resolve_imports(&mut facts, &read_manifests(root, files, read, list));
-        resolve_references(&mut facts);
+        let manifests = read_manifests(root, files, read, list);
+        resolve_imports(&mut facts, &manifests);
+        resolve_references_with(&mut facts, &manifests);
         Self { files: facts }
     }
 
