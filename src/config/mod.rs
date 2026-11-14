@@ -10,6 +10,35 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::Result;
 
+/// The keys that 5.0 removed or renamed, each with the text that gives the
+/// replacement. A table comes after its keys, thus the error names the key.
+const REMOVED_KEYS: &[(&str, &str)] = &[
+    (
+        "exclude_built_assets",
+        "use include_generated, which has the opposite meaning",
+    ),
+    ("duplicates.exclude_tests", "use exclude_tests"),
+    ("temporal.exclude_tests", "use exclude_tests"),
+    ("temporal", "use exclude_tests"),
+    ("gate.complexity", "use complexity.gate"),
+    ("gate.score", "use score.gate"),
+    ("gate.stubs", "use stubs.gate"),
+    ("gate.mutation", "use mutation.gate"),
+    ("gate", "use the gate key in the table of each command"),
+    (
+        "complexity.cyclomatic_error",
+        "use complexity.cyclomatic_max",
+    ),
+    ("complexity.cognitive_error", "use complexity.cognitive_max"),
+    ("satd.custom_markers", "use satd.markers"),
+    ("churn.top", "use the --top flag"),
+    ("hotspot.top", "use the --top flag"),
+    ("hotspot.days", "use hotspot.since, for example \"90d\""),
+    ("defect.churn_days", "use defect.since, for example \"30d\""),
+    ("changes.days", "use changes.since, for example \"30d\""),
+    ("score.fail_under", "use score.min"),
+];
+
 /// Main configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -87,13 +116,11 @@ impl Config {
                 path.display()
             )));
         }
-        let config: Self = figment
-            .merge(Toml::file_exact(path))
-            .merge(Env::prefixed("OMEN_").split("__"))
-            .extract()
-            .map_err(|e| crate::core::Error::Config(e.to_string()))?;
-        config.validate()?;
-        Ok(config)
+        Self::extract(
+            figment
+                .merge(Toml::file_exact(path))
+                .merge(Env::prefixed("OMEN_").split("__")),
+        )
     }
 
     /// Load configuration from directory, looking for omen.toml or .omen/omen.toml.
@@ -102,10 +129,26 @@ impl Config {
     /// Env vars with `OMEN_` prefix override file/default values.
     pub fn load_default(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref();
-        let config: Self = Figment::from(Serialized::defaults(Self::default()))
-            .merge(Toml::file(dir.join("omen.toml")))
-            .merge(Toml::file(dir.join(".omen/omen.toml")))
-            .merge(Env::prefixed("OMEN_").split("__"))
+        Self::extract(
+            Figment::from(Serialized::defaults(Self::default()))
+                .merge(Toml::file(dir.join("omen.toml")))
+                .merge(Toml::file(dir.join(".omen/omen.toml")))
+                .merge(Env::prefixed("OMEN_").split("__")),
+        )
+    }
+
+    /// Read the configuration from the merged sources. A key that 5.0 removed
+    /// gives an error that names the replacement, not only the unknown-field
+    /// error of serde.
+    fn extract(figment: Figment) -> Result<Self> {
+        for (key, replacement) in REMOVED_KEYS {
+            if figment.contains(key) {
+                return Err(crate::core::Error::Config(format!(
+                    "{key} was removed in 5.0; {replacement}"
+                )));
+            }
+        }
+        let config: Self = figment
             .extract()
             .map_err(|e| crate::core::Error::Config(e.to_string()))?;
         config.validate()?;
@@ -748,6 +791,108 @@ mod tests {
             jail.set_env("OMEN_HOTSPOT__SINCE", "1y");
             let config = Config::from_file("omen.toml").unwrap();
             assert_eq!(config.hotspot.since.days(), 365);
+            Ok(())
+        });
+    }
+
+    /// Each key that 5.0 removed or renamed, the file text that sets it, and
+    /// the text that the error must contain.
+    const REMOVED_KEY_CASES: &[(&str, &str, &str)] = &[
+        (
+            "exclude_built_assets = false",
+            "exclude_built_assets",
+            "use include_generated",
+        ),
+        (
+            "[duplicates]\nexclude_tests = false",
+            "duplicates.exclude_tests",
+            "use exclude_tests",
+        ),
+        (
+            "[temporal]\nexclude_tests = false",
+            "temporal.exclude_tests",
+            "use exclude_tests",
+        ),
+        (
+            "[gate]\ncomplexity = \"error\"",
+            "gate.complexity",
+            "use complexity.gate",
+        ),
+        ("[gate]\nscore = \"error\"", "gate.score", "use score.gate"),
+        ("[gate]\nstubs = \"error\"", "gate.stubs", "use stubs.gate"),
+        (
+            "[gate]\nmutation = \"error\"",
+            "gate.mutation",
+            "use mutation.gate",
+        ),
+        (
+            "[complexity]\ncyclomatic_error = 25",
+            "complexity.cyclomatic_error",
+            "use complexity.cyclomatic_max",
+        ),
+        (
+            "[complexity]\ncognitive_error = 25",
+            "complexity.cognitive_error",
+            "use complexity.cognitive_max",
+        ),
+        (
+            "[satd]\ncustom_markers = [\"X\"]",
+            "satd.custom_markers",
+            "use satd.markers",
+        ),
+        ("[churn]\ntop = 5", "churn.top", "use the --top flag"),
+        ("[hotspot]\ntop = 5", "hotspot.top", "use the --top flag"),
+        ("[hotspot]\ndays = 5", "hotspot.days", "use hotspot.since"),
+        (
+            "[defect]\nchurn_days = 5",
+            "defect.churn_days",
+            "use defect.since",
+        ),
+        ("[changes]\ndays = 5", "changes.days", "use changes.since"),
+        (
+            "[score]\nfail_under = 70.0",
+            "score.fail_under",
+            "use score.min",
+        ),
+    ];
+
+    #[test]
+    fn test_a_removed_key_gives_an_error_that_names_the_new_key() {
+        Jail::expect_with(|jail| {
+            for (text, old, replacement) in REMOVED_KEY_CASES {
+                jail.create_file("omen.toml", text)?;
+                let message = format!("{old} was removed in 5.0");
+                for error in [
+                    Config::from_file("omen.toml").unwrap_err().to_string(),
+                    Config::load_default(".").unwrap_err().to_string(),
+                ] {
+                    assert!(error.contains(&message), "{old}: {error}");
+                    assert!(error.contains(replacement), "{old}: {error}");
+                }
+            }
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_a_removed_key_in_the_environment_gives_the_same_error() {
+        Jail::expect_with(|jail| {
+            jail.set_env("OMEN_GATE__COMPLEXITY", "error");
+            let error = Config::load_default(".").unwrap_err().to_string();
+            assert!(
+                error.contains("gate.complexity was removed in 5.0; use complexity.gate"),
+                "{error}"
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_a_key_that_never_existed_keeps_the_unknown_field_error() {
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.toml", "[churn]\nunknown_window = 3")?;
+            let error = Config::from_file("omen.toml").unwrap_err().to_string();
+            assert!(!error.contains("was removed"), "{error}");
             Ok(())
         });
     }
