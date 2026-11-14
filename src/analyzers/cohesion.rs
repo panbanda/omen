@@ -29,11 +29,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use chrono::Utc;
+use petgraph::graph::{DiGraph, NodeIndex};
 use serde::{Deserialize, Serialize};
 
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::index::build::CodeIndex;
 use crate::index::extract::FileSymbols;
+use crate::index::graph::strongly_connected_components;
 use crate::index::members::{class_model, ClassModel, ClassSyntax};
 use crate::index::model::{Receiver, ReferenceKind, ResolutionStatus, SharedStr, SymbolKind};
 
@@ -729,12 +731,21 @@ pub struct ClassHierarchy {
     parents: HashMap<String, Vec<String>>,
     /// Maps class name -> list of direct children
     children: HashMap<String, Vec<String>>,
+    /// The DIT of each name. The first request for a DIT calculates all of them.
+    depths: std::cell::OnceCell<HashMap<String, u32>>,
+    /// The count of the edges that the depth calculation examined, for the tests.
+    steps: std::cell::Cell<u64>,
 }
 
 impl ClassHierarchy {
     /// Creates a new empty class hierarchy.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The count of the edges that the depth calculation examined.
+    pub fn steps(&self) -> u64 {
+        self.steps.get()
     }
 
     /// Adds a class that has at most one base to the hierarchy.
@@ -761,63 +772,81 @@ impl ClassHierarchy {
 
         // Ensure the class has an entry in children map (even if empty)
         self.children.entry(class_name.to_string()).or_default();
+        self.depths = std::cell::OnceCell::new();
     }
 
     /// Calculates DIT (Depth of Inheritance Tree) for a class.
     /// DIT = length of the longest path from the class to a root of the
     /// inheritance tree, over all base types. A base that the hierarchy does
-    /// not have is a root. A cycle ends at the class that closes it.
+    /// not have is a root.
+    ///
+    /// A cycle is invalid code. The classes of one cycle have the depth of
+    /// their component: an edge inside a component adds nothing.
     pub fn get_dit(&self, class_name: &str) -> u32 {
-        let mut memo: HashMap<&str, u32> = HashMap::new();
-        let mut path: Vec<&str> = Vec::new();
-        self.depth(class_name, &mut memo, &mut path)
+        self.depths
+            .get_or_init(|| self.all_depths())
+            .get(class_name)
+            .copied()
+            .unwrap_or(0)
     }
 
-    fn depth<'a>(
-        &'a self,
-        class_name: &'a str,
-        memo: &mut HashMap<&'a str, u32>,
-        path: &mut Vec<&'a str>,
-    ) -> u32 {
-        if let Some(known) = memo.get(class_name) {
-            return *known;
-        }
-        if path.contains(&class_name) {
-            return 0;
-        }
-        let Some(bases) = self.parents.get(class_name) else {
-            return 0;
-        };
-        path.push(class_name);
-        let deepest = bases
+    /// The depth of each name, in one pass over the graph of the base types.
+    /// The pass collapses each strongly connected component and finds the
+    /// longest path over the components, which have no cycle.
+    fn all_depths(&self) -> HashMap<String, u32> {
+        let mut graph: DiGraph<&str, ()> = DiGraph::new();
+        let mut nodes: HashMap<&str, NodeIndex> = HashMap::new();
+        let mut names: Vec<&str> = self
+            .parents
             .iter()
-            .map(|base| 1 + self.depth(base, memo, path))
-            .max()
-            .unwrap_or(0);
-        path.pop();
-        // A depth that a cycle cut short is not the depth of the class.
-        if !self.closes_cycle(class_name, path) {
-            memo.insert(class_name, deepest);
+            .flat_map(|(name, bases)| {
+                std::iter::once(name.as_str()).chain(bases.iter().map(String::as_str))
+            })
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        for name in names {
+            nodes.insert(name, graph.add_node(name));
         }
-        deepest
-    }
+        let mut classes: Vec<&String> = self.parents.keys().collect();
+        classes.sort_unstable();
+        for class in classes {
+            for base in &self.parents[class] {
+                graph.add_edge(nodes[class.as_str()], nodes[base.as_str()], ());
+            }
+        }
 
-    /// The class has a path to a class on the current path.
-    fn closes_cycle(&self, class_name: &str, path: &[&str]) -> bool {
-        let mut seen: HashSet<&str> = HashSet::new();
-        let mut stack: Vec<&str> = vec![class_name];
-        while let Some(current) = stack.pop() {
-            if !seen.insert(current) {
-                continue;
-            }
-            for base in self.parents.get(current).into_iter().flatten() {
-                if path.contains(&base.as_str()) || base == class_name {
-                    return true;
-                }
-                stack.push(base);
+        // The components come with the bases first.
+        let components = strongly_connected_components(&graph);
+        let mut component_of: HashMap<NodeIndex, usize> = HashMap::new();
+        for (number, component) in components.iter().enumerate() {
+            for node in component {
+                component_of.insert(*node, number);
             }
         }
-        false
+        let mut depth_of_component = vec![0u32; components.len()];
+        for (number, component) in components.iter().enumerate() {
+            let mut deepest = 0;
+            for node in component {
+                for base in graph.neighbors(*node) {
+                    self.steps.set(self.steps.get() + 1);
+                    let other = component_of[&base];
+                    if other != number {
+                        deepest = deepest.max(1 + depth_of_component[other]);
+                    }
+                }
+            }
+            depth_of_component[number] = deepest;
+        }
+        graph
+            .node_indices()
+            .map(|node| {
+                (
+                    graph[node].to_string(),
+                    depth_of_component[component_of[&node]],
+                )
+            })
+            .collect()
     }
 
     /// Calculates NOC (Number of Children) for a class.
@@ -1601,6 +1630,49 @@ mod tests {
     }
 
     #[test]
+    fn test_class_hierarchy_cyclic_ladder_is_linear() {
+        // Two classes for each level, each with both classes of the next level as
+        // bases, and a back edge from the last level to the first. A search over
+        // paths is exponential in the number of levels.
+        let levels = 60;
+        let mut hierarchy = ClassHierarchy::new();
+        for level in 0..levels {
+            let bases: Vec<String> = if level + 1 < levels {
+                vec![format!("A{}", level + 1), format!("B{}", level + 1)]
+            } else {
+                vec!["A0".to_string()]
+            };
+            hierarchy.add_class_with_bases(&format!("A{level}"), &bases);
+            hierarchy.add_class_with_bases(&format!("B{level}"), &bases);
+        }
+        let started = std::time::Instant::now();
+        for level in 0..levels {
+            assert_eq!(hierarchy.get_dit(&format!("A{level}")), 0);
+            // No class has `B0` as a base. It is above the component of the
+            // cycle, and the component is one level.
+            let expected = u32::from(level == 0);
+            assert_eq!(hierarchy.get_dit(&format!("B{level}")), expected);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_class_hierarchy_cycle_below_a_chain() {
+        // Leaf -> Mid -> (X <-> Y) -> Root: the cycle is one level.
+        let mut hierarchy = ClassHierarchy::new();
+        hierarchy.add_class("Leaf", Some("Mid"));
+        hierarchy.add_class("Mid", Some("X"));
+        hierarchy.add_class_with_bases("X", &["Y".to_string(), "Root".to_string()]);
+        hierarchy.add_class("Y", Some("X"));
+        hierarchy.add_class("Root", None);
+        assert_eq!(hierarchy.get_dit("Root"), 0);
+        assert_eq!(hierarchy.get_dit("X"), 1);
+        assert_eq!(hierarchy.get_dit("Y"), 1);
+        assert_eq!(hierarchy.get_dit("Mid"), 2);
+        assert_eq!(hierarchy.get_dit("Leaf"), 3);
+    }
+
+    #[test]
     fn test_class_hierarchy_self_parent() {
         // Degenerate case: class is its own parent
         let mut hierarchy = ClassHierarchy::new();
@@ -1670,6 +1742,53 @@ mod tests {
             assert_eq!(hierarchy.get_dit(child), 1);
             assert_eq!(hierarchy.get_noc(child), 0);
         }
+    }
+
+    /// Level `n` has the bases `n + 1` and `n + 2`. The last level has the
+    /// root as a base, thus the hierarchy has a cycle.
+    fn ladder(levels: usize, close: bool) -> ClassHierarchy {
+        let mut hierarchy = ClassHierarchy::new();
+        for level in 0..levels {
+            let mut bases = Vec::new();
+            for next in [level + 1, level + 2] {
+                if next < levels {
+                    bases.push(format!("L{next}"));
+                } else if close {
+                    bases.push("L0".to_string());
+                }
+            }
+            hierarchy.add_class_with_bases(&format!("L{level}"), &bases);
+        }
+        hierarchy
+    }
+
+    #[test]
+    fn test_dit_work_is_linear_for_a_ladder_with_a_cycle() {
+        let hierarchy = ladder(60, true);
+        for level in 0..60 {
+            hierarchy.get_dit(&format!("L{level}"));
+        }
+        // 60 classes and 120 edges.
+        assert!(hierarchy.steps() <= 2_000, "steps: {}", hierarchy.steps());
+    }
+
+    #[test]
+    fn test_dit_of_a_ladder_without_a_cycle_is_the_longest_path() {
+        let hierarchy = ladder(60, false);
+        assert_eq!(hierarchy.get_dit("L0"), 59);
+        assert_eq!(hierarchy.get_dit("L58"), 1);
+        assert_eq!(hierarchy.get_dit("L59"), 0);
+    }
+
+    #[test]
+    fn test_dit_of_a_cycle_is_the_depth_of_its_component() {
+        let mut hierarchy = ClassHierarchy::new();
+        hierarchy.add_class_with_bases("A", &["B".to_string()]);
+        hierarchy.add_class_with_bases("B", &["A".to_string(), "Root".to_string()]);
+        hierarchy.add_class_with_bases("C", &["A".to_string()]);
+        assert_eq!(hierarchy.get_dit("A"), 1);
+        assert_eq!(hierarchy.get_dit("B"), 1);
+        assert_eq!(hierarchy.get_dit("C"), 2);
     }
 
     #[test]
