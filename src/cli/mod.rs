@@ -2265,6 +2265,7 @@ mod tests {
         assert_eq!(args.max_nodes, 5);
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_top_offset() {
         let args = parse_mutation_args(&["omen", "mutation", "--top", "4", "--offset", "2"]);

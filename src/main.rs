@@ -25,7 +25,9 @@ use omen::commands::context::ContextRequest;
 use omen::commands::eval::EvalRequest;
 use omen::commands::impact::ImpactRequest;
 use omen::commands::outline::OutlineRequest;
-use omen::commands::scope::{build_context, filtered_file_set, write_report_file, Scope};
+#[cfg(feature = "mutation")]
+use omen::commands::scope::write_report_file;
+use omen::commands::scope::{build_context, filtered_file_set, Scope};
 use omen::commands::symbol::SymbolRequest;
 use omen::config::Config;
 use omen::core::progress::is_tty;
