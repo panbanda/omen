@@ -374,6 +374,39 @@ fn test_inheritance_depth_and_children() {
 }
 
 #[test]
+fn test_dit_is_the_longest_path_over_all_bases() {
+    let python = "class Root: pass\nclass Deep(Root): pass\nclass Shallow: pass\nclass Leaf(Shallow, Deep): pass\n";
+    let analysis = analyze(&[("a.py", python)]);
+    assert_eq!(class(&analysis, "Leaf").dit, 2);
+    assert_eq!(
+        class(&analysis, "Leaf").parent_class.as_deref(),
+        Some("Shallow")
+    );
+    assert_eq!(class(&analysis, "Deep").noc, 1);
+    assert_eq!(class(&analysis, "Shallow").noc, 1);
+    assert_eq!(class(&analysis, "Root").noc, 1);
+
+    let cpp = "class Root {};\nclass Deep : public Root {};\nclass Shallow {};\nclass Leaf : public Shallow, public Deep {};\n";
+    let analysis = analyze(&[("a.cpp", cpp)]);
+    assert_eq!(class(&analysis, "Leaf").dit, 2);
+
+    let java = "interface Root {}\ninterface Deep extends Root {}\ninterface Shallow {}\ninterface Leaf extends Shallow, Deep {}\n";
+    let analysis = analyze(&[("A.java", java)]);
+    assert_eq!(class(&analysis, "Leaf").dit, 2);
+}
+
+#[test]
+fn test_dit_ends_when_the_bases_have_a_cycle() {
+    let sources = [
+        ("a.py", "class A(B, C): pass\n"),
+        ("b.py", "class B(A): pass\n"),
+        ("c.py", "class C: pass\n"),
+    ];
+    let analysis = analyze(&sources);
+    assert!(class(&analysis, "A").dit <= 3);
+}
+
+#[test]
 fn test_test_files_are_skipped_unless_asked() {
     let source = "class Hidden:\n    pass\n";
     let analysis = analyze(&[("tests/hidden_test.py", source)]);

@@ -731,58 +731,85 @@ fn is_reference(language: Language, node: Node<'_>, ancestors: &[Node<'_>]) -> b
     }
 }
 
-/// The name of the superclass of a type definition.
-pub fn superclass(language: Language, node: Node<'_>, source: &[u8]) -> Option<String> {
-    let first_text = |parent: Node<'_>, kinds: &[&str]| -> Option<String> {
+/// The names of the base types of a type definition, in source order. The
+/// first name is the parent class that the output shows. DIT and NOC use all
+/// the names.
+pub fn bases(language: Language, node: Node<'_>, source: &[u8]) -> Vec<String> {
+    let names_of = |parent: Node<'_>, kinds: &[&str]| -> Vec<String> {
         let mut cursor = parent.walk();
-        let found = parent
-            .children(&mut cursor)
-            .find(|child| kinds.contains(&child.kind()))
-            .map(|child| text(child, source).to_string());
-        found
+        let names = parent
+            .named_children(&mut cursor)
+            .filter(|child| kinds.contains(&child.kind()))
+            .map(|child| text(child, source).to_string())
+            .collect();
+        names
     };
     match language {
         Language::Java => {
-            let clause = node.child_by_field_name("superclass")?;
-            first_text(clause, &["type_identifier"])
+            if let Some(clause) = node.child_by_field_name("superclass") {
+                return names_of(clause, &["type_identifier"]);
+            }
+            let Some(clause) = first_child_of_kind(node, "extends_interfaces") else {
+                return Vec::new();
+            };
+            let Some(list) = first_child_of_kind(clause, "type_list") else {
+                return names_of(clause, &["type_identifier"]);
+            };
+            let mut cursor = list.walk();
+            let names = list
+                .named_children(&mut cursor)
+                .filter_map(|child| match child.kind() {
+                    "type_identifier" => Some(text(child, source).to_string()),
+                    "generic_type" => first_child_of_kind(child, "type_identifier")
+                        .map(|name| text(name, source).to_string()),
+                    _ => None,
+                })
+                .collect();
+            names
         }
         Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
-            let heritage = first_child_of_kind(node, "class_heritage")?;
-            let clause = first_child_of_kind(heritage, "extends_clause").or(Some(heritage))?;
-            first_text(clause, &["identifier", "type_identifier"])
-        }
-        Language::Python => {
-            let bases = node.child_by_field_name("superclasses")?;
-            first_text(bases, &["identifier"])
-        }
-        Language::CSharp => {
-            let bases = first_child_of_kind(node, "base_list")?;
-            let mut cursor = bases.walk();
-            let first = bases.named_children(&mut cursor).next()?;
-            let name = match first.kind() {
-                "generic_name" => first.named_child(0).unwrap_or(first),
-                _ => first,
+            let Some(heritage) = first_child_of_kind(node, "class_heritage") else {
+                return Vec::new();
             };
-            Some(text(name, source).to_string())
+            let clause = first_child_of_kind(heritage, "extends_clause").unwrap_or(heritage);
+            names_of(clause, &["identifier", "type_identifier"])
+                .into_iter()
+                .take(1)
+                .collect()
         }
-        Language::Cpp => {
-            let clause = first_child_of_kind(node, "base_class_clause")?;
-            first_text(clause, &["type_identifier"])
-        }
-        Language::Ruby => {
-            let superclass = node.child_by_field_name("superclass")?;
-            let name = superclass.named_child(0)?;
-            Some(text(name, source).to_string())
-        }
-        Language::Php => {
-            let base = first_child_of_kind(node, "base_clause")?;
-            let mut cursor = base.walk();
-            let name = base
+        Language::Python => match node.child_by_field_name("superclasses") {
+            Some(bases) => names_of(bases, &["identifier"]),
+            None => Vec::new(),
+        },
+        Language::CSharp => {
+            let Some(bases) = first_child_of_kind(node, "base_list") else {
+                return Vec::new();
+            };
+            let mut cursor = bases.walk();
+            let names = bases
                 .named_children(&mut cursor)
-                .find(|child| ["name", "qualified_name"].contains(&child.kind()))?;
-            Some(text(name, source).to_string())
+                .map(|base| match base.kind() {
+                    "generic_name" => base.named_child(0).unwrap_or(base),
+                    _ => base,
+                })
+                .map(|name| text(name, source).to_string())
+                .collect();
+            names
         }
-        Language::Rust | Language::Go | Language::C | Language::Bash => None,
+        Language::Cpp => match first_child_of_kind(node, "base_class_clause") {
+            Some(clause) => names_of(clause, &["type_identifier"]),
+            None => Vec::new(),
+        },
+        Language::Ruby => node
+            .child_by_field_name("superclass")
+            .and_then(|superclass| superclass.named_child(0))
+            .map(|name| vec![text(name, source).to_string()])
+            .unwrap_or_default(),
+        Language::Php => match first_child_of_kind(node, "base_clause") {
+            Some(base) => names_of(base, &["name", "qualified_name"]),
+            None => Vec::new(),
+        },
+        Language::Rust | Language::Go | Language::C | Language::Bash => Vec::new(),
     }
 }
 

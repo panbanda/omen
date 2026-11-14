@@ -134,12 +134,12 @@ impl Analyzer {
             })
             .collect();
 
-        let mut all_classes = Classes::new(&views).metrics();
-
+        let measured = Classes::new(&views).metrics();
         let mut hierarchy = ClassHierarchy::new();
-        for cls in &all_classes {
-            hierarchy.add_class(&cls.class_name, cls.parent_class.as_deref());
+        for (cls, bases) in &measured {
+            hierarchy.add_class_with_bases(&cls.class_name, bases);
         }
+        let mut all_classes: Vec<ClassMetrics> = measured.into_iter().map(|(cls, _)| cls).collect();
         for cls in &mut all_classes {
             cls.dit = hierarchy.get_dit(&cls.class_name);
             cls.noc = hierarchy.get_noc(&cls.class_name);
@@ -491,7 +491,7 @@ impl<'a, 'v> Classes<'a, 'v> {
     }
 
     /// The metrics of each class, in the order of the classes in the files.
-    fn metrics(self) -> Vec<ClassMetrics> {
+    fn metrics(self) -> Vec<(ClassMetrics, Vec<String>)> {
         let views = self.views;
         self.slots
             .iter()
@@ -666,14 +666,17 @@ impl<'a, 'v> Classes<'a, 'v> {
                 let start_line = class.range.start_line as usize;
                 let end_line = class.range.end_line.max(builder.end_line) as usize;
                 let violations = build_violations(wmc, cbo, lcom);
+                let bases: Vec<String> = facts.link_facts[slot.position]
+                    .bases
+                    .iter()
+                    .filter(|base| !self.interfaces.contains(*base))
+                    .cloned()
+                    .collect();
 
-                ClassMetrics {
+                let metrics = ClassMetrics {
                     file: facts.file.clone(),
                     class_name: class.name.clone(),
-                    parent_class: facts.link_facts[slot.position]
-                        .superclass
-                        .clone()
-                        .filter(|parent| !self.interfaces.contains(parent)),
+                    parent_class: bases.first().cloned(),
                     language: facts.language.to_string(),
                     start_line,
                     end_line,
@@ -693,7 +696,8 @@ impl<'a, 'v> Classes<'a, 'v> {
                     fields,
                     coupled_classes: coupled,
                     violations,
-                }
+                };
+                (metrics, bases)
             })
             .collect()
     }
@@ -704,11 +708,11 @@ fn facts_of<'a>(views: &'a [View<'_>], slot: &Slot) -> &'a crate::index::model::
 }
 
 /// Class hierarchy for DIT/NOC calculation.
-/// Tracks parent-child relationships across the codebase.
+/// Tracks the base types of each class across the codebase. A class can have more than one base.
 #[derive(Debug, Default)]
 pub struct ClassHierarchy {
-    /// Maps class name -> parent class name (None if no parent)
-    parents: HashMap<String, Option<String>>,
+    /// Maps class name -> names of its base types, in source order
+    parents: HashMap<String, Vec<String>>,
     /// Maps class name -> list of direct children
     children: HashMap<String, Vec<String>>,
 }
@@ -719,50 +723,87 @@ impl ClassHierarchy {
         Self::default()
     }
 
-    /// Adds a class to the hierarchy.
+    /// Adds a class that has at most one base to the hierarchy.
     pub fn add_class(&mut self, class_name: &str, parent: Option<&str>) {
-        let parent_str = parent.map(|s| s.to_string());
-        self.parents
-            .insert(class_name.to_string(), parent_str.clone());
+        let bases: Vec<String> = parent.map(str::to_string).into_iter().collect();
+        self.add_class_with_bases(class_name, &bases);
+    }
 
-        // Register this class as a child of its parent
-        if let Some(parent_name) = parent_str {
+    /// Adds a class and its base types to the hierarchy.
+    pub fn add_class_with_bases(&mut self, class_name: &str, bases: &[String]) {
+        let mut unique: Vec<String> = Vec::new();
+        for base in bases {
+            if !unique.contains(base) {
+                unique.push(base.clone());
+            }
+        }
+        for base in &unique {
             self.children
-                .entry(parent_name)
+                .entry(base.clone())
                 .or_default()
                 .push(class_name.to_string());
         }
+        self.parents.insert(class_name.to_string(), unique);
 
         // Ensure the class has an entry in children map (even if empty)
         self.children.entry(class_name.to_string()).or_default();
     }
 
     /// Calculates DIT (Depth of Inheritance Tree) for a class.
-    /// DIT = max path length from class to root of inheritance tree.
-    /// Per Chidamber & Kemerer 1994, DIT counts the number of ancestor classes.
+    /// DIT = length of the longest path from the class to a root of the
+    /// inheritance tree, over all base types. A base that the hierarchy does
+    /// not have is a root. A cycle ends at the class that closes it.
     pub fn get_dit(&self, class_name: &str) -> u32 {
-        let mut depth = 0;
-        let mut current = class_name.to_string();
-        let mut visited = HashSet::new();
+        let mut memo: HashMap<&str, u32> = HashMap::new();
+        let mut path: Vec<&str> = Vec::new();
+        self.depth(class_name, &mut memo, &mut path)
+    }
 
-        // Walk up the inheritance chain, tracking visited to break cycles
-        while let Some(Some(parent)) = self.parents.get(&current) {
-            if !visited.insert(parent.clone()) {
-                break;
-            }
-            depth += 1;
-            current = parent.clone();
+    fn depth<'a>(
+        &'a self,
+        class_name: &'a str,
+        memo: &mut HashMap<&'a str, u32>,
+        path: &mut Vec<&'a str>,
+    ) -> u32 {
+        if let Some(known) = memo.get(class_name) {
+            return *known;
         }
+        if path.contains(&class_name) {
+            return 0;
+        }
+        let Some(bases) = self.parents.get(class_name) else {
+            return 0;
+        };
+        path.push(class_name);
+        let deepest = bases
+            .iter()
+            .map(|base| 1 + self.depth(base, memo, path))
+            .max()
+            .unwrap_or(0);
+        path.pop();
+        // A depth that a cycle cut short is not the depth of the class.
+        if !self.closes_cycle(class_name, path) {
+            memo.insert(class_name, deepest);
+        }
+        deepest
+    }
 
-        // If parent not in our map, still count it as depth 1
-        if depth == 0 {
-            if let Some(Some(_)) = self.parents.get(class_name) {
-                // Has a parent but parent not tracked - depth is at least 1
-                return 1;
+    /// The class has a path to a class on the current path.
+    fn closes_cycle(&self, class_name: &str, path: &[&str]) -> bool {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut stack: Vec<&str> = vec![class_name];
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+            for base in self.parents.get(current).into_iter().flatten() {
+                if path.contains(&base.as_str()) || base == class_name {
+                    return true;
+                }
+                stack.push(base);
             }
         }
-
-        depth
+        false
     }
 
     /// Calculates NOC (Number of Children) for a class.

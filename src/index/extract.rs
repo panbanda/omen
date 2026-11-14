@@ -123,7 +123,7 @@ pub struct Draft<'tree> {
     /// the search for a method.
     pub prepends: Vec<String>,
     /// The name of the class that the type extends.
-    pub superclass: Option<String>,
+    pub bases: Vec<String>,
     /// The function has the name of the variable or the field that holds it.
     pub named_by_binding: bool,
 }
@@ -147,7 +147,7 @@ pub struct LinkFacts {
     pub c_linkage: bool,
     pub defined_type: bool,
     pub prepends: Vec<String>,
-    pub superclass: Option<String>,
+    pub bases: Vec<String>,
     pub named_by_binding: bool,
     /// The names, different from its own, under which the module exports
     /// this top-level symbol, as `export { a as b }` gives `b` to `a`.
@@ -693,7 +693,7 @@ impl<'tree> Extractor<'_, 'tree> {
             c_linkage: false,
             defined_type: false,
             prepends: Vec::new(),
-            superclass: None,
+            bases: Vec::new(),
             named_by_binding: rule.name == NameRule::Hook
                 && rule.kind != SymbolKind::Field
                 && (name_node.start_byte() < node.start_byte()
@@ -708,7 +708,7 @@ impl<'tree> Extractor<'_, 'tree> {
             return None;
         }
         if self.members.is_some() && draft.kind.is_type() {
-            draft.superclass = members::superclass(self.language, node, self.source);
+            draft.bases = members::bases(self.language, node, self.source);
         }
         // The declared type of a field is in the place of a result type.
         if draft.kind == SymbolKind::Field && draft.return_type.is_none() {
@@ -1115,7 +1115,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             c_linkage: draft.c_linkage,
             defined_type: draft.defined_type,
             prepends: draft.prepends,
-            superclass: draft.superclass,
+            bases: draft.bases,
             named_by_binding: draft.named_by_binding,
             export_aliases,
         });
