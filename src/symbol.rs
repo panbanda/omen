@@ -155,11 +155,18 @@ pub fn report_with_reader(
             .and_then(|content| complexity_analyzer.analyze_content(Path::new(&sym.file), content));
         if let Ok(file_result) = analyzed {
             // Find the function matching name + start_line
-            let found = file_result
-                .functions
-                .iter()
-                // The complexity analyzer can start a function at its annotation.
-                .find(|f| f.name == sym.name && f.start_line <= sym.line && sym.line <= f.end_line);
+            let same_name = || file_result.functions.iter().filter(|f| f.name == sym.name);
+            // A function with the same name can be in a function. The function
+            // that starts at the line of the symbol is the symbol. The
+            // complexity analyzer can start a function at its annotation. Then
+            // the smallest function that contains the line is the symbol.
+            let found = same_name()
+                .find(|f| f.start_line == sym.line)
+                .or_else(|| {
+                    same_name()
+                        .filter(|f| f.start_line <= sym.line && sym.line <= f.end_line)
+                        .min_by_key(|f| f.end_line - f.start_line)
+                });
             if let Some(f) = found {
                 (Some(f.metrics.cyclomatic), Some(f.metrics.cognitive))
             } else {
@@ -326,6 +333,25 @@ mod tests {
         );
         let src = report.source.unwrap();
         assert!(src.contains("fn a"), "source should contain function body");
+    }
+
+    /// An inner function has the name of the outer function. The report of
+    /// the inner function has the complexity of the inner function.
+    #[test]
+    fn test_nested_function_with_the_name_of_the_outer_function() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("a.py"),
+            "def f(items):\n    for item in items:\n        if item:\n            if item > 1:\n                pass\n\n    def f():\n        return 1\n\n    return f\n",
+        )
+        .unwrap();
+        let files = vec![dir.path().join("a.py")];
+        let outer = get_symbol(dir.path(), &files, "a.py#f", &SymbolOptions::default()).unwrap();
+        let inner = get_symbol(dir.path(), &files, "a.py#f.f", &SymbolOptions::default()).unwrap();
+        assert_eq!(outer.start_line, 1);
+        assert_eq!(inner.start_line, 7);
+        assert!(outer.cyclomatic.unwrap() > 1, "{outer:?}");
+        assert_eq!(inner.cyclomatic, Some(1), "{inner:?}");
     }
 
     #[test]
