@@ -1224,7 +1224,7 @@ mod tests {
                 "35 made>braces.radius UniqueCandidate ReceiverDeclaredType [shapes.hpp#Circle.radius]",
                 "35 made>heap.radius UniqueCandidate ReceiverDeclaredType [shapes.hpp#Circle.radius]",
                 "35 made>declared.radius UniqueCandidate ReceiverDeclaredType [shapes.hpp#Circle.radius]",
-                "35 made>std::sqrt Unresolved - []",
+                "35 made>std::sqrt External - []",
                 "35 made>describe UniqueCandidate ImportedModule [shapes.cpp#describe]",
             ]
         );

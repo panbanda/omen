@@ -645,7 +645,7 @@ mod tests {
                 "31 Program.Measure>size.Area UniqueCandidate ReceiverDeclaredType [Shapes/Shapes.cs#Circle.Area]",
                 "31 Program.Measure>shape.Area Ambiguous NameOnly [Shapes/Shapes.cs#Circle.Area, Shapes/Shapes.cs#IShape.Area]",
                 "31 Program.Measure>made.Area UniqueCandidate ReceiverDeclaredType [Shapes/Shapes.cs#Circle.Area]",
-                "31 Program.Measure>Math.Max Unresolved - []",
+                "31 Program.Measure>Math.Max External - []",
                 "37 Program.Shadow>Helper UniqueCandidate LexicalScope [Program.cs#Program.Shadow.Helper]",
                 "37 Program.Shadow>Shop.Util.Helpers::Helper UniqueCandidate QualifiedPath [Util/Helpers.cs#Helpers.Helper]",
                 "42 Program.Tally>counter.Next UniqueCandidate ReceiverDeclaredType [Program.cs#Program.Counter.Next]",

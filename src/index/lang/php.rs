@@ -780,7 +780,7 @@ mod tests {
             rows(CALL_FILES, "main.php")[9..],
             [
                 "29 measure>Circle UniqueCandidate QualifiedPath [shapes.php#Circle.__construct]",
-                "30 measure>SplStack Unresolved - []",
+                "30 measure>SplStack External - []",
                 "31 measure>$stack.push Unresolved - []",
                 "32 measure>$size.area UniqueCandidate ReceiverDeclaredType [shapes.php#Circle.area]",
                 "32 measure>$shape.area Ambiguous NameOnly [shapes.php#Circle.area, shapes.php#Shape.area]",
@@ -788,7 +788,7 @@ mod tests {
                 "32 measure>$circle.area UniqueCandidate ReceiverDeclaredType [shapes.php#Circle.area]",
                 "32 measure>Circle::unit UniqueCandidate QualifiedPath [shapes.php#Circle.unit]",
                 "32 measure>$callback Unresolved - []",
-                "32 measure>strtoupper Unresolved - []",
+                "32 measure>strtoupper External - []",
             ]
         );
     }
@@ -806,7 +806,7 @@ mod tests {
                 "47 Circle.build>self UniqueCandidate QualifiedPath [shapes.php#Circle.__construct]",
                 "52 Circle.area>self.scaled UniqueCandidate EnclosingType [shapes.php#Circle.scaled]",
                 "52 Circle.area>helper UniqueCandidate ImportedName [util.php#helper]",
-                "57 Circle.label>strtoupper Unresolved - []",
+                "57 Circle.label>strtoupper External - []",
                 "57 Circle.label>super.label UniqueCandidate EnclosingType [shapes.php#Base.label]",
             ]
         );

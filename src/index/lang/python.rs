@@ -698,7 +698,7 @@ mod tests {
                 "20 run>Circle UniqueCandidate ImportedName [app/shapes.py#Circle.__init__]",
                 "21 run>circle.area UniqueCandidate ReceiverDeclaredType [app/shapes.py#Circle.area]",
                 "23 run>add UniqueCandidate LexicalScope [app/main.py#run.add]",
-                "23 run>len Unresolved - []",
+                "23 run>len External - []",
                 "27 measure>size.area UniqueCandidate ReceiverDeclaredType [app/shapes.py#Square.area]",
                 "27 measure>size.label UniqueCandidate ReceiverDeclaredType [app/shapes.py#Shape.label]",
                 "27 measure>shape.area Ambiguous NameOnly [app/shapes.py#Circle.area, app/shapes.py#Shape.area, app/shapes.py#Square.area]",

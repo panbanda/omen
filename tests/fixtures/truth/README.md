@@ -36,6 +36,9 @@ are not evidence of accuracy on code that the author did not see.
   no definition.
 - `candidates_required` lists definitions that omen must offer as candidates.
   The harness measures candidates and edges separately.
+- `status` is optional. The value `external` means that omen must report the call as a call of a
+  definition outside the repository. The value `not_external` means that omen must not. The check
+  covers each report of the callee name in the caller.
 - An import `path` is the path in the source, without quotation marks. For a
   wildcard import, it is the path of the module.
 - `names` lists each name that the import binds. `alias` is the local name when

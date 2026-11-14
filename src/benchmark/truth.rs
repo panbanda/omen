@@ -706,7 +706,8 @@ fn compare_calls(
         ));
         if let Some(status) = call.status {
             let reported = matching.iter().flat_map(|o| o.external.iter().copied());
-            let wrong = reported.filter(|external| *external != (status == ExpectedStatus::External));
+            let wrong =
+                reported.filter(|external| *external != (status == ExpectedStatus::External));
             let count = wrong.count();
             out.push(assertion(
                 format!("{prefix}/status"),

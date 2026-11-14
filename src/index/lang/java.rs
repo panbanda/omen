@@ -601,7 +601,7 @@ mod tests {
                 "20 Main.run>List.of External - []",
                 "20 Main.run>local UniqueCandidate EnclosingType [Main.java#Main.local]",
                 "22 Main.run>add.applyAsInt UniqueCandidate LexicalScope [Main.java#Main.run.add]",
-                "22 Main.run>numbers.size Unresolved - []",
+                "22 Main.run>numbers.size External - []",
                 "26 Main.measure>Circle UniqueCandidate QualifiedPath [shop/shapes/Circle.java#Circle.Circle]",
                 "27 Main.measure>size.area UniqueCandidate ReceiverDeclaredType [shop/shapes/Circle.java#Circle.area]",
                 "27 Main.measure>shape.area Ambiguous NameOnly [shop/shapes/Circle.java#Circle.area, shop/shapes/Shape.java#Shape.area]",
@@ -610,7 +610,7 @@ mod tests {
                 "32 Main.shadow>helper UniqueCandidate ImportedName [shop/util/Util.java#Util.helper]",
                 "36 Main.tally>counter.next UniqueCandidate ReceiverDeclaredType [Main.java#Main.Counter.next]",
                 "36 Main.tally>(..).next UniqueCandidate ReceiverDeclaredType [Main.java#Main.Counter.next]",
-                "36 Main.tally>Math.max Unresolved - []",
+                "36 Main.tally>Math.max External - []",
                 "36 Main.tally>missing Unresolved - []",
             ]
         );

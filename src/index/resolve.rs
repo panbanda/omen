@@ -6,6 +6,8 @@
 //! name. A qualifier or a receiver that fails does not continue to the rules
 //! for a bare name.
 
+pub mod external;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, OnceLock};
 
@@ -1885,6 +1887,13 @@ impl<'a> Resolver<'a> {
 
     fn resolve(&self, file: usize, position: usize, depth: usize) -> Outcome {
         let mut outcome = self.resolve_by_rules(file, position, depth);
+        // The other rules found no candidate. The source can still show a
+        // definition outside the repository.
+        if outcome.status == Status::Unresolved && outcome.candidates.is_empty() {
+            if let Some(external) = self.external(file, position) {
+                return external;
+            }
+        }
         // A Python or C++ call of a class makes an object. It runs the constructor.
         if matches!(self.family(file), Family::Python | Family::C) {
             let arity = self.files[file].references[position].arity;
@@ -2341,7 +2350,7 @@ mod tests {
                 "5 run>crate::other::Cart::open UniqueCandidate QualifiedPath [src/other.rs#Cart.open]",
                 "6 run>crate::other::missing Unresolved - []",
                 "7 run>crate::other::Gone::open Unresolved - []",
-                "8 run>serde::other::thing Unresolved - []",
+                "8 run>serde::other::thing External - []",
             ]
         );
         assert_eq!(

@@ -1182,10 +1182,10 @@ mod tests {
                 "33 measure>size.area UniqueCandidate ReceiverDeclaredType [shapes.ts#Square.area]",
                 "33 measure>shape.area Ambiguous NameOnly [shapes.ts#Circle.area, shapes.ts#Shape.area, shapes.ts#Square.area]",
                 "33 measure>callback Unresolved - []",
-                "37 external>Map Unresolved - []",
+                "37 external>Map External - []",
                 "38 external>seen.set Unresolved - []",
                 "39 external>Square UniqueCandidate QualifiedPath [shapes.ts#Square]",
-                "40 external>parseInt Unresolved - []",
+                "40 external>parseInt External - []",
                 "40 external>basename External - []",
                 "40 external>other.helper UniqueCandidate ImportedModule [other.ts#helper]",
                 "40 external>Circle.unit UniqueCandidate QualifiedPath [shapes.ts#Circle.unit]",
@@ -1237,8 +1237,8 @@ mod tests {
         assert_eq!(
             rows(&files, "legacy.cjs"),
             [
-                "1 ->require Unresolved - []",
-                "2 ->require Unresolved - []",
+                "1 ->require External - []",
+                "2 ->require External - []",
                 "5 legacyName>basename External - []",
                 "5 legacyName>other.onlyHere UniqueCandidate ImportedModule [other.js#onlyHere]",
             ]
@@ -1276,7 +1276,7 @@ mod tests {
         assert_eq!(
             rows(&files, "shop.ts"),
             [
-                "7 Shop.create>Map Unresolved - []",
+                "7 Shop.create>Map External - []",
                 "8 Shop.create>items.set Unresolved - []",
             ]
         );

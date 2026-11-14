@@ -622,8 +622,8 @@ mod tests {
         assert_eq!(
             rows(CALL_FILES, "main.rb"),
             [
-                "1 ->require_relative Unresolved - []",
-                "2 ->require_relative Unresolved - []",
+                "1 ->require_relative External - []",
+                "2 ->require_relative External - []",
                 "9 bare>local UniqueCandidate SameFile [main.rb#local]",
                 "9 bare>local UniqueCandidate SameFile [main.rb#local]",
                 "9 bare>helper UniqueCandidate ImportedModule [other.rb#helper]",
@@ -722,7 +722,7 @@ mod tests {
         assert_eq!(
             rows(&files, "lib/handler.rb"),
             [
-                "1 ->require_relative Unresolved - []",
+                "1 ->require_relative External - []",
                 "4 Handler>attr_reader Unresolved - []",
                 "7 Handler.challenge>realm Ambiguous NameOnly [test/spec_handler.rb#realm]",
                 "7 Handler.challenge>loaded UniqueCandidate ImportedModule [lib/tools.rb#loaded]",

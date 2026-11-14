@@ -622,11 +622,11 @@ mod tests {
             names(view.callers(&leaf, 2, DEFAULT_MIN_BASIS)),
             [vec!["shop.py#helper"], vec!["shop.py#Item.name"]]
         );
-        // `len` is not in the repository. The call is evidence, not an edge.
+        // `len` is a builtin that the repository does not define. The call is evidence, not an edge.
         let calls = view.calls_of(leaf[0]);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].call, "len");
-        assert_eq!(calls[0].status, ResolutionStatus::Unresolved);
+        assert_eq!(calls[0].status, ResolutionStatus::External);
         assert_eq!(view.resolution_summary().unique_candidate, 3);
     }
 
