@@ -621,6 +621,7 @@ mod tests {
                     edge("src/a.rs#run", "src/a.rs#helper", ChangeState::Added),
                 ],
             },
+            security: None,
         }
     }
 

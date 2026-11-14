@@ -24,7 +24,17 @@ pub fn run(
             // The reference is checked before the first write, so a failed run keeps
             // the files of an earlier run.
             let changes = git_ref
-                .map(|reference| crate::changeset::build::compute(path, Some(reference), config))
+                .map(|reference| -> crate::core::Result<_> {
+                    let mut changes =
+                        crate::changeset::build::compute(path, Some(reference), config)?;
+                    changes.security = Some(crate::changeset::security::compute(
+                        path,
+                        Some(reference),
+                        config,
+                        &changes,
+                    )?);
+                    Ok(changes)
+                })
                 .transpose()?;
             std::fs::create_dir_all(&args.data)?;
 

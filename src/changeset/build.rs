@@ -319,6 +319,7 @@ pub fn compute(repository: &Path, target: Option<&str>, config: &Config) -> Resu
         notes,
         new_findings,
         graph,
+        security: None,
     })
 }
 

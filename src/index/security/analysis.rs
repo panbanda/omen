@@ -82,6 +82,30 @@ pub fn analyze(
     }
 }
 
+/// Analyzes files that the caller already has as text. The names are relative paths.
+pub fn analyze_sources(sources: &[(&str, &str)], min_basis: ResolutionBasis) -> Analysis {
+    let contents: std::collections::HashMap<PathBuf, Vec<u8>> = sources
+        .iter()
+        .map(|(name, text)| (PathBuf::from(name), text.as_bytes().to_vec()))
+        .collect();
+    let paths: Vec<PathBuf> = sources
+        .iter()
+        .map(|(name, _)| PathBuf::from(name))
+        .collect();
+    analyze(
+        Path::new(""),
+        &paths,
+        &|path| {
+            contents
+                .get(path)
+                .cloned()
+                .ok_or_else(|| crate::core::Error::analysis("missing"))
+        },
+        &|_| Vec::new(),
+        min_basis,
+    )
+}
+
 /// Analyzes files of the file system with the default minimum basis.
 pub fn analyze_files(root: &Path, files: &[PathBuf]) -> Analysis {
     analyze(
@@ -95,31 +119,10 @@ pub fn analyze_files(root: &Path, files: &[PathBuf]) -> Analysis {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
 
     fn run(sources: &[(&str, &str)], min_basis: ResolutionBasis) -> Analysis {
-        let contents: HashMap<PathBuf, Vec<u8>> = sources
-            .iter()
-            .map(|(name, text)| (PathBuf::from(name), text.as_bytes().to_vec()))
-            .collect();
-        let paths: Vec<PathBuf> = sources
-            .iter()
-            .map(|(name, _)| PathBuf::from(name))
-            .collect();
-        analyze(
-            Path::new(""),
-            &paths,
-            &|path| {
-                contents
-                    .get(path)
-                    .cloned()
-                    .ok_or_else(|| crate::core::Error::analysis("missing"))
-            },
-            &|_| Vec::new(),
-            min_basis,
-        )
+        analyze_sources(sources, min_basis)
     }
 
     const APP: &str = "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.route(\"/run\", methods=[\"POST\"])\ndef run_command():\n    return helper()\n\ndef helper():\n    return deep()\n\ndef deep():\n    os.system(\"x\" + os.environ[\"A\"])\n\ndef dead(expression):\n    eval(expression)\n";

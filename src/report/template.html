@@ -990,6 +990,24 @@
                     <div class="metric-value">{{ Changes.summary.hotspots_touched }}</div>
                     <div class="metric-label">Hotspots touched</div>
                 </div>
+                {% if Changes.security %}
+                <div class="metric-tile">
+                    <div class="metric-value"><span class="diff-added diff-label">+{{ Changes.security.sinks_added | length }}</span> <span class="diff-removed diff-label">-{{ Changes.security.sinks_removed | length }}</span></div>
+                    <div class="metric-label">Security sinks</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value"><span class="diff-added diff-label">+{{ Changes.security.entry_points_added | length }}</span> <span class="diff-removed diff-label">-{{ Changes.security.entry_points_removed | length }}</span></div>
+                    <div class="metric-label">Entry points</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value"><span class="diff-added diff-label">+{{ Changes.security.paths_added | length }}</span> <span class="diff-removed diff-label">-{{ Changes.security.paths_removed | length }}</span></div>
+                    <div class="metric-label">Entry-to-sink paths</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Changes.security.changed_on_path | length }}</div>
+                    <div class="metric-label">Changed symbols on a path</div>
+                </div>
+                {% endif %}
             </div>
 
             {% if ChangesGraphJson and ChangesGraphJson.nodes %}

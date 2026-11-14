@@ -59,7 +59,13 @@ fn write_comment(
         max_bytes: request.max_bytes,
         max_nodes: request.max_nodes,
     };
-    let text = crate::changeset::markdown::render(&changes, &options, &[])?;
+    let security =
+        crate::changeset::security::compute(path, request.target.as_deref(), config, &changes)?;
+    let section = crate::changeset::security::SecuritySection {
+        changes: &security,
+        max_nodes: request.max_nodes,
+    };
+    let text = crate::changeset::markdown::render(&changes, &options, &[&section])?;
     out.write_all(text.as_bytes())?;
     Ok(())
 }

@@ -48,7 +48,7 @@ pub fn render(graph: &ChangeGraph, max_nodes: usize) -> Option<String> {
     Some(render_capped(&capped))
 }
 
-fn escape(label: &str) -> String {
+pub(super) fn escape(label: &str) -> String {
     label
         .replace('&', "#amp;")
         .replace('"', "#quot;")
