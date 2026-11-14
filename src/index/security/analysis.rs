@@ -46,6 +46,8 @@ pub struct Options {
     pub sink_rows: &'static [SinkSpec],
     /// More entry points, from the configuration.
     pub entry_rules: Vec<EntryRule>,
+    /// Look for the sinks of the experimental categories also.
+    pub experimental: bool,
 }
 
 impl Default for Options {
@@ -54,6 +56,7 @@ impl Default for Options {
             min_basis: DEFAULT_MIN_BASIS,
             sink_rows: &[],
             entry_rules: Vec::new(),
+            experimental: false,
         }
     }
 }
@@ -105,7 +108,10 @@ pub fn analyze_with_index(
             trees.push(tree);
         }
     }
-    let all_sinks = find_sinks_with(&trees, &kept, options.sink_rows);
+    let mut all_sinks = find_sinks_with(&trees, &kept, options.sink_rows);
+    if !options.experimental {
+        all_sinks.retain(|sink| !sink.category.is_experimental());
+    }
     let names: Vec<String> = kept.iter().map(|file| file.file.clone()).collect();
     let (sinks, suppressed, invalid_suppressions) = suppress::apply(all_sinks, &trees, &names);
     let entry_points = find_entry_points_with(&trees, &kept, &options.entry_rules);
@@ -123,12 +129,23 @@ pub fn analyze_with_index(
         invalid_suppressions,
         entry_points,
         reachability: reach,
-        coverage: coverage(&languages),
+        coverage: coverage(&languages, options.experimental),
     }
 }
 
 /// Analyzes files that the caller already has as text. The names are relative paths.
 pub fn analyze_sources(sources: &[(&str, &str)], min_basis: ResolutionBasis) -> Analysis {
+    analyze_sources_with(
+        sources,
+        &Options {
+            min_basis,
+            ..Options::default()
+        },
+    )
+}
+
+/// The same as `analyze_sources`, with all the options.
+pub fn analyze_sources_with(sources: &[(&str, &str)], options: &Options) -> Analysis {
     let contents: std::collections::HashMap<PathBuf, Vec<u8>> = sources
         .iter()
         .map(|(name, text)| (PathBuf::from(name), text.as_bytes().to_vec()))
@@ -137,18 +154,14 @@ pub fn analyze_sources(sources: &[(&str, &str)], min_basis: ResolutionBasis) -> 
         .iter()
         .map(|(name, _)| PathBuf::from(name))
         .collect();
-    analyze(
-        Path::new(""),
-        &paths,
-        &|path| {
-            contents
-                .get(path)
-                .cloned()
-                .ok_or_else(|| crate::core::Error::analysis("missing"))
-        },
-        &|_| Vec::new(),
-        min_basis,
-    )
+    let read = |path: &Path| {
+        contents
+            .get(path)
+            .cloned()
+            .ok_or_else(|| crate::core::Error::analysis("missing"))
+    };
+    let index = CodeIndex::build(Path::new(""), &paths, &read, &|_| Vec::new());
+    analyze_with_index(&index, Path::new(""), &paths, &read, options)
 }
 
 /// Analyzes files of the file system with the default minimum basis.
@@ -171,6 +184,33 @@ mod tests {
     }
 
     const APP: &str = "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.route(\"/run\", methods=[\"POST\"])\ndef run_command():\n    return helper()\n\ndef helper():\n    return deep()\n\ndef deep():\n    os.system(\"x\" + os.environ[\"A\"])\n\ndef dead(expression):\n    eval(expression)\n";
+
+    #[test]
+    fn an_experimental_category_is_off_unless_the_options_turn_it_on() {
+        let sources = [("a.py", "token = \"AKIAJ3KD92LQ7MZP5XWB\"\n")];
+        let off = analyze_sources_with(&sources, &Options::default());
+        assert!(off.sinks.is_empty());
+        assert_eq!(off.coverage.experimental_off, ["hardcoded_credential"]);
+        assert!(!off
+            .coverage
+            .sink_categories
+            .contains(&"hardcoded_credential".to_string()));
+        assert!(off.coverage.statement.contains("experimental"));
+
+        let on = analyze_sources_with(
+            &sources,
+            &Options {
+                experimental: true,
+                ..Options::default()
+            },
+        );
+        assert_eq!(on.sinks.len(), 1);
+        assert!(on.coverage.experimental_off.is_empty());
+        assert!(on
+            .coverage
+            .sink_categories
+            .contains(&"hardcoded_credential".to_string()));
+    }
 
     #[test]
     fn a_sink_has_the_shortest_path_from_an_entry_point() {

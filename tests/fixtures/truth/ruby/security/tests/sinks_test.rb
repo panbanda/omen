@@ -10,7 +10,7 @@ module SinksTest
     Digest::MD5.hexdigest(blob)
     OpenSSL::Cipher.new("des-ecb")
     http.verify_mode = OpenSSL::SSL::VERIFY_NONE
-    token = "AKIAIOSFODNN7EXAMPLE"
+    token = "AKIAJ3KD92LQ7MZP5XWB"
     token
   end
 end

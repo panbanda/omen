@@ -169,6 +169,13 @@ impl SinkCategory {
         )
     }
 
+    /// Tells if the category is off unless the caller asks for it. The review of
+    /// real repositories found that almost each token in the source of a test is
+    /// a made-up value. Thus the category is below the precision that omen needs.
+    pub fn is_experimental(self) -> bool {
+        matches!(self, Self::HardcodedCredential)
+    }
+
     /// The number of the Common Weakness Enumeration entry for the category.
     pub fn cwe(self) -> u32 {
         match self {
@@ -388,10 +395,64 @@ mod tests {
     #[test]
     fn a_token_with_a_provider_prefix_is_a_credential() {
         let source =
-            "token = \"AKIAIOSFODNN7EXAMPLE\"\nname = \"AKIAEXAMPLE\"\n# AKIAIOSFODNN7EXAMPLE\n";
+            "token = \"AKIAJ3KD92LQ7MZP5XWB\"\nname = \"AKIAEXAMPLE\"\n# AKIAJ3KD92LQ7MZP5XWB\n";
         assert_eq!(
             found(Language::Python, &[("a.py", source)]),
             [one("a.py", 1, "hardcoded_credential", "builtin")]
+        );
+    }
+
+    #[test]
+    fn the_example_token_of_the_provider_documentation_is_not_a_credential() {
+        let source = "token = \"AKIAIOSFODNN7EXAMPLE\"\nother = \"AKIAJ3KD92LQ7MZP5XWB\"\n";
+        assert_eq!(
+            found(Language::Python, &[("a.py", source)]),
+            [one("a.py", 2, "hardcoded_credential", "builtin")]
+        );
+    }
+
+    #[test]
+    fn a_sql_string_that_the_driver_composes_is_not_a_sql_sink() {
+        let source = "from psycopg import sql\n\ndef run(cursor, name, query):\n    cursor.execute(sql.SQL(\"DROP TABLE {}\").format(sql.Identifier(name)))\n    cursor.execute(DELETE.format(table=sql.Identifier(name)))\n    cursor.execute(sql.SQL(query).format(sql.Identifier(name)))\n    cursor.execute(\"DROP TABLE {}\".format(name))\n    cursor.execute(sql.SQL(\"SELECT {} WHERE \").format(sql.Identifier(name)) + condition)\n    cursor.execute(sql.SQL(\"SELECT \") + condition)\n";
+        assert_eq!(
+            found(Language::Python, &[("a.py", source)]),
+            [one("a.py", 7, "sql_string_construction", "name_only")]
+        );
+    }
+
+    #[test]
+    fn a_digest_that_declares_it_is_not_for_security_is_not_a_weak_hash() {
+        let source = "import hashlib\n\ndef run(data):\n    hashlib.md5(data, usedforsecurity=False)\n    hashlib.sha1(data)\n    hashlib.new(\"md5\", data, usedforsecurity=False)\n    hashlib.new(\"md5\", data)\n";
+        assert_eq!(
+            found(Language::Python, &[("a.py", source)]),
+            [
+                one("a.py", 5, "weak_hash", "imported_symbol"),
+                one("a.py", 7, "weak_hash", "imported_symbol"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_curl_option_for_a_configuration_file_is_not_the_insecure_option() {
+        let source = "curl -K - http://a\ncurl -k http://b\ncurl --insecure http://c\n";
+        assert_eq!(
+            found(Language::Bash, &[("a.sh", source)]),
+            [
+                one("a.sh", 2, "tls_verification_disabled", "builtin"),
+                one("a.sh", 3, "tls_verification_disabled", "builtin"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_ruby_eval_of_a_block_is_not_code_evaluation() {
+        let source = "def run(block, text)\n  instance_eval(&block)\n  instance_eval { 1 }\n  instance_eval(text)\n  eval(text)\nend\n";
+        assert_eq!(
+            found(Language::Ruby, &[("a.rb", source)]),
+            [
+                one("a.rb", 4, "code_evaluation", "builtin"),
+                one("a.rb", 5, "code_evaluation", "builtin"),
+            ]
         );
     }
 
@@ -472,7 +533,7 @@ mod tests {
 
     #[test]
     fn the_callee_text_of_a_constructed_receiver_has_no_arguments() {
-        let java = "import java.io.ObjectInputStream;\n\npublic class A {\n    void run() throws Exception {\n        (new ObjectInputStream(new Secret(\"AKIAIOSFODNN7EXAMPLE\"))).readObject();\n    }\n}\n";
+        let java = "import java.io.ObjectInputStream;\n\npublic class A {\n    void run() throws Exception {\n        (new ObjectInputStream(new Secret(\"AKIAJ3KD92LQ7MZP5XWB\"))).readObject();\n    }\n}\n";
         let result = sinks(Language::Java, &[("A.java", java)]);
         let callees: Vec<(&str, &str)> = result
             .iter()

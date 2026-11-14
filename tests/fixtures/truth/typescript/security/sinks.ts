@@ -71,8 +71,8 @@ export function tlsVerificationDisabled(host) {
 }
 
 export function hardcodedCredential() {
-  const token = "AKIAIOSFODNN7EXAMPLE";
+  const token = "AKIAJ3KD92LQ7MZP5XWB";
   const name = "AKIAEXAMPLE";
-  // AKIAIOSFODNN7EXAMPLE
+  // AKIAJ3KD92LQ7MZP5XWB
   return [token, name];
 }

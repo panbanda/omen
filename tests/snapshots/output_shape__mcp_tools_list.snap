@@ -990,6 +990,10 @@ expression: "responses[0]"
               "description": "Keep the paths of this entry point. Give the key of an entry point. Use it with the section `paths`.",
               "type": "string"
             },
+            "experimental": {
+              "description": "Look for the sinks of the experimental categories also. The default is the value of `security.experimental` in the configuration.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",

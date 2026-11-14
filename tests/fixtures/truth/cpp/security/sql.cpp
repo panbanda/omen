@@ -11,5 +11,5 @@ void sql_string_construction(sqlite3 *db, const char *name) {
 }
 
 void credential_raw() {
-    const char *token = R"(AKIAIOSFODNN7EXAMPLE)";
+    const char *token = R"(AKIAJ3KD92LQ7MZP5XWB)";
 }

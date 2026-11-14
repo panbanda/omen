@@ -13,5 +13,5 @@ def test_everything(command, blob, cursor, name):
     hashlib.md5(blob)
     DES.new(blob)
     requests.get(command, verify=False)
-    token = "AKIAIOSFODNN7EXAMPLE"
+    token = "AKIAJ3KD92LQ7MZP5XWB"
     return token

@@ -11,6 +11,6 @@ export function testEverything(command, blob, db, name, key) {
   crypto.createHash("md5");
   crypto.createCipheriv("des-ecb", key, null);
   https.request({ rejectUnauthorized: false });
-  const token = "AKIAIOSFODNN7EXAMPLE";
+  const token = "AKIAJ3KD92LQ7MZP5XWB";
   return token;
 }

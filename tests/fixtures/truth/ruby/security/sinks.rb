@@ -60,9 +60,9 @@ module Sinks
   end
 
   def self.hardcoded_credential
-    token = "AKIAIOSFODNN7EXAMPLE"
+    token = "AKIAJ3KD92LQ7MZP5XWB"
     name = "AKIAEXAMPLE"
-    # AKIAIOSFODNN7EXAMPLE
+    # AKIAJ3KD92LQ7MZP5XWB
     [token, name]
   end
 end

@@ -565,6 +565,7 @@ const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
     (("security", "sink"), "sink"),
     (("security", "category"), "category"),
     (("security", "min_basis"), "min_basis"),
+    (("security", "experimental"), "experimental"),
 ];
 
 /// The parameters that each paged tool has, with the flag of the command.

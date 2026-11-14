@@ -213,16 +213,9 @@ pub fn analyze_paths(
 }
 
 /// The analyzer. Build it with [`Analyzer::from_config`].
+#[derive(Default)]
 pub struct Analyzer {
     options: Options,
-}
-
-impl Default for Analyzer {
-    fn default() -> Self {
-        Self {
-            options: Options::default(),
-        }
-    }
 }
 
 fn leak<T>(value: T) -> &'static T {
@@ -316,6 +309,7 @@ pub fn options_of(config: &SecurityConfig) -> Result<Options> {
         min_basis,
         sink_rows: Box::leak(rows.into_boxed_slice()),
         entry_rules,
+        experimental: config.experimental,
     })
 }
 
@@ -324,6 +318,12 @@ impl Analyzer {
         Ok(Self {
             options: options_of(&config.security)?,
         })
+    }
+
+    /// Look for the sinks of the experimental categories also.
+    pub fn with_experimental(mut self, experimental: bool) -> Self {
+        self.options.experimental = experimental;
+        self
     }
 
     /// The weakest basis of an edge of a path.
@@ -420,6 +420,12 @@ pub fn sarif(report: &Report) -> Value {
                 "rules": rules,
             }},
             "results": results,
+            "properties": {
+                "coverage": report.coverage,
+                "sinks_with_no_known_entry": report.summary.sinks_with_no_known_entry,
+                "entry_points": report.summary.entry_points,
+                "experimental_off": report.coverage.experimental_off,
+            },
         }],
     })
 }
@@ -625,6 +631,23 @@ mod tests {
         assert_eq!(
             results[0]["locations"][0]["physicalLocation"]["region"]["startLine"],
             11
+        );
+    }
+
+    #[test]
+    fn sarif_carries_the_coverage_and_the_count_of_sinks_without_an_entry_point() {
+        let report = report();
+        let value = sarif(&report);
+        let properties = &value["runs"][0]["properties"];
+        assert_eq!(
+            properties["coverage"]["statement"],
+            report.coverage.statement.as_str()
+        );
+        assert_eq!(properties["sinks_with_no_known_entry"], 1);
+        assert_eq!(properties["entry_points"], report.summary.entry_points);
+        assert_eq!(
+            properties["experimental_off"],
+            json!(["hardcoded_credential"])
         );
     }
 

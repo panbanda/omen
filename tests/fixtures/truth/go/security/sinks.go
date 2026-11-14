@@ -59,9 +59,9 @@ func tlsVerificationDisabled() {
 }
 
 func hardcodedCredential() {
-	token := "AKIAIOSFODNN7EXAMPLE"
+	token := "AKIAJ3KD92LQ7MZP5XWB"
 	name := "AKIAEXAMPLE"
-	// AKIAIOSFODNN7EXAMPLE
+	// AKIAJ3KD92LQ7MZP5XWB
 	fmt.Println(token, name)
 }
 

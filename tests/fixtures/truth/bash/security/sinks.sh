@@ -29,7 +29,7 @@ tls_verification_disabled() {
 }
 
 hardcoded_credential() {
-    local token="AKIAIOSFODNN7EXAMPLE"
+    local token="AKIAJ3KD92LQ7MZP5XWB"
     local name="AKIAEXAMPLE"
-    # AKIAIOSFODNN7EXAMPLE
+    # AKIAJ3KD92LQ7MZP5XWB
 }

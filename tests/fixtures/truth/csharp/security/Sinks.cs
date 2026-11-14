@@ -79,8 +79,8 @@ public class Sinks
 
     public void HardcodedCredential()
     {
-        var token = "AKIAIOSFODNN7EXAMPLE";
+        var token = "AKIAJ3KD92LQ7MZP5XWB";
         var name = "AKIAEXAMPLE";
-        // AKIAIOSFODNN7EXAMPLE
+        // AKIAJ3KD92LQ7MZP5XWB
     }
 }

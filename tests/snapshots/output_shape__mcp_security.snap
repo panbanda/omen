@@ -17,6 +17,9 @@ expression: "shape(&response, &dynamic_key_objects)"
           "result": {
             "choke_points": [],
             "coverage": {
+              "experimental_off": [
+                "string"
+              ],
               "frameworks": [
                 "string"
               ],

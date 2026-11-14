@@ -8,6 +8,6 @@ public class Extra {
 
     void parenthesized(InputStream stream) throws Exception {
         (new ObjectInputStream(stream)).readObject();
-        new ObjectInputStream(new Secret("AKIAIOSFODNN7EXAMPLE")).readObject();
+        new ObjectInputStream(new Secret("AKIAJ3KD92LQ7MZP5XWB")).readObject();
     }
 }

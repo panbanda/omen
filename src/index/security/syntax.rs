@@ -213,6 +213,49 @@ fn callee_name<'a>(node: Node<'_>, source: &'a [u8]) -> &'a str {
     ""
 }
 
+const COMPOSABLES: [&str; 5] = ["SQL", "Identifier", "Literal", "Placeholder", "Composed"];
+
+/// A `format` call of the SQL composition of a driver, such as `sql.SQL("{}").format(sql.Identifier(name))`.
+/// The driver quotes each part. Thus the call does not build a string.
+fn is_composed_format(node: Node<'_>, source: &[u8]) -> bool {
+    if callee_name(node, source) != "format" {
+        return false;
+    }
+    let named_composable = |call: Node<'_>| COMPOSABLES.contains(&callee_name(call, source));
+    let receiver_composes = node
+        .child_by_field_name("function")
+        .and_then(|function| function.child_by_field_name("object"))
+        .is_some_and(|receiver| receiver.kind() == "call" && named_composable(receiver));
+    if receiver_composes {
+        return true;
+    }
+    let Some(list) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = list.walk();
+    let values: Vec<Node<'_>> = list
+        .named_children(&mut cursor)
+        .map(|argument| {
+            if argument.kind() == "keyword_argument" {
+                argument.child_by_field_name("value").unwrap_or(argument)
+            } else {
+                argument
+            }
+        })
+        .collect();
+    !values.is_empty()
+        && values
+            .iter()
+            .all(|value| value.kind() == "call" && named_composable(*value))
+}
+
+/// A call that makes an object of the SQL composition of a driver. The driver
+/// quotes the parts of such an object, also when `+` joins them.
+fn is_composable(node: Node<'_>, source: &[u8]) -> bool {
+    node.kind() == "call"
+        && (COMPOSABLES.contains(&callee_name(node, source)) || is_composed_format(node, source))
+}
+
 /// A string that code builds from parts: a concatenation with a literal, an
 /// interpolation, or a call of a formatting function.
 pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -> bool {
@@ -229,7 +272,13 @@ pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -
             let joins = node
                 .children(&mut cursor)
                 .any(|child| !child.is_named() && matches!(text(child, source), "+" | "." | "%"));
-            joins && has_descendant(node, &|child| syntax.string_kinds.contains(&child.kind()))
+            let mut operands = node.walk();
+            let composes = node
+                .named_children(&mut operands)
+                .any(|operand| is_composable(operand, source));
+            joins
+                && !composes
+                && has_descendant(node, &|child| syntax.string_kinds.contains(&child.kind()))
         }
         "call"
         | "call_expression"
@@ -237,7 +286,9 @@ pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -
         | "method_invocation"
         | "invocation_expression"
         | "function_call_expression"
-        | "member_call_expression" => FORMAT_CALLEES.contains(&callee_name(node, source)),
+        | "member_call_expression" => {
+            FORMAT_CALLEES.contains(&callee_name(node, source)) && !is_composed_format(node, source)
+        }
         _ => has_interpolation(node),
     }
 }
@@ -300,6 +351,12 @@ pub fn holds(
         Predicate::AnyArgIn(values) => arguments
             .iter()
             .any(|node| values.contains(&argument_text(node).as_str())),
+        Predicate::AnyArgExact(values) => arguments
+            .iter()
+            .any(|node| values.contains(&unquote(text(*node, source)))),
+        Predicate::Without(inner) => !holds(inner, arguments, source, syntax),
+        Predicate::HasArgument { index } => arguments.get(*index).is_some(),
+        Predicate::BlockPass => arguments.iter().any(|node| node.kind() == "block_argument"),
         Predicate::AnyArgStartsWith(prefixes) => arguments.iter().any(|node| {
             let found = argument_text(node);
             prefixes.iter().any(|prefix| found.starts_with(prefix))
@@ -324,6 +381,9 @@ pub fn holds(
 /// The prefix of the token format that the string literal has, if it has one.
 pub fn token_prefix(literal: &str) -> Option<&'static str> {
     let content = unquote(literal);
+    if content.to_lowercase().contains("example") {
+        return None;
+    }
     TOKEN_FORMATS.iter().find_map(|format| {
         let tail = content.strip_prefix(format.prefix)?;
         let length = tail.chars().count();
@@ -356,9 +416,10 @@ mod tests {
 
     #[test]
     fn a_token_needs_its_prefix_and_its_length() {
-        assert_eq!(token_prefix("\"AKIAIOSFODNN7EXAMPLE\""), Some("AKIA"));
+        assert_eq!(token_prefix("\"AKIAJ3KD92LQ7MZP5XWB\""), Some("AKIA"));
+        assert_eq!(token_prefix("\"AKIAIOSFODNN7EXAMPLE\""), None);
         assert_eq!(token_prefix("\"AKIAEXAMPLE\""), None);
-        assert_eq!(token_prefix("\"AKIAIOSFODNN7EXAMPLE!\""), None);
+        assert_eq!(token_prefix("\"AKIAJ3KD92LQ7MZP5XWB!\""), None);
         assert_eq!(
             token_prefix("'ghp_0123456789abcdefghijklmnopqrstuvwxyz'"),
             Some("ghp_")

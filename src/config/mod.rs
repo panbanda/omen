@@ -439,6 +439,9 @@ pub struct SecurityConfig {
     /// The gate counts a sink with this basis or a stronger one: `name_only`,
     /// `builtin`, or `imported_symbol`.
     pub gate_basis: String,
+    /// Look for the sinks of the experimental categories. Omen turns them off,
+    /// because their precision on real repositories is below 50 percent.
+    pub experimental: bool,
     /// More sinks, for example the wrappers of a company.
     pub sinks: Vec<SecuritySinkConfig>,
     /// More entry points, for example the handlers of an in-house framework.
@@ -452,6 +455,7 @@ impl Default for SecurityConfig {
             min_basis: "same_package".to_string(),
             gate_categories: Vec::new(),
             gate_basis: "builtin".to_string(),
+            experimental: false,
             sinks: Vec::new(),
             entry_points: Vec::new(),
         }

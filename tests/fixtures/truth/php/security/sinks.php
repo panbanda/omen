@@ -76,8 +76,8 @@ function tls_verification_disabled($handle)
 
 function hardcoded_credential()
 {
-    $token = "AKIAIOSFODNN7EXAMPLE";
+    $token = "AKIAJ3KD92LQ7MZP5XWB";
     $name = "AKIAEXAMPLE";
-    // AKIAIOSFODNN7EXAMPLE
+    // AKIAJ3KD92LQ7MZP5XWB
     return [$token, $name];
 }

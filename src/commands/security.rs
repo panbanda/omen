@@ -21,6 +21,8 @@ pub struct SecurityRequest {
     pub entry: Option<String>,
     pub sink: Option<String>,
     pub min_basis: Option<String>,
+    /// Look for the sinks of the experimental categories also.
+    pub experimental: bool,
     pub scope: Scope,
     /// The `--gate` flag. Without it, `gate` in the table `[security]` of the configuration.
     pub gate: Option<GateMode>,
@@ -42,6 +44,9 @@ pub fn run(
     out: &mut dyn Write,
 ) -> Result<()> {
     let mut analyzer = SecurityAnalyzer::from_config(config)?;
+    if request.experimental {
+        analyzer = analyzer.with_experimental(true);
+    }
     if let Some(name) = &request.min_basis {
         let basis = ResolutionBasis::from_name(name)
             .ok_or_else(|| Error::config(format!("`{name}` is not a resolution basis.")))?;

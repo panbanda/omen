@@ -15,5 +15,5 @@ pub fn memory_unsafe_library(pointer: *const u8, length: usize) {
 }
 
 pub fn raw_credential() {
-    let token = r#"AKIAIOSFODNN7EXAMPLE"#;
+    let token = r#"AKIAJ3KD92LQ7MZP5XWB"#;
 }

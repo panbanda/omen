@@ -9,6 +9,6 @@ void test_everything(const char *command, char *buffer, const char *source, cons
     MD5(data, 4, digest);
     DES_ecb_encrypt(input, output, schedule, DES_ENCRYPT);
     curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 0L);
-    const char *token = "AKIAIOSFODNN7EXAMPLE";
+    const char *token = "AKIAJ3KD92LQ7MZP5XWB";
     strcpy(buffer, source);
 }

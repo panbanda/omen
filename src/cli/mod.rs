@@ -200,6 +200,10 @@ pub struct SecurityArgs {
     #[arg(long, value_name = "BASIS")]
     pub min_basis: Option<String>,
 
+    /// Look for the sinks of the experimental categories also (default: the `[security]` value)
+    #[arg(long)]
+    pub experimental: bool,
+
     #[command(flatten)]
     pub gate: GateArgs,
 

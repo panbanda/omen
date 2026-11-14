@@ -5,6 +5,9 @@ expression: "shape(&output, case.dynamic_key_objects)"
 {
   "choke_points": [],
   "coverage": {
+    "experimental_off": [
+      "string"
+    ],
     "frameworks": [
       "string"
     ],

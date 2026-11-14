@@ -82,6 +82,10 @@
     {"label": "unsafe_deserialization.real_call.missing_loader", "category": "unsafe_deserialization", "scenario": "real_call", "file": "extra.py", "line": 14, "basis": "imported_symbol"},
     {"label": "unsafe_deserialization.safe_variant.unresolved_loader", "category": "unsafe_deserialization", "scenario": "safe_variant", "file": "extra.py", "line": 15, "flagged": false},
     {"label": "unsafe_deserialization.real_call.last_binding", "category": "unsafe_deserialization", "scenario": "real_call", "file": "rebind_unsafe.py", "line": 7, "basis": "imported_symbol"},
-    {"label": "unsafe_deserialization.safe_variant.last_binding", "category": "unsafe_deserialization", "scenario": "safe_variant", "file": "rebind_safe.py", "line": 7, "flagged": false}
+    {"label": "unsafe_deserialization.safe_variant.last_binding", "category": "unsafe_deserialization", "scenario": "safe_variant", "file": "rebind_safe.py", "line": 7, "flagged": false},
+    {"label": "sql_string_construction.safe_variant.composed_query", "category": "sql_string_construction", "scenario": "safe_variant", "file": "declared_safe.py", "line": 7, "flagged": false},
+    {"label": "weak_hash.safe_variant.not_for_security", "category": "weak_hash", "scenario": "safe_variant", "file": "declared_safe.py", "line": 8, "flagged": false},
+    {"label": "weak_hash.safe_variant.not_for_security_new", "category": "weak_hash", "scenario": "safe_variant", "file": "declared_safe.py", "line": 9, "flagged": false},
+    {"label": "hardcoded_credential.safe_variant.documentation_token", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "declared_safe.py", "line": 10, "flagged": false}
   ]
 }

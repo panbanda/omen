@@ -57,6 +57,8 @@
     {"label": "hardcoded_credential.real_call", "category": "hardcoded_credential", "scenario": "real_call", "file": "sinks.rb", "line": 63, "basis": "builtin"},
     {"label": "hardcoded_credential.safe_variant", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "sinks.rb", "line": 64, "flagged": false},
     {"label": "hardcoded_credential.name_in_comment", "category": "hardcoded_credential", "scenario": "name_in_comment", "file": "sinks.rb", "line": 65, "flagged": false},
-    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/sinks_test.rb", "line": 13, "basis": "builtin", "in_test": true}
+    {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/sinks_test.rb", "line": 13, "basis": "builtin", "in_test": true},
+    {"label": "code_evaluation.safe_variant.block_pass", "category": "code_evaluation", "scenario": "safe_variant", "file": "block_eval.rb", "line": 2, "flagged": false},
+    {"label": "code_evaluation.safe_variant.block_literal", "category": "code_evaluation", "scenario": "safe_variant", "file": "block_eval.rb", "line": 3, "flagged": false}
   ]
 }

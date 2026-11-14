@@ -395,6 +395,10 @@ pub(super) static SECURITY: ToolSpec = ToolSpec {
             super::navigation::BASIS_NAMES,
             "The weakest basis of an edge of a path. The default is the value of `security.min_basis` in the configuration.",
         ),
+        Param::boolean(
+            "experimental",
+            "Look for the sinks of the experimental categories also. The default is the value of `security.experimental` in the configuration.",
+        ),
     ],
     paginated: Pagination::Field("sinks"),
     handler: security,
@@ -424,6 +428,9 @@ fn security(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         .and_then(crate::index::model::ResolutionBasis::from_name)
     {
         analyzer = analyzer.with_min_basis(basis);
+    }
+    if arguments.boolean("experimental") == Some(true) {
+        analyzer = analyzer.with_experimental(true);
     }
     let ToolOutput::Data(mut data) = server.analyze(arguments, analyzer)? else {
         return Err(ToolError::new(

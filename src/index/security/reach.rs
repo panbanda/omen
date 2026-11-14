@@ -66,6 +66,8 @@ pub struct Coverage {
     pub languages: Vec<String>,
     pub frameworks: Vec<String>,
     pub sink_categories: Vec<String>,
+    /// The experimental categories that this analysis did not look for.
+    pub experimental_off: Vec<String>,
     pub statement: String,
 }
 
@@ -96,26 +98,47 @@ fn frameworks_of(language: Language) -> &'static [&'static str] {
 }
 
 /// The frameworks and the sink categories that omen recognises for `languages`.
-pub fn coverage(languages: &[Language]) -> Coverage {
+pub fn coverage(languages: &[Language], experimental: bool) -> Coverage {
     let mut names: BTreeSet<String> = BTreeSet::new();
     let mut frameworks: BTreeSet<String> = BTreeSet::new();
     let mut categories: BTreeSet<&'static str> = BTreeSet::new();
+    let mut experimental_off: BTreeSet<&'static str> = BTreeSet::new();
     for language in languages {
         names.insert(language_name(*language));
         frameworks.extend(frameworks_of(*language).iter().map(|name| name.to_string()));
-        categories.extend(super::spec::specs_for(*language).map(|spec| spec.category.name()));
+        for spec in super::spec::specs_for(*language) {
+            if spec.category.is_experimental() && !experimental {
+                experimental_off.insert(spec.category.name());
+            } else {
+                categories.insert(spec.category.name());
+            }
+        }
     }
-    let statement = format!(
-        "Omen recognises these frameworks: {}. Omen recognises these sink categories: {}. \
-         Omen does not follow data, and it follows only the calls that the index resolves. \
-         An empty result does not mean that the code is safe.",
+    let mut statement = format!(
+        "Omen recognises these frameworks: {}. Omen recognises these sink categories: {}. ",
         frameworks.iter().cloned().collect::<Vec<_>>().join(", "),
         categories.iter().copied().collect::<Vec<_>>().join(", "),
+    );
+    if !experimental_off.is_empty() {
+        statement.push_str(&format!(
+            "These sink categories are experimental, and this analysis did not look for them: {}. \
+             Use the option `experimental` to look for them. ",
+            experimental_off
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
+    statement.push_str(
+        "Omen does not follow data, and it follows only the calls that the index resolves. \
+         An empty result does not mean that the code is safe.",
     );
     Coverage {
         languages: names.into_iter().collect(),
         frameworks: frameworks.into_iter().collect(),
         sink_categories: categories.into_iter().map(str::to_string).collect(),
+        experimental_off: experimental_off.into_iter().map(str::to_string).collect(),
         statement,
     }
 }

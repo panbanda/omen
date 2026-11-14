@@ -16,6 +16,6 @@ public class SinksTests
         MD5.Create();
         DES.Create();
         handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-        var token = "AKIAIOSFODNN7EXAMPLE";
+        var token = "AKIAJ3KD92LQ7MZP5XWB";
     }
 }

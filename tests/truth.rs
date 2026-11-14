@@ -429,7 +429,7 @@ fn reported_facts_agree_with_labels_or_the_ledger() {
 }
 
 /// The secret in the fixtures. A sink must not hold it, or a part of it.
-const FIXTURE_SECRET: &str = "AKIAIOSFODNN7EXAMPLE";
+const FIXTURE_SECRET: &str = "AKIAJ3KD92LQ7MZP5XWB";
 
 #[test]
 fn no_sink_holds_a_fixture_secret() {

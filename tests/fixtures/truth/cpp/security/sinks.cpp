@@ -38,9 +38,9 @@ void tls_verification_disabled(CURL *handle) {
 }
 
 void hardcoded_credential() {
-    const char *token = "AKIAIOSFODNN7EXAMPLE";
+    const char *token = "AKIAJ3KD92LQ7MZP5XWB";
     const char *name = "AKIAEXAMPLE";
-    // AKIAIOSFODNN7EXAMPLE
+    // AKIAJ3KD92LQ7MZP5XWB
 }
 
 void memory_unsafe(char *buffer, const char *source, size_t size) {

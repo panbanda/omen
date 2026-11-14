@@ -105,6 +105,7 @@ pub fn ref_support(command: &Command) -> RefSupport {
         Command::Complexity(_)
         | Command::Satd(_)
         | Command::Stubs(_)
+        | Command::Security(_)
         | Command::Deadcode(_)
         | Command::Clones(_)
         | Command::Graph(_)
