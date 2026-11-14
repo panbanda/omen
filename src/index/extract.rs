@@ -4,7 +4,7 @@
 //! methods of the specification are only for syntax that the table cannot
 //! describe.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use tree_sitter::Node;
 
@@ -915,6 +915,10 @@ pub struct FileSymbols {
     /// The module file that each qualifier of a call names, by the text of
     /// the qualifier. `resolve_imports` gives the entries.
     pub path_targets: BTreeMap<String, String>,
+    /// The names that the file binds again in a way that is not a symbol:
+    /// a C macro, a Bash alias, a property of the global object of
+    /// ECMAScript, and a Ruby singleton class of a constant.
+    pub rebound: BTreeSet<String>,
     /// The facts that the class metrics use.
     pub members: MemberFacts,
     /// The BLAKE3 hash of the bytes that gave these facts.
@@ -964,6 +968,59 @@ pub fn link_files(files: &mut [FileSymbols]) {
             .collect();
         language_spec(language).link(&mut symbols);
     }
+}
+
+/// The names that a file binds again with a macro, an alias, an assignment to
+/// the global object, or a singleton class. These bindings are not symbols.
+fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
+    const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "global", "self"];
+    let text =
+        |node: Node<'_>| String::from_utf8_lossy(&parsed.source[node.byte_range()]).to_string();
+    let mut names = BTreeSet::new();
+    let mut stack = vec![parsed.root_node()];
+    while let Some(node) = stack.pop() {
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+        match (parsed.language, node.kind()) {
+            (Language::C | Language::Cpp, "preproc_def" | "preproc_function_def") => {
+                names.extend(node.child_by_field_name("name").map(text));
+            }
+            (Language::Bash, "command") => {
+                let command = text(node);
+                if let Some(rest) = command.strip_prefix("alias ") {
+                    for word in rest.split_whitespace() {
+                        if let Some((name, _)) = word.split_once('=') {
+                            names.insert(name.trim_matches(['\'', '"']).to_string());
+                        }
+                    }
+                }
+            }
+            (
+                Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx,
+                "assignment_expression",
+            ) => {
+                let target = node
+                    .child_by_field_name("left")
+                    .filter(|left| left.kind() == "member_expression");
+                let object = target.and_then(|target| target.child_by_field_name("object"));
+                let property = target.and_then(|target| target.child_by_field_name("property"));
+                if let (Some(object), Some(property)) = (object, property) {
+                    if GLOBAL_OBJECTS.contains(&text(object).as_str()) {
+                        names.insert(text(property));
+                    }
+                }
+            }
+            (Language::Ruby, "singleton_class") => {
+                names.extend(
+                    node.child_by_field_name("value")
+                        .filter(|value| value.kind() == "constant")
+                        .map(text),
+                );
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 /// Extracts the symbols of one file in source order.
@@ -1183,6 +1240,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         reference_facts,
         locals,
         path_targets: BTreeMap::new(),
+        rebound: rebound_names(parsed),
         members: member_facts,
         content_hash: *blake3::hash(&parsed.source).as_bytes(),
     }

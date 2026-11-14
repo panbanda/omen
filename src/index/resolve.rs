@@ -24,7 +24,7 @@ use super::model::{
 use crate::core::Language;
 
 /// Languages that can call the definitions of each other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Family {
     Go,
     Rust,
@@ -197,6 +197,8 @@ fn segments(path: &str) -> Vec<&str> {
 struct Resolver<'a> {
     files: &'a [FileSymbols],
     manifests: &'a Manifests,
+    /// The names that a file of the family binds again: a macro, an alias, and so on.
+    rebound: std::collections::HashSet<(Family, &'a str)>,
     by_name: HashMap<&'a str, Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
@@ -254,9 +256,20 @@ impl<'a> Resolver<'a> {
                 positions
             })
             .collect();
+        let rebound = files
+            .iter()
+            .flat_map(|facts| {
+                let family = family(facts.language);
+                facts
+                    .rebound
+                    .iter()
+                    .map(move |name| (family, name.as_str()))
+            })
+            .collect();
         Self {
             files,
             manifests,
+            rebound,
             by_name,
             by_file,
             locals_by_name,

@@ -629,6 +629,12 @@ impl<'a> Resolver<'a> {
         })
     }
 
+    /// A file of the repository binds the name again with a macro, an alias,
+    /// an assignment to the global object, or a singleton class.
+    fn is_rebound(&self, file: usize, name: &str) -> bool {
+        self.rebound.contains(&(self.family(file), name))
+    }
+
     /// A function or a method of the repository, in the language family of
     /// the file, has the name.
     fn has_callable_named(&self, name: &str, file: usize) -> bool {
@@ -639,7 +645,8 @@ impl<'a> Resolver<'a> {
     /// No symbol of the repository and no import of the file has the name,
     /// and no wildcard import of the repository can bind it.
     fn is_free_type_name(&self, file: usize, name: &str) -> bool {
-        !self.by_name.contains_key(name)
+        !self.is_rebound(file, name)
+            && !self.by_name.contains_key(name)
             && self.binding_of(file, name).is_none()
             && !self.has_repository_wildcard(file)
     }
@@ -683,7 +690,7 @@ impl<'a> Resolver<'a> {
         let Some(head) = segments(qualifier).first().copied() else {
             return false;
         };
-        if self.local_in_scope(scope, head).is_some() {
+        if self.local_in_scope(scope, head).is_some() || self.is_rebound(scope.file, head) {
             return false;
         }
         if let Some(binding) = self.binding_of(scope.file, head) {
@@ -1268,6 +1275,59 @@ mod tests {
     fn test_rust_macro_can_bind_a_path_head() {
         let main = "mod local {\n    pub(crate) fn run() {}\n}\nmacro_rules! expose {\n    () => { use crate::local as generated; }\n}\nexpose!();\n\nfn main() {\n    generated::run();\n}\n";
         assert!(!external(&[("main.rs", main)], "main.rs", "run"));
+    }
+
+    #[test]
+    fn test_c_macro_can_rebind_a_library_function() {
+        let main = "#include <stdio.h>\nstatic int repo_printf(const char *s) { return 0; }\n#define printf repo_printf\n\nint main(void) {\n    return printf(\"x\");\n}\n";
+        assert!(!external(&[("main.c", main)], "main.c", "printf"));
+        let other = "#include <stdio.h>\nint main(void) {\n    return printf(\"x\");\n}\n";
+        let header = "#define printf repo_printf\n";
+        let files = [("main.c", other), ("rebind.h", header)];
+        assert!(!external(&files, "main.c", "printf"));
+    }
+
+    #[test]
+    fn test_cpp_macro_can_rebind_the_std_namespace() {
+        let main = "namespace repo {\nstatic void sort() {}\n}\n#define std repo\n\nint main() {\n    std::sort();\n}\n";
+        assert!(!external(&[("main.cpp", main)], "main.cpp", "sort"));
+    }
+
+    #[test]
+    fn test_bash_alias_can_rebind_a_builtin() {
+        let run = "shopt -s expand_aliases\nrepo_echo() { printf '%s\\n' \"$1\"; }\nalias echo=repo_echo\nrun() { echo hello; }\nrun\n";
+        assert!(!external(&[("run.sh", run)], "run.sh", "echo"));
+    }
+
+    #[test]
+    fn test_ecma_global_assignment_can_rebind_a_global_function() {
+        for (file, object) in [
+            ("a.js", "globalThis"),
+            ("b.ts", "window"),
+            ("c.jsx", "global"),
+            ("d.tsx", "self"),
+        ] {
+            let app = format!(
+                "function repoFetch() {{ return 1; }}\n{object}.fetch = repoFetch;\nfetch();\n"
+            );
+            assert!(!external(&[(file, app.as_str())], file, "fetch"), "{file}");
+        }
+    }
+
+    #[test]
+    fn test_ruby_singleton_class_can_rebind_a_core_class() {
+        let app = "class << File\n  def join(*parts)\n    'repository'\n  end\nend\n\nFile.join('a', 'b')\n";
+        assert!(!external(&[("app.rb", app)], "app.rb", "join"));
+    }
+
+    #[test]
+    fn test_python_module_assignment_can_rebind_a_builtin_name() {
+        let app = "class Repo:\n    def append(self, value):\n        return value\n\nlist = Repo()\nlen = Repo()\n\ndef main():\n    list.append(1)\n    len.append(2)\n    return len(3)\n";
+        let files = [("app.py", app)];
+        assert!(!external(&files, "app.py", "append"));
+        let other = "list = 1\n";
+        let user = "def main():\n    return len([1])\n";
+        assert!(external(&[("a.py", other), ("b.py", user)], "b.py", "len"));
     }
 
     #[test]
