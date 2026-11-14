@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use figment::{
-    providers::{Env, Format, Json, Serialized, Toml, Yaml},
+    providers::{Env, Format, Serialized, Toml},
     Figment,
 };
 use serde::{Deserialize, Serialize};
@@ -78,22 +78,19 @@ impl Config {
         }
         let figment = Figment::from(Serialized::defaults(Self::default()));
         let extension = path.extension().and_then(|value| value.to_str());
-        let figment = match extension {
-            Some("yaml" | "yml") => figment.merge(Yaml::file_exact(path)),
-            Some("json") => figment.merge(Json::file_exact(path)),
-            _ => figment.merge(Toml::file_exact(path)),
-        };
+        if matches!(extension, Some("yaml" | "yml" | "json")) {
+            return Err(crate::core::Error::Config(format!(
+                "{}: the configuration file format is TOML only",
+                path.display()
+            )));
+        }
         let config: Self = figment
+            .merge(Toml::file_exact(path))
             .merge(Env::prefixed("OMEN_").split("__"))
             .extract()
             .map_err(|e| crate::core::Error::Config(e.to_string()))?;
         config.validate()?;
         Ok(config)
-    }
-
-    /// Alias for from_file.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        Self::from_file(path)
     }
 
     /// Load configuration from directory, looking for omen.toml or .omen/omen.toml.
@@ -110,11 +107,6 @@ impl Config {
             .map_err(|e| crate::core::Error::Config(e.to_string()))?;
         config.validate()?;
         Ok(config)
-    }
-
-    /// Alias for load_default.
-    pub fn load_from_dir(dir: impl AsRef<Path>) -> Result<Self> {
-        Self::load_default(dir)
     }
 
     /// Reject configuration that cannot mean anything, rather than silently
@@ -134,11 +126,6 @@ impl Config {
         crate::git::since_to_days(&self.churn.since)
             .map_err(|error| crate::core::Error::Config(format!("churn.since: {error}")))?;
         Ok(())
-    }
-
-    /// Create default config file content.
-    pub fn default_toml() -> &'static str {
-        include_str!("default_config.toml")
     }
 }
 
@@ -428,16 +415,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_load_alias() {
-        Jail::expect_with(|jail| {
-            jail.create_file("test.toml", "[churn]\ntop = 50")?;
-            let config = Config::load("test.toml").unwrap();
-            assert_eq!(config.churn.top, 50);
-            Ok(())
-        });
-    }
-
-    #[test]
     fn test_config_load_default_omen_toml() {
         Jail::expect_with(|jail| {
             jail.create_file("omen.toml", "[duplicates]\nmin_tokens = 100")?;
@@ -463,15 +440,6 @@ mod tests {
         Jail::expect_with(|_jail| {
             let config = Config::load_default(".").unwrap();
             assert_eq!(config.complexity.cyclomatic_error, 20);
-            Ok(())
-        });
-    }
-
-    #[test]
-    fn test_config_load_from_dir_alias() {
-        Jail::expect_with(|_jail| {
-            let config = Config::load_from_dir(".").unwrap();
-            assert_eq!(config.churn.since, "6m");
             Ok(())
         });
     }
@@ -503,12 +471,6 @@ mod tests {
             assert_eq!(config.complexity.cyclomatic_error, 42);
             Ok(())
         });
-    }
-
-    #[test]
-    fn test_config_default_toml() {
-        let content = Config::default_toml();
-        assert!(!content.is_empty());
     }
 
     #[test]
@@ -589,11 +551,13 @@ mod tests {
     }
 
     #[test]
-    fn test_yaml_config_loads() {
+    fn test_a_config_file_that_is_not_toml_is_an_error_that_says_toml_only() {
         Jail::expect_with(|jail| {
-            jail.create_file("omen.yaml", "churn:\n  top: 37\n")?;
-            let config = Config::from_file("omen.yaml").unwrap();
-            assert_eq!(config.churn.top, 37);
+            for name in ["omen.yaml", "omen.yml", "omen.json"] {
+                jail.create_file(name, "")?;
+                let error = Config::from_file(name).unwrap_err().to_string();
+                assert!(error.contains("TOML only"), "{name}: {error}");
+            }
             Ok(())
         });
     }
