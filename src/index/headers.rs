@@ -39,27 +39,27 @@ pub fn parse(path: &Path, language: Language, content: &[u8]) -> Option<ParseRes
     }
 }
 
-/// Parses the file again for an analysis of the index. The result is `None` when the
-/// read fails, or when the bytes are not the bytes that gave `facts`. A file that gave
-/// `None` once stays `None`: `failed` records it, and the file is not read again. Thus
-/// an analysis never uses a second version of a file.
+/// Reads and parses a file again for an analysis of the index.
+///
+/// A read that fails, or bytes that are not the bytes that gave `facts`, are an error
+/// for the whole command: the analysis never uses a second version of a file. `Ok(None)`
+/// means that the file has no syntax tree, and it does not depend on the read.
 pub fn parse_unchanged(
     facts: &FileSymbols,
-    failed: &std::sync::atomic::AtomicBool,
-    read: impl FnOnce() -> Option<Vec<u8>>,
+    read: impl FnOnce() -> crate::core::Result<Vec<u8>>,
     parse: impl FnOnce(&[u8]) -> Option<ParseResult>,
-) -> Option<ParseResult> {
-    use std::sync::atomic::Ordering;
-    if failed.load(Ordering::SeqCst) {
-        return None;
+) -> crate::core::Result<Option<ParseResult>> {
+    let changed = || {
+        crate::core::Error::analysis(format!(
+            "{} changed or became unreadable during analysis; run the command again",
+            facts.file
+        ))
+    };
+    let content = read().map_err(|_| changed())?;
+    if !facts.is_content_of_facts(&content) {
+        return Err(changed());
     }
-    let parsed = read()
-        .filter(|content| facts.is_content_of_facts(content))
-        .and_then(|content| parse(&content));
-    if parsed.is_none() {
-        failed.store(true, Ordering::SeqCst);
-    }
-    parsed
+    Ok(parse(&content))
 }
 
 fn relative(root: &Path, path: &Path) -> String {

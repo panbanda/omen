@@ -355,7 +355,7 @@ fn place_of(key: &str) -> (String, u32) {
 fn observed_paths(dir: &Path) -> Vec<ObservedPath> {
     let mut files = Vec::new();
     source_files(dir, &mut files);
-    let analysis = analyze_files(dir, &files);
+    let analysis = analyze_files(dir, &files).unwrap();
     let paths = analysis
         .reachability
         .paths

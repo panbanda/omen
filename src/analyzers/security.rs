@@ -187,13 +187,13 @@ pub fn analyze_context(ctx: &AnalysisContext<'_>) -> Result<Analysis> {
     let files: Vec<PathBuf> = ctx.files.iter().cloned().collect();
     let index = ctx.code_index()?;
     let options = options_of(&ctx.config.security)?;
-    Ok(analyze_with_index(
+    analyze_with_index(
         &index,
         ctx.root,
         &files,
         &|path| ctx.read_file(path),
         &options,
-    ))
+    )
 }
 
 /// The analysis of files of the file system. The paths are absolute or relative to the
@@ -211,7 +211,7 @@ pub fn analyze_paths(
         &read,
         &crate::index::build::list_directory,
     );
-    Ok(analyze_with_index(&index, root, files, &read, &options))
+    analyze_with_index(&index, root, files, &read, &options)
 }
 
 /// The analyzer. Build it with [`Analyzer::from_config`].
@@ -361,7 +361,7 @@ impl AnalyzerTrait for Analyzer {
             &files,
             &|path| ctx.read_file(path),
             &self.options,
-        );
+        )?;
         Ok(Report::from_analysis(analysis))
     }
 }
@@ -755,7 +755,7 @@ mod tests {
                 Vec::new()
             });
         let analysis =
-            analyze_with_index(&index, std::path::Path::new(""), &paths, &read, &options);
+            analyze_with_index(&index, std::path::Path::new(""), &paths, &read, &options).unwrap();
         assert_eq!(analysis.sinks.len(), 1);
         assert_eq!(analysis.entry_points.len(), 1);
         assert_eq!(analysis.entry_points[0].framework, "acme-web");

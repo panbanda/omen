@@ -259,13 +259,7 @@ fn analyze_revision(
     let index = CodeIndex::build(Path::new(""), &files, &read, &|directory| {
         source.list_directory(directory).unwrap_or_default()
     });
-    Ok(analyze_with_index(
-        &index,
-        Path::new(""),
-        &files,
-        &read,
-        options,
-    ))
+    analyze_with_index(&index, Path::new(""), &files, &read, options)
 }
 
 /// Computes the security block of `HEAD` against the merge base with `target`.

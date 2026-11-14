@@ -152,7 +152,8 @@ pub trait TreeSource: Sync {
 /// The syntax trees that the entry point rules ask for in other files. The source
 /// parses a file when a rule asks, and it keeps the tree for the next question.
 pub struct OnDemandTrees<'a> {
-    parse_file: &'a (dyn Fn(usize) -> Option<ParseResult> + Sync),
+    parse_file: &'a (dyn Fn(usize) -> crate::core::Result<Option<ParseResult>> + Sync),
+    error: parking_lot::Mutex<Option<crate::core::Error>>,
     parsed: parking_lot::Mutex<std::collections::HashMap<usize, Cell>>,
 }
 
@@ -161,10 +162,22 @@ pub struct OnDemandTrees<'a> {
 type Cell = std::sync::Arc<std::sync::OnceLock<Option<std::sync::Arc<ParseResult>>>>;
 
 impl<'a> OnDemandTrees<'a> {
-    pub fn new(parse_file: &'a (dyn Fn(usize) -> Option<ParseResult> + Sync)) -> Self {
+    pub fn new(
+        parse_file: &'a (dyn Fn(usize) -> crate::core::Result<Option<ParseResult>> + Sync),
+    ) -> Self {
         Self {
             parse_file,
+            error: parking_lot::Mutex::new(None),
             parsed: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// The error of a parse that a rule asked for, when a parse failed. The caller must
+    /// call this after the analysis, and it must give the error to its own caller.
+    pub fn finish(&self) -> crate::core::Result<()> {
+        match self.error.lock().take() {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     }
 }
@@ -172,7 +185,14 @@ impl<'a> OnDemandTrees<'a> {
 impl TreeSource for OnDemandTrees<'_> {
     fn tree(&self, position: usize) -> Option<TreeRef<'_>> {
         let cell = std::sync::Arc::clone(self.parsed.lock().entry(position).or_default());
-        cell.get_or_init(|| (self.parse_file)(position).map(std::sync::Arc::new))
+        let parse = || match (self.parse_file)(position) {
+            Ok(tree) => tree.map(std::sync::Arc::new),
+            Err(error) => {
+                self.error.lock().get_or_insert(error);
+                None
+            }
+        };
+        cell.get_or_init(parse)
             .as_ref()
             .map(|tree| TreeRef::Shared(std::sync::Arc::clone(tree)))
     }
@@ -1769,9 +1789,9 @@ mod tests {
         let parse_file = |_: usize| {
             parses.fetch_add(1, Ordering::SeqCst);
             std::thread::sleep(std::time::Duration::from_millis(50));
-            Parser::new()
+            Ok(Parser::new()
                 .parse(b"x = 1\n", Language::Python, Path::new("a.py"))
-                .ok()
+                .ok())
         };
         let trees = OnDemandTrees::new(&parse_file);
         std::thread::scope(|scope| {

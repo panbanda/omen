@@ -73,7 +73,7 @@ pub fn analyze(
     read: ReadFile<'_>,
     list: ListDirectory<'_>,
     min_basis: ResolutionBasis,
-) -> Analysis {
+) -> crate::core::Result<Analysis> {
     let index = CodeIndex::build(root, files, read, list);
     let options = Options {
         min_basis,
@@ -89,30 +89,26 @@ pub fn analyze_with_index(
     files: &[PathBuf],
     read: ReadFile<'_>,
     options: &Options,
-) -> Analysis {
+) -> crate::core::Result<Analysis> {
     let by_relative: BTreeMap<String, &PathBuf> = files
         .iter()
         .map(|path| (relative(root, path), path))
         .collect();
-    let failed: Vec<std::sync::atomic::AtomicBool> = index
-        .files
-        .iter()
-        .map(|_| std::sync::atomic::AtomicBool::new(false))
-        .collect();
-    let parse_file = |position: usize| -> Option<ParseResult> {
+    let parse_file = |position: usize| -> crate::core::Result<Option<ParseResult>> {
         let file = &index.files[position];
-        let path = by_relative.get(&file.file)?;
+        let Some(path) = by_relative.get(&file.file) else {
+            return Ok(None);
+        };
         headers::parse_unchanged(
             file,
-            &failed[position],
-            || read(path).ok(),
+            || read(path),
             |content| headers::parse(path, file.language, content),
         )
     };
     let (all_sinks, comments, entry_points, kept) =
-        match findings_one_tree_at_a_time(index, &parse_file, options) {
+        match findings_one_tree_at_a_time(index, &parse_file, options)? {
             Some(findings) => findings,
-            None => findings_with_all_trees(index, &parse_file, options),
+            None => findings_with_all_trees(index, &parse_file, options)?,
         };
     let mut all_sinks = all_sinks;
     if !options.experimental {
@@ -132,14 +128,14 @@ pub fn analyze_with_index(
             languages.push(language);
         }
     }
-    Analysis {
+    Ok(Analysis {
         sinks,
         suppressed,
         invalid_suppressions,
         entry_points,
         reachability: reach,
         coverage: coverage(&languages, options.experimental),
-    }
+    })
 }
 
 type Comments = Vec<(Vec<suppress::Allow>, Vec<InvalidSuppression>)>;
@@ -153,47 +149,57 @@ type Findings = (Vec<Sink>, Comments, Vec<EntryPoint>, Vec<usize>);
 /// depends on the set of those files, thus the caller must use the other function.
 fn findings_one_tree_at_a_time(
     index: &CodeIndex,
-    parse_file: &(dyn Fn(usize) -> Option<ParseResult> + Sync),
+    parse_file: &(dyn Fn(usize) -> crate::core::Result<Option<ParseResult>> + Sync),
     options: &Options,
-) -> Option<Findings> {
+) -> crate::core::Result<Option<Findings>> {
     let files = &index.files;
     let repository = Repository::new(files);
     let trees = OnDemandTrees::new(parse_file);
     let per_file: Vec<Option<(Vec<Sink>, _, Vec<EntryPoint>)>> = (0..files.len())
         .into_par_iter()
         .map(|position| {
-            let tree = parse_file(position)?;
+            let Some(tree) = parse_file(position)? else {
+                return Ok(None);
+            };
             let file = &files[position];
-            Some((
+            Ok(Some((
                 file_sinks(&tree, file, &repository, options.sink_rows),
                 suppress::comments_of(&tree, &file.file),
                 entry_points_of_file(position, &tree, files, &trees, &options.entry_rules),
-            ))
+            )))
         })
-        .collect();
+        .collect::<crate::core::Result<_>>()?;
+    trees.finish()?;
     let mut sinks = Vec::new();
     let mut comments = Vec::new();
     let mut entry_points = Vec::new();
     for found in per_file {
-        let (file_sinks, file_comments, file_entries) = found?;
+        let Some((file_sinks, file_comments, file_entries)) = found else {
+            return Ok(None);
+        };
         sinks.extend(file_sinks);
         comments.push(file_comments);
         entry_points.extend(file_entries);
     }
-    Some((sinks, comments, entry_points, (0..files.len()).collect()))
+    Ok(Some((
+        sinks,
+        comments,
+        entry_points,
+        (0..files.len()).collect(),
+    )))
 }
 
 /// The same result as `findings_one_tree_at_a_time` for the files that have a tree.
 /// The function keeps the trees of all files and a copy of their facts.
 fn findings_with_all_trees(
     index: &CodeIndex,
-    parse_file: &(dyn Fn(usize) -> Option<ParseResult> + Sync),
+    parse_file: &(dyn Fn(usize) -> crate::core::Result<Option<ParseResult>> + Sync),
     options: &Options,
-) -> Findings {
+) -> crate::core::Result<Findings> {
     let parsed: Vec<Option<ParseResult>> = (0..index.files.len())
         .into_par_iter()
         .map(parse_file)
-        .collect();
+        .collect::<crate::core::Result<_>>()?;
     let mut kept: Vec<FileSymbols> = Vec::new();
     let mut positions: Vec<usize> = Vec::new();
     let mut trees: Vec<ParseResult> = Vec::new();
@@ -211,7 +217,7 @@ fn findings_with_all_trees(
         .map(|(tree, file)| suppress::comments_of(tree, &file.file))
         .collect();
     let entry_points = find_entry_points_with(&trees, &kept, &options.entry_rules);
-    (sinks, comments, entry_points, positions)
+    Ok((sinks, comments, entry_points, positions))
 }
 
 /// Analyzes files that the caller already has as text. The names are relative paths.
@@ -243,10 +249,11 @@ pub fn analyze_sources_with(sources: &[(&str, &str)], options: &Options) -> Anal
     };
     let index = CodeIndex::build(Path::new(""), &paths, &read, &|_| Vec::new());
     analyze_with_index(&index, Path::new(""), &paths, &read, options)
+        .expect("the sources are in memory and do not change")
 }
 
 /// Analyzes files of the file system with the default minimum basis.
-pub fn analyze_files(root: &Path, files: &[PathBuf]) -> Analysis {
+pub fn analyze_files(root: &Path, files: &[PathBuf]) -> crate::core::Result<Analysis> {
     analyze(
         root,
         files,
@@ -287,17 +294,19 @@ mod tests {
                 .ok_or_else(|| crate::core::Error::analysis("missing"))
         };
         let index = CodeIndex::build(Path::new(""), &paths, &read, &|_| Vec::new());
-        let parse_file = |position: usize| {
+        let parse_file = |position: usize| -> crate::core::Result<Option<ParseResult>> {
             let file = &index.files[position];
             let path = Path::new(&file.file);
-            headers::parse(path, file.language, &read(path).ok()?)
+            Ok(headers::parse(path, file.language, &read(path)?))
         };
         let options = Options::default();
 
         let (sinks, comments, entries, kept) =
-            findings_one_tree_at_a_time(&index, &parse_file, &options).unwrap();
+            findings_one_tree_at_a_time(&index, &parse_file, &options)
+                .unwrap()
+                .unwrap();
         let (all_sinks, all_comments, all_entries, all_kept) =
-            findings_with_all_trees(&index, &parse_file, &options);
+            findings_with_all_trees(&index, &parse_file, &options).unwrap();
 
         assert!(!sinks.is_empty());
         assert!(!entries.is_empty());
@@ -315,7 +324,9 @@ mod tests {
     }
 
     /// A reader whose second read of `a.py` fails or gives other bytes.
-    fn analyze_with_unstable_read(second_read: Option<&'static str>) -> Analysis {
+    fn analyze_with_unstable_read(
+        second_read: Option<&'static str>,
+    ) -> crate::core::Result<Analysis> {
         use std::sync::atomic::{AtomicUsize, Ordering};
         const DANGEROUS: &str = "def f(x):\n    eval(x)\n";
         let sources = [("a.py", DANGEROUS), ("b.py", "def g():\n    return 1\n")];
@@ -350,16 +361,19 @@ mod tests {
         )
     }
 
+    const CHANGED: &str =
+        "a.py changed or became unreadable during analysis; run the command again";
+
     #[test]
-    fn a_file_that_fails_to_read_once_is_not_read_again() {
-        let analysis = analyze_with_unstable_read(None);
-        assert!(analysis.sinks.is_empty());
+    fn a_file_that_fails_to_read_after_the_index_is_an_error() {
+        let error = analyze_with_unstable_read(None).unwrap_err();
+        assert!(error.to_string().contains(CHANGED), "{error}");
     }
 
     #[test]
-    fn a_file_whose_bytes_changed_is_not_analyzed() {
-        let analysis = analyze_with_unstable_read(Some("def f(x):\n    return x\n"));
-        assert!(analysis.sinks.is_empty());
+    fn a_file_whose_bytes_changed_after_the_index_is_an_error() {
+        let error = analyze_with_unstable_read(Some("def f(x):\n    return x\n")).unwrap_err();
+        assert!(error.to_string().contains(CHANGED), "{error}");
     }
 
     #[test]
@@ -374,10 +388,14 @@ mod tests {
                 .ok_or_else(|| crate::core::Error::analysis("missing"))
         };
         let index = CodeIndex::build(Path::new(""), &paths, &read, &|_| Vec::new());
-        let no_tree = |_: usize| None;
-        assert!(findings_one_tree_at_a_time(&index, &no_tree, &Options::default()).is_none());
+        let no_tree = |_: usize| Ok(None);
+        assert!(
+            findings_one_tree_at_a_time(&index, &no_tree, &Options::default())
+                .unwrap()
+                .is_none()
+        );
         let (sinks, _, entries, kept) =
-            findings_with_all_trees(&index, &no_tree, &Options::default());
+            findings_with_all_trees(&index, &no_tree, &Options::default()).unwrap();
         assert!(sinks.is_empty() && entries.is_empty() && kept.is_empty());
     }
 
