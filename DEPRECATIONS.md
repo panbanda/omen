@@ -41,7 +41,7 @@ Use the replacement.
 
 The flags `-p`, `-f`, `-c`, `-v`, and `-j` are global. On each command, `-p` is
 the repository path. `stubs --gate` has no default value in the CLI. If the
-flag is absent, the `[gate]` table of the configuration gives the mode.
+flag is absent, the `gate` key in the table of the command gives the mode.
 
 If the `-p` value is not a directory, each command that reads the repository
 stops with an error before the analysis. `mcp manifest`, `eval`, `benchmark`,
@@ -120,6 +120,44 @@ use the same form. The MCP tools give the same keys as the commands.
 | `hotspots.json` (`report generate`) | `hotspot.json` |
 | `--skip duplicates` (`report generate`) | `--skip clones` |
 | `--skip hotspots` (`report generate`) | `--skip hotspot` |
+### Configuration keys
+
+Omen 5.0 removed or renamed the keys in this table. There is no alias. A
+configuration file or an `OMEN_` variable that sets an old key gives an error
+that names the new key. For example: `gate.complexity was removed in 5.0; use
+complexity.gate`.
+
+| Removed | Replacement |
+|---|---|
+| `[gate]` table | The `gate` key in the table of each command |
+| `gate.complexity` | `complexity.gate` |
+| `gate.score` | `score.gate` |
+| `gate.stubs` | `stubs.gate` |
+| `gate.mutation` | `mutation.gate` |
+| `complexity.cyclomatic_error` | `complexity.cyclomatic_max` |
+| `complexity.cognitive_error` | `complexity.cognitive_max` |
+| `score.fail_under` | `score.min`. The default is 80. |
+| `satd.custom_markers` | `satd.markers` |
+| `exclude_built_assets` | `include_generated`. The meaning is the opposite. The default `false` gives the old behavior. |
+| `duplicates.exclude_tests` | `exclude_tests` at the top level |
+| `[temporal]` table, `temporal.exclude_tests` | `exclude_tests` at the top level |
+| `hotspot.days` | `hotspot.since`, for example `"90d"` |
+| `defect.churn_days` | `defect.since`, for example `"30d"` |
+| `changes.days` | `changes.since`, for example `"30d"` |
+| `churn.top`, `hotspot.top` | The `--top` flag. The default is 20 rows, as a constant in the command. |
+
+Other changes of the configuration:
+
+- `--config` accepts TOML only. A path that ends in `.yaml`, `.yml`, or `.json`
+  is an error.
+- A window is a `since` duration, such as `30d`, `6m`, or `1y`, with the
+  syntax of the `--since` flag. The value `all` is valid for `churn`,
+  `hotspot`, and `defect`. It is not valid for `changes`. A window of 0 is an
+  error.
+- `exclude_tests` now applies to `temporal` through the same key as `clones`.
+- `score.min` has the explicit default 80. The `--fail-under` flag overrides
+  it.
+
 ## Changed in 5.0
 
 These changes have no compatibility shim. Each row gives the old behaviour, the
@@ -222,7 +260,7 @@ envelope.
 These bounds are new:
 
 - `days` of `churn`, `defect`, `hotspot`, and `temporal`: 1 to 36500.
-- `stale_days` of `flags`: 0 to 36500.
+- `stale_days` of `flags`: 1 to 36500.
 - `min_tokens` of `clones`, `top_k` of the search tools, and `max_tokens` of
   `context`: 1 or more.
 - `similarity` of `clones` and `min_score` of the search tools: 0 to 1.
@@ -238,9 +276,9 @@ tools used a fixed value and did not read the configuration.
 | `churn` | `days` | 30 | `churn.since` of the configuration. The built-in default is `6m`, which is 180 days. | Send `days: 30` to keep the old window. |
 | `clones` | `similarity` | 0.7 | `duplicates.min_similarity` of the configuration. The built-in default is 0.9. | Send `similarity: 0.7` to keep the old threshold. |
 | `clones` | `min_tokens` | 50 | `duplicates.min_tokens` of the configuration. The built-in default is 50. | None, unless the configuration sets the value. |
-| `clones` | Test code | Not read. | `duplicates.exclude_tests` of the configuration applies. The new `include_tests` argument reads test code. | None, unless the configuration sets `exclude_tests = false`. |
-| `changes` | Days of history | 30 | `changes.days` of the configuration. The built-in default is 30. | None, unless the configuration sets the value. |
-| `satd` | Custom markers | Not read. | `satd.custom_markers` of the configuration applies. | None, unless the configuration sets markers. |
+| `clones` | Test code | Not read. | `exclude_tests` of the configuration applies. The new `include_tests` argument reads test code. | None, unless the configuration sets `exclude_tests = false`. |
+| `changes` | Days of history | 30 | `changes.since` of the configuration. The built-in default is 30. | None, unless the configuration sets the value. |
+| `satd` | Custom markers | Not read. | `satd.markers` of the configuration applies. | None, unless the configuration sets markers. |
 
 ### Default of `flags --stale-days`
 
@@ -250,12 +288,13 @@ the command got `--stale-days 0`.
 
 | | Before 5.0 | From 5.0 |
 |---|---|---|
-| `flags` without `--stale-days` | 90 days. The configuration had no effect. | `[feature_flags] stale_days`. When that value is absent or 0, the age is 14 days. |
-| `flags --stale-days 0` | The configured value, or 14 days. | 14 days. |
+| `flags` without `--stale-days` | 90 days. The configuration had no effect. | `[feature_flags] stale_days`. The default is 90 days. |
+| `flags --stale-days 0` | The configured value, or 14 days. | An error. The value 0 is not valid. |
+| `stale_days = 0` in the configuration | 14 days. | The value 0 is not valid, and the age is never 14 days. |
 
-To keep the old result, give `--stale-days 90`, or set `stale_days = 90` in
-`[feature_flags]`. The MCP tool `flags` did not change: its `stale_days`
-argument has the same rule as the flag.
+The value of `stale_days` in the configuration is 90 if the file does not set
+it. Before 5.0, an absent value was 0, and the analyzer then used 14 days. The
+MCP tool `flags` has the same rule as the flag.
 
 No other flag has a built-in default that hides a configuration key.
 
