@@ -9,7 +9,7 @@
 //! Variable declarations, class/struct definitions, module-level
 //! constants, and type aliases are not yet analyzed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
@@ -957,6 +957,9 @@ fn extract_attribute_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option
 const MODULE_SCOPE: &str = "<module>";
 
 /// Walk the AST to collect identifier usages and the uses of a function as a value.
+/// A use as a value is an identifier that is not the target of a call, as the
+/// `used` in `Spec { handler: used }` and in `register("data", used)` are. The
+/// index gives the edges of the calls, and these uses give the other edges.
 /// Uses iterative traversal with a single TreeCursor for performance.
 fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode) {
     let source = &result.source;
@@ -966,6 +969,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
     // restore the enclosing one, otherwise every call made after a nested
     // function in the same body loses its caller.
     let mut scopes: Vec<(u32, Option<String>)> = Vec::new();
+    let mut value_uses: BTreeSet<(String, String, bool)> = BTreeSet::new();
 
     // Iterative pre-order traversal
     loop {
@@ -992,11 +996,11 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             ));
         }
 
-        // Code at module scope runs when the file is loaded, so calls made
+        // Code at module scope runs when the file is loaded, so uses made
         // there have a real caller -- `export const W = memo(Internal)`
-        // genuinely reaches `Internal`. Inside an anonymous function with no
-        // named ancestor there is nothing to attribute a call to, and
-        // guessing would make unreachable code look reachable.
+        // genuinely reaches `Internal`. An anonymous function with no named
+        // ancestor is in code that runs at module scope or that a callback
+        // runs, thus its uses count as module scope too.
         let from_module_scope = scopes.is_empty();
         let current_function = if from_module_scope {
             Some(MODULE_SCOPE.to_string())
@@ -1008,16 +1012,13 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         if (kind == "identifier" || kind == "type_identifier") && !is_definition_context(&node) {
             if let Ok(name) = node.utf8_text(source) {
                 fdc.usages.insert(name.to_string());
-            }
-        }
-
-        if kind == "call_expression" || kind == "function_call" || kind == "call" {
-            // Detect function-as-value references in call arguments.
-            // If an argument is a bare identifier matching a known function
-            // definition, add a synthetic call edge from the current function
-            // to that identifier so BFS can reach it.
-            if let Some(ref caller) = current_function {
-                collect_function_value_refs(&node, source, caller, from_module_scope, fdc);
+                if kind == "identifier" && !is_call_target(&node) {
+                    let (caller, module_scope) = match &current_function {
+                        Some(caller) => (caller.clone(), from_module_scope),
+                        None => (MODULE_SCOPE.to_string(), true),
+                    };
+                    value_uses.insert((caller, name.to_string(), module_scope));
+                }
             }
         }
 
@@ -1032,10 +1033,35 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                 break;
             }
             if !cursor.goto_parent() {
+                fdc.calls = value_uses
+                    .into_iter()
+                    .map(|(caller, callee, from_module_scope)| CallReference {
+                        caller,
+                        callee,
+                        file: fdc.path.clone(),
+                        from_module_scope,
+                    })
+                    .collect();
                 return; // Done traversing
             }
         }
     }
+}
+
+/// Whether the identifier names the callee of a call, not a value.
+fn is_call_target(node: &tree_sitter::Node<'_>) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    let kind = parent.kind();
+    if !(kind.contains("call") || kind.contains("invocation") || kind == "command") {
+        return false;
+    }
+    ["function", "name", "method"].iter().any(|field| {
+        parent
+            .child_by_field_name(field)
+            .is_some_and(|child| child.id() == node.id())
+    })
 }
 
 fn is_function_node(kind: &str) -> bool {
@@ -1057,6 +1083,14 @@ fn is_function_node(kind: &str) -> bool {
 fn is_definition_context(node: &tree_sitter::Node<'_>) -> bool {
     if let Some(parent) = node.parent() {
         let parent_kind = parent.kind();
+        // C and C++ put the name of a function in a declarator.
+        if parent_kind == "function_declarator"
+            && parent
+                .child_by_field_name("declarator")
+                .is_some_and(|declarator| declarator.id() == node.id())
+        {
+            return true;
+        }
         // Check if this identifier is the "name" field of a definition
         if let Some(name_node) = parent.child_by_field_name("name") {
             if name_node.id() == node.id() {
@@ -1079,55 +1113,6 @@ fn is_definition_context(node: &tree_sitter::Node<'_>) -> bool {
         }
     }
     false
-}
-
-/// Scan call arguments for bare identifiers that match known function definitions.
-/// These represent function-as-value references (callbacks) and get synthetic call edges
-/// so that BFS reachability can follow them.
-fn collect_function_value_refs(
-    call_node: &tree_sitter::Node<'_>,
-    source: &[u8],
-    caller: &str,
-    from_module_scope: bool,
-    fdc: &mut FileDeadCode,
-) {
-    // Find the argument_list / arguments child of the call node
-    let args_node = call_node.child_by_field_name("arguments").or_else(|| {
-        // Some grammars (Go) use "argument_list" as the node kind
-        // rather than a named field
-        (0..call_node.child_count())
-            .filter_map(|i| call_node.child(i))
-            .find(|c| c.kind() == "argument_list")
-    });
-
-    let args_node = match args_node {
-        Some(n) => n,
-        None => return,
-    };
-
-    for i in 0..args_node.child_count() {
-        let arg = match args_node.child(i) {
-            Some(a) => a,
-            None => continue,
-        };
-
-        if arg.kind() != "identifier" {
-            continue;
-        }
-
-        let name = match arg.utf8_text(source) {
-            Ok(n) => n,
-            Err(_) => continue,
-        };
-
-        fdc.calls.push(CallReference {
-            caller: caller.to_string(),
-            callee: name.to_string(),
-            file: fdc.path.clone(),
-            from_module_scope,
-            line: call_node.start_position().row as u32 + 1,
-        });
-    }
 }
 
 fn get_visibility(name: &str, lang: Language) -> String {
@@ -1354,8 +1339,6 @@ struct CallReference {
     /// function. Structural rather than a reserved caller name, which a
     /// property binding could otherwise collide with.
     from_module_scope: bool,
-    #[allow(dead_code)]
-    line: u32,
 }
 
 // Public output types
@@ -3032,6 +3015,48 @@ mod index_tests {
         let analysis = Analyzer::new().analyze(&ctx).unwrap();
 
         assert_eq!(analysis.summary.total_definitions, 1);
+    }
+
+    #[test]
+    fn test_a_function_stored_as_a_value_is_alive_when_its_holder_is_alive() {
+        let sources: [(&str, &str); 4] = [
+            (
+                "m.rs",
+                "struct Spec { handler: fn() }\nfn used() {}\nfn unused_one() {}\nfn main() { let _ = Spec { handler: used }; }\n",
+            ),
+            (
+                "m.go",
+                "package main\ntype Spec struct{ Handler func() }\nfunc used() {}\nfunc unusedOne() {}\nfunc main() { _ = Spec{Handler: used} }\n",
+            ),
+            (
+                "m.py",
+                "def used():\n    pass\n\ndef _unused_one():\n    pass\n\ndef main():\n    table = {\"a\": used}\n    return table\n",
+            ),
+            (
+                "m.js",
+                "function used() {}\nfunction unusedOne() {}\nexport function main() { return { handler: used }; }\n",
+            ),
+        ];
+        for (name, text) in sources {
+            let dead = dead_names(&[(name, text)]);
+            assert!(!dead.contains(&"used".to_string()), "{name}: {dead:?}");
+            assert!(
+                dead.iter()
+                    .any(|found| found.to_lowercase().replace('_', "") == "unusedone"),
+                "{name}: {dead:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_function_stored_as_a_value_in_dead_code_is_dead() {
+        let dead = dead_names(&[(
+            "m.js",
+            "function used() {}\nfunction holder() { return { handler: used }; }\n",
+        )]);
+
+        assert!(dead.contains(&"used".to_string()), "{dead:?}");
+        assert!(dead.contains(&"holder".to_string()), "{dead:?}");
     }
 
     #[test]
