@@ -308,26 +308,27 @@ impl FileContext<'_> {
             .map(|(position, _)| position)
     }
 
-    fn find_local(&self, name: &str, chain: &[usize]) -> Option<&Local> {
-        let named = |local: &&Local| local.name.name == name;
+    /// The local name that the byte `at` sees. A name is not in scope before
+    /// its first value, and the name in the nearest block that contains `at`
+    /// hides the others. This is the rule of the call resolver.
+    fn find_local(&self, name: &str, chain: &[usize], at: usize) -> Option<&Local> {
+        let visible = |local: &&Local| {
+            local.name.name == name
+                && local.name.value_start.is_none_or(|value| value < at)
+                && local.block.as_ref().is_none_or(|block| block.contains(&at))
+        };
+        let nearest = |owner: Option<usize>| {
+            self.file
+                .locals
+                .iter()
+                .filter(visible)
+                .filter(|local| local.owner == owner)
+                .min_by_key(|local| local.block.as_ref().map_or(usize::MAX, |block| block.len()))
+        };
         chain
             .iter()
-            .find_map(|owner| {
-                self.file
-                    .locals
-                    .iter()
-                    .rev()
-                    .filter(named)
-                    .find(|local| local.owner == Some(*owner))
-            })
-            .or_else(|| {
-                self.file
-                    .locals
-                    .iter()
-                    .rev()
-                    .filter(named)
-                    .find(|local| local.owner.is_none())
-            })
+            .find_map(|owner| nearest(Some(*owner)))
+            .or_else(|| nearest(None))
     }
 
     fn binds(binding: &ImportBinding, name: &str) -> bool {
@@ -394,7 +395,7 @@ impl FileContext<'_> {
     fn resolve(&self, written: &[String], chain: &[usize], at: usize) -> Owner {
         let mut written = written.to_vec();
         for _ in 0..2 {
-            let Some(local) = self.find_local(&written[0], chain) else {
+            let Some(local) = self.find_local(&written[0], chain, at) else {
                 break;
             };
             if written.len() < 2 {

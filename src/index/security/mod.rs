@@ -453,4 +453,28 @@ mod tests {
         assert_eq!(result[0].enclosing.as_deref(), Some("a.py#run"));
         assert_eq!(result[0].callee_text, "pickle.loads");
     }
+
+    #[test]
+    fn a_local_in_an_inner_block_after_the_call_does_not_hide_the_sink_go() {
+        let source = "package main\n\nimport \"os/exec\"\n\nfunc run(cmd string) {\n\texec.Command(cmd)\n\t{\n\t\texec := struct{}{}\n\t\t_ = exec\n\t}\n}\n";
+        assert_eq!(
+            found(Language::Go, &[("a.go", source)]),
+            [one("a.go", 6, "command_execution", "imported_symbol")]
+        );
+    }
+
+    #[test]
+    fn a_local_declared_after_the_call_does_not_hide_the_sink_go() {
+        let source = "package main\n\nimport \"os/exec\"\n\nfunc run(cmd string) {\n\texec.Command(cmd)\n\texec := 1\n\t_ = exec\n}\n";
+        assert_eq!(
+            found(Language::Go, &[("a.go", source)]),
+            [one("a.go", 6, "command_execution", "imported_symbol")]
+        );
+    }
+
+    #[test]
+    fn a_local_in_a_block_that_holds_the_call_hides_the_sink_go() {
+        let source = "package main\n\nimport \"os/exec\"\n\nfunc run(cmd string) {\n\t{\n\t\texec := struct{}{}\n\t\texec.Command(cmd)\n\t}\n}\n";
+        assert_eq!(found(Language::Go, &[("a.go", source)]), []);
+    }
 }

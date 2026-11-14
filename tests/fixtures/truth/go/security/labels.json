@@ -59,6 +59,7 @@
     {"label": "memory_unsafe.name_in_comment", "category": "memory_unsafe", "scenario": "name_in_comment", "file": "unsafe.go", "line": 14, "flagged": false},
     {"label": "memory_unsafe.same_name_symbol", "category": "memory_unsafe", "scenario": "same_name_symbol", "file": "unsafe_decoys.go", "line": 6, "flagged": false},
     {"label": "memory_unsafe.in_test", "category": "memory_unsafe", "scenario": "in_test", "file": "unsafe_test.go", "line": 6, "basis": "imported_symbol", "in_test": true},
-    {"label": "tls_verification_disabled.safe_variant.map_literal", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_extra.go", "line": 4, "flagged": false}
+    {"label": "tls_verification_disabled.safe_variant.map_literal", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_extra.go", "line": 4, "flagged": false},
+    {"label": "command_execution.real_call.name_hidden_later", "category": "command_execution", "scenario": "real_call", "file": "shadow_later.go", "line": 6, "basis": "imported_symbol", "constant_argument": false}
   ]
 }
