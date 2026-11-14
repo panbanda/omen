@@ -127,6 +127,16 @@ mod tests {
     }
 
     #[test]
+    fn test_a_dotted_name_and_a_nested_name_get_different_keys() {
+        let source = "outer.inner() {\n    echo dotted\n}\n\nouter() {\n    inner() {\n        echo nested\n    }\n}\n";
+        let keys = keys(Language::Bash, source);
+        assert_eq!(keys.len(), 3, "{keys:?}");
+        let unique: std::collections::BTreeSet<&String> = keys.iter().collect();
+        assert_eq!(unique.len(), 3, "{keys:?}");
+        assert_eq!(keys[0], "file#outer.inner");
+    }
+
+    #[test]
     fn test_imports() {
         use crate::index::imports::testing::rows;
         let files = [

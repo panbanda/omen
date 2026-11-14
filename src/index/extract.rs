@@ -981,15 +981,26 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         .collect();
     // The fields get their ordinals after the other symbols. Thus a field
     // does not change the key of a method with the same name.
-    let mut counts: BTreeMap<(&[String], &str), usize> = BTreeMap::new();
+    // The count is for each rendered key. Two different paths can render one
+    // key, for example a Bash function `a.b` and a function `b` in `a`.
+    // A name that ends in `~2` can also render the key of a second definition.
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut used: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut ordinals = vec![0; found.len()];
     for fields in [false, true] {
         for (position, (draft, _)) in found.iter().enumerate() {
             if (draft.kind == SymbolKind::Field) == fields {
-                let count = counts
-                    .entry((draft.container_path.as_slice(), draft.name.as_str()))
-                    .or_insert(0);
+                let base = symbol_key(file, &draft.container_path, &draft.name, 1);
+                let count = counts.entry(base).or_insert(0);
                 *count += 1;
+                while !used.insert(symbol_key(
+                    file,
+                    &draft.container_path,
+                    &draft.name,
+                    *count,
+                )) {
+                    *count += 1;
+                }
                 ordinals[position] = *count;
             }
         }
