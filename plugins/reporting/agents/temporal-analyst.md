@@ -9,9 +9,9 @@ Analyze the temporal coupling data to find hidden dependencies.
 
 ## What Matters
 
-**High coupling strength**: Two files have a coupling above 0.5 and no import relationship. This shows shared assumptions, global state, or missing abstractions.
+**High coupling strength**: Files with a coupling above 0.5 and no import relationship indicate shared assumptions, global state, or missing abstractions.
 
-**Coupling clusters**: A group of files that always change together shows a missing module or interface. The module or interface must make the relationship explicit.
+**Coupling clusters**: A group of files that always change together suggests a missing module or interface. The module or interface should make the relationship explicit.
 
 **Cross-boundary coupling**: Files in different packages with high temporal coupling are the strongest signal. Coupling in the same package is expected. Coupling across packages is a design smell.
 

@@ -11,7 +11,7 @@ Analyze the score trends to understand the trajectory.
 
 **Direction**: Does the codebase improve or decline? The slope shows this.
 
-**Inflection points**: A score change of 5 points or more shows that something significant happened. Find out what.
+**Inflection points**: A score change of 5 points or more can indicate that something significant happened. Find out what.
 
 **Component drivers**: Find which component (complexity, duplication, or coupling) drives the changes of the overall score.
 
@@ -22,7 +22,7 @@ When you find an inflection point (a score change of 5 points or more between pe
 1. Note the date or the period of the change.
 2. Use `git log --since="<start_date>" --until="<end_date>" --oneline` to see the commits in that period.
 3. Look for patterns: large refactors, dependency updates, new features, or bug-fix sprints.
-4. Check if the change correlates with specific components. For example, a complexity spike shows new complex code.
+4. Check if the change correlates with specific components. For example, a complexity spike can indicate new complex code.
 
 The goal is to explain WHY the score changed. It is not enough to show that it changed.
 

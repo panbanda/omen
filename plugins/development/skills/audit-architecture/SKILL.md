@@ -45,9 +45,9 @@ omen -f json cohesion
 ```
 
 Watch these metrics:
-- **LCOM** (Lack of Cohesion): A value above 0.7 shows that a class does too many things.
-- **WMC** (Weighted Methods per Class): A value above 30 shows that a class is too complex.
-- **CBO** (Coupling Between Objects): A value above 10 shows that a class has too many dependencies.
+- **LCOM** (Lack of Cohesion): A value above 1 shows that a class does too many things.
+- **WMC** (Weighted Methods per Class): A value above 24 shows that a class is too complex.
+- **CBO** (Coupling Between Objects): A value above 14 shows that a class has too many dependencies.
 
 ### Step 4: Find the Hidden Dependencies
 
@@ -113,13 +113,13 @@ Show the architecture review in this format:
 
 ## Cohesion Analysis
 
-### Low Cohesion Classes (LCOM > 0.7)
+### Low Cohesion Classes (LCOM > 1)
 | Class | LCOM | WMC | Recommendation |
 |-------|------|-----|----------------|
-| UserService | 0.85 | 45 | Split into UserAuth, UserProfile |
-| DataProcessor | 0.78 | 38 | Extract strategies for each type |
+| UserService | 3 | 45 | Split into UserAuth, UserProfile |
+| DataProcessor | 2 | 38 | Extract strategies for each type |
 
-### High Coupling (CBO > 10)
+### High Coupling (CBO > 14)
 - `api/handlers.go` - CBO: 15
   - Depends on too many internal modules
   - Consider facade pattern

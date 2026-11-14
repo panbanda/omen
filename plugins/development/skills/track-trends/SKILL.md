@@ -49,7 +49,7 @@ The output includes these fields:
 | Score | Composite health score (0-100) |
 | Slope | Points gained/lost per period |
 | R-squared | How consistent the trend is (0-1) |
-| Correlation | Direction and strength (-1 to 1) |
+| Correlation | Strength of the trend (0 to 1). The slope gives the direction. |
 
 **Trend interpretation:**
 - A positive slope shows improving health.

@@ -24,9 +24,9 @@ Set `verified: true` and fill `evidence` only after you read the file and confir
 **Mega-hotspots**: One file has the highest score by a large margin. It is probably a god class or a broken abstraction.
 
 **Score thresholds**:
-- 0.7 or more: Critical. Prioritize immediately.
-- 0.5 or more: High. Schedule soon.
-- 0.3 or more: Medium. Monitor.
+- 0.81 or more: Critical. Prioritize immediately.
+- 0.64 or more: High. Schedule soon.
+- 0.36 or more: Medium. Monitor.
 
 ## What to Report
 

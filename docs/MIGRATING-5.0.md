@@ -48,7 +48,7 @@ omen search query "parse config" -n 5
 omen report generate --data ./data
 ```
 
-The flag `--days` is not removed. It is an alias for `--since` on `churn`, `hotspot`, `defect`, and `report generate`. If you give both, `--since` wins.
+The flag `--days` is not removed. It is an alias for `--since` on `churn`, `hotspot`, `defect`, and `report generate`. If you give both, `--since` wins. For `report generate`, one window applies to the metadata, the churn, and the trend.
 
 ### Gates
 
@@ -105,11 +105,11 @@ The command `report generate` writes one JSON file for each analyzer. Two file n
 | `--skip duplicates` | `--skip clones` |
 | `--skip hotspots` | `--skip hotspot` |
 
-`report generate` also writes `security.json`. It writes each file to a temporary file and then renames it. If a write fails, the command fails and names each file that it could not write. The report renderer reads the new names.
+`report generate` also writes `security.json`. It writes each file to a temporary file and then renames it. This includes `metadata.json` and `score.json`. If a write fails, the command fails and names each file that it could not write. The report renderer reads the new names.
 
 ## Symbol identifiers
 
-The commands `symbol`, `impact`, `repomap`, `context`, and `task_context`, and the MCP tools with the same results, use the key of the symbol from the shared index.
+The commands `symbol`, `impact`, `repomap`, and `context`, and the MCP tools with the same results, use the key of the symbol from the shared index.
 
 | Before 5.0 | From 5.0 |
 |---|---|
@@ -119,7 +119,7 @@ The commands `symbol`, `impact`, `repomap`, `context`, and `task_context`, and t
 The format is `path#Container.name`. A second definition of the same name in the same container has the suffix `~2`, then `~3`, and so on.
 
 - Do not parse the identifier. Give it back as it is.
-- `symbol`, `impact`, `get_symbol`, and `task_context` also accept the old `file:name` form as input.
+- The commands `symbol` and `impact`, and the MCP tools `get_symbol` and `task_context`, also accept the old `file:name` form as input. `task_context` is an MCP tool only. It has no CLI command.
 - `start_line` is now the line of the declaration, after annotations and decorators.
 - A call that has only a name as evidence is a candidate, not an edge. Use `--min-basis name_only` (MCP: `min_basis`) to get an edge for a call with one such candidate.
 
@@ -371,7 +371,7 @@ One call reports all its problems.
 
 ### Errors
 
-A JSON-RPC error is only for a protocol fault: a parse error, an unknown method, or an unknown tool. Each other failure is a tool result with `isError: true`. Its text and `structuredContent` have this JSON:
+A JSON-RPC error is only for a protocol fault: a parse error (`-32700`), an unknown method (`-32601`), an unknown tool, or a `tools/call` request without `params` or without a tool name (`-32602`). Each other failure is a tool result with `isError: true`. Its text and `structuredContent` have this JSON:
 
 ```json
 {
@@ -387,7 +387,7 @@ A JSON-RPC error is only for a protocol fault: a parse error, an unknown method,
 }
 ```
 
-The other codes are `not_found`, `ambiguous`, `path_outside_root`, `git_unavailable`, and `internal`.
+The eight codes are `missing_argument`, `invalid_argument`, `unknown_argument`, `not_found`, `ambiguous`, `path_outside_root`, `git_unavailable`, and `internal`.
 
 | Case | Before 5.0 | From 5.0 |
 |---|---|---|
@@ -397,6 +397,8 @@ The other codes are `not_found`, `ambiguous`, `path_outside_root`, `git_unavaila
 ### Envelope
 
 Each tool, `task_context` included, gives `tool`, `total_items`, `returned`, `offset`, `has_more`, `next_offset`, `truncated`, `hints`, `index`, and `result`. Before 5.0, there was no `has_more`, `next_offset`, `truncated`, `hints`, or `index`. Each tool has `limit` (default 50) and `offset`. `task_context` has a byte budget instead.
+
+One exception exists. If you call `context` with `format: "markdown"`, the result is text and has no envelope.
 
 ### Defaults
 
@@ -427,7 +429,7 @@ The default of `--min-score` of `search query` is now 0. It was 0.3, and a value
 
 ### `omen security`
 
-The command `omen security` reports sinks, entry points, and the paths between them. It reports facts. It does not report a vulnerability, and an empty result does not mean that the code is safe. The sections are `sinks`, `surface`, and `paths`. The formats include `-f sarif` and `-f mermaid`.
+The command `omen security` reports sinks, entry points, and the paths between them. It reports facts. It does not report a vulnerability, and an empty result does not mean that the code is safe. The sections are `sinks`, `surface`, and `paths`. The formats include `-f sarif`. The format `-f mermaid` works only for `omen security paths`. The other sections give an error.
 
 ```sh
 omen security

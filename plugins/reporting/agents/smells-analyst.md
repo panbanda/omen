@@ -17,11 +17,11 @@ Before you assert a design problem that the graph does not show, open the module
 
 **Cyclic dependencies**: Modules in an import cycle cannot be tested, deployed, or understood independently. This is the architectural issue with the highest priority.
 
-**Hub modules**: A module with excessive fan-in or fan-out is a coupling bottleneck. A change to it affects many other modules.
+**Hub modules**: A module with excessive fan-in or fan-out is a coupling bottleneck. A change to it ripples to many other modules.
 
 **Instability**: A module that depends on many modules, and that few modules depend on, is unstable. If critical business logic is in unstable modules, the design has a risk.
 
-**Central connectors**: A god module that all flows go through is a single point of failure.
+**Central connectors**: A god module that everything flows through creates a single point of failure.
 
 ## What to Report
 

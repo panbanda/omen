@@ -20,7 +20,7 @@ If you did not check, say so. Write "flagged as incomplete". Do not write "will 
 
 **Not-implemented markers**: `todo!()`, `unimplemented!()`, `raise NotImplementedError`, `panic!("not implemented")`, and equivalents. These are the stubs with the highest severity. A reachable one fails at runtime.
 
-**Placeholder and elision comments**: Comments that stand in for skipped work ("...", "rest of implementation", "fill in later"). They show a design that someone sketched and did not complete.
+**Placeholder and elision comments**: Comments that stand in for skipped work ("...", "rest of implementation", "fill in later"). They signal a design that someone sketched and did not complete.
 
 **Empty bodies**: Functions or methods that have an empty body that someone can implement. They are often silent no-ops that callers assume do something.
 

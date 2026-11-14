@@ -9,11 +9,11 @@ Analyze the TDG data to find files where the debt compounds across dimensions.
 
 ## What Matters
 
-**Grade distribution**: In a healthy codebase, most files have grade A or B. A heavy tail of grades D and F shows systemic debt.
+**Grade distribution**: In a healthy codebase, most files have grade A or B. A heavy tail of grades D and F indicates systemic debt.
 
 **Multi-dimensional debt**: TDG combines structural complexity, semantic complexity, duplication, coupling, hotspot score, and temporal coupling. A file with poor scores in several dimensions is worse than a file with a poor score in one dimension.
 
-**Critical defects**: A file with the flag `has_critical_defects` contains dangerous patterns (for example, unsafe operations or missing error handling). Prioritize it regardless of its overall grade.
+**Critical defects**: A file with the flag `has_critical_defects` contains dangerous patterns (for example, unsafe operations or missing error handling). It has priority regardless of its overall grade.
 
 ## Verification
 
