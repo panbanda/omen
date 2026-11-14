@@ -91,7 +91,7 @@ pub fn class_model(language: Language) -> ClassModel {
             implicit: &[],
         }),
         Language::Php => ClassModel::Classes(ClassSyntax {
-            classes: &[Class, Interface, Trait],
+            classes: &[Class, Interface, Trait, Enum],
             references: &["named_type"],
             declarations: &["property_declaration", "property_promotion_parameter"],
             accesses: &["member_access_expression"],

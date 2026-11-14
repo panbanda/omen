@@ -641,6 +641,15 @@ fn test_rust_enum_and_trait_are_measured() {
 }
 
 #[test]
+fn test_php_enum_with_methods_is_measured() {
+    let source = "<?php\nenum Signal {\n    case Stop;\n\n    public function code(): int {\n        return 0;\n    }\n}\n";
+    let analysis = analyze(&[("Signal.php", source)]);
+    let signal = class(&analysis, "Signal");
+    assert_eq!(signal.nom, 1);
+    assert_eq!(signal.wmc, 1);
+}
+
+#[test]
 fn test_php_trait_is_measured() {
     let source = "<?php\ntrait Logs {\n    private $lines = [];\n\n    function add($line) { $this->lines[] = $line; }\n\n    function all() { return $this->lines; }\n}\n";
     let analysis = analyze(&[("Logs.php", source)]);
