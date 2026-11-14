@@ -1079,7 +1079,7 @@ export function branchy(a: boolean, b: boolean, c: boolean, d: boolean, e: boole
     }
     std::fs::write(
         temp.path().join("omen.toml"),
-        "[complexity]\ncyclomatic_error = 3\n",
+        "[complexity]\ncyclomatic_max = 3\n",
     )
     .unwrap();
 }
@@ -1112,7 +1112,7 @@ fn test_complexity_check_honors_config_excludes() {
     write_complexity_exclude_fixture(&temp);
     std::fs::write(
         temp.path().join("omen.toml"),
-        "exclude = [\"packages/alpha/test/**\"]\n\n[complexity]\ncyclomatic_error = 3\n",
+        "exclude = [\"packages/alpha/test/**\"]\n\n[complexity]\ncyclomatic_max = 3\n",
     )
     .unwrap();
 
@@ -2099,7 +2099,7 @@ fn test_gate_mode_comes_from_configuration_and_the_flag_wins() {
     write_complexity_exclude_fixture(&temp);
     std::fs::write(
         temp.path().join("omen.toml"),
-        "[complexity]\ncyclomatic_error = 3\n\n[gate]\ncomplexity = \"error\"\n",
+        "[complexity]\ncyclomatic_max = 3\ngate = \"error\"\n",
     )
     .unwrap();
     let path = temp.path().to_str().unwrap();
@@ -2119,7 +2119,7 @@ fn test_stubs_gate_mode_comes_from_configuration() {
         "pub fn later() -> u32 { todo!() }\n",
     )
     .unwrap();
-    std::fs::write(temp.path().join("omen.toml"), "[gate]\nstubs = \"error\"\n").unwrap();
+    std::fs::write(temp.path().join("omen.toml"), "[stubs]\ngate = \"error\"\n").unwrap();
 
     omen()
         .args(["-p", temp.path().to_str().unwrap(), "stubs"])
@@ -2318,11 +2318,7 @@ fn write_committed_repository() -> TempDir {
 fn test_configured_score_gate_does_not_replace_score_trend() {
     let temp = write_committed_repository();
     let config = temp.path().join("gate.toml");
-    std::fs::write(
-        &config,
-        "[score]\nfail_under = 100.0\n\n[gate]\nscore = \"error\"\n",
-    )
-    .unwrap();
+    std::fs::write(&config, "[score]\nmin = 100.0\ngate = \"error\"\n").unwrap();
     let path = temp.path().to_str().unwrap();
     let config = config.to_str().unwrap();
 
@@ -2913,7 +2909,7 @@ fn test_all_applies_top_to_each_section_as_the_single_command_does() {
 struct GateCase {
     command: &'static str,
     arguments: &'static [&'static str],
-    /// The configuration that makes the fixture a violation.
+    /// The keys of the command table that make the fixture a violation.
     thresholds: &'static str,
     source: &'static str,
 }
@@ -2922,14 +2918,14 @@ const GATE_CASES: &[GateCase] = &[
     GateCase {
         command: "complexity",
         arguments: &["complexity"],
-        thresholds: "[complexity]\ncyclomatic_error = 1\n",
+        thresholds: "cyclomatic_max = 1\n",
         source:
             "pub fn branchy(a: bool, b: bool) -> u32 { if a { 1 } else if b { 2 } else { 3 } }\n",
     },
     GateCase {
         command: "score",
         arguments: &["score"],
-        thresholds: "[score]\nfail_under = 100.0\n",
+        thresholds: "min = 100.0\n",
         source:
             "// TODO: remove this\npub fn later(a: bool) -> u32 { if a { todo!() } else { 1 } }\n",
     },
@@ -2963,9 +2959,15 @@ fn test_gate_keeps_the_report_and_writes_the_violation_to_stderr() {
         let repository = TempDir::new().unwrap();
         std::fs::write(repository.path().join("lib.rs"), case.source).unwrap();
         let configuration = TempDir::new().unwrap();
-        let write_configuration = |name: &str, gate: &str| -> String {
+        let write_configuration = |name: &str, mode: &str| -> String {
             let file = configuration.path().join(name);
-            std::fs::write(&file, format!("{}{gate}", case.thresholds)).unwrap();
+            let gate = if mode.is_empty() {
+                String::new()
+            } else {
+                format!("gate = \"{mode}\"\n")
+            };
+            let text = format!("[{}]\n{}{gate}", case.command, case.thresholds);
+            std::fs::write(&file, text).unwrap();
             file.to_str().unwrap().to_string()
         };
         let plain = write_configuration("plain.toml", "");
@@ -2990,10 +2992,7 @@ fn test_gate_keeps_the_report_and_writes_the_violation_to_stderr() {
             );
 
             for (mode, status) in [("warn", 0), ("error", 2)] {
-                let from_config = write_configuration(
-                    &format!("{mode}.toml"),
-                    &format!("\n[gate]\n{} = \"{mode}\"\n", case.command),
-                );
+                let from_config = write_configuration(&format!("{mode}.toml"), mode);
                 for (source, output) in [
                     ("flag", run(format, &plain, &["--gate", mode])),
                     ("configuration", run(format, &from_config, &[])),
@@ -3010,10 +3009,7 @@ fn test_gate_keeps_the_report_and_writes_the_violation_to_stderr() {
 
             let off_flag = run(
                 format,
-                &write_configuration(
-                    "error.toml",
-                    &format!("\n[gate]\n{} = \"error\"\n", case.command),
-                ),
+                &write_configuration("error.toml", "error"),
                 &["--gate", "off"],
             );
             assert_eq!(

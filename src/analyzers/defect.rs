@@ -131,7 +131,7 @@ impl Analyzer {
     /// subcommand, `omen all`, `report generate`, `score` -- uses the same
     /// window rather than the default.
     pub fn from_config(config: &crate::config::Config) -> Self {
-        Self::new().with_churn_days(config.defect.churn_days)
+        Self::new().with_churn_days(config.defect.since.days())
     }
 
     pub fn with_churn_days(mut self, days: u32) -> Self {

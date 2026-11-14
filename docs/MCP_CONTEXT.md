@@ -44,13 +44,13 @@ takes: the value in the configuration, or the built-in default.
 | `churn` | `days` | `churn.since` (built-in default `6m`) |
 | `clones` | `min_tokens` | `duplicates.min_tokens` (50) |
 | `clones` | `similarity` | `duplicates.min_similarity` (0.9) |
-| `clones` | `include_tests` | `false`; `duplicates.exclude_tests` then applies |
-| `defect` | `days` | `defect.churn_days` (30) |
-| `hotspot` | `days` | `hotspot.days` (90) |
+| `clones` | `include_tests` | `false`; `exclude_tests` then applies |
+| `defect` | `days` | `defect.since` (30d) |
+| `hotspot` | `days` | `hotspot.since` (90d) |
 | `flags` | `provider` | `feature_flags.providers` |
-| `flags` | `stale_days` | `feature_flags.stale_days`; when that value is 0, the age is 14 days |
+| `flags` | `stale_days` | `feature_flags.stale_days` (90) |
 
-`changes` reads `changes.days`, and `satd` reads `satd.custom_markers`. They
+`changes` reads `changes.since`, and `satd` reads `satd.markers`. They
 have no parameter for these values.
 
 `tests/parity.rs` compares each tool with its command on a fixture repository,

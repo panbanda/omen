@@ -9,7 +9,7 @@
 //! Variable declarations, class/struct definitions, module-level
 //! constants, and type aliases are not yet analyzed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
@@ -17,6 +17,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
+use crate::index::extract::FileSymbols;
+use crate::index::model::{Exported, Receiver, Reference, ResolutionStatus, Symbol, SymbolKind};
 use crate::parser::{self, Parser};
 
 /// Dead code analyzer.
@@ -49,21 +51,6 @@ impl Analyzer {
     pub fn with_cargo_check(mut self, enabled: bool) -> Self {
         self.cargo_check = enabled;
         self
-    }
-
-    /// Analyze a single file for definitions and usages.
-    fn analyze_file(&self, path: &std::path::Path) -> Result<FileDeadCode> {
-        let result = self.parser.parse_file(path)?;
-        Ok(collect_file_data(&result))
-    }
-
-    fn analyze_content(&self, path: &std::path::Path, content: Vec<u8>) -> Result<FileDeadCode> {
-        let language =
-            Language::detect(path).ok_or_else(|| crate::core::Error::UnsupportedLanguage {
-                path: path.to_path_buf(),
-            })?;
-        let result = self.parser.parse(&content, language, path)?;
-        Ok(collect_file_data(&result))
     }
 }
 
@@ -99,102 +86,159 @@ impl AnalyzerTrait for Analyzer {
             Vec::new()
         };
 
-        // Phase 1: Collect definitions and usages from all files.
-        // Tree-sitter extraction runs on all files (including .rs) to build
-        // the definition/reference graph. Cargo results supplement this with
-        // compiler-level dead code warnings when available.
-        let files: Vec<_> = ctx.files.iter().collect();
-        let file_results: Vec<FileDeadCode> = files
+        // Phase 1: Collect the definitions and the references from the shared
+        // index, and the context that only the syntax tree gives (attributes,
+        // decorators, visibility modifiers, and uses as a value). Cargo results
+        // supplement this with compiler-level dead code warnings when available.
+        let index = ctx.code_index()?;
+        let file_results: Vec<FileDeadCode> = index
+            .files
             .par_iter()
-            .filter_map(|path| {
-                if ctx.content_source.is_some() {
-                    ctx.read_file(path)
-                        .ok()
-                        .and_then(|content| self.analyze_content(path, content).ok())
-                } else {
-                    self.analyze_file(&ctx.root.join(path)).ok()
-                }
+            .filter_map(|facts| {
+                let path = Path::new(&facts.file);
+                let content = ctx.read_file(path).ok()?;
+                let result = self.parser.parse(&content, facts.language, path).ok()?;
+                Some(collect_file_data(&result, facts))
             })
             .collect();
 
-        // Phase 2: Build global symbol tables with qualified names
-        // Use file::function_name format to prevent collisions when multiple files
-        // have functions with the same name.
+        // Phase 2: Build the global tables. A definition is known by the key
+        // of the shared index, which is unique for each definition.
         let mut all_definitions: HashMap<String, Definition> = HashMap::new();
         let mut all_usages: HashSet<String> = HashSet::new();
-        let mut all_calls: Vec<CallReference> = Vec::new();
-        // Map from simple name to qualified names for cross-file call resolution
-        let mut name_to_qualified: HashMap<String, Vec<String>> = HashMap::new();
+        let mut value_references: Vec<CallReference> = Vec::new();
+        let mut keys_by_name: HashMap<String, Vec<String>> = HashMap::new();
 
         for fdc in &file_results {
-            for (name, def) in &fdc.definitions {
-                let qualified_name = format!("{}::{}", def.file, name);
-                all_definitions.insert(qualified_name.clone(), def.clone());
-                name_to_qualified
-                    .entry(name.clone())
+            for def in &fdc.definitions {
+                all_definitions.insert(def.key.clone(), def.clone());
+                keys_by_name
+                    .entry(def.name.clone())
                     .or_default()
-                    .push(qualified_name);
+                    .push(def.key.clone());
             }
             all_usages.extend(fdc.usages.iter().cloned());
-            all_calls.extend(fdc.calls.iter().cloned());
+            value_references.extend(fdc.calls.iter().cloned());
+        }
+        for keys in keys_by_name.values_mut() {
+            keys.sort();
         }
 
-        // Phase 3: Build call graph edges (for reachability) using qualified names
+        // Phase 3: Build the edges for reachability. An edge goes from the
+        // definition that holds a reference to each definition that the
+        // reference can name. A definition is dead only if no reference can
+        // name it: the index gives each candidate of an ambiguous call, and a
+        // call that the index cannot resolve counts for each definition with
+        // that name.
         let mut call_graph: HashMap<String, Vec<String>> = HashMap::new();
-        for call in &all_calls {
-            // Qualify the caller with its file path
-            let qualified_caller = format!("{}::{}", call.file, call.caller);
-
-            // For the callee, first try same-file lookup, then cross-file
-            let qualified_callees: Vec<String> = {
-                let same_file_qualified = format!("{}::{}", call.file, call.callee);
-                if all_definitions.contains_key(&same_file_qualified) {
-                    vec![same_file_qualified]
-                } else if let Some(qualified_names) = name_to_qualified.get(&call.callee) {
-                    // Cross-file call: could be any of the matching functions
-                    qualified_names.clone()
-                } else {
-                    vec![]
+        let mut roots: Vec<String> = Vec::new();
+        let mut candidate_keys: HashSet<String> = HashSet::new();
+        let mut unresolved_names: HashSet<String> = HashSet::new();
+        for reference in index.files.iter().flat_map(|facts| &facts.references) {
+            let resolution = &reference.resolution;
+            let weak = matches!(
+                resolution.status,
+                ResolutionStatus::Unresolved | ResolutionStatus::Ambiguous
+            );
+            let mut targets: Vec<String> = resolution
+                .candidates
+                .iter()
+                .filter(|key| {
+                    !weak
+                        || all_definitions
+                            .get(*key)
+                            .is_none_or(|def| can_be_named_by(def, reference))
+                })
+                .cloned()
+                .collect();
+            let names_nothing = weak && resolution.candidates.is_empty();
+            candidate_keys.extend(targets.iter().cloned());
+            if names_nothing {
+                unresolved_names.insert(reference.name.clone());
+                if let Some(keys) = keys_by_name.get(&reference.name) {
+                    targets.extend(
+                        keys.iter()
+                            .filter(|key| can_be_named_by(&all_definitions[*key], reference))
+                            .cloned(),
+                    );
                 }
-            };
-
-            for qualified_callee in qualified_callees {
-                call_graph
-                    .entry(qualified_caller.clone())
+            }
+            // Code that is not in a known function runs when the file loads, or
+            // when a callback in it runs. Such a reference is a root.
+            match reference
+                .enclosing
+                .as_ref()
+                .filter(|key| all_definitions.contains_key(*key))
+            {
+                Some(caller) => call_graph
+                    .entry(caller.clone())
                     .or_default()
-                    .push(qualified_callee);
+                    .extend(targets),
+                None => roots.extend(targets),
+            }
+        }
+        for call in &value_references {
+            let callees: Vec<String> = match keys_by_name.get(&call.callee) {
+                Some(keys) => {
+                    let local: Vec<String> = keys
+                        .iter()
+                        .filter(|key| {
+                            all_definitions
+                                .get(*key)
+                                .is_some_and(|def| def.file == call.file)
+                        })
+                        .cloned()
+                        .collect();
+                    if local.is_empty() {
+                        keys.clone()
+                    } else {
+                        local
+                    }
+                }
+                None => Vec::new(),
+            };
+            if call.from_module_scope {
+                roots.extend(callees);
+                continue;
+            }
+            let callers: Vec<&String> = keys_by_name
+                .get(&call.caller)
+                .into_iter()
+                .flatten()
+                .filter(|key| {
+                    all_definitions
+                        .get(*key)
+                        .is_some_and(|def| def.file == call.file)
+                })
+                .collect();
+            for caller in callers {
+                call_graph
+                    .entry(caller.clone())
+                    .or_default()
+                    .extend(callees.iter().cloned());
             }
         }
 
-        // Phase 4: Mark reachable from entry points (using qualified names)
+        // Phase 4: Mark reachable from entry points
         let mut reachable: HashSet<String> = HashSet::new();
         let mut queue: Vec<String> = Vec::new();
 
-        // Module scope is itself an entry point: its code runs on load. The
-        // pseudo-callers stay out of `reachable`, which counts definitions --
-        // nothing calls them, so they cannot be reached twice.
-        for call in &all_calls {
-            if call.from_module_scope {
-                queue.push(format!("{}::{}", call.file, call.caller));
+        for root in roots {
+            if all_definitions.contains_key(&root) && reachable.insert(root.clone()) {
+                queue.push(root);
             }
         }
 
-        // Identify entry points using qualified names
-        for (qualified_name, def) in &all_definitions {
-            // Extract simple name from qualified name for entry point check
-            let simple_name = qualified_name.rsplit("::").next().unwrap_or(qualified_name);
-            if is_entry_point(simple_name, def) {
-                reachable.insert(qualified_name.clone());
-                queue.push(qualified_name.clone());
+        for (key, def) in &all_definitions {
+            if is_entry_point(&def.name, def) && reachable.insert(key.clone()) {
+                queue.push(key.clone());
             }
         }
 
-        // BFS to mark reachable (all names are qualified now)
         while let Some(current) = queue.pop() {
             if let Some(callees) = call_graph.get(&current) {
                 for callee in callees {
-                    if all_definitions.contains_key(callee) && !reachable.contains(callee) {
-                        reachable.insert(callee.clone());
+                    if all_definitions.contains_key(callee) && reachable.insert(callee.clone()) {
                         queue.push(callee.clone());
                     }
                 }
@@ -225,15 +269,14 @@ impl AnalyzerTrait for Analyzer {
         }
 
         // Add tree-sitter detected dead code, skipping items already reported by cargo
-        for (qualified_name, def) in &all_definitions {
+        for (key, def) in &all_definitions {
             // Skip generated files -- they participate in the call graph for
             // reachability but their definitions should not be reported.
             if is_generated_file(&def.file) {
                 continue;
             }
 
-            // Extract simple name for entry point check and usage lookup
-            let simple_name = qualified_name.rsplit("::").next().unwrap_or(qualified_name);
+            let simple_name = def.name.as_str();
 
             // Skip entry points
             if is_entry_point(simple_name, def) {
@@ -245,9 +288,11 @@ impl AnalyzerTrait for Analyzer {
                 continue;
             }
 
-            // Check if unreachable (using qualified name) AND not used (simple name in usages)
-            let is_unreachable = !reachable.contains(qualified_name);
-            let is_unused = !all_usages.contains(simple_name);
+            // Unreachable from the entry points, or named by no reference at all.
+            let is_unreachable = !reachable.contains(key);
+            let is_unused = !candidate_keys.contains(key)
+                && !unresolved_names.contains(simple_name)
+                && !all_usages.contains(simple_name);
 
             if is_unreachable || is_unused {
                 let confidence = calculate_confidence(def, is_unreachable, is_unused);
@@ -277,12 +322,6 @@ impl AnalyzerTrait for Analyzer {
         }
 
         let total_items = items.len();
-        for item in &mut items {
-            let path = Path::new(&item.file);
-            if let Ok(relative) = path.strip_prefix(ctx.root) {
-                item.file = relative.to_string_lossy().to_string();
-            }
-        }
         // The definitions come from a map, and its sequence is different in
         // each run.
         items.sort_by(|a, b| {
@@ -313,21 +352,31 @@ impl AnalyzerTrait for Analyzer {
 }
 
 /// Collect definitions and usages from a parsed file.
-fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
-    let path_str = result.path.to_string_lossy().to_string();
+///
+/// `facts` are the facts of the shared index for the same bytes. They give the
+/// definitions. The syntax tree gives the context that the index does not hold.
+fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileDeadCode {
+    let path_str = facts.file.clone();
     let mut fdc = FileDeadCode {
         path: path_str.clone(),
-        definitions: HashMap::new(),
+        definitions: Vec::new(),
         usages: HashSet::new(),
         calls: Vec::new(),
     };
 
-    // Only functions with an external binding can be referenced by name, and
-    // so only they can be judged unused. An anonymous callback would never
-    // match a usage and would be reported as dead with high confidence.
-    let functions: Vec<parser::FunctionNode> = parser::extract_functions(result)
-        .into_iter()
-        .filter(|func| func.is_bound)
+    // The index holds only definitions that have a name. An anonymous callback
+    // would never match a usage and would be reported as dead with high confidence.
+    // A declaration without a body, as a trait method or a prototype does, has no
+    // code to remove, and a call can reach it through a different definition.
+    let functions: Vec<&Symbol> = facts
+        .symbols
+        .iter()
+        .filter(|symbol| {
+            symbol.is_callable()
+                && symbol.kind != SymbolKind::Constructor
+                && (symbol.body_range.is_some() || facts.language == Language::Ruby)
+                && !is_member_of_an_object(result, symbol)
+        })
         .collect();
 
     let is_test_file = is_test_file(&fdc.path);
@@ -356,8 +405,8 @@ fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
     // Extract function definitions
     for func in functions {
         let mut visibility = get_visibility(&func.name, result.language);
-        // Use the parser's is_exported which correctly checks for pub in Rust
-        let mut exported = func.is_exported || is_exported(&func.name, result.language);
+        let mut exported =
+            func.exported == Exported::Exported || is_exported(&func.name, result.language);
         let info = function_info.get(&func.name);
         let mut attributes = info.map(|i| i.attributes.clone()).unwrap_or_default();
         // Mark as test file if already in test file OR inside #[cfg(test)] module
@@ -391,37 +440,45 @@ fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
             }
         }
 
-        let definition = Definition {
+        fdc.definitions.push(Definition {
+            key: func.key.clone(),
+            nameable_from_other_files: is_nameable_from_other_files(
+                func,
+                result.language,
+                exported,
+                &visibility,
+            ),
+            is_free_function: func.container.is_none() && func.kind == SymbolKind::Function,
             name: func.name.clone(),
             kind: "function".to_string(),
             file: fdc.path.clone(),
-            line: func.start_line,
-            end_line: func.end_line,
+            line: func.range.start_line,
+            end_line: func.range.end_line,
             visibility,
             exported,
             is_test_file: is_in_test_context,
             attributes,
             is_trait_impl,
-        };
+        });
+    }
 
-        // Definitions are keyed by bare name, so a file holding both
-        // `export const f = () => {}` and an object property `f: () => {}`
-        // has two entries competing for one key. Losing the exported one
-        // would report a live export as dead, so it wins; otherwise the
-        // first definition stands.
-        match fdc.definitions.entry(func.name.clone()) {
-            std::collections::hash_map::Entry::Vacant(slot) => {
-                slot.insert(definition);
-            }
-            std::collections::hash_map::Entry::Occupied(mut slot) => {
-                if definition.exported && !slot.get().exported {
-                    slot.insert(definition);
-                }
-            }
+    // A file can define one name more than once, as `export const f = () => {}`
+    // and an object property `f: () => {}` do. Losing the exported one would
+    // report a live export as dead, so the other definitions of the name share
+    // its export.
+    let exported_names: HashSet<String> = fdc
+        .definitions
+        .iter()
+        .filter(|def| def.exported)
+        .map(|def| def.name.clone())
+        .collect();
+    for def in &mut fdc.definitions {
+        if exported_names.contains(&def.name) {
+            def.exported = true;
         }
     }
 
-    // Extract usages and calls by walking the AST
+    // Extract usages and the uses of a function as a value by walking the AST
     collect_usages_and_calls(result, &mut fdc);
 
     fdc
@@ -926,7 +983,10 @@ fn extract_attribute_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option
 /// `CallReference::from_module_scope`, which is what consumers test.
 const MODULE_SCOPE: &str = "<module>";
 
-/// Walk AST to collect identifier usages and function calls.
+/// Walk the AST to collect identifier usages and the uses of a function as a value.
+/// A use as a value is an identifier that is not the target of a call, as the
+/// `used` in `Spec { handler: used }` and in `register("data", used)` are. The
+/// index gives the edges of the calls, and these uses give the other edges.
 /// Uses iterative traversal with a single TreeCursor for performance.
 fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode) {
     let source = &result.source;
@@ -936,6 +996,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
     // restore the enclosing one, otherwise every call made after a nested
     // function in the same body loses its caller.
     let mut scopes: Vec<(u32, Option<String>)> = Vec::new();
+    let mut value_uses: BTreeSet<(String, String, bool)> = BTreeSet::new();
 
     // Iterative pre-order traversal
     loop {
@@ -962,11 +1023,11 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             ));
         }
 
-        // Code at module scope runs when the file is loaded, so calls made
+        // Code at module scope runs when the file is loaded, so uses made
         // there have a real caller -- `export const W = memo(Internal)`
-        // genuinely reaches `Internal`. Inside an anonymous function with no
-        // named ancestor there is nothing to attribute a call to, and
-        // guessing would make unreachable code look reachable.
+        // genuinely reaches `Internal`. An anonymous function with no named
+        // ancestor is in code that runs at module scope or that a callback
+        // runs, thus its uses count as module scope too.
         let from_module_scope = scopes.is_empty();
         let current_function = if from_module_scope {
             Some(MODULE_SCOPE.to_string())
@@ -978,29 +1039,25 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         if (kind == "identifier" || kind == "type_identifier") && !is_definition_context(&node) {
             if let Ok(name) = node.utf8_text(source) {
                 fdc.usages.insert(name.to_string());
+                if kind == "identifier" && !is_call_target(&node) {
+                    let (caller, module_scope) = match &current_function {
+                        Some(caller) => (caller.clone(), from_module_scope),
+                        None => (MODULE_SCOPE.to_string(), true),
+                    };
+                    value_uses.insert((caller, name.to_string(), module_scope));
+                }
             }
         }
 
-        // Collect function calls
-        if kind == "call_expression" || kind == "function_call" || kind == "call" {
-            if let Some(callee) = extract_callee(&node, source, lang) {
-                if let Some(ref caller) = current_function {
-                    fdc.calls.push(CallReference {
-                        caller: caller.clone(),
-                        callee,
-                        file: fdc.path.clone(),
-                        from_module_scope,
-                        line: node.start_position().row as u32 + 1,
-                    });
-                }
-            }
-
-            // Detect function-as-value references in call arguments.
-            // If an argument is a bare identifier matching a known function
-            // definition, add a synthetic call edge from the current function
-            // to that identifier so BFS can reach it.
-            if let Some(ref caller) = current_function {
-                collect_function_value_refs(&node, source, caller, from_module_scope, fdc);
+        // `Util.replacer` reads the function `replacer` as a property.
+        if kind == "property_identifier" && is_read_as_property(&node) {
+            if let Ok(name) = node.utf8_text(source) {
+                fdc.usages.insert(name.to_string());
+                let (caller, module_scope) = match &current_function {
+                    Some(caller) => (caller.clone(), from_module_scope),
+                    None => (MODULE_SCOPE.to_string(), true),
+                };
+                value_uses.insert((caller, name.to_string(), module_scope));
             }
         }
 
@@ -1015,10 +1072,76 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                 break;
             }
             if !cursor.goto_parent() {
+                fdc.calls = value_uses
+                    .into_iter()
+                    .map(|(caller, callee, from_module_scope)| CallReference {
+                        caller,
+                        callee,
+                        file: fdc.path.clone(),
+                        from_module_scope,
+                    })
+                    .collect();
                 return; // Done traversing
             }
         }
     }
+}
+
+/// Whether a property name is read as a value: it is the member of a member
+/// expression, and the expression is not the callee of a call.
+fn is_read_as_property(node: &tree_sitter::Node<'_>) -> bool {
+    let Some(access) = node.parent().filter(|p| p.kind() == "member_expression") else {
+        return false;
+    };
+    if access
+        .child_by_field_name("property")
+        .is_none_or(|property| property.id() != node.id())
+    {
+        return false;
+    }
+    !access.parent().is_some_and(|call| {
+        call.kind() == "call_expression"
+            && call
+                .child_by_field_name("function")
+                .is_some_and(|function| function.id() == access.id())
+    })
+}
+
+/// Whether the identifier names the callee of a call, or a member of an object,
+/// and not a value. The call or the member access has its own reference in
+/// the index.
+fn is_call_target(node: &tree_sitter::Node<'_>) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    let kind = parent.kind();
+    let is_access = ["member", "access", "attribute", "selector", "scoped"]
+        .iter()
+        .any(|part| kind.contains(part));
+    if is_access
+        && parent
+            .named_child(0)
+            .is_some_and(|object| object.id() != node.id())
+    {
+        let calls_the_access = parent.parent().is_some_and(|call| {
+            let call_kind = call.kind();
+            (call_kind.contains("call") || call_kind.contains("invocation"))
+                && call
+                    .child_by_field_name("function")
+                    .is_some_and(|function| function.id() == parent.id())
+        });
+        if calls_the_access {
+            return true;
+        }
+    }
+    if !(kind.contains("call") || kind.contains("invocation") || kind == "command") {
+        return false;
+    }
+    ["function", "name", "method"].iter().any(|field| {
+        parent
+            .child_by_field_name(field)
+            .is_some_and(|child| child.id() == node.id())
+    })
 }
 
 fn is_function_node(kind: &str) -> bool {
@@ -1040,6 +1163,14 @@ fn is_function_node(kind: &str) -> bool {
 fn is_definition_context(node: &tree_sitter::Node<'_>) -> bool {
     if let Some(parent) = node.parent() {
         let parent_kind = parent.kind();
+        // C and C++ put the name of a function in a declarator.
+        if parent_kind == "function_declarator"
+            && parent
+                .child_by_field_name("declarator")
+                .is_some_and(|declarator| declarator.id() == node.id())
+        {
+            return true;
+        }
         // Check if this identifier is the "name" field of a definition
         if let Some(name_node) = parent.child_by_field_name("name") {
             if name_node.id() == node.id() {
@@ -1062,78 +1193,6 @@ fn is_definition_context(node: &tree_sitter::Node<'_>) -> bool {
         }
     }
     false
-}
-
-fn extract_callee(node: &tree_sitter::Node<'_>, source: &[u8], _lang: Language) -> Option<String> {
-    // Try "function" field first
-    if let Some(fn_node) = node.child_by_field_name("function") {
-        // Handle member expressions (obj.method())
-        if fn_node.kind() == "member_expression" || fn_node.kind() == "field_expression" {
-            if let Some(prop) = fn_node.child_by_field_name("property") {
-                return prop.utf8_text(source).ok().map(|s| s.to_string());
-            }
-        }
-        return fn_node.utf8_text(source).ok().map(|s| s.to_string());
-    }
-
-    // Try first child
-    if node.child_count() > 0 {
-        let first = node.child(0)?;
-        if first.kind() == "identifier" {
-            return first.utf8_text(source).ok().map(|s| s.to_string());
-        }
-    }
-
-    None
-}
-
-/// Scan call arguments for bare identifiers that match known function definitions.
-/// These represent function-as-value references (callbacks) and get synthetic call edges
-/// so that BFS reachability can follow them.
-fn collect_function_value_refs(
-    call_node: &tree_sitter::Node<'_>,
-    source: &[u8],
-    caller: &str,
-    from_module_scope: bool,
-    fdc: &mut FileDeadCode,
-) {
-    // Find the argument_list / arguments child of the call node
-    let args_node = call_node.child_by_field_name("arguments").or_else(|| {
-        // Some grammars (Go) use "argument_list" as the node kind
-        // rather than a named field
-        (0..call_node.child_count())
-            .filter_map(|i| call_node.child(i))
-            .find(|c| c.kind() == "argument_list")
-    });
-
-    let args_node = match args_node {
-        Some(n) => n,
-        None => return,
-    };
-
-    for i in 0..args_node.child_count() {
-        let arg = match args_node.child(i) {
-            Some(a) => a,
-            None => continue,
-        };
-
-        if arg.kind() != "identifier" {
-            continue;
-        }
-
-        let name = match arg.utf8_text(source) {
-            Ok(n) => n,
-            Err(_) => continue,
-        };
-
-        fdc.calls.push(CallReference {
-            caller: caller.to_string(),
-            callee: name.to_string(),
-            file: fdc.path.clone(),
-            from_module_scope,
-            line: call_node.start_position().row as u32 + 1,
-        });
-    }
 }
 
 fn get_visibility(name: &str, lang: Language) -> String {
@@ -1221,6 +1280,139 @@ fn is_generated_file(path: &str) -> bool {
     }
 
     false
+}
+
+/// Whether the definition is a function that an object literal or an assignment
+/// to a property holds, in the JavaScript family. A framework or a caller
+/// outside of the analysis reaches it by its name on an object, thus the
+/// analysis cannot call it dead.
+fn is_member_of_an_object(result: &parser::ParseResult, symbol: &Symbol) -> bool {
+    if !matches!(
+        result.language,
+        Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx
+    ) {
+        return false;
+    }
+    let Some(mut node) = result
+        .tree
+        .root_node()
+        .descendant_for_byte_range(symbol.range.start_byte, symbol.range.end_byte)
+    else {
+        return false;
+    };
+    while node.start_byte() == symbol.range.start_byte && node.end_byte() == symbol.range.end_byte {
+        let parent = node.parent();
+        let holds_a_property = match node.kind() {
+            "pair" => true,
+            "assignment_expression" => node
+                .child_by_field_name("left")
+                .is_some_and(|left| left.kind() == "member_expression"),
+            "method_definition" => parent.is_some_and(|p| p.kind() == "object"),
+            "arrow_function" | "function_expression" | "function" => {
+                parent.is_some_and(|p| match p.kind() {
+                    "pair" => true,
+                    "assignment_expression" => p
+                        .child_by_field_name("left")
+                        .is_some_and(|left| left.kind() == "member_expression"),
+                    _ => false,
+                })
+            }
+            _ => false,
+        };
+        if holds_a_property {
+            return true;
+        }
+        match parent {
+            Some(p) => node = p,
+            None => return false,
+        }
+    }
+    false
+}
+
+/// Whether the syntax lets a file other than the file of the definition name it.
+///
+/// A function that has no type around it is visible to other files only when
+/// it is exported or when the syntax does not say. A method is visible, except
+/// when a keyword makes it private to its class or its file.
+fn is_nameable_from_other_files(
+    symbol: &Symbol,
+    language: Language,
+    exported: bool,
+    visibility: &str,
+) -> bool {
+    let has_word = |word: &str| {
+        symbol
+            .signature
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .any(|part| part == word)
+    };
+    if has_word("pub") {
+        return true;
+    }
+    if symbol.container.is_none() && symbol.kind == SymbolKind::Function {
+        return exported || !matches!(symbol.exported, Exported::NotExported);
+    }
+    let private_by_keyword = match language {
+        Language::Java
+        | Language::CSharp
+        | Language::Php
+        | Language::TypeScript
+        | Language::Tsx => has_word("private"),
+        Language::C | Language::Cpp => has_word("static"),
+        Language::Ruby => visibility == "private" || visibility == "protected",
+        _ => false,
+    };
+    !private_by_keyword
+}
+
+/// Whether a call that the index cannot resolve can name the definition.
+///
+/// The definition must be in the same group of languages. A syntax that keeps
+/// the definition private to its file hides it from a call in a different
+/// file. A call with a receiver cannot name a function that has no type around
+/// it, except in a language where a module or an object holds functions.
+fn can_be_named_by(def: &Definition, call: &Reference) -> bool {
+    let def_language = Language::detect(Path::new(&def.file));
+    let call_language = Language::detect(Path::new(&call.file));
+    let (Some(def_language), Some(call_language)) = (def_language, call_language) else {
+        return false;
+    };
+    if language_group(def_language) != language_group(call_language) {
+        return false;
+    }
+    if def.file != call.file && !def.nameable_from_other_files {
+        return false;
+    }
+    let receiver_calls_a_member = matches!(
+        call.receiver,
+        Some(Receiver::Name(_) | Receiver::Expression | Receiver::SelfValue | Receiver::Super)
+    );
+    let functions_live_in_objects = matches!(
+        def_language,
+        Language::Python
+            | Language::Ruby
+            | Language::JavaScript
+            | Language::Jsx
+            | Language::TypeScript
+            | Language::Tsx
+    );
+    !(receiver_calls_a_member && def.is_free_function && !functions_live_in_objects)
+}
+
+fn language_group(language: Language) -> u8 {
+    match language {
+        Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx => 1,
+        Language::C | Language::Cpp => 2,
+        Language::Go => 3,
+        Language::Rust => 4,
+        Language::Python => 5,
+        Language::Java => 6,
+        Language::CSharp => 7,
+        Language::Ruby => 8,
+        Language::Php => 9,
+        Language::Bash => 10,
+    }
 }
 
 fn is_entry_point(name: &str, def: &Definition) -> bool {
@@ -1312,14 +1504,31 @@ fn calculate_confidence(def: &Definition, is_unreachable: bool, is_unused: bool)
 // Internal types for file analysis
 struct FileDeadCode {
     path: String,
-    definitions: HashMap<String, Definition>,
+    definitions: Vec<Definition>,
     usages: HashSet<String>,
+    /// The uses of a function as a value, as `register("data", handler)` does.
+    /// A call has its own reference in the shared index.
     calls: Vec<CallReference>,
+}
+
+#[cfg(test)]
+fn file_data(result: &parser::ParseResult) -> FileDeadCode {
+    let facts = crate::index::extract::extract_file(result, &result.path.to_string_lossy());
+    collect_file_data(result, &facts)
+}
+
+#[cfg(test)]
+impl FileDeadCode {
+    /// The first definition with this name.
+    fn definition(&self, name: &str) -> Option<&Definition> {
+        self.definitions.iter().find(|def| def.name == name)
+    }
 }
 
 #[derive(Clone)]
 struct Definition {
-    #[allow(dead_code)]
+    /// The key of the symbol in the shared index.
+    key: String,
     name: String,
     kind: String,
     file: String,
@@ -1332,6 +1541,11 @@ struct Definition {
     attributes: Vec<String>,
     /// Whether this is a trait implementation method
     is_trait_impl: bool,
+    /// The syntax lets a file other than the file of the definition name it.
+    /// A definition that is not private, or whose visibility the syntax does not give, is such a definition.
+    nameable_from_other_files: bool,
+    /// A function that has no type or function around it.
+    is_free_function: bool,
 }
 
 #[derive(Clone)]
@@ -1343,8 +1557,6 @@ struct CallReference {
     /// function. Structural rather than a reserved caller name, which a
     /// property binding could otherwise collide with.
     from_module_scope: bool,
-    #[allow(dead_code)]
-    line: u32,
 }
 
 // Public output types
@@ -1440,6 +1652,9 @@ mod tests {
     #[test]
     fn test_is_entry_point() {
         let def = Definition {
+            key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "main".to_string(),
             kind: "function".to_string(),
             file: "main.go".to_string(),
@@ -1454,6 +1669,9 @@ mod tests {
         assert!(is_entry_point("main", &def));
 
         let def2 = Definition {
+            key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "TestSomething".to_string(),
             kind: "function".to_string(),
             file: "foo_test.go".to_string(),
@@ -1480,6 +1698,9 @@ mod tests {
     #[test]
     fn test_calculate_confidence() {
         let private_def = Definition {
+            key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "helper".to_string(),
             kind: "function".to_string(),
             file: "main.go".to_string(),
@@ -1495,6 +1716,9 @@ mod tests {
         assert!(conf > 0.9); // High confidence for private, unreachable, unused
 
         let exported_def = Definition {
+            key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "Public".to_string(),
             kind: "function".to_string(),
             file: "lib.go".to_string(),
@@ -1519,6 +1743,9 @@ mod tests {
 
         // Two files both have a helper() function
         let def1 = Definition {
+            key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "helper".to_string(),
             kind: "function".to_string(),
             file: "src/util.go".to_string(),
@@ -1532,6 +1759,9 @@ mod tests {
         };
 
         let def2 = Definition {
+            key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "helper".to_string(),
             kind: "function".to_string(),
             file: "src/parser.go".to_string(),
@@ -1610,17 +1840,17 @@ mod tests {
         let result = parser
             .parse(content, Language::Rust, Path::new("lib.rs"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
         // The #[test] function should be recognized as an entry point
-        let test_fn = fdc.definitions.get("my_weird_test_name").unwrap();
+        let test_fn = fdc.definition("my_weird_test_name").unwrap();
         assert!(
             is_entry_point("my_weird_test_name", test_fn),
             "Function with #[test] attribute should be an entry point"
         );
 
         // The helper function should NOT be an entry point
-        let helper_fn = fdc.definitions.get("helper_not_a_test").unwrap();
+        let helper_fn = fdc.definition("helper_not_a_test").unwrap();
         assert!(
             !is_entry_point("helper_not_a_test", helper_fn),
             "Regular function without #[test] should not be an entry point"
@@ -1642,10 +1872,10 @@ mod tests {
         let result = parser
             .parse(content, Language::Rust, Path::new("lib.rs"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
         // The #[tokio::test] function should be recognized as an entry point
-        let test_fn = fdc.definitions.get("my_async_test").unwrap();
+        let test_fn = fdc.definition("my_async_test").unwrap();
         assert!(
             is_entry_point("my_async_test", test_fn),
             "Function with #[tokio::test] attribute should be an entry point, attrs: {:?}",
@@ -1682,11 +1912,11 @@ mod tests {
         let result = parser
             .parse(content, Language::Rust, Path::new("lib.rs"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
         // Functions inside #[cfg(test)] should be recognized as being in test context
         // They should have is_test_file = true OR have reduced confidence
-        let helper_fn = fdc.definitions.get("helper_in_test_module");
+        let helper_fn = fdc.definition("helper_in_test_module");
         assert!(
             helper_fn.is_some(),
             "helper_in_test_module should be found in definitions"
@@ -1727,10 +1957,10 @@ mod tests {
         let result = parser
             .parse(content, Language::Rust, Path::new("lib.rs"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
         // The trait impl method should be found and marked as a trait impl
-        let trait_method = fdc.definitions.get("trait_method");
+        let trait_method = fdc.definition("trait_method");
         assert!(
             trait_method.is_some(),
             "trait_method should be found in definitions"
@@ -1764,10 +1994,10 @@ mod tests {
         let result = parser
             .parse(content, Language::Rust, Path::new("lib.rs"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
         // The pub function should be marked as exported and be an entry point
-        let pub_fn = fdc.definitions.get("public_api_function").unwrap();
+        let pub_fn = fdc.definition("public_api_function").unwrap();
         assert!(pub_fn.exported, "pub function should be marked as exported");
         assert!(
             is_entry_point("public_api_function", pub_fn),
@@ -1775,7 +2005,7 @@ mod tests {
         );
 
         // The private function should NOT be an entry point
-        let private_fn = fdc.definitions.get("private_helper").unwrap();
+        let private_fn = fdc.definition("private_helper").unwrap();
         assert!(
             !private_fn.exported,
             "private function should not be marked as exported"
@@ -1842,9 +2072,13 @@ impl MyTrait for MyStruct {
         let result = parser
             .parse(content, Language::Rust, Path::new("lib.rs"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
-        let names: HashSet<&str> = fdc.definitions.keys().map(|s| s.as_str()).collect();
+        let names: HashSet<&str> = fdc
+            .definitions
+            .iter()
+            .map(|def| def.name.as_str())
+            .collect();
         assert!(
             names.contains("free_function"),
             "should find free_function, got: {:?}",
@@ -1902,12 +2136,12 @@ fn epsilon() {}
         let result = parser
             .parse(content, Language::Rust, Path::new("standalone.rs"))
             .unwrap();
-        let functions = crate::parser::extract_functions(&result);
+        let functions = file_data(&result).definitions;
 
         assert_eq!(
             functions.len(),
             5,
-            "tree-sitter should find all 5 Rust functions, got: {:?}",
+            "the index should find all 5 Rust functions, got: {:?}",
             functions.iter().map(|f| &f.name).collect::<Vec<_>>()
         );
     }
@@ -1951,8 +2185,8 @@ def _unlisted_helper():
         // Verify collect_file_data integrates __all__ into the exported flag.
         // _internal_api starts with _ so is_exported() alone returns false,
         // but __all__ listing should force it to exported.
-        let fdc = collect_file_data(&result);
-        let internal_fn = fdc.definitions.get("_internal_api").unwrap();
+        let fdc = file_data(&result);
+        let internal_fn = fdc.definition("_internal_api").unwrap();
         assert!(
             internal_fn.exported,
             "Function in __all__ should be exported even with _ prefix"
@@ -1985,15 +2219,15 @@ if __name__ == "__main__":
         let result = parser
             .parse(content, Language::Python, Path::new("script.py"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
-        let main_fn = fdc.definitions.get("main").unwrap();
+        let main_fn = fdc.definition("main").unwrap();
         assert!(
             is_entry_point("main", main_fn),
             "main() called in __name__ block should be an entry point"
         );
 
-        let setup_fn = fdc.definitions.get("setup").unwrap();
+        let setup_fn = fdc.definition("setup").unwrap();
         assert!(
             is_entry_point("setup", setup_fn),
             "setup() called in __name__ block should be an entry point"
@@ -2031,30 +2265,30 @@ def plain_function():
         let result = parser
             .parse(content, Language::Python, Path::new("app.py"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
-        let hello_fn = fdc.definitions.get("hello").unwrap();
+        let hello_fn = fdc.definition("hello").unwrap();
         assert!(
             is_entry_point("hello", hello_fn),
             "Flask @app.route decorated function should be an entry point, attrs: {:?}",
             hello_fn.attributes
         );
 
-        let fixture_fn = fdc.definitions.get("my_fixture").unwrap();
+        let fixture_fn = fdc.definition("my_fixture").unwrap();
         assert!(
             is_entry_point("my_fixture", fixture_fn),
             "@pytest.fixture decorated function should be an entry point, attrs: {:?}",
             fixture_fn.attributes
         );
 
-        let task_fn = fdc.definitions.get("process_data").unwrap();
+        let task_fn = fdc.definition("process_data").unwrap();
         assert!(
             is_entry_point("process_data", task_fn),
             "@celery.task decorated function should be an entry point, attrs: {:?}",
             task_fn.attributes
         );
 
-        let prop_fn = fdc.definitions.get("name").unwrap();
+        let prop_fn = fdc.definition("name").unwrap();
         assert!(
             is_entry_point("name", prop_fn),
             "@property decorated function should be an entry point, attrs: {:?}",
@@ -2063,7 +2297,7 @@ def plain_function():
 
         // plain_function has no decorator -- it is still "public" by Python naming,
         // so it will be exported via is_exported. Check that it has no decorator attrs.
-        let plain_fn = fdc.definitions.get("plain_function").unwrap();
+        let plain_fn = fdc.definition("plain_function").unwrap();
         assert!(
             plain_fn
                 .attributes
@@ -2101,6 +2335,9 @@ def plain_function():
     #[test]
     fn test_go_exported_is_entry_point() {
         let def = Definition {
+            key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "PublicFunc".to_string(),
             kind: "function".to_string(),
             file: "main.go".to_string(),
@@ -2115,6 +2352,9 @@ def plain_function():
         assert!(is_entry_point("PublicFunc", &def));
 
         let private_def = Definition {
+            key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "privateFunc".to_string(),
             kind: "function".to_string(),
             file: "main.go".to_string(),
@@ -2132,6 +2372,9 @@ def plain_function():
     #[test]
     fn test_go_benchmark_and_example_entry_points() {
         let def = Definition {
+            key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "BenchmarkSort".to_string(),
             kind: "function".to_string(),
             file: "sort_test.go".to_string(),
@@ -2169,15 +2412,18 @@ export function exportedFunc() {
         let result = parser
             .parse(content, Language::TypeScript, Path::new("util.ts"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
         assert!(
-            fdc.definitions.contains_key("publicHelper"),
+            fdc.definition("publicHelper").is_some(),
             "Should find publicHelper, got: {:?}",
-            fdc.definitions.keys().collect::<Vec<_>>()
+            fdc.definitions
+                .iter()
+                .map(|def| &def.name)
+                .collect::<Vec<_>>()
         );
         assert!(
-            fdc.definitions.contains_key("exportedFunc"),
+            fdc.definition("exportedFunc").is_some(),
             "Should find exportedFunc"
         );
     }
@@ -2201,15 +2447,18 @@ public class MyService {
         let result = parser
             .parse(content, Language::Java, Path::new("MyService.java"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
         assert!(
-            fdc.definitions.contains_key("processData"),
+            fdc.definition("processData").is_some(),
             "Should find processData, got: {:?}",
-            fdc.definitions.keys().collect::<Vec<_>>()
+            fdc.definitions
+                .iter()
+                .map(|def| &def.name)
+                .collect::<Vec<_>>()
         );
         assert!(
-            fdc.definitions.contains_key("helperMethod"),
+            fdc.definition("helperMethod").is_some(),
             "Should find helperMethod"
         );
     }
@@ -2232,16 +2481,16 @@ def __private():
         let result = parser
             .parse(content, Language::Python, Path::new("module.py"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
-        assert!(fdc.definitions.contains_key("public_func"));
-        assert!(fdc.definitions.contains_key("_helper"));
-        assert!(fdc.definitions.contains_key("__private"));
+        assert!(fdc.definition("public_func").is_some());
+        assert!(fdc.definition("_helper").is_some());
+        assert!(fdc.definition("__private").is_some());
 
         // Check visibility
-        assert_eq!(fdc.definitions["_helper"].visibility, "internal");
-        assert_eq!(fdc.definitions["__private"].visibility, "private");
-        assert_eq!(fdc.definitions["public_func"].visibility, "public");
+        assert_eq!(fdc.definition("_helper").unwrap().visibility, "internal");
+        assert_eq!(fdc.definition("__private").unwrap().visibility, "private");
+        assert_eq!(fdc.definition("public_func").unwrap().visibility, "public");
     }
 
     #[test]
@@ -2263,14 +2512,14 @@ fn nested_helper() {}
         let result = parser
             .parse(content, Language::Rust, Path::new("lib.rs"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
-        assert!(fdc.definitions.contains_key("public_api"));
-        assert!(fdc.definitions.contains_key("internal_helper"));
-        assert!(fdc.definitions.contains_key("nested_helper"));
+        assert!(fdc.definition("public_api").is_some());
+        assert!(fdc.definition("internal_helper").is_some());
+        assert!(fdc.definition("nested_helper").is_some());
 
-        assert!(fdc.definitions["public_api"].exported);
-        assert!(!fdc.definitions["internal_helper"].exported);
+        assert!(fdc.definition("public_api").unwrap().exported);
+        assert!(!fdc.definition("internal_helper").unwrap().exported);
     }
 
     #[test]
@@ -2299,7 +2548,7 @@ func setup() {
         let result = parser
             .parse(content, Language::Go, Path::new("server.go"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
         // handleData is passed as an argument, not called directly.
         // There should be a call edge from setup -> handleData so that
@@ -2337,7 +2586,7 @@ func setup() {
         let result = parser
             .parse(content, Language::Go, Path::new("setup.go"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
         let has_edge = fdc
             .calls
@@ -2371,17 +2620,20 @@ func privateHelper() {
         let result = parser
             .parse(content, Language::Go, Path::new("main.go"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
         assert!(
-            fdc.definitions.contains_key("PublicFunc"),
+            fdc.definition("PublicFunc").is_some(),
             "Should find PublicFunc, got: {:?}",
-            fdc.definitions.keys().collect::<Vec<_>>()
+            fdc.definitions
+                .iter()
+                .map(|def| &def.name)
+                .collect::<Vec<_>>()
         );
-        assert!(fdc.definitions.contains_key("privateHelper"));
+        assert!(fdc.definition("privateHelper").is_some());
 
-        assert!(fdc.definitions["PublicFunc"].exported);
-        assert!(!fdc.definitions["privateHelper"].exported);
+        assert!(fdc.definition("PublicFunc").unwrap().exported);
+        assert!(!fdc.definition("privateHelper").unwrap().exported);
     }
 
     #[test]
@@ -2427,7 +2679,7 @@ func RegisterConductorServiceServer() {
         let result = parser
             .parse(content, Language::Go, Path::new("conductor_grpc.pb.go"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
         // Definitions ARE collected for call graph participation
         assert!(
@@ -2445,6 +2697,9 @@ func RegisterConductorServiceServer() {
     #[test]
     fn test_handler_patterns_are_entry_points() {
         let base_def = Definition {
+            key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "".to_string(),
             kind: "function".to_string(),
             file: "handler.go".to_string(),
@@ -2466,6 +2721,9 @@ func RegisterConductorServiceServer() {
     #[test]
     fn test_confidence_reduces_for_test_files() {
         let test_def = Definition {
+            key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "helper".to_string(),
             kind: "function".to_string(),
             file: "helper_test.go".to_string(),
@@ -2524,16 +2782,16 @@ end
         let result = parser
             .parse(content, Language::Ruby, Path::new("my_class.rb"))
             .unwrap();
-        let fdc = collect_file_data(&result);
+        let fdc = file_data(&result);
 
-        let public_fn = fdc.definitions.get("public_method").unwrap();
+        let public_fn = fdc.definition("public_method").unwrap();
         assert_eq!(
             public_fn.visibility, "public",
             "Method before 'private' should be public"
         );
         assert!(public_fn.exported, "Public Ruby method should be exported");
 
-        let secret_fn = fdc.definitions.get("secret_method").unwrap();
+        let secret_fn = fdc.definition("secret_method").unwrap();
         assert_eq!(
             secret_fn.visibility, "private",
             "Method after 'private' should be private"
@@ -2543,13 +2801,13 @@ end
             "Private Ruby method should not be exported"
         );
 
-        let another_fn = fdc.definitions.get("another_secret").unwrap();
+        let another_fn = fdc.definition("another_secret").unwrap();
         assert_eq!(
             another_fn.visibility, "private",
             "Second method after 'private' should also be private"
         );
 
-        let protected_fn = fdc.definitions.get("protected_method").unwrap();
+        let protected_fn = fdc.definition("protected_method").unwrap();
         assert_eq!(
             protected_fn.visibility, "protected",
             "Method after 'protected' should be protected"
@@ -2729,7 +2987,7 @@ mod arrow_function_tests {
         let result = crate::parser::Parser::new()
             .parse(source.as_bytes(), Language::TypeScript, Path::new("t.ts"))
             .unwrap();
-        collect_file_data(&result)
+        file_data(&result)
     }
 
     #[test]
@@ -2740,7 +2998,10 @@ mod arrow_function_tests {
         assert!(
             fdc.definitions.is_empty(),
             "anonymous callbacks became definitions: {:?}",
-            fdc.definitions.keys().collect::<Vec<_>>()
+            fdc.definitions
+                .iter()
+                .map(|def| &def.name)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2748,9 +3009,12 @@ mod arrow_function_tests {
     fn test_bound_arrow_is_a_definition() {
         let fdc = js_file_data("const helper = () => {};\n");
         assert!(
-            fdc.definitions.contains_key("helper"),
+            fdc.definition("helper").is_some(),
             "got {:?}",
-            fdc.definitions.keys().collect::<Vec<_>>()
+            fdc.definitions
+                .iter()
+                .map(|def| &def.name)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2760,45 +3024,9 @@ mod arrow_function_tests {
         // reported as dead code.
         let fdc = js_file_data("export const useThing = () => {};\n");
         let definition = fdc
-            .definitions
-            .get("useThing")
+            .definition("useThing")
             .expect("useThing should be a definition");
         assert!(definition.exported, "exported arrow not marked exported");
-    }
-
-    #[test]
-    fn test_calls_inside_arrows_are_attributed_to_the_arrow() {
-        let fdc = js_file_data("const a = () => { helper(); };\n");
-        let call = fdc
-            .calls
-            .iter()
-            .find(|call| call.callee == "helper")
-            .expect("call to helper should be recorded");
-        assert_eq!(call.caller, "a");
-    }
-
-    #[test]
-    fn test_module_scope_calls_have_a_caller() {
-        // `export const W = memo(Internal)` genuinely reaches `Internal`.
-        // Without a module-scope caller the reference records no call edge and
-        // `Internal` looks unreachable -- the React `memo` wrapper pattern.
-        let fdc = js_file_data("const Internal = () => {};\nexport const W = memo(Internal);\n");
-        let call = fdc
-            .calls
-            .iter()
-            .find(|call| call.callee == "memo")
-            .expect("module-scope call should be recorded");
-        assert_eq!(call.caller, MODULE_SCOPE);
-        assert!(
-            fdc.calls
-                .iter()
-                .any(|call| call.callee == "Internal" && call.caller == MODULE_SCOPE),
-            "the function-as-value reference should reach Internal, got {:?}",
-            fdc.calls
-                .iter()
-                .map(|c| (&c.caller, &c.callee))
-                .collect::<Vec<_>>()
-        );
     }
 
     #[test]
@@ -2829,25 +3057,323 @@ mod arrow_function_tests {
                 .collect::<Vec<_>>()
         );
     }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::core::FileSet;
+
+    /// The names of the definitions that the analysis reports as dead.
+    fn dead_names(files: &[(&str, &str)]) -> Vec<String> {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, text) in files {
+            let path = directory.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+        }
+        let config = Config::default();
+        let file_set = FileSet::from_path(directory.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(directory.path()));
+        let mut names: Vec<String> = Analyzer::new()
+            .with_confidence(0.0)
+            .analyze(&ctx)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.name)
+            .collect();
+        names.sort();
+        names
+    }
 
     #[test]
-    fn test_leaving_a_nested_function_restores_the_enclosing_scope() {
-        // `after()` is called by `outer`, not by nobody: the scope tracker
-        // must restore `outer` after the nested arrow closes.
-        let fdc = js_file_data("function outer() { const inner = () => { deep(); }; after(); }\n");
+    fn test_a_called_helper_is_alive_in_each_language() {
+        let sources: [(&str, &str); 14] = [
+            ("m.rs", "fn main() { helper(); }\nfn helper() {}\nfn unused_one() {}\n"),
+            (
+                "m.go",
+                "package main\nfunc main() { helper() }\nfunc helper() {}\nfunc unusedOne() {}\n",
+            ),
+            (
+                "m.py",
+                "def main():\n    helper()\n\ndef helper():\n    pass\n\ndef _unused_one():\n    pass\n",
+            ),
+            (
+                "m.ts",
+                "function main() { helper(); }\nfunction helper() {}\nfunction unusedOne() {}\n",
+            ),
+            (
+                "m.tsx",
+                "function main() { helper(); }\nfunction helper() {}\nfunction unusedOne() {}\n",
+            ),
+            (
+                "m.js",
+                "function main() { helper(); }\nfunction helper() {}\nfunction unusedOne() {}\n",
+            ),
+            (
+                "m.jsx",
+                "function main() { helper(); }\nfunction helper() {}\nfunction unusedOne() {}\n",
+            ),
+            (
+                "M.java",
+                "class M {\n  static void main(String[] a) { helper(); }\n  static void helper() {}\n  static void unusedOne() {}\n}\n",
+            ),
+            (
+                "M.cs",
+                "class M {\n  static void Main() { Helper(); }\n  static void Helper() {}\n  static void UnusedOne() {}\n}\n",
+            ),
+            ("m.c", "static void helper(void) {}\nstatic void unused_one(void) {}\nint main(void) { helper(); return 0; }\n"),
+            (
+                "m.cpp",
+                "static void helper() {}\nstatic void unused_one() {}\nint main() { helper(); return 0; }\n",
+            ),
+            (
+                "m.rb",
+                "def main\n  helper\nend\n\ndef helper\nend\n\ndef unused_one\nend\n",
+            ),
+            (
+                "m.php",
+                "<?php\nfunction main() { helper(); }\nfunction helper() {}\nfunction unused_one() {}\n",
+            ),
+            ("m.sh", "main() {\n  helper\n}\nhelper() {\n  :\n}\nunused_one() {\n  :\n}\n"),
+        ];
+        for (name, text) in sources {
+            let dead = dead_names(&[(name, text)]);
+            assert!(
+                !dead.contains(&"helper".to_string()) && !dead.contains(&"Helper".to_string()),
+                "{name}: a called helper is dead: {dead:?}"
+            );
+            // A function of Ruby, PHP, or Bash is visible from each file, thus the
+            // index marks it as exported and the analysis never reports it.
+            if !name.ends_with(".rb") && !name.ends_with(".php") && !name.ends_with(".sh") {
+                assert!(
+                    dead.iter()
+                        .any(|found| found.to_lowercase().replace('_', "") == "unusedone"),
+                    "{name}: the unused function is not dead: {dead:?}"
+                );
+            }
+        }
+    }
 
-        let deep = fdc
-            .calls
-            .iter()
-            .find(|call| call.callee == "deep")
-            .expect("call to deep should be recorded");
-        assert_eq!(deep.caller, "inner");
+    #[test]
+    fn test_a_callback_at_module_scope_keeps_its_callee_alive() {
+        let dead = dead_names(&[(
+            "m.js",
+            "function helper(x) { return x; }\nfunction unusedOne() {}\n[1, 2].map(x => helper(x));\n",
+        )]);
 
-        let after = fdc
-            .calls
-            .iter()
-            .find(|call| call.callee == "after")
-            .expect("call to after should be recorded");
-        assert_eq!(after.caller, "outer");
+        assert!(!dead.contains(&"helper".to_string()), "{dead:?}");
+        assert!(dead.contains(&"unusedOne".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_a_method_that_no_call_can_name_is_dead_when_a_same_name_method_is_called() {
+        let dead = dead_names(&[(
+            "m.ts",
+            "class A { run() {} }\nclass B { run() {} }\nfunction main(a: A) { a.run(); }\n",
+        )]);
+
+        let run_count = dead.iter().filter(|name| name.as_str() == "run").count();
+        assert_eq!(run_count, 1, "{dead:?}");
+    }
+
+    #[test]
+    fn test_a_call_that_the_index_cannot_resolve_keeps_each_same_name_definition_alive() {
+        let dead = dead_names(&[(
+            "m.py",
+            "class A:\n    def process(self):\n        pass\n\nclass B:\n    def process(self):\n        pass\n\ndef main(thing):\n    thing.process()\n",
+        )]);
+
+        assert!(!dead.contains(&"process".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_an_unresolved_call_names_an_exported_definition_of_another_file() {
+        let dead = dead_names(&[
+            (
+                "a.py",
+                "def process():\n    pass\n\ndef _hidden():\n    pass\n",
+            ),
+            (
+                "b.py",
+                "def main(thing):\n    thing.process()\n    thing._hidden()\n",
+            ),
+        ]);
+
+        assert!(!dead.contains(&"process".to_string()), "{dead:?}");
+        assert!(dead.contains(&"_hidden".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_a_member_of_an_object_is_not_a_definition_in_the_javascript_family() {
+        // A framework or a caller outside of the analysis reaches such a member
+        // by its name on an object.
+        for name in ["m.js", "m.jsx", "m.ts", "m.tsx"] {
+            let dead = dead_names(&[(
+                name,
+                "export function make() { return { handler() {}, get prop() { return 1; }, run: () => {} }; }\nexport function install(inst) { inst.fn = () => {}; }\nfunction unusedOne() {}\n",
+            )]);
+
+            assert_eq!(dead, ["unusedOne"], "{name}");
+        }
+    }
+
+    #[test]
+    fn test_a_function_read_as_a_property_is_a_use_in_the_javascript_family() {
+        let dead = dead_names(&[(
+            "m.ts",
+            "namespace Util { export const replacer = (x: any) => x; }\nexport function main() { return JSON.stringify({}, Util.replacer); }\nfunction unusedOne() {}\n",
+        )]);
+
+        assert_eq!(dead, ["unusedOne"]);
+    }
+
+    #[test]
+    fn test_a_constructor_is_not_a_definition() {
+        let dead = dead_names(&[(
+            "m.ts",
+            "class A { constructor() {} }\nexport function main() { return A; }\n",
+        )]);
+
+        assert!(dead.is_empty(), "{dead:?}");
+    }
+
+    #[test]
+    fn test_a_method_of_an_exported_class_stays_a_definition() {
+        let dead = dead_names(&[(
+            "m.ts",
+            "class Tool { private hidden(): void {} }\nexport function main(): void { new Tool(); }\n",
+        )]);
+
+        assert!(dead.contains(&"hidden".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_an_ambiguous_call_keeps_each_candidate_alive() {
+        let dead = dead_names(&[
+            ("main.py", "def main():\n    helper()\n"),
+            ("a.py", "def helper():\n    pass\n"),
+            ("b.py", "def helper():\n    pass\n"),
+        ]);
+
+        assert!(!dead.contains(&"helper".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_a_call_in_an_arrow_belongs_to_the_arrow() {
+        let alive = dead_names(&[(
+            "m.js",
+            "export const a = () => { helper(); };\nfunction helper() {}\n",
+        )]);
+        let dead = dead_names(&[(
+            "m.js",
+            "const a = () => { helper(); };\nfunction helper() {}\n",
+        )]);
+
+        assert!(!alive.contains(&"helper".to_string()), "{alive:?}");
+        assert!(dead.contains(&"helper".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_a_function_given_to_a_call_at_module_scope_is_alive() {
+        // `export const W = memo(Internal)` reaches `Internal`: the React
+        // `memo` wrapper pattern.
+        let dead = dead_names(&[(
+            "m.js",
+            "const Internal = () => {};\nexport const W = memo(Internal);\n",
+        )]);
+
+        assert!(!dead.contains(&"Internal".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_leaving_a_nested_function_restores_the_enclosing_function() {
+        // `after` is called by `outer`. `deep` is called only by `inner`,
+        // which nothing calls.
+        let dead = dead_names(&[(
+            "m.js",
+            "export function outer() { const inner = () => { deep(); }; after(); }\nfunction deep() {}\nfunction after() {}\n",
+        )]);
+
+        assert!(!dead.contains(&"after".to_string()), "{dead:?}");
+        assert!(dead.contains(&"deep".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_a_declaration_without_a_body_is_not_a_definition() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("m.rs"),
+            "trait Shape {\n    fn area(&self) -> u32;\n}\nstruct Square;\nimpl Shape for Square {\n    fn area(&self) -> u32 { 1 }\n}\n",
+        )
+        .unwrap();
+        let config = Config::default();
+        let file_set = FileSet::from_path(directory.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(directory.path()));
+
+        let analysis = Analyzer::new().analyze(&ctx).unwrap();
+
+        assert_eq!(analysis.summary.total_definitions, 1);
+    }
+
+    #[test]
+    fn test_a_function_stored_as_a_value_is_alive_when_its_holder_is_alive() {
+        let sources: [(&str, &str); 4] = [
+            (
+                "m.rs",
+                "struct Spec { handler: fn() }\nfn used() {}\nfn unused_one() {}\nfn main() { let _ = Spec { handler: used }; }\n",
+            ),
+            (
+                "m.go",
+                "package main\ntype Spec struct{ Handler func() }\nfunc used() {}\nfunc unusedOne() {}\nfunc main() { _ = Spec{Handler: used} }\n",
+            ),
+            (
+                "m.py",
+                "def used():\n    pass\n\ndef _unused_one():\n    pass\n\ndef main():\n    table = {\"a\": used}\n    return table\n",
+            ),
+            (
+                "m.js",
+                "function used() {}\nfunction unusedOne() {}\nexport function main() { return { handler: used }; }\n",
+            ),
+        ];
+        for (name, text) in sources {
+            let dead = dead_names(&[(name, text)]);
+            assert!(!dead.contains(&"used".to_string()), "{name}: {dead:?}");
+            assert!(
+                dead.iter()
+                    .any(|found| found.to_lowercase().replace('_', "") == "unusedone"),
+                "{name}: {dead:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_function_stored_as_a_value_in_dead_code_is_dead() {
+        let dead = dead_names(&[(
+            "m.js",
+            "function used() {}\nfunction holder() { return { handler: used }; }\n",
+        )]);
+
+        assert!(dead.contains(&"used".to_string()), "{dead:?}");
+        assert!(dead.contains(&"holder".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_the_two_definitions_of_one_name_in_one_file_are_two_definitions() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("m.ts"),
+            "class A { run() {} }\nclass B { run() {} }\n",
+        )
+        .unwrap();
+        let config = Config::default();
+        let file_set = FileSet::from_path(directory.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(directory.path()));
+
+        let analysis = Analyzer::new().analyze(&ctx).unwrap();
+
+        assert_eq!(analysis.summary.total_definitions, 2);
     }
 }

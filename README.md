@@ -620,12 +620,10 @@ Achieving a score of 100 is nearly impossible for real-world codebases. Set real
 
 ```toml
 [score]
-fail_under = 70.0
+min = 70.0
 
-# Gate mode of each gated command: "off", "warn", or "error".
-# The `--gate` flag overrides the value.
-[gate]
-score = "error"
+# Gate mode: "off", "warn", or "error". The `--gate` flag overrides the value.
+gate = "error"
 ```
 
 A gated command writes its normal report to stdout in each gate mode. The gate writes the violations to stderr. `warn` exits with status 0, and `error` exits with status 2.
@@ -987,11 +985,11 @@ Omen clones to a temp directory, runs analysis, and cleans up automatically. The
 
 ## Configuration
 
-Automatic configuration discovery loads TOML from `omen.toml` and then `.omen/omen.toml` under the analyzed repository. An explicit `--config <PATH>` accepts TOML (the default for unrecognized extensions), YAML (`.yaml` or `.yml`), or JSON (`.json`). `OMEN_` environment variables override file values; use a double underscore for nested keys, such as `OMEN_COMPLEXITY__CYCLOMATIC_ERROR=25`.
+Automatic configuration discovery loads TOML from `omen.toml` and then `.omen/omen.toml` under the analyzed repository. An explicit `--config <PATH>` accepts TOML only. A path that ends in `.yaml`, `.yml`, or `.json` is an error. `OMEN_` environment variables override file values; use a double underscore for nested keys, such as `OMEN_COMPLEXITY__CYCLOMATIC_MAX=25`.
 
-The accepted top-level keys are `exclude`, `exclude_built_assets`, `complexity`, `satd`, `churn`, `duplicates`, `hotspot`, `defect`, `score`, `gate`, `feature_flags`, `temporal`, and `changes`. The `[gate]` table sets the gate mode (`off`, `warn`, or `error`) of `complexity`, `score`, `stubs`, and `mutation`. The `--gate` flag overrides it. Copy [`omen.example.toml`](omen.example.toml) to `omen.toml` or `.omen/omen.toml` and customize it. Configuration structs reject unknown keys, including unknown nested keys, so misspellings produce an error instead of being silently ignored.
+The accepted top-level keys are `exclude`, `include_generated`, `exclude_tests`, `complexity`, `score`, `stubs`, `mutation`, `churn`, `hotspot`, `defect`, `changes`, `satd`, `duplicates`, and `feature_flags`. Each gated command has a table with a `gate` key. The value is `off`, `warn`, or `error`, and the `--gate` flag overrides it. Each history window is a `since` duration, such as `90d`, `6m`, or `1y`, in the table of the command. Copy [`omen.example.toml`](omen.example.toml) to `omen.toml` or `.omen/omen.toml` and customize it. The file shows each key with its default value. Configuration structs reject unknown keys, including unknown nested keys, so misspellings produce an error instead of being silently ignored. A key that 5.0 removed gives an error that names the new key.
 
-The `exclude_built_assets` key (default `true`) skips built and minified output. It skips a JS or TS file when the name ends in `.min`, `.bundle`, `.chunk`, `-min`, `-bundle`, `_min`, or `_bundle` before the extension. It also skips each file below a directory named `node_modules`, `target`, `dist`, `build`, `coverage`, `vendor`, `.next`, `_next`, `.turbo`, or `.cache`. Set it to `false` to analyze these files.
+By default, omen skips built and minified output. It skips a JS or TS file when the name ends in `.min`, `.bundle`, `.chunk`, `-min`, `-bundle`, `_min`, or `_bundle` before the extension. It also skips each file below a directory named `node_modules`, `target`, `dist`, `build`, `coverage`, `vendor`, `.next`, `_next`, `.turbo`, or `.cache`. Set `include_generated = true` to analyze these files.
 
 > [!TIP]
 > Using Claude Code? Run the `setup-config` skill to analyze your repository and generate an `omen.toml` with intelligent defaults for your tech stack, including detected feature flag providers and language-specific exclude patterns.

@@ -1,0 +1,19 @@
+{
+  "language": "cpp",
+  "oracle": "Author-reviewed. c++ accepts the files with a stub header foreign.hpp. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "main.cpp", "name": "deadPlain"},
+    {"label": "dead_caller", "file": "main.cpp", "name": "deadCaller"},
+    {"label": "dead_callee", "file": "main.cpp", "name": "deadCallee"},
+    {"label": "dead_unresolved", "file": "main.cpp", "name": "deadUnresolved"},
+    {"label": "dead_method", "file": "main.cpp", "name": "deadMethod"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.cpp", "name": "liveDirect"},
+    {"label": "live_value", "file": "main.cpp", "name": "liveValue"},
+    {"label": "live_public", "file": "main.cpp", "name": "livePublic"},
+    {"label": "live_method", "file": "main.cpp", "name": "liveMethod"},
+    {"label": "main", "file": "main.cpp", "name": "main"}
+  ]
+}

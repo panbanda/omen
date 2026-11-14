@@ -3,12 +3,15 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use super::scope::{scoped_inputs, Scope};
 use crate::config::Config;
-use crate::core::{FileSet, Result};
+use crate::core::Result;
 use crate::output::Format;
 
 pub struct ContextRequest {
     pub max_tokens: usize,
+    /// Read the files at this commit and not in the working tree.
+    pub git_ref: Option<String>,
 }
 
 pub fn run(
@@ -18,11 +21,13 @@ pub fn run(
     format: Format,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let file_set = FileSet::from_path(path, config)?;
-    let mut context = crate::context::build_context(
+    let scope = Scope::default().with_ref(request.git_ref.as_deref());
+    let (file_set, source) = scoped_inputs(path, config, &scope)?;
+    let (mut context, _) = crate::context::build_context_with_source(
         path,
         &file_set,
         config,
+        source,
         Some(crate::context::max_symbols_for_token_budget(
             request.max_tokens,
         )),
@@ -51,7 +56,10 @@ mod tests {
         run(
             &path,
             &Config::default(),
-            &ContextRequest { max_tokens: 8000 },
+            &ContextRequest {
+                max_tokens: 8000,
+                git_ref: None,
+            },
             format,
             &mut out,
         )

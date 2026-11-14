@@ -95,7 +95,7 @@ files.par_iter()
     .collect()
 ```
 
-**Configuration**: Automatic discovery loads TOML from `omen.toml` and `.omen/omen.toml`. An explicit `--config` path supports TOML, YAML, or JSON. Environment variables with the `OMEN_` prefix override file values. Config types use `#[serde(deny_unknown_fields)]`, so unknown keys are errors. See `omen.example.toml` for a representative configuration.
+**Configuration**: Automatic discovery loads TOML from `omen.toml` and `.omen/omen.toml`. An explicit `--config` path supports TOML only. Environment variables with the `OMEN_` prefix override file values. Config types use `#[serde(deny_unknown_fields)]`, so unknown keys are errors. See `omen.example.toml` for a representative configuration.
 
 **MCP server**: The `mcp/` module is a JSON-RPC server that gives each analyzer to an LLM as a tool. A tool name is the bare analyzer name, without a prefix. One `ToolSpec` in `src/mcp/tools/` describes each tool: its name, description, parameters, pagination target, and handler. The server makes the `tools/list` schema, the validation of arguments, and `McpServer::tool_names()` from these specifications. The manifest reads `tool_names()`. To add or change a tool or a parameter, change its `ToolSpec` only. The `stubs` tool is read-only and does not have the `--gate` option of the CLI.
 
@@ -135,7 +135,7 @@ Top-level commands (flat structure):
 - `search` - Semantic symbol search (`index` and `query`)
 - `mcp` - Start MCP server
 
-**Global options**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--compact`, `--ref`, and `--shallow` are clap global flags. Put them before or after the subcommand. `-p` is always the repository path. The `complexity`, `score`, `stubs`, and `mutation` commands take `--gate off|warn|error`; if the flag is absent, the `[gate]` table of the configuration gives the mode. A gated command writes its report to stdout first and the gate result to stderr. `--output` is the file that receives the report on `report render`, `eval`, and `mutation`. With `--compact`, with `-f json` it emits minified single-line JSON and is ignored for other formats.
+**Global options**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--compact`, `--ref`, and `--shallow` are clap global flags. Put them before or after the subcommand. `-p` is always the repository path. The `complexity`, `score`, `stubs`, and `mutation` commands take `--gate off|warn|error`; if the flag is absent, the `gate` key in the table of the command gives the mode. A gated command writes its report to stdout first and the gate result to stderr. `--output` is the file that receives the report on `report render`, `eval`, and `mutation`. With `--compact`, with `-f json` it emits minified single-line JSON and is ignored for other formats.
 
 **Pagination flags** (most analyzers): `--top N` (limit to N results), `--offset N` (skip first N results). Combine for pagination.
 

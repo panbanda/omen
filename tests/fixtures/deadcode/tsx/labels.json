@@ -1,0 +1,19 @@
+{
+  "language": "tsx",
+  "oracle": "Author-reviewed. tsc accepts the files with jsx enabled. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "main.tsx", "name": "deadPlain"},
+    {"label": "dead_caller", "file": "main.tsx", "name": "deadCaller"},
+    {"label": "dead_callee", "file": "main.tsx", "name": "deadCallee"},
+    {"label": "dead_unresolved", "file": "main.tsx", "name": "deadUnresolved"},
+    {"label": "dead_method", "file": "main.tsx", "name": "deadMethod"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.tsx", "name": "liveDirect"},
+    {"label": "live_value", "file": "main.tsx", "name": "liveValue"},
+    {"label": "live_public", "file": "main.tsx", "name": "livePublic"},
+    {"label": "live_method", "file": "main.tsx", "name": "liveMethod"},
+    {"label": "main", "file": "main.tsx", "name": "main"}
+  ]
+}

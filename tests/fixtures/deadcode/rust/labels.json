@@ -1,0 +1,19 @@
+{
+  "language": "rust",
+  "oracle": "Author-reviewed. rustc 2021 would accept the files with a stub crate named external. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "main.rs", "name": "dead_plain"},
+    {"label": "dead_caller", "file": "main.rs", "name": "dead_caller"},
+    {"label": "dead_callee", "file": "main.rs", "name": "dead_callee"},
+    {"label": "dead_unresolved", "file": "main.rs", "name": "dead_unresolved"},
+    {"label": "dead_method", "file": "main.rs", "name": "dead_method"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.rs", "name": "live_direct"},
+    {"label": "live_value", "file": "main.rs", "name": "live_value"},
+    {"label": "live_public", "file": "main.rs", "name": "live_public"},
+    {"label": "live_method", "file": "main.rs", "name": "live_method"},
+    {"label": "main", "file": "main.rs", "name": "main"}
+  ]
+}

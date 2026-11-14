@@ -2,8 +2,8 @@
 pub mod cache;
 mod facts;
 
-use crate::analyzers::repomap::SymbolLocation;
 use crate::core::{is_test_file, Error, Result};
+use crate::index::view::{SymbolLocation, DEFAULT_MIN_BASIS};
 use cache::Snapshot;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -58,8 +58,14 @@ pub fn build(snapshot: &Snapshot, root: &Path, name: &str, options: &Options) ->
     let mut related = BTreeMap::new();
     related.insert(seed, ("seed", 0));
     for (relation, levels) in [
-        ("caller", index.callers(&[seed], options.depth)),
-        ("callee", index.callees(&[seed], options.depth)),
+        (
+            "caller",
+            index.callers(&[seed], options.depth, DEFAULT_MIN_BASIS),
+        ),
+        (
+            "callee",
+            index.callees(&[seed], options.depth, DEFAULT_MIN_BASIS),
+        ),
     ] {
         for (level, symbols) in levels.iter().enumerate() {
             for &i in symbols {
@@ -81,11 +87,7 @@ pub fn build(snapshot: &Snapshot, root: &Path, name: &str, options: &Options) ->
         json!({"location": SymbolLocation::from(symbol), "signature": symbol.signature,
             "relation": relation, "depth": depth, "role_hints": role_hints(&symbol.file, &symbol.name)})
     }).collect();
-    let calls: Vec<_> = index
-        .call_resolutions
-        .iter()
-        .filter(|call| call.caller == SymbolLocation::from(&index.symbols[seed]))
-        .collect();
+    let calls = index.calls_of(seed);
     let symbol = &index.symbols[seed];
     let canonical = root.canonicalize()?.join(&symbol.file);
     let syntax = snapshot

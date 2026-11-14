@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::{
     percentile, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result, SourceFile,
 };
+use crate::index::model::Symbol;
 use crate::parser::queries::{
     get_decision_node_types, get_flat_node_types, get_nested_scope_node_types,
     get_nesting_node_types,
@@ -351,10 +352,33 @@ fn body_is_a_nested_function(node: &tree_sitter::Node<'_>, lang: Language) -> bo
 
 /// Analyze complexity for a single function from its parse result.
 pub fn analyze_function_complexity(func: &parser::FunctionNode, result: &ParseResult) -> Metrics {
+    measure_function(func.start_line, func.end_line, func.body_byte_range, result)
+}
+
+/// Analyze complexity for a definition of the shared index. The index holds
+/// the parse result of the file in the same bytes, thus the body range of the
+/// symbol locates the function node.
+pub fn analyze_symbol_complexity(symbol: &Symbol, result: &ParseResult) -> Metrics {
+    measure_function(
+        symbol.range.start_line,
+        symbol.range.end_line,
+        symbol
+            .body_range
+            .map(|body| (body.start_byte, body.end_byte)),
+        result,
+    )
+}
+
+fn measure_function(
+    start_line: u32,
+    end_line: u32,
+    body_byte_range: Option<(usize, usize)>,
+    result: &ParseResult,
+) -> Metrics {
     let root = result.root_node();
 
     // Find the function node in the tree
-    let func_node = find_function_node(&root, func, result.language);
+    let func_node = find_function_node(&root, start_line, body_byte_range, result.language);
 
     let (cyclomatic, cognitive, max_nesting) = match func_node {
         // A concise arrow body can itself be another function, as in
@@ -378,7 +402,7 @@ pub fn analyze_function_complexity(func: &parser::FunctionNode, result: &ParseRe
         cyclomatic,
         cognitive,
         max_nesting,
-        lines: func.end_line.saturating_sub(func.start_line) + 1,
+        lines: end_line.saturating_sub(start_line) + 1,
     }
 }
 
@@ -406,11 +430,12 @@ pub fn analyze_function_complexity(func: &parser::FunctionNode, result: &ParseRe
 /// non-definition kinds in some grammars.
 fn find_function_node<'a>(
     root: &tree_sitter::Node<'a>,
-    func: &parser::FunctionNode,
+    start_line: u32,
+    body_byte_range: Option<(usize, usize)>,
     lang: Language,
 ) -> Option<tree_sitter::Node<'a>> {
     let function_kinds = parser::get_function_node_types(lang);
-    let line = func.start_line.saturating_sub(1); // Convert to 0-indexed
+    let line = start_line.saturating_sub(1); // Convert to 0-indexed
     let mut cursor = root.walk();
     let mut exact_line_match: Option<tree_sitter::Node<'a>> = None;
     let mut innermost_containing: Option<tree_sitter::Node<'a>> = None;
@@ -424,7 +449,7 @@ fn find_function_node<'a>(
         if start <= line && line <= end {
             let kind = node.kind();
             if function_kinds.contains(&kind) {
-                if let Some(target_range) = func.body_byte_range {
+                if let Some(target_range) = body_byte_range {
                     if parser::function_body_byte_range(&node) == Some(target_range) {
                         // Unambiguous: this node's body occupies exactly the
                         // same bytes `func`'s body was extracted from.
@@ -2029,5 +2054,108 @@ export default function anon(a) { if (a) {} return a; }
             assert_eq!(result.functions[0].name, "f", "{lang:?}");
             assert_eq!(result.total_cognitive, 1, "{lang:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod symbol_tests {
+    use super::*;
+    use crate::index::extract::extract_file;
+    use std::path::Path;
+
+    #[test]
+    fn test_complexity_of_an_index_symbol_in_each_language() {
+        let sources: [(Language, &str, &str, &str); 14] = [
+            (Language::Rust, "t.rs", "fn f(a: bool) { if a {} }", "f"),
+            (
+                Language::Go,
+                "t.go",
+                "package p\nfunc f(a bool) { if a {} }",
+                "f",
+            ),
+            (
+                Language::Python,
+                "t.py",
+                "def f(a):\n    if a:\n        pass\n",
+                "f",
+            ),
+            (
+                Language::TypeScript,
+                "t.ts",
+                "function f(a) { if (a) {} }",
+                "f",
+            ),
+            (Language::Tsx, "t.tsx", "function f(a) { if (a) {} }", "f"),
+            (
+                Language::JavaScript,
+                "t.js",
+                "function f(a) { if (a) {} }",
+                "f",
+            ),
+            (Language::Jsx, "t.jsx", "function f(a) { if (a) {} }", "f"),
+            (
+                Language::Java,
+                "T.java",
+                "class T { void f(boolean a) { if (a) {} } }",
+                "f",
+            ),
+            (
+                Language::CSharp,
+                "T.cs",
+                "class T { void f(bool a) { if (a) {} } }",
+                "f",
+            ),
+            (Language::C, "t.c", "void f(int a) { if (a) {} }", "f"),
+            (Language::Cpp, "t.cpp", "void f(int a) { if (a) {} }", "f"),
+            (
+                Language::Ruby,
+                "t.rb",
+                "def f(a)\n  if a\n  end\nend\n",
+                "f",
+            ),
+            (
+                Language::Php,
+                "t.php",
+                "<?php function f($a) { if ($a) {} }",
+                "f",
+            ),
+            (
+                Language::Bash,
+                "t.sh",
+                "f() {\n  if true; then\n    :\n  fi\n}\n",
+                "f",
+            ),
+        ];
+        for (language, name, source, function) in sources {
+            let parsed =
+                crate::index::headers::parse(Path::new(name), language, source.as_bytes()).unwrap();
+            let facts = extract_file(&parsed, name);
+            let symbol = facts
+                .symbols
+                .iter()
+                .find(|symbol| symbol.name == function)
+                .unwrap_or_else(|| panic!("{language:?}: no symbol"));
+
+            let metrics = analyze_symbol_complexity(symbol, &parsed);
+
+            assert_eq!(metrics.cyclomatic, 2, "{language:?}");
+        }
+    }
+
+    #[test]
+    fn test_two_functions_on_one_line_get_their_own_complexity() {
+        let name = "t.js";
+        let source = "function a() {} function b(x) { if (x) {} }\n";
+        let parsed =
+            crate::index::headers::parse(Path::new(name), Language::JavaScript, source.as_bytes())
+                .unwrap();
+        let facts = extract_file(&parsed, name);
+        let cyclomatic = |function: &str| {
+            let symbol = facts.symbols.iter().find(|s| s.name == function).unwrap();
+            analyze_symbol_complexity(symbol, &parsed).cyclomatic
+        };
+
+        assert_eq!(cyclomatic("a"), 1);
+        assert_eq!(cyclomatic("b"), 2);
     }
 }

@@ -147,20 +147,20 @@ min_tokens = 10
 min_similarity = 0.8
 
 [hotspot]
-days = 36000
+since = "36000d"
 
 [defect]
-churn_days = 36000
+since = "36000d"
 
 [changes]
-days = 36000
+since = "36000d"
 
 [feature_flags]
 providers = ["unleash"]
 stale_days = 7
 
 [satd]
-custom_markers = ["SHORTCUT"]
+markers = ["SHORTCUT"]
 "#;
 
 fn remove_path(value: &mut Value, segments: &[&str]) {
@@ -849,7 +849,7 @@ fn stale_days_comes_from_the_flag_then_the_configuration_then_the_default() {
     let repository = directory.path();
     let unleash = "[feature_flags]\nproviders = [\"unleash\"]\n";
 
-    // No flag and no configured age: the built-in default of 14 days.
+    // No flag and no configured age: the default of 90 days.
     std::fs::write(repository.join("omen.toml"), unleash).expect("write configuration");
     assert_eq!(stale_flags(repository, &[], json!({})), (1, 1));
 
@@ -974,41 +974,41 @@ const CONFIGURED_KEYS: &[ConfiguredKey] = &[
         probe: "/clones",
     },
     ConfiguredKey {
-        key: "duplicates.exclude_tests",
+        key: "exclude_tests",
         base: "",
-        configured: "[duplicates]\nexclude_tests = false\n",
+        configured: "exclude_tests = false\n",
         tool: "clones",
         command: &["clones"],
         probe: "/clones",
     },
     ConfiguredKey {
-        key: "defect.churn_days",
+        key: "defect.since",
         base: "",
-        configured: "[defect]\nchurn_days = 3\n",
+        configured: "[defect]\nsince = \"3d\"\n",
         tool: "defect",
         command: &["defect"],
         probe: "/files",
     },
     ConfiguredKey {
-        key: "hotspot.days",
+        key: "hotspot.since",
         base: "",
-        configured: "[hotspot]\ndays = 3\n",
+        configured: "[hotspot]\nsince = \"3d\"\n",
         tool: "hotspot",
         command: &["hotspot"],
         probe: "/hotspots",
     },
     ConfiguredKey {
-        key: "changes.days",
+        key: "changes.since",
         base: "",
-        configured: "[changes]\ndays = 3\n",
+        configured: "[changes]\nsince = \"3d\"\n",
         tool: "changes",
         command: &["changes"],
         probe: "/commits",
     },
     ConfiguredKey {
-        key: "satd.custom_markers",
+        key: "satd.markers",
         base: "",
-        configured: "[satd]\ncustom_markers = [\"REVISIT\"]\n",
+        configured: "[satd]\nmarkers = [\"REVISIT\"]\n",
         tool: "satd",
         command: &["satd"],
         probe: "/items",
@@ -1057,7 +1057,7 @@ const NEAR_CLONE_SOURCE: &str = r#"pub fn sum_near(values: &[u32]) -> u32 {
 }
 "#;
 
-/// A marker that only `satd.custom_markers` can find.
+/// A marker that only `satd.markers` can find.
 const MARKED_SOURCE: &str = "// REVISIT: make this faster\npub fn marked() -> u32 {\n    1\n}\n";
 
 /// Adds the files that the configuration keys need to the fixture.
@@ -1147,11 +1147,11 @@ fn each_configuration_key_of_the_tools_has_a_discriminating_case() {
         "churn.since",
         "duplicates.min_tokens",
         "duplicates.min_similarity",
-        "duplicates.exclude_tests",
-        "defect.churn_days",
-        "hotspot.days",
-        "changes.days",
-        "satd.custom_markers",
+        "exclude_tests",
+        "defect.since",
+        "hotspot.since",
+        "changes.since",
+        "satd.markers",
         "feature_flags.providers",
         "feature_flags.stale_days",
     ]

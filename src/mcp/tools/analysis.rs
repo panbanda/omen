@@ -4,7 +4,6 @@ use super::{
     Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolOutput, ToolSpec, COMPACT,
     MAX_COUNT, PATH,
 };
-use crate::mcp::error::ToolError;
 use crate::mcp::McpServer;
 
 /// The largest history window: 100 years.
@@ -29,14 +28,13 @@ pub(super) static COMPLEXITY: ToolSpec = ToolSpec {
 pub(super) static SATD: ToolSpec = ToolSpec {
     name: "satd",
     description: "Finds debt comments such as TODO, FIXME, and HACK. \
-        The tool also finds the markers in `satd.custom_markers` of the configuration.",
+        The tool also finds the markers in `satd.markers` of the configuration.",
     params: &[PATH],
     paginated: Pagination::Field("items"),
     handler: |server, arguments| {
         server.analyze(
             arguments,
-            crate::analyzers::satd::Analyzer::new()
-                .with_custom_markers(&server.config.satd.custom_markers),
+            crate::commands::analyzers::satd_analyzer(&server.config),
         )
     },
 };
@@ -71,22 +69,10 @@ pub(super) static CHURN: ToolSpec = ToolSpec {
     ],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
-        // `churn.since` is a window such as `6m` or `all`. Text that is not a
-        // window is an error, not all the history.
-        let days = match arguments.count_u32("days") {
-            Some(days) => days,
-            None => crate::git::since_to_days(&server.config.churn.since).map_err(|error| {
-                ToolError::internal(format!(
-                    "The value of `churn.since` in the configuration is not correct: {error}"
-                ))
-                .with_param("days")
-                .with_next("Correct the configuration, or give `days`.")
-            })?,
-        };
-        server.analyze(
-            arguments,
-            crate::analyzers::churn::Analyzer::new().with_days(days),
-        )
+        let days = arguments.count_u32("days").unwrap_or(
+            crate::commands::analyzers::configured_churn_days(&server.config),
+        );
+        server.analyze(arguments, crate::commands::analyzers::churn_analyzer(days))
     },
 };
 
@@ -112,28 +98,21 @@ pub(super) static CLONES: ToolSpec = ToolSpec {
         Param::boolean(
             "include_tests",
             "If true, the tool also reads test code. \
-             If false, `duplicates.exclude_tests` of the configuration applies.",
+             If false, `exclude_tests` of the configuration applies.",
         )
         .with_default(ParamDefault::Boolean(false)),
     ],
     paginated: Pagination::Field("clones"),
     handler: |server, arguments| {
-        let configured = &server.config.duplicates;
         let include_tests = arguments.boolean("include_tests").unwrap_or(false);
         server.analyze(
             arguments,
-            crate::analyzers::duplicates::Analyzer::new()
-                .with_min_tokens(
-                    arguments
-                        .count("min_tokens")
-                        .unwrap_or(configured.min_tokens),
-                )
-                .with_similarity_threshold(
-                    arguments
-                        .number("similarity")
-                        .unwrap_or(configured.min_similarity),
-                )
-                .with_exclude_tests(!include_tests && configured.exclude_tests),
+            crate::commands::analyzers::clones_analyzer(
+                &server.config,
+                arguments.count("min_tokens"),
+                arguments.number("similarity"),
+                include_tests,
+            ),
         )
     },
 };
@@ -144,30 +123,27 @@ pub(super) static DEFECT: ToolSpec = ToolSpec {
     params: &[
         PATH,
         Param::integer("days", 1, MAX_DAYS, DAYS_DESCRIPTION)
-            .with_default(ParamDefault::Configuration("defect.churn_days")),
+            .with_default(ParamDefault::Configuration("defect.since")),
     ],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
         let days = arguments
             .count_u32("days")
-            .unwrap_or(server.config.defect.churn_days);
-        server.analyze(
-            arguments,
-            crate::analyzers::defect::Analyzer::new().with_churn_days(days),
-        )
+            .unwrap_or(server.config.defect.since.days());
+        server.analyze(arguments, crate::commands::analyzers::defect_analyzer(days))
     },
 };
 
 pub(super) static CHANGES: ToolSpec = ToolSpec {
     name: "changes",
     description: "Gives the risk of each recent commit. The tool uses just-in-time risk analysis. \
-        `changes.days` of the configuration gives the number of days of history.",
+        `changes.since` of the configuration gives the window of history.",
     params: &[PATH],
     paginated: Pagination::Field("commits"),
     handler: |server, arguments| {
         server.analyze(
             arguments,
-            crate::analyzers::changes::Analyzer::new().with_days(server.config.changes.days),
+            crate::commands::analyzers::changes_analyzer(&server.config),
         )
     },
 };
@@ -192,8 +168,7 @@ pub(super) static DIFF: ToolSpec = ToolSpec {
 fn diff(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     let scope = server.scope(arguments)?;
     let target = arguments.string("base").or(arguments.string("head"));
-    let result =
-        crate::analyzers::changes::Analyzer::default().analyze_diff(&scope.path, target)?;
+    let result = crate::commands::diff::analyze(&scope.path, target)?;
     Ok(ToolOutput::data(serde_json::to_value(&result)?))
 }
 
@@ -224,16 +199,16 @@ pub(super) static HOTSPOT: ToolSpec = ToolSpec {
     params: &[
         PATH,
         Param::integer("days", 1, MAX_DAYS, DAYS_DESCRIPTION)
-            .with_default(ParamDefault::Configuration("hotspot.days")),
+            .with_default(ParamDefault::Configuration("hotspot.since")),
     ],
     paginated: Pagination::Field("hotspots"),
     handler: |server, arguments| {
         let days = arguments
             .count_u32("days")
-            .unwrap_or(server.config.hotspot.days);
+            .unwrap_or(server.config.hotspot.since.days());
         server.analyze(
             arguments,
-            crate::analyzers::hotspot::Analyzer::new().with_days(days),
+            crate::commands::analyzers::hotspot_analyzer(days),
         )
     },
 };
@@ -339,10 +314,9 @@ pub(super) static FLAGS: ToolSpec = ToolSpec {
         .with_default(ParamDefault::Configuration("feature_flags.providers")),
         Param::integer(
             "stale_days",
-            0,
+            1,
             MAX_DAYS,
-            "The age in days after which a flag is stale. \
-             The value 0 selects the built-in age of 14 days.",
+            "The age in days after which a flag is stale.",
         )
         .with_default(ParamDefault::Configuration("feature_flags.stale_days")),
     ],
@@ -351,19 +325,13 @@ pub(super) static FLAGS: ToolSpec = ToolSpec {
 };
 
 fn flags(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
-    let providers: Vec<String> = arguments
-        .string("provider")
-        .map(|provider| vec![provider.to_string()])
-        .unwrap_or_default();
-    let mut config = server.config.clone();
-    if !providers.is_empty() {
-        config.feature_flags.providers = providers;
-    }
-    // The same rule as the `flags` command: the argument, then the
-    // configured value. The analyzer uses 14 days when the value is 0.
-    if let Some(stale_days) = arguments.count_u32("stale_days") {
-        config.feature_flags.stale_days = stale_days;
-    }
+    // The same function as the `flags` command: the argument, then the
+    // configured value.
+    let config = crate::commands::analyzers::flags_config(
+        &server.config,
+        arguments.string("provider"),
+        arguments.count_u32("stale_days"),
+    );
     server.analyze_with_config(
         arguments,
         &config,
@@ -379,7 +347,7 @@ pub(super) static SCORE: ToolSpec = ToolSpec {
     handler: |server, arguments| {
         server.analyze(
             arguments,
-            crate::score::Analyzer::from_config(&server.config),
+            crate::commands::analyzers::score_analyzer(&server.config),
         )
     },
 };

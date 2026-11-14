@@ -1,15 +1,38 @@
 //! The command handlers. Each handler takes a typed request and writes its
 //! report to a writer, so a test can read the report and the CLI can send it
 //! to standard output.
+//!
+//! A gate verdict and a progress message go to stderr, not to the writer.
 
+/// Writes one line to a writer and returns the error of the write.
+macro_rules! say {
+    ($out:expr) => {
+        writeln!($out)?
+    };
+    ($out:expr, $($arg:tt)*) => {
+        writeln!($out, $($arg)*)?
+    };
+}
+
+pub mod all;
+pub mod analyzers;
 pub mod benchmark;
+pub mod complexity;
 pub mod context;
+pub mod diff;
 pub mod eval;
+pub mod gate;
 pub mod impact;
+#[cfg(feature = "mutation")]
+pub mod mutation;
 pub mod outline;
+pub mod report;
+pub mod repository;
 pub mod scope;
+pub mod score;
+pub mod search;
+pub mod stubs;
 pub mod symbol;
-
 #[cfg(test)]
 pub(crate) mod testing {
     use std::path::PathBuf;

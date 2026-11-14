@@ -26,6 +26,8 @@ pub const DEFAULT_MIN_BASIS: ResolutionBasis = ResolutionBasis::SamePackage;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewSymbol {
     pub name: String,
+    /// The first byte of the body, or of the declaration when it has no body.
+    pub body_start: usize,
     pub qualified_name: String,
     pub kind: SymbolKind,
     pub file: String,
@@ -115,10 +117,16 @@ pub struct CallView {
 
 impl CallView {
     pub fn from_index(index: &CodeIndex) -> Self {
+        Self::from_index_where(index, |_| true)
+    }
+
+    /// The view of the files for which `keep` is true. A call from a file that
+    /// `keep` rejects is not in the view.
+    pub fn from_index_where(index: &CodeIndex, keep: impl Fn(&str) -> bool) -> Self {
         let mut symbols = Vec::new();
         let mut by_key = HashMap::new();
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
-        for file in &index.files {
+        for file in index.files.iter().filter(|file| keep(&file.file)) {
             for symbol in &file.symbols {
                 if symbol.kind == SymbolKind::Field {
                     continue;
@@ -131,6 +139,9 @@ impl CallView {
                     .push(position);
                 symbols.push(ViewSymbol {
                     name: symbol.name.clone(),
+                    body_start: symbol
+                        .body_range
+                        .map_or(symbol.range.start_byte, |body| body.start_byte),
                     qualified_name: symbol.key.clone(),
                     kind: symbol.kind,
                     file: file.file.clone(),
@@ -146,7 +157,12 @@ impl CallView {
             vec![BTreeSet::new(); symbols.len()];
         let mut evidence: Vec<Vec<CallEvidence>> = vec![Vec::new(); symbols.len()];
         let mut summary = ResolutionSummary::default();
-        for reference in index.files.iter().flat_map(|file| &file.references) {
+        for reference in index
+            .files
+            .iter()
+            .filter(|file| keep(&file.file))
+            .flat_map(|file| &file.references)
+        {
             summary.count(reference.resolution.status);
             let caller = reference
                 .enclosing
@@ -264,6 +280,20 @@ impl CallView {
                     && (path == name || path.ends_with(&format!(".{name}")))
             })
             .collect()
+    }
+
+    /// Each edge as a pair of a caller and a callee, once, in order. An edge
+    /// counts when its basis is `min_basis` or a stronger basis.
+    pub fn edges(&self, min_basis: ResolutionBasis) -> Vec<(usize, usize)> {
+        let mut edges: BTreeSet<(usize, usize)> = BTreeSet::new();
+        for (caller, callees) in self.callees.iter().enumerate() {
+            for (callee, basis) in callees {
+                if basis.rank() >= min_basis.rank() {
+                    edges.insert((caller, *callee));
+                }
+            }
+        }
+        edges.into_iter().collect()
     }
 
     /// The call sites in the body of one definition, in source order.
@@ -536,6 +566,58 @@ mod tests {
         assert_eq!(calls[0].call, "len");
         assert_eq!(calls[0].status, ResolutionStatus::Unresolved);
         assert_eq!(view.resolution_summary().unique_candidate, 3);
+    }
+
+    #[test]
+    fn test_edges_list_each_edge_one_time_in_definition_order() {
+        let view = view(FILES);
+        let name = |position: usize| view.symbols[position].qualified_name.as_str();
+
+        let edges: Vec<(&str, &str)> = view
+            .edges(DEFAULT_MIN_BASIS)
+            .into_iter()
+            .map(|(caller, callee)| (name(caller), name(callee)))
+            .collect();
+
+        assert_eq!(
+            edges,
+            [
+                ("shop.py#Item.name", "shop.py#helper"),
+                ("shop.py#helper", "shop.py#leaf"),
+                ("shop.py#run", "shop.py#Item.name"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_view_of_chosen_files_holds_only_their_definitions_and_calls() {
+        let mut facts = index(&[
+            ("a.py", "def run():\n    return helper()\n"),
+            ("b.py", "def helper():\n    return missing()\n"),
+        ]);
+        resolve_references(&mut facts);
+        let index = CodeIndex { files: facts };
+
+        let view = CallView::from_index_where(&index, |file| file == "b.py");
+
+        let names: Vec<&str> = view
+            .symbols
+            .iter()
+            .map(|symbol| symbol.qualified_name.as_str())
+            .collect();
+        assert_eq!(names, ["b.py#helper"]);
+        assert_eq!(view.resolution_summary().unresolved, 1);
+        assert_eq!(view.resolution_summary().unique_candidate, 0);
+        assert!(view.edges(DEFAULT_MIN_BASIS).is_empty());
+    }
+
+    #[test]
+    fn test_definition_has_the_byte_of_the_start_of_its_body() {
+        let source = FILES[0].1;
+        let view = view(FILES);
+        let leaf = view.resolve("leaf")[0];
+
+        assert!(source[view.symbols[leaf].body_start..].starts_with("return len"));
     }
 
     /// A call outside of each definition is a call site of the input. The

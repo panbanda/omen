@@ -175,7 +175,7 @@ pub fn report_with_reader(
         }
     };
 
-    // Direct callers/callees using CallGraphIndex
+    // Direct callers and callees from the call view
     let caller_levels = index.callers(&[primary_idx], 1, opts.min_basis);
     let callers: Vec<ImpactSymbol> = caller_levels
         .into_iter()
@@ -583,7 +583,7 @@ mod tests {
     #[test]
     fn test_source_slice_c() {
         // C function name extraction is best-effort: tree-sitter-c nests the name
-        // inside a declarator, so extract_functions may return 0 for plain C.
+        // inside a declarator, so the index may find no symbol for plain C.
         // We attempt the test but skip (don't fail) if the symbol is not found.
         let dir = TempDir::new().unwrap();
         let src =

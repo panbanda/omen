@@ -160,36 +160,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "cpp/c-out-of-line/hit@1",
-    "reason": "expected one of shapes.cpp:area:9, shapes.hpp:area:28 in the first 1, got main.cpp:measure:51",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "cpp/c-out-of-line/hit@10",
-    "reason": "expected one of shapes.cpp:area:9, shapes.hpp:area:28 in the first 10, got main.cpp:measure:51",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "cpp/c-side-squared/hit@1",
-    "reason": "expected one of shapes.hpp:area:45 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "cpp/c-side-squared/hit@10",
-    "reason": "expected one of shapes.hpp:area:45 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "cpp/c-value-times/hit@1",
-    "reason": "expected one of sub/util.cpp:twice:11 in the first 1, got other.cpp:push_back:13",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "cpp/c-value-times/hit@10",
-    "reason": "expected one of sub/util.cpp:twice:11 in the first 10, got other.cpp:push_back:13, main.cpp:twice_local:21",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "cpp/i-part-overload/hit@1",
     "reason": "expected one of main.cpp:overload_one:35, main.cpp:overload_two:39 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -200,16 +170,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "cpp/i-part-scaled/hit@1",
-    "reason": "expected one of shapes.cpp:scaled:17, shapes.hpp:scaled:35, main.cpp:measure_scaled:55 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "cpp/i-part-scaled/hit@10",
-    "reason": "expected one of shapes.cpp:scaled:17, shapes.hpp:scaled:35, main.cpp:measure_scaled:55 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "cpp/i-point/hit@1",
     "reason": "expected one of shapes.hpp:Point:13 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -217,16 +177,6 @@
   {
     "id": "cpp/i-point/hit@10",
     "reason": "expected one of shapes.hpp:Point:13 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "cpp/i-twice/hit@1",
-    "reason": "expected one of sub/util.cpp:twice:7, sub/util.cpp:twice:11, sub/util.hpp:twice:7, sub/util.hpp:twice:8 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "cpp/i-twice/hit@10",
-    "reason": "expected one of sub/util.cpp:twice:7, sub/util.cpp:twice:11, sub/util.hpp:twice:7, sub/util.hpp:twice:8 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {
@@ -272,11 +222,6 @@
   {
     "id": "cpp/n-times/hit@1",
     "reason": "expected one of sub/util.cpp:twice:11, sub/util.hpp:twice:8 in the first 1, got sub/util.hpp:largest:11",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "cpp/n-times/hit@10",
-    "reason": "expected one of sub/util.cpp:twice:11, sub/util.hpp:twice:8 in the first 10, got sub/util.hpp:largest:11",
     "tracking": "phase-4-search"
   },
   {
@@ -330,18 +275,8 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "csharp/n-distance/hit@10",
-    "reason": "expected one of Shapes/Shapes.cs:Norm:95 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "csharp/n-twice-radius/hit@1",
     "reason": "expected one of Shapes/Shapes.cs:Diameter:35 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "csharp/n-twice-radius/hit@10",
-    "reason": "expected one of Shapes/Shapes.cs:Diameter:35 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {
@@ -392,16 +327,6 @@
   {
     "id": "java/c-record/hit@10",
     "reason": "expected one of shop/shapes/Point.java:Point:3 in the first 10, got shop/shapes/Point.java:norm:4",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "java/c-side-squared/hit@1",
-    "reason": "expected one of shop/shapes/Square.java:area:11 in the first 1, got shop/shapes/Square.java:area:10",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "java/c-side-squared/hit@10",
-    "reason": "expected one of shop/shapes/Square.java:area:11 in the first 10, got shop/shapes/Square.java:area:10, shop/shapes/Square.java:Square:6, shop/shapes/Square.java:edge:19",
     "tracking": "phase-4-search"
   },
   {

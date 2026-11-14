@@ -41,7 +41,7 @@ Use the replacement.
 
 The flags `-p`, `-f`, `-c`, `-v`, and `-j` are global. On each command, `-p` is
 the repository path. `stubs --gate` has no default value in the CLI. If the
-flag is absent, the `[gate]` table of the configuration gives the mode.
+flag is absent, the `gate` key in the table of the command gives the mode.
 
 If the `-p` value is not a directory, each command that reads the repository
 stops with an error before the analysis. `mcp manifest`, `eval`, `benchmark`,
@@ -120,6 +120,44 @@ use the same form. The MCP tools give the same keys as the commands.
 | `hotspots.json` (`report generate`) | `hotspot.json` |
 | `--skip duplicates` (`report generate`) | `--skip clones` |
 | `--skip hotspots` (`report generate`) | `--skip hotspot` |
+### Configuration keys
+
+Omen 5.0 removed or renamed the keys in this table. There is no alias. A
+configuration file or an `OMEN_` variable that sets an old key gives an error
+that names the new key. For example: `gate.complexity was removed in 5.0; use
+complexity.gate`.
+
+| Removed | Replacement |
+|---|---|
+| `[gate]` table | The `gate` key in the table of each command |
+| `gate.complexity` | `complexity.gate` |
+| `gate.score` | `score.gate` |
+| `gate.stubs` | `stubs.gate` |
+| `gate.mutation` | `mutation.gate` |
+| `complexity.cyclomatic_error` | `complexity.cyclomatic_max` |
+| `complexity.cognitive_error` | `complexity.cognitive_max` |
+| `score.fail_under` | `score.min`. The default is 80. |
+| `satd.custom_markers` | `satd.markers` |
+| `exclude_built_assets` | `include_generated`. The meaning is the opposite. The default `false` gives the old behavior. |
+| `duplicates.exclude_tests` | `exclude_tests` at the top level |
+| `[temporal]` table, `temporal.exclude_tests` | `exclude_tests` at the top level |
+| `hotspot.days` | `hotspot.since`, for example `"90d"` |
+| `defect.churn_days` | `defect.since`, for example `"30d"` |
+| `changes.days` | `changes.since`, for example `"30d"` |
+| `churn.top`, `hotspot.top` | The `--top` flag. The default is 20 rows, as a constant in the command. |
+
+Other changes of the configuration:
+
+- `--config` accepts TOML only. A path that ends in `.yaml`, `.yml`, or `.json`
+  is an error.
+- A window is a `since` duration, such as `30d`, `6m`, or `1y`, with the
+  syntax of the `--since` flag. The value `all` is valid for `churn`,
+  `hotspot`, and `defect`. It is not valid for `changes`. A window of 0 is an
+  error.
+- `exclude_tests` now applies to `temporal` through the same key as `clones`.
+- `score.min` has the explicit default 80. The `--fail-under` flag overrides
+  it.
+
 ## Changed in 5.0
 
 These changes have no compatibility shim. Each row gives the old behaviour, the
@@ -127,8 +165,8 @@ new behaviour, and the necessary change in a client.
 
 ### Symbol identifiers of `symbol` and `impact`
 
-The commands `symbol` and `impact`, and the MCP tools `get_symbol` and
-`impact`, read the shared index. The other commands do not.
+The commands `symbol`, `impact`, `repomap`, `context`, `graph`, and `smells`, and
+the MCP tools that give the same results, read the shared index.
 
 | Area | Before 5.0 | From 5.0 | Change in a client |
 |---|---|---|---|
@@ -139,9 +177,65 @@ The commands `symbol` and `impact`, and the MCP tools `get_symbol` and
 | A call for which only the name gives a definition | An edge to the one definition with that name in the repository. | No edge. The call has the status `ambiguous` and the basis `name_only`, and it lists each definition with the name that the caller can see. | Read `candidates` of `call_resolutions`. Use `--min-basis name_only`, or the MCP parameter `min_basis`, to get an edge for a call with one such candidate. |
 | `--min-basis` of `symbol` and `impact`, `min_basis` of `get_symbol` and `impact` | Not available. | The weakest basis of a call that gives a caller or a callee. The default is `same_package`, which excludes `name_only`. | None. |
 | `--ref` with `symbol` and `impact` on a local repository | The commands read the files on the disk. | The commands read the files of that commit. | None. |
+| `--ref` with a command that cannot read a commit, on a local repository | The commands read the working tree and did not tell the user. | The commands `churn`, `hotspot`, `defect`, `temporal`, `ownership`, `changes`, `diff`, `tdg`, `score`, `all`, `search`, `mutation`, and `mcp` give an error. The commands that read source (`complexity`, `satd`, `stubs`, `deadcode`, `clones`, `graph`, `cohesion`, `repomap`, `smells`, `flags`, `context`, `outline`, `symbol`, `impact`) read the files of the commit. | Remove `--ref`, or check out the commit. |
 | `truncated` of the MCP tools `context` and `repomap` | Only the cut of the token budget. | Also the cut of `max_symbols` and `max_risks`, with the total before the cut. | Read `truncated`. |
 | `truncated` of the MCP tool `impact` | Always empty. | `/callers/*/symbols` and `/callees/*/symbols` have the number of definitions without the `depth` limit and the number in the result. | Read `truncated` to know that `depth` cut the result. |
 | A key of the shared index as the `name` of `task_context` | Not applicable. The tool did not accept the key. | The tool selects the definition by the file and by the last name of the key. It does not use the container or the `~N` suffix. A file with two definitions of that name gives the `ambiguous` error. | Send the `start_line` of one choice with the `name`. |
+
+### Commands that read the shared index
+
+The commands `repomap`, `context`, `graph`, and `smells`, and the MCP tool
+`task_context`, now read the shared index. The old call resolver and the old
+import resolver do not exist.
+
+| Area | Before 5.0 | From 5.0 | Change in a client |
+|---|---|---|---|
+| `qualified_name` of `repomap`, `context`, and `task_context` | `file:name`. | The key of the symbol: `file#Container.name`. | Give the identifier back as it is. |
+| `kind` of `repomap` symbols | `Function` for each symbol. | `Method` for a method. | Accept `Method`. |
+| `repomap` and `context` edges | A call whose only evidence was the name gave an edge to the one definition with that name. | No edge. The ranking uses the calls that have the basis `same_package` or a stronger basis. | None. Expect lower `in_degree` and `out_degree` for calls without an import. |
+| `--ref` with `repomap`, `context`, `graph`, and `smells` | `repomap` and `context` read the files on the disk. | The commands read the files of that commit. | None. |
+| Test files in `repomap` | The index did not hold them, thus a call from a test file did not exist. | The index holds them, but the map ignores the symbols and the calls of test files unless `skip_test_files` is false. A call that has a test file as the only other definition with a name can now resolve. | None. |
+| Edges of `graph` and `smells` | The old import resolver matched the import path to a file by the stem of the path. | The module map of the shared index resolves the import. An import that more than one file can satisfy gives no edge. A Go import of a package gives an edge to each file of the package. | Expect a different edge count. Both commands still give the same edges and the same cycles. |
+| `call_evidence` of `task_context` | `basis` was always a string. | `basis` can be `null`, and each entry has the `line` of the call. | Read `line`. Accept `null` for `basis`. |
+
+### `outline` and `search` read the shared index
+
+The command `outline`, the MCP tool `outline`, and the chunks of `search index`
+now come from the definitions of the shared index.
+
+| Area | Before 5.0 | From 5.0 | Change in a client |
+|---|---|---|---|
+| `classes` of `outline` | Classes and structs. Rust and Go listed only structs. | Also interfaces, traits, and enums. A Ruby module is a class. | Accept more entries. |
+| `imports` of `outline` | The parser gave the paths. C# `using` was not an import. | The shared index gives each path one time, in source order. C# `using` is an import. | None. |
+| Methods of a type in `outline` and in `search` | The parser found them in the body of the type, and in the Rust `impl` blocks. | The index also finds Go receiver methods, and C++ methods that a class declares and that a different file defines. | None. |
+| A method of a type that another file declares, in `outline` | A C++ method such as `Shape::draw`, a Go receiver method, or a Rust `impl` method was a top-level function. | The method is in the `methods` of a `classes` entry that has the name of the receiver type. The entry has no fields, is not exported, and its lines are the lines of the methods. | Do not treat each `classes` entry as a declaration of the type. |
+| `parent_name` of a search result | Rust `impl` blocks and class bodies. Go methods had no parent. | The receiver type of a Go method is the parent. | None. |
+| `signature` of a search result | The first line of the declaration, with the opening brace when the line had one. | The declaration without the opening brace. | None. |
+| Declarations without a body in `search` | Not indexed. | Not indexed. | None. |
+| `search index` cache | The cache holds chunks that the parser made. | The cache stores an index version. A cache that an older version made is cleared, and `search index` builds all the chunks again. | None. |
+
+### `deadcode` reads the shared index
+
+`deadcode` takes the definitions and the call edges from the shared index.
+The syntax tree gives only the attributes, the decorators, the visibility
+modifiers, and the use of a function as a value.
+
+| Area | Before 5.0 | From 5.0 | Change in a client |
+|---|---|---|---|
+| Definitions | One definition for each name in each file. Two methods with one name in two types were one definition. | One definition for each symbol of the index. `total_definitions` is higher when a file has two such methods. | None. |
+| Declaration without a body | A trait method or a prototype was a definition. | It is not a definition. | None. |
+| Calls that give an edge | Only the node kinds `call_expression`, `function_call`, and `call`. | Each call that the index finds, in all languages. | Expect fewer dead items in Java, C#, PHP, Bash, and for Rust method calls. |
+| Function used as a value | An identifier that was an argument of a call gave an edge. | Each identifier that is not the target of a call gives an edge from its function, as `Spec { handler: used }` does. | Expect fewer dead items. |
+| Call that the index cannot resolve | The name of the callee gave an edge to each definition with that name. | The name gives an edge only to a definition in the same group of languages that the call can see: an exported definition, a definition in the file of the call, or a Go definition. A call with a receiver does not name a free function in Go, Rust, Java, C#, C, C++, or PHP. An ambiguous call gives an edge to each candidate that obeys the same rules. | Expect more dead items. |
+| Call in a callback outside of a named function | No edge. | The callee is reachable, as a call at module scope is. | Expect fewer dead items. |
+| Reason `No references found in codebase` | The name was not an identifier anywhere. | No reference lists the definition as a candidate, no unresolved call has its name, and the name is not an identifier anywhere. | None. |
+| Exported definition | The parser treated each Python, Ruby, PHP, C, C++, and Bash definition as exported. | The index decides. A Python name with a leading underscore, and a C or C++ `static` function, are not exported. | Expect more dead items in those languages. |
+| `file` and `line` | `line` was the first line of the node. | `line` is the line of the declaration, after annotations and decorators. | None. |
+
+### Cohesion for TSX and JSX
+
+`cohesion` now measures the classes of `.tsx` and `.jsx` files. Before 5.0, it
+skipped them.
 
 ### MCP server
 
@@ -168,7 +262,7 @@ envelope.
 These bounds are new:
 
 - `days` of `churn`, `defect`, `hotspot`, and `temporal`: 1 to 36500.
-- `stale_days` of `flags`: 0 to 36500.
+- `stale_days` of `flags`: 1 to 36500.
 - `min_tokens` of `clones`, `top_k` of the search tools, and `max_tokens` of
   `context`: 1 or more.
 - `similarity` of `clones` and `min_score` of the search tools: 0 to 1.
@@ -184,9 +278,9 @@ tools used a fixed value and did not read the configuration.
 | `churn` | `days` | 30 | `churn.since` of the configuration. The built-in default is `6m`, which is 180 days. | Send `days: 30` to keep the old window. |
 | `clones` | `similarity` | 0.7 | `duplicates.min_similarity` of the configuration. The built-in default is 0.9. | Send `similarity: 0.7` to keep the old threshold. |
 | `clones` | `min_tokens` | 50 | `duplicates.min_tokens` of the configuration. The built-in default is 50. | None, unless the configuration sets the value. |
-| `clones` | Test code | Not read. | `duplicates.exclude_tests` of the configuration applies. The new `include_tests` argument reads test code. | None, unless the configuration sets `exclude_tests = false`. |
-| `changes` | Days of history | 30 | `changes.days` of the configuration. The built-in default is 30. | None, unless the configuration sets the value. |
-| `satd` | Custom markers | Not read. | `satd.custom_markers` of the configuration applies. | None, unless the configuration sets markers. |
+| `clones` | Test code | Not read. | `exclude_tests` of the configuration applies. The new `include_tests` argument reads test code. | None, unless the configuration sets `exclude_tests = false`. |
+| `changes` | Days of history | 30 | `changes.since` of the configuration. The built-in default is 30. | None, unless the configuration sets the value. |
+| `satd` | Custom markers | Not read. | `satd.markers` of the configuration applies. | None, unless the configuration sets markers. |
 
 ### Default of `flags --stale-days`
 
@@ -196,12 +290,13 @@ the command got `--stale-days 0`.
 
 | | Before 5.0 | From 5.0 |
 |---|---|---|
-| `flags` without `--stale-days` | 90 days. The configuration had no effect. | `[feature_flags] stale_days`. When that value is absent or 0, the age is 14 days. |
-| `flags --stale-days 0` | The configured value, or 14 days. | 14 days. |
+| `flags` without `--stale-days` | 90 days. The configuration had no effect. | `[feature_flags] stale_days`. The default is 90 days. |
+| `flags --stale-days 0` | The configured value, or 14 days. | An error. The value 0 is not valid. |
+| `stale_days = 0` in the configuration | 14 days. | The value 0 is not valid, and the age is never 14 days. |
 
-To keep the old result, give `--stale-days 90`, or set `stale_days = 90` in
-`[feature_flags]`. The MCP tool `flags` did not change: its `stale_days`
-argument has the same rule as the flag.
+The value of `stale_days` in the configuration is 90 if the file does not set
+it. Before 5.0, an absent value was 0, and the analyzer then used 14 days. The
+MCP tool `flags` has the same rule as the flag.
 
 No other flag has a built-in default that hides a configuration key.
 

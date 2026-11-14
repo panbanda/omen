@@ -1,0 +1,17 @@
+{
+  "language": "ruby",
+  "oracle": "Author-reviewed. ruby 3.3 accepts the files. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "main.rb", "name": "dead_plain"},
+    {"label": "dead_caller", "file": "main.rb", "name": "dead_caller"},
+    {"label": "dead_callee", "file": "main.rb", "name": "dead_callee"},
+    {"label": "dead_unresolved", "file": "main.rb", "name": "dead_unresolved"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.rb", "name": "live_direct"},
+    {"label": "live_value", "file": "main.rb", "name": "live_value"},
+    {"label": "live_public", "file": "main.rb", "name": "live_public"},
+    {"label": "run", "file": "main.rb", "name": "run"}
+  ]
+}

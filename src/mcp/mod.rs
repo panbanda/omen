@@ -543,8 +543,8 @@ mod tests {
         assert_eq!(
             ambiguous["error"]["suggestions"],
             json!([
-                {"name": "same.rb:helper", "start_line": 2},
-                {"name": "same.rb:helper", "start_line": 7}
+                {"name": "same.rb#A.helper", "start_line": 2},
+                {"name": "same.rb#B.helper", "start_line": 7}
             ])
         );
         let selected = call(
@@ -1490,7 +1490,7 @@ mod tests {
         )
         .unwrap();
         let mut config = Config::default();
-        config.satd.custom_markers = vec!["SHORTCUT".to_string()];
+        config.satd.markers = vec!["SHORTCUT".to_string()];
         let with_marker = McpServer::new(dir.path().to_path_buf(), config);
         let without_marker = McpServer::new(dir.path().to_path_buf(), Config::default());
         let found = envelope_of(&with_marker, "satd", json!({}));
@@ -1499,22 +1499,6 @@ mod tests {
             envelope_of(&without_marker, "satd", json!({}))["total_items"],
             0
         );
-    }
-
-    #[test]
-    fn churn_with_an_invalid_configured_window_is_an_error() {
-        let dir = TempDir::new().unwrap();
-        let mut config = Config::default();
-        config.churn.since = "nonsense".to_string();
-        let server = McpServer::new(dir.path().to_path_buf(), config);
-        let body = error_of(&server, "churn", json!({}));
-        let message = body["error"]["message"].as_str().unwrap();
-        assert!(message.contains("churn.since"), "{message}");
-        assert!(message.contains("\"nonsense\""), "{message}");
-        // The argument has priority, thus the configured value is not read.
-        let with_days = call(&server, "churn", json!({"days": 30}));
-        let text = with_days["content"][0]["text"].as_str().unwrap();
-        assert!(!text.contains("churn.since"), "{text}");
     }
 
     #[test]

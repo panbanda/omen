@@ -1,11 +1,11 @@
-//! AST-aware chunking for semantic search.
+//! Chunking for semantic search.
 //!
 //! Splits long functions at statement boundaries so each chunk has focused
 //! vocabulary for better TF-IDF relevance. Short functions remain as single
 //! chunks. Each chunk carries its parent type (class/struct/impl) when applicable.
 
-use crate::core::Language;
-use crate::parser::{FunctionNode, ParseResult};
+use crate::index::extract::FileSymbols;
+use crate::index::model::Symbol;
 
 /// Maximum characters per chunk. Functions longer than this get split at
 /// statement boundaries.
@@ -30,28 +30,39 @@ pub struct Chunk {
     pub total_chunks: u32,
 }
 
-/// Extract chunks from a parsed file.
+/// The definitions of a file that the search indexes: the functions, the
+/// methods, and the constructors, in source order. The index holds only
+/// definitions that have a name, because a search result needs a name.
+pub fn searchable_symbols(facts: &FileSymbols) -> Vec<&Symbol> {
+    facts
+        .symbols
+        .iter()
+        .filter(|symbol| {
+            symbol.is_callable()
+                && (symbol.body_range.is_some() || facts.language == crate::core::Language::Ruby)
+        })
+        .collect()
+}
+
+/// Extract chunks from the facts of a file.
 ///
 /// Each function becomes one or more chunks. Long functions are split at
 /// statement boundaries. The enclosing class/struct/impl name is attached
 /// as `parent_name` when the function is nested inside one.
-pub fn extract_chunks(
-    parse_result: &ParseResult,
-    functions: &[FunctionNode],
-    rel_path: &str,
-) -> Vec<Chunk> {
-    let source = String::from_utf8_lossy(&parse_result.source);
+pub fn extract_chunks(source: &[u8], facts: &FileSymbols, rel_path: &str) -> Vec<Chunk> {
+    let source = String::from_utf8_lossy(source);
     let lines: Vec<&str> = source.lines().collect();
-
-    let parent_map = build_parent_map(parse_result);
+    let functions = searchable_symbols(facts);
 
     let mut all_chunks = Vec::new();
 
-    for (func, definition_ordinal) in functions.iter().zip(definition_ordinals(functions)) {
-        let parent_name = find_parent(&parent_map, func.start_line, func.end_line);
+    for (func, definition_ordinal) in functions.iter().zip(definition_ordinals(&functions)) {
+        let parent_name = parent_name(facts, func);
+        let start_line = func.range.start_line;
+        let end_line = func.range.end_line;
 
-        let start = (func.start_line as usize).saturating_sub(1);
-        let end = (func.end_line as usize).min(lines.len());
+        let start = (start_line as usize).saturating_sub(1);
+        let end = (end_line as usize).min(lines.len());
 
         let body = if start < end && start < lines.len() {
             lines[start..end].join("\n")
@@ -67,15 +78,15 @@ pub fn extract_chunks(
                 parent_name: parent_name.clone(),
                 signature: func.signature.clone(),
                 content: body,
-                definition_line: func.start_line,
+                definition_line: start_line,
                 definition_ordinal,
-                start_line: func.start_line,
-                end_line: func.end_line,
+                start_line,
+                end_line,
                 chunk_index: 0,
                 total_chunks: 1,
             });
         } else {
-            let sub_chunks = split_at_statement_boundaries(&body, func.start_line);
+            let sub_chunks = split_at_statement_boundaries(&body, start_line);
             let total = sub_chunks.len() as u32;
             for (i, (chunk_body, chunk_start, chunk_end)) in sub_chunks.into_iter().enumerate() {
                 all_chunks.push(Chunk {
@@ -85,7 +96,7 @@ pub fn extract_chunks(
                     parent_name: parent_name.clone(),
                     signature: func.signature.clone(),
                     content: chunk_body,
-                    definition_line: func.start_line,
+                    definition_line: start_line,
                     definition_ordinal,
                     start_line: chunk_start,
                     end_line: chunk_end,
@@ -101,13 +112,13 @@ pub fn extract_chunks(
 
 /// The position of each function among the functions that have its name and
 /// its first line. A line can have more than one definition of one name.
-pub fn definition_ordinals(functions: &[FunctionNode]) -> Vec<u32> {
+pub fn definition_ordinals(functions: &[&Symbol]) -> Vec<u32> {
     let mut seen: std::collections::HashMap<(&str, u32), u32> = std::collections::HashMap::new();
     functions
         .iter()
         .map(|func| {
             let count = seen
-                .entry((func.name.as_str(), func.start_line))
+                .entry((func.name.as_str(), func.range.start_line))
                 .or_insert(0);
             let ordinal = *count;
             *count += 1;
@@ -116,100 +127,24 @@ pub fn definition_ordinals(functions: &[FunctionNode]) -> Vec<u32> {
         .collect()
 }
 
-/// A parent type span (class/struct/impl).
-struct ParentSpan {
-    name: String,
-    start_line: u32,
-    end_line: u32,
-}
-
-/// Build a map of parent type spans from the AST.
-fn build_parent_map(parse_result: &ParseResult) -> Vec<ParentSpan> {
-    let mut parents = Vec::new();
-    let root = parse_result.root_node();
-    let type_kinds = get_type_node_kinds(parse_result.language);
-
-    fn visit(
-        node: tree_sitter::Node<'_>,
-        source: &[u8],
-        type_kinds: &[&str],
-        parents: &mut Vec<ParentSpan>,
-    ) {
-        if type_kinds.contains(&node.kind()) {
-            if let Some(name) = extract_type_name(&node, source) {
-                parents.push(ParentSpan {
-                    name,
-                    start_line: node.start_position().row as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                });
-            }
-        }
-        for child in node.children(&mut node.walk()) {
-            visit(child, source, type_kinds, parents);
-        }
+/// The name of the type to which a function belongs: the receiver type of a
+/// Rust `impl` block or of a Go receiver, or the innermost class-like
+/// definition that contains the function.
+fn parent_name(facts: &FileSymbols, function: &Symbol) -> Option<String> {
+    if let Some(receiver) = &function.receiver_type {
+        return Some(receiver.clone());
     }
-
-    visit(root, &parse_result.source, &type_kinds, &mut parents);
-    parents
-}
-
-/// Find the most specific (innermost) parent that encloses the given line range.
-fn find_parent(parents: &[ParentSpan], start_line: u32, end_line: u32) -> Option<String> {
-    let mut best: Option<&ParentSpan> = None;
-    for p in parents {
-        if p.start_line <= start_line && p.end_line >= end_line {
-            match best {
-                Some(current) => {
-                    // Prefer the tighter (inner) span
-                    if (p.end_line - p.start_line) < (current.end_line - current.start_line) {
-                        best = Some(p);
-                    }
-                }
-                None => best = Some(p),
-            }
-        }
-    }
-    best.map(|p| p.name.clone())
-}
-
-pub(crate) fn get_type_node_kinds(lang: Language) -> Vec<&'static str> {
-    match lang {
-        Language::Rust => vec!["struct_item", "enum_item", "impl_item", "trait_item"],
-        Language::Go => vec!["type_declaration"],
-        Language::Python => vec!["class_definition"],
-        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
-            vec!["class_declaration", "class"]
-        }
-        Language::Java | Language::CSharp => {
-            vec!["class_declaration", "interface_declaration"]
-        }
-        Language::Cpp => vec!["class_specifier", "struct_specifier"],
-        Language::C => vec!["struct_specifier"],
-        Language::Ruby => vec!["class", "module"],
-        Language::Php => vec!["class_declaration", "interface_declaration"],
-        Language::Bash => vec![],
-    }
-}
-
-fn extract_type_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-    // For Rust impl_item, use "type" field to get the self type
-    // (not the trait name in `impl Trait for Type`).
-    if node.kind() == "impl_item" {
-        if let Some(ty) = node.child_by_field_name("type") {
-            return ty.utf8_text(source).ok().map(|s| s.to_string());
-        }
-    }
-    // Try "name" field first, then look for an identifier child
-    let name_node = node.child_by_field_name("name").or_else(|| {
-        let mut cursor = node.walk();
-        let found = node
-            .children(&mut cursor)
-            .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier");
-        found
-    });
-    name_node
-        .and_then(|n| n.utf8_text(source).ok())
-        .map(|s| s.to_string())
+    facts
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.is_class_like(facts.language))
+        .filter(|symbol| {
+            symbol.range.start_byte <= function.range.start_byte
+                && function.range.end_byte <= symbol.range.end_byte
+                && symbol.key != function.key
+        })
+        .min_by_key(|symbol| symbol.range.end_byte - symbol.range.start_byte)
+        .map(|symbol| symbol.name.clone())
 }
 
 /// Split a function body into chunks at statement boundaries.
@@ -302,53 +237,44 @@ pub fn format_chunk_text(chunk: &Chunk) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Language;
+    use std::path::Path;
+
+    fn facts_of(source: &[u8], language: Language, name: &str) -> FileSymbols {
+        let parsed = crate::index::headers::parse(Path::new(name), language, source).unwrap();
+        crate::index::extract::extract_file(&parsed, name)
+    }
+
+    fn chunks_of(source: &[u8], language: Language, name: &str) -> Vec<Chunk> {
+        extract_chunks(source, &facts_of(source, language, name), name)
+    }
+
+    fn parent_of(source: &[u8], language: Language, name: &str) -> Option<String> {
+        let chunks = chunks_of(source, language, name);
+        assert_eq!(chunks.len(), 1, "{name}: {chunks:?}");
+        chunks[0].parent_name.clone()
+    }
 
     #[test]
     fn test_short_function_single_chunk() {
-        let func = FunctionNode {
-            name: "foo".to_string(),
-            binding_name: Some("foo".to_string()),
-            is_bound: true,
-            start_line: 1,
-            end_line: 3,
-            body_byte_range: None,
-            is_exported: true,
-            signature: "fn foo()".to_string(),
-        };
-
-        let source = b"fn foo() {\n    x + 1\n}";
-        let parse_result = parse_rust(source);
-        let chunks = extract_chunks(&parse_result, &[func], "src/lib.rs");
+        let chunks = chunks_of(b"fn foo() {\n    x + 1\n}", Language::Rust, "src/lib.rs");
 
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].chunk_index, 0);
         assert_eq!(chunks[0].total_chunks, 1);
         assert_eq!(chunks[0].symbol_name, "foo");
+        assert_eq!(chunks[0].file_path, "src/lib.rs");
     }
 
     #[test]
     fn test_long_function_splits() {
-        // Build a function body longer than MAX_CHUNK_CHARS with statement boundaries
         let mut body = String::from("fn long_func() {\n");
         for i in 0..60 {
             body.push_str(&format!("    let x{i} = {i};\n"));
         }
         body.push('}');
 
-        let line_count = body.lines().count() as u32;
-        let func = FunctionNode {
-            name: "long_func".to_string(),
-            binding_name: Some("long_func".to_string()),
-            is_bound: true,
-            start_line: 1,
-            end_line: line_count,
-            body_byte_range: None,
-            is_exported: true,
-            signature: "fn long_func()".to_string(),
-        };
-
-        let parse_result = parse_rust(body.as_bytes());
-        let chunks = extract_chunks(&parse_result, &[func], "src/lib.rs");
+        let chunks = chunks_of(body.as_bytes(), Language::Rust, "src/lib.rs");
 
         assert!(
             chunks.len() > 1,
@@ -357,8 +283,6 @@ mod tests {
         );
         assert!(chunks.iter().all(|c| c.total_chunks == chunks.len() as u32));
         assert!(chunks.iter().all(|c| c.symbol_name == "long_func"));
-
-        // Verify chunk indices are sequential
         for (i, chunk) in chunks.iter().enumerate() {
             assert_eq!(chunk.chunk_index, i as u32);
         }
@@ -367,43 +291,15 @@ mod tests {
     #[test]
     fn test_parent_name_from_impl() {
         let source = b"struct Foo {}\nimpl Foo {\n    fn bar() {\n        1\n    }\n}";
-        let parse_result = parse_rust(source);
-
-        let func = FunctionNode {
-            name: "bar".to_string(),
-            binding_name: Some("bar".to_string()),
-            is_bound: true,
-            start_line: 3,
-            end_line: 5,
-            body_byte_range: None,
-            is_exported: false,
-            signature: "fn bar()".to_string(),
-        };
-
-        let chunks = extract_chunks(&parse_result, &[func], "src/lib.rs");
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].parent_name.as_deref(), Some("Foo"));
+        assert_eq!(
+            parent_of(source, Language::Rust, "src/lib.rs").as_deref(),
+            Some("Foo")
+        );
     }
 
     #[test]
     fn test_no_parent_for_free_function() {
-        let source = b"fn free() { 1 }";
-        let parse_result = parse_rust(source);
-
-        let func = FunctionNode {
-            name: "free".to_string(),
-            binding_name: Some("free".to_string()),
-            is_bound: true,
-            start_line: 1,
-            end_line: 1,
-            body_byte_range: None,
-            is_exported: false,
-            signature: "fn free()".to_string(),
-        };
-
-        let chunks = extract_chunks(&parse_result, &[func], "src/lib.rs");
-        assert_eq!(chunks.len(), 1);
-        assert!(chunks[0].parent_name.is_none());
+        assert!(parent_of(b"fn free() { 1 }", Language::Rust, "src/lib.rs").is_none());
     }
 
     #[test]
@@ -456,251 +352,132 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_functions_list() {
-        let source = b"fn foo() {}";
-        let parse_result = parse_rust(source);
-        let chunks = extract_chunks(&parse_result, &[], "test.rs");
-        assert!(chunks.is_empty());
-    }
-
-    fn parse_rust(source: &[u8]) -> ParseResult {
-        let parser = crate::parser::Parser::new();
-        parser
-            .parse(source, Language::Rust, std::path::Path::new("test.rs"))
-            .unwrap()
-    }
-
-    fn parse_lang(source: &[u8], lang: Language) -> ParseResult {
-        let parser = crate::parser::Parser::new();
-        parser
-            .parse(source, lang, std::path::Path::new("test"))
-            .unwrap()
-    }
-
-    #[test]
-    fn test_type_node_kinds_coverage() {
-        let with_types = [
-            Language::Rust,
-            Language::Go,
-            Language::Python,
-            Language::TypeScript,
-            Language::JavaScript,
-            Language::Tsx,
-            Language::Jsx,
-            Language::Java,
-            Language::CSharp,
-            Language::Cpp,
-            Language::C,
-            Language::Ruby,
-            Language::Php,
-        ];
-        for lang in with_types {
-            assert!(
-                !get_type_node_kinds(lang).is_empty(),
-                "{lang:?} should have type node kinds"
-            );
-        }
-        assert!(get_type_node_kinds(Language::Bash).is_empty());
+    fn test_file_without_functions_has_no_chunks() {
+        assert!(chunks_of(b"const LIMIT: u32 = 1;\n", Language::Rust, "test.rs").is_empty());
     }
 
     #[test]
     fn test_parent_detection_go() {
-        // Go methods with receivers are not nested inside type_declaration
         let source = b"package main\ntype Server struct{}\nfunc (s *Server) Start() {\n\treturn\n}";
-        let pr = parse_lang(source, Language::Go);
-        let func = FunctionNode {
-            name: "Start".to_string(),
-            binding_name: Some("Start".to_string()),
-            is_bound: true,
-            start_line: 3,
-            end_line: 5,
-            body_byte_range: None,
-            is_exported: true,
-            signature: "func (s *Server) Start()".to_string(),
-        };
-        let chunks = extract_chunks(&pr, &[func], "main.go");
-        assert!(chunks[0].parent_name.is_none());
+        assert_eq!(
+            parent_of(source, Language::Go, "main.go").as_deref(),
+            Some("Server")
+        );
     }
 
     #[test]
     fn test_parent_detection_python() {
         let source = b"class Foo:\n    def bar(self):\n        pass\n";
-        let pr = parse_lang(source, Language::Python);
-        let func = FunctionNode {
-            name: "bar".to_string(),
-            binding_name: Some("bar".to_string()),
-            is_bound: true,
-            start_line: 2,
-            end_line: 3,
-            body_byte_range: None,
-            is_exported: false,
-            signature: "def bar(self)".to_string(),
-        };
-        let chunks = extract_chunks(&pr, &[func], "test.py");
-        assert_eq!(chunks[0].parent_name.as_deref(), Some("Foo"));
+        assert_eq!(
+            parent_of(source, Language::Python, "test.py").as_deref(),
+            Some("Foo")
+        );
     }
 
     #[test]
     fn test_parent_detection_typescript() {
         let source = b"class Widget {\n    render() {\n        return 1;\n    }\n}";
-        let pr = parse_lang(source, Language::TypeScript);
-        let func = FunctionNode {
-            name: "render".to_string(),
-            binding_name: Some("render".to_string()),
-            is_bound: true,
-            start_line: 2,
-            end_line: 4,
-            body_byte_range: None,
-            is_exported: false,
-            signature: "render()".to_string(),
-        };
-        let chunks = extract_chunks(&pr, &[func], "test.ts");
-        assert_eq!(chunks[0].parent_name.as_deref(), Some("Widget"));
+        assert_eq!(
+            parent_of(source, Language::TypeScript, "test.ts").as_deref(),
+            Some("Widget")
+        );
+    }
+
+    #[test]
+    fn test_parent_detection_tsx_and_jsx() {
+        let source = b"class Widget {\n    render() {\n        return 1;\n    }\n}";
+        for (language, name) in [(Language::Tsx, "test.tsx"), (Language::Jsx, "test.jsx")] {
+            assert_eq!(
+                parent_of(source, language, name).as_deref(),
+                Some("Widget"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parent_detection_javascript() {
+        let source = b"class Widget {\n    render() {\n        return 1;\n    }\n}";
+        assert_eq!(
+            parent_of(source, Language::JavaScript, "test.js").as_deref(),
+            Some("Widget")
+        );
     }
 
     #[test]
     fn test_parent_detection_java() {
         let source = b"class Service {\n    void run() {\n        return;\n    }\n}";
-        let pr = parse_lang(source, Language::Java);
-        let func = FunctionNode {
-            name: "run".to_string(),
-            binding_name: Some("run".to_string()),
-            is_bound: true,
-            start_line: 2,
-            end_line: 4,
-            body_byte_range: None,
-            is_exported: true,
-            signature: "void run()".to_string(),
-        };
-        let chunks = extract_chunks(&pr, &[func], "Test.java");
-        assert_eq!(chunks[0].parent_name.as_deref(), Some("Service"));
+        assert_eq!(
+            parent_of(source, Language::Java, "Test.java").as_deref(),
+            Some("Service")
+        );
     }
 
     #[test]
     fn test_parent_detection_cpp() {
         let source = b"class Engine {\npublic:\n    void start() {\n        return;\n    }\n};";
-        let pr = parse_lang(source, Language::Cpp);
-        let func = FunctionNode {
-            name: "start".to_string(),
-            binding_name: Some("start".to_string()),
-            is_bound: true,
-            start_line: 3,
-            end_line: 5,
-            body_byte_range: None,
-            is_exported: true,
-            signature: "void start()".to_string(),
-        };
-        let chunks = extract_chunks(&pr, &[func], "test.cpp");
-        assert_eq!(chunks[0].parent_name.as_deref(), Some("Engine"));
+        assert_eq!(
+            parent_of(source, Language::Cpp, "test.cpp").as_deref(),
+            Some("Engine")
+        );
     }
 
     #[test]
     fn test_parent_detection_c_struct() {
         let source = b"struct Point { int x; int y; };\nvoid draw() { return; }";
-        let pr = parse_lang(source, Language::C);
-        let func = FunctionNode {
-            name: "draw".to_string(),
-            binding_name: Some("draw".to_string()),
-            is_bound: true,
-            start_line: 2,
-            end_line: 2,
-            body_byte_range: None,
-            is_exported: true,
-            signature: "void draw()".to_string(),
-        };
-        let chunks = extract_chunks(&pr, &[func], "test.c");
-        assert!(chunks[0].parent_name.is_none());
+        assert!(parent_of(source, Language::C, "test.c").is_none());
     }
 
     #[test]
     fn test_parent_detection_ruby() {
         let source = b"class Dog\n  def bark\n    puts 'woof'\n  end\nend";
-        let pr = parse_lang(source, Language::Ruby);
-        let func = FunctionNode {
-            name: "bark".to_string(),
-            binding_name: Some("bark".to_string()),
-            is_bound: true,
-            start_line: 2,
-            end_line: 4,
-            body_byte_range: None,
-            is_exported: false,
-            signature: "def bark".to_string(),
-        };
-        let chunks = extract_chunks(&pr, &[func], "test.rb");
-        assert_eq!(chunks[0].parent_name.as_deref(), Some("Dog"));
+        assert_eq!(
+            parent_of(source, Language::Ruby, "test.rb").as_deref(),
+            Some("Dog")
+        );
     }
 
     #[test]
     fn test_parent_detection_php() {
         let source =
             b"<?php\nclass Controller {\n    function index() {\n        return 1;\n    }\n}";
-        let pr = parse_lang(source, Language::Php);
-        let func = FunctionNode {
-            name: "index".to_string(),
-            binding_name: Some("index".to_string()),
-            is_bound: true,
-            start_line: 3,
-            end_line: 5,
-            body_byte_range: None,
-            is_exported: true,
-            signature: "function index()".to_string(),
-        };
-        let chunks = extract_chunks(&pr, &[func], "test.php");
-        assert_eq!(chunks[0].parent_name.as_deref(), Some("Controller"));
+        assert_eq!(
+            parent_of(source, Language::Php, "test.php").as_deref(),
+            Some("Controller")
+        );
     }
 
     #[test]
     fn test_parent_detection_csharp() {
         let source = b"class Handler {\n    void Process() {\n        return;\n    }\n}";
-        let pr = parse_lang(source, Language::CSharp);
-        let func = FunctionNode {
-            name: "Process".to_string(),
-            binding_name: Some("Process".to_string()),
-            is_bound: true,
-            start_line: 2,
-            end_line: 4,
-            body_byte_range: None,
-            is_exported: true,
-            signature: "void Process()".to_string(),
-        };
-        let chunks = extract_chunks(&pr, &[func], "test.cs");
-        assert_eq!(chunks[0].parent_name.as_deref(), Some("Handler"));
+        assert_eq!(
+            parent_of(source, Language::CSharp, "test.cs").as_deref(),
+            Some("Handler")
+        );
     }
 
     #[test]
     fn test_parent_detection_bash_none() {
         let source = b"#!/bin/bash\nmy_func() {\n    echo hello\n}";
-        let pr = parse_lang(source, Language::Bash);
-        let func = FunctionNode {
-            name: "my_func".to_string(),
-            binding_name: Some("my_func".to_string()),
-            is_bound: true,
-            start_line: 2,
-            end_line: 4,
-            body_byte_range: None,
-            is_exported: false,
-            signature: "my_func()".to_string(),
-        };
-        let chunks = extract_chunks(&pr, &[func], "test.sh");
-        assert!(chunks[0].parent_name.is_none());
+        assert!(parent_of(source, Language::Bash, "test.sh").is_none());
     }
 
     #[test]
     fn test_impl_trait_for_type_uses_type_not_trait() {
         let source =
             b"trait Display {}\nimpl Display for Foo {\n    fn fmt() {\n        return;\n    }\n}";
-        let pr = parse_rust(source);
-        let func = FunctionNode {
-            name: "fmt".to_string(),
-            binding_name: Some("fmt".to_string()),
-            is_bound: true,
-            start_line: 3,
-            end_line: 5,
-            body_byte_range: None,
-            is_exported: false,
-            signature: "fn fmt()".to_string(),
-        };
-        let chunks = extract_chunks(&pr, &[func], "src/lib.rs");
-        assert_eq!(chunks[0].parent_name.as_deref(), Some("Foo"));
+        assert_eq!(
+            parent_of(source, Language::Rust, "src/lib.rs").as_deref(),
+            Some("Foo")
+        );
+    }
+
+    #[test]
+    fn test_two_definitions_of_one_name_on_one_line_have_two_ordinals() {
+        let source = b"function same() {} function same() {}\n";
+        let facts = facts_of(source, Language::JavaScript, "test.js");
+        let symbols = searchable_symbols(&facts);
+
+        assert_eq!(definition_ordinals(&symbols), [0, 1]);
     }
 }

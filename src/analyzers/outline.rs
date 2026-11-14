@@ -1,12 +1,13 @@
 //! Outline analyzer — token-cheap file map: imports, classes, top-level functions.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result, SourceFile};
-use crate::parser::{extract_classes, extract_functions, extract_imports, Parser};
+use crate::index::extract::FileSymbols;
+use crate::index::model::{Exported, Symbol, SymbolKind};
 
 /// A function in the outline (top-level or method).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,7 +20,9 @@ pub struct OutlineFunction {
     pub is_exported: bool,
 }
 
-/// A class or struct in the outline.
+/// A class or struct in the outline. A type that another file declares has an
+/// entry too, if this file has a method of the type. The entry has no fields
+/// and is not exported, and its lines are the lines of the methods.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutlineClass {
     pub name: String,
@@ -131,98 +134,128 @@ pub fn outline_file_in(root: &Path, path: &Path) -> Result<FileOutline> {
 }
 
 fn outline_source(file: &SourceFile) -> Result<FileOutline> {
-    let parser = Parser::new();
-    let result = parser.parse_source(file)?;
+    let parsed = crate::index::headers::parse(&file.path, file.language, &file.content)
+        .ok_or_else(|| crate::core::Error::UnsupportedLanguage {
+            path: file.path.clone(),
+        })?;
+    let facts = crate::index::extract::extract_file(&parsed, &file.path.to_string_lossy());
+    Ok(outline_from_facts(&facts, file.lines_of_code() as u32))
+}
 
-    let imports: Vec<String> = extract_imports(&result)
-        .into_iter()
-        .map(|i| i.path)
-        .collect();
+/// Builds the outline of one file from the facts of the shared index.
+///
+/// A method belongs to a type when its body is in the range of the type, or when
+/// it names the type as its receiver, as a Rust `impl` block and a Go
+/// receiver do. A function that belongs to no type is a top-level function.
+fn outline_from_facts(facts: &FileSymbols, loc: u32) -> FileOutline {
+    let language = facts.language;
+    let mut imports: Vec<String> = Vec::new();
+    for binding in &facts.imports {
+        if !imports.contains(&binding.module_path) {
+            imports.push(binding.module_path.clone());
+        }
+    }
 
-    let classes_raw = extract_classes(&result);
-    // An outline lists what a reader can navigate to by name, so anonymous
-    // callbacks are noise rather than content.
-    let functions_raw: Vec<_> = extract_functions(&result)
-        .into_iter()
-        .filter(|func| func.is_bound)
-        .collect();
-
-    // Build two exclusion sets so we can correctly identify top-level functions:
-    //
-    // 1. Class body ranges (struct/class definition extent, NOT extended to impl
-    //    blocks): catches languages like Python/Java/C++ where methods are
-    //    lexically inside the class body.
-    // 2. Method (name, start_line) pairs from every class: catches languages
-    //    like Rust and Go where methods live outside the struct definition (in
-    //    impl / standalone function blocks) and therefore fall outside the class
-    //    body range.
-    let class_ranges: Vec<(u32, u32)> = classes_raw
+    let types: Vec<&Symbol> = facts
+        .symbols
         .iter()
-        .map(|c| (c.start_line, c.end_line))
+        .filter(|symbol| symbol.is_class_like(language))
         .collect();
+    let is_member_of = |symbol: &Symbol, owner: &Symbol| {
+        symbol.container.as_deref() == Some(owner.name.as_str())
+            && symbol.range.start_byte >= owner.range.start_byte
+            && symbol.range.end_byte <= owner.range.end_byte
+            || symbol.receiver_type.as_deref() == Some(owner.name.as_str())
+    };
+    let to_function = |symbol: &Symbol| OutlineFunction {
+        name: symbol.name.clone(),
+        signature: truncate_120(&symbol.signature),
+        start_line: symbol.range.start_line,
+        end_line: symbol.range.end_line,
+        is_exported: symbol.exported == Exported::Exported,
+    };
 
-    // Set of (name, start_line) for every method across all classes.
-    let method_keys: std::collections::HashSet<(String, u32)> = classes_raw
+    let classes: Vec<OutlineClass> = types
         .iter()
-        .flat_map(|c| c.methods.iter().map(|m| (m.name.clone(), m.start_line)))
-        .collect();
-
-    // Convert class nodes
-    let classes: Vec<OutlineClass> = classes_raw
-        .into_iter()
-        .map(|c| OutlineClass {
-            name: c.name,
-            start_line: c.start_line,
-            end_line: c.end_line,
-            is_exported: c.is_exported,
-            methods: c
-                .methods
-                .into_iter()
-                .map(|m| OutlineFunction {
-                    name: m.name,
-                    signature: truncate_120(&m.signature),
-                    start_line: m.start_line,
-                    end_line: m.end_line,
-                    is_exported: m.is_exported,
-                })
-                .collect(),
-            fields: c.fields,
-        })
-        .collect();
-
-    // Top-level functions: a function is a method (not top-level) if either:
-    //  (a) its start_line falls within a class body range, OR
-    //  (b) its (name, start_line) appears in the method_keys set.
-    let functions: Vec<OutlineFunction> = functions_raw
-        .into_iter()
-        .filter(|f| {
-            let in_class_body = class_ranges
+        .map(|owner| OutlineClass {
+            name: owner.name.clone(),
+            start_line: owner.range.start_line,
+            end_line: owner.range.end_line,
+            is_exported: owner.exported == Exported::Exported,
+            methods: facts
+                .symbols
                 .iter()
-                .any(|(start, end)| f.start_line >= *start && f.start_line <= *end);
-            let is_method = method_keys.contains(&(f.name.clone(), f.start_line));
-            !in_class_body && !is_method
-        })
-        .map(|f| OutlineFunction {
-            name: f.name,
-            signature: truncate_120(&f.signature),
-            start_line: f.start_line,
-            end_line: f.end_line,
-            is_exported: f.is_exported,
+                .filter(|symbol| symbol.is_callable() && is_member_of(symbol, owner))
+                .map(to_function)
+                .collect(),
+            fields: facts
+                .symbols
+                .iter()
+                .filter(|symbol| symbol.kind == SymbolKind::Field && is_member_of(symbol, owner))
+                .map(|symbol| symbol.name.clone())
+                .collect(),
         })
         .collect();
 
-    let loc = file.lines_of_code() as u32;
-    let language = result.language.to_string();
-    let file_str = file.path.to_string_lossy().to_string();
+    // An outline lists what a reader can navigate to by name, and the index
+    // holds only definitions that have a name.
+    let outside_types: Vec<&Symbol> = facts
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.is_callable())
+        .filter(|symbol| !types.iter().any(|owner| is_member_of(symbol, owner)))
+        .collect();
+    let functions: Vec<OutlineFunction> = outside_types
+        .iter()
+        .filter(|symbol| symbol.receiver_type.is_none())
+        .map(|symbol| to_function(symbol))
+        .collect();
+    let mut classes = classes;
+    classes.extend(classes_declared_elsewhere(&outside_types, &to_function));
 
-    Ok(FileOutline {
-        file: file_str,
-        language,
+    FileOutline {
+        file: facts.file.clone(),
+        language: language.to_string(),
         loc,
         imports,
         classes,
         functions,
-    })
+    }
+}
+
+/// The entries for the types of the methods that name a receiver type that this
+/// file does not declare. A C++ method `Shape::draw` in `shape.cpp`, a Go
+/// receiver method, and a Rust `impl` block can be in a file other than the
+/// file of the type. An entry has the name of the receiver type, the lines that
+/// the methods cover, and no fields. The entries are in the order of the first
+/// method of each type.
+fn classes_declared_elsewhere(
+    methods: &[&Symbol],
+    to_function: &dyn Fn(&Symbol) -> OutlineFunction,
+) -> Vec<OutlineClass> {
+    let mut classes: Vec<OutlineClass> = Vec::new();
+    for symbol in methods {
+        let Some(owner) = symbol.receiver_type.as_deref() else {
+            continue;
+        };
+        let method = to_function(symbol);
+        match classes.iter_mut().find(|class| class.name == owner) {
+            Some(class) => {
+                class.start_line = class.start_line.min(method.start_line);
+                class.end_line = class.end_line.max(method.end_line);
+                class.methods.push(method);
+            }
+            None => classes.push(OutlineClass {
+                name: owner.to_string(),
+                start_line: method.start_line,
+                end_line: method.end_line,
+                is_exported: false,
+                methods: vec![method],
+                fields: Vec::new(),
+            }),
+        }
+    }
+    classes
 }
 
 fn truncate_120(s: &str) -> String {
@@ -250,26 +283,20 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        let files: Vec<PathBuf> = ctx.files.iter().cloned().collect();
+        let index = ctx.code_index()?;
 
-        let mut file_outlines: Vec<FileOutline> = files
+        let mut file_outlines: Vec<FileOutline> = index
+            .files
             .par_iter()
-            .filter_map(|path| {
-                if ctx.content_source.is_some() {
-                    let content = ctx.read_file(path).ok()?;
-                    let language = crate::core::Language::detect(path)?;
-                    let file = SourceFile::from_content(path, language, content);
-                    outline_source(&file).ok()
-                } else {
-                    outline_file(&ctx.root.join(path)).ok()
-                }
-            })
-            .map(|mut fo| {
-                // Make paths relative to root
-                if let Ok(rel) = Path::new(&fo.file).strip_prefix(ctx.root) {
-                    fo.file = rel.to_string_lossy().to_string();
-                }
-                fo
+            .map(|facts| {
+                let loc = ctx
+                    .read_file(Path::new(&facts.file))
+                    .map(|content| {
+                        SourceFile::from_content(Path::new(&facts.file), facts.language, content)
+                            .lines_of_code() as u32
+                    })
+                    .unwrap_or(0);
+                outline_from_facts(facts, loc)
             })
             .collect();
 
@@ -379,10 +406,10 @@ mod tests {
     fn test_outline_typescript_fixture() {
         let result = outline_file(&fixture("sample.ts")).unwrap();
         assert_eq!(result.language, "TypeScript");
-        // ConsoleLogger class
-        assert_eq!(result.classes.len(), 1);
-        assert_eq!(result.classes[0].name, "ConsoleLogger");
-        assert!(result.classes[0].is_exported);
+        // The interface Logger and the class ConsoleLogger
+        let names: Vec<&str> = result.classes.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Logger", "ConsoleLogger"]);
+        assert!(result.classes[1].is_exported);
         // parseConfig function
         assert!(result.functions.iter().any(|f| f.name == "parseConfig"));
     }
@@ -443,8 +470,21 @@ mod tests {
             .find(|c| c.name == "Calculator")
             .unwrap();
         assert_eq!(calc.methods.len(), 2);
-        // 2 imports
-        assert_eq!(result.imports.len(), 0); // C# using not handled as imports in parser
+        assert_eq!(result.imports.len(), 2);
+    }
+
+    #[test]
+    fn test_outline_lists_a_trait_and_an_enum_with_the_types() {
+        let source = "pub trait Speak {\n    fn speak(&self);\n}\n\npub enum Color {\n    Red,\n}\n\nfn free() {}\n";
+        let tmp = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
+        std::fs::write(tmp.path(), source).unwrap();
+
+        let result = outline_file(tmp.path()).unwrap();
+
+        let names: Vec<&str> = result.classes.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Speak", "Color"]);
+        assert_eq!(result.classes[0].methods[0].name, "speak");
+        assert_eq!(result.functions.len(), 1);
     }
 
     #[test]
@@ -505,6 +545,73 @@ mod tests {
     fn test_outline_unknown_extension() {
         let result = outline_file(Path::new("/tmp/unknown.xyz123"));
         assert!(result.is_err(), "Unknown extension should return Err");
+    }
+
+    fn outline_of(suffix: &str, source: &str) -> FileOutline {
+        let tmp = tempfile::NamedTempFile::with_suffix(suffix).unwrap();
+        std::fs::write(tmp.path(), source).unwrap();
+        outline_file(tmp.path()).unwrap()
+    }
+
+    fn assert_owner_without_type(result: &FileOutline, owner: &str, method: &str) {
+        let top: Vec<&str> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(!top.contains(&method), "{method} is top-level: {top:?}");
+        let class = result
+            .classes
+            .iter()
+            .find(|class| class.name == owner)
+            .unwrap_or_else(|| panic!("no entry for {owner}: {:?}", result.classes));
+        assert!(
+            class.methods.iter().any(|m| m.name == method),
+            "{method} is not under {owner}: {:?}",
+            class.methods
+        );
+    }
+
+    #[test]
+    fn test_cpp_method_of_a_type_in_another_file_is_listed_under_the_type() {
+        let result = outline_of(
+            ".cpp",
+            "#include \"shape.hpp\"\n\nvoid Shape::draw() {}\n\nvoid helper() {}\n",
+        );
+        assert_owner_without_type(&result, "Shape", "draw");
+        let top: Vec<&str> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(top, ["helper"]);
+        let class = &result.classes[0];
+        assert_eq!((class.start_line, class.end_line), (3, 3));
+    }
+
+    #[test]
+    fn test_go_method_of_a_type_in_another_file_is_listed_under_the_type() {
+        let result = outline_of(
+            ".go",
+            "package server\n\nfunc (s *Server) Start() {}\n\nfunc helper() {}\n",
+        );
+        assert_owner_without_type(&result, "Server", "Start");
+        let top: Vec<&str> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(top, ["helper"]);
+    }
+
+    #[test]
+    fn test_rust_impl_of_a_type_in_another_file_is_listed_under_the_type() {
+        let result = outline_of(
+            ".rs",
+            "use super::Shape;\n\nimpl Shape {\n    fn draw(&self) {}\n}\n\nfn helper() {}\n",
+        );
+        assert_owner_without_type(&result, "Shape", "draw");
+        let top: Vec<&str> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(top, ["helper"]);
+    }
+
+    #[test]
+    fn test_a_method_of_a_type_in_the_file_keeps_the_entry_of_the_type() {
+        let result = outline_of(
+            ".go",
+            "package server\n\ntype Server struct{}\n\nfunc (s *Server) Start() {}\n",
+        );
+        assert_eq!(result.classes.len(), 1);
+        assert_eq!(result.classes[0].start_line, 3);
+        assert_owner_without_type(&result, "Server", "Start");
     }
 
     #[test]

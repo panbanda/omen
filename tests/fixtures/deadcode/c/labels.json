@@ -1,0 +1,17 @@
+{
+  "language": "c",
+  "oracle": "Author-reviewed. cc accepts the files with a stub header foreign.h. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "main.c", "name": "dead_plain"},
+    {"label": "dead_caller", "file": "main.c", "name": "dead_caller"},
+    {"label": "dead_callee", "file": "main.c", "name": "dead_callee"},
+    {"label": "dead_unresolved", "file": "main.c", "name": "dead_unresolved"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.c", "name": "live_direct"},
+    {"label": "live_value", "file": "main.c", "name": "live_value"},
+    {"label": "live_public", "file": "main.c", "name": "live_public"},
+    {"label": "main", "file": "main.c", "name": "main"}
+  ]
+}

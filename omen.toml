@@ -25,25 +25,24 @@ exclude = [
 ]
 
 [complexity]
-cyclomatic_error = 20
-cognitive_error = 30
+cyclomatic_max = 20
+cognitive_max = 30
 
 [satd]
-custom_markers = []
+markers = []
 
 [churn]
 since = "6m"
-top = 20
 
 [duplicates]
 min_tokens = 50
 min_similarity = 0.9
 
 [hotspot]
-top = 20
+since = "90d"
 
 [score]
-fail_under = 70.0
+min = 70.0
 
 [feature_flags]
 stale_days = 90
