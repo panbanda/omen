@@ -208,10 +208,11 @@ now come from the definitions of the shared index.
 | `classes` of `outline` | Classes and structs. Rust and Go listed only structs. | Also interfaces, traits, and enums. A Ruby module is a class. | Accept more entries. |
 | `imports` of `outline` | The parser gave the paths. C# `using` was not an import. | The shared index gives each path one time, in source order. C# `using` is an import. | None. |
 | Methods of a type in `outline` and in `search` | The parser found them in the body of the type, and in the Rust `impl` blocks. | The index also finds Go receiver methods, and C++ methods that a class declares and that a different file defines. | None. |
+| A method of a type that another file declares, in `outline` | A C++ method such as `Shape::draw`, a Go receiver method, or a Rust `impl` method was a top-level function. | The method is in the `methods` of a `classes` entry that has the name of the receiver type. The entry has no fields, is not exported, and its lines are the lines of the methods. | Do not treat each `classes` entry as a declaration of the type. |
 | `parent_name` of a search result | Rust `impl` blocks and class bodies. Go methods had no parent. | The receiver type of a Go method is the parent. | None. |
 | `signature` of a search result | The first line of the declaration, with the opening brace when the line had one. | The declaration without the opening brace. | None. |
 | Declarations without a body in `search` | Not indexed. | Not indexed. | None. |
-| `search index` cache | The cache holds chunks that the parser made. | A file that did not change keeps its old chunks. | Delete `.omen/search.db` to build all chunks again. |
+| `search index` cache | The cache holds chunks that the parser made. | The cache stores an index version. A cache that an older version made is cleared, and `search index` builds all the chunks again. | None. |
 
 ### `deadcode` reads the shared index
 

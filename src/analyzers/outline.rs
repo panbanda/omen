@@ -20,7 +20,9 @@ pub struct OutlineFunction {
     pub is_exported: bool,
 }
 
-/// A class or struct in the outline.
+/// A class or struct in the outline. A type that another file declares has an
+/// entry too, if this file has a method of the type. The entry has no fields
+/// and is not exported, and its lines are the lines of the methods.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutlineClass {
     pub name: String,
@@ -197,13 +199,19 @@ fn outline_from_facts(facts: &FileSymbols, loc: u32) -> FileOutline {
 
     // An outline lists what a reader can navigate to by name, and the index
     // holds only definitions that have a name.
-    let functions: Vec<OutlineFunction> = facts
+    let outside_types: Vec<&Symbol> = facts
         .symbols
         .iter()
         .filter(|symbol| symbol.is_callable())
         .filter(|symbol| !types.iter().any(|owner| is_member_of(symbol, owner)))
-        .map(to_function)
         .collect();
+    let functions: Vec<OutlineFunction> = outside_types
+        .iter()
+        .filter(|symbol| symbol.receiver_type.is_none())
+        .map(|symbol| to_function(symbol))
+        .collect();
+    let mut classes = classes;
+    classes.extend(classes_declared_elsewhere(&outside_types, &to_function));
 
     FileOutline {
         file: facts.file.clone(),
@@ -213,6 +221,41 @@ fn outline_from_facts(facts: &FileSymbols, loc: u32) -> FileOutline {
         classes,
         functions,
     }
+}
+
+/// The entries for the types of the methods that name a receiver type that this
+/// file does not declare. A C++ method `Shape::draw` in `shape.cpp`, a Go
+/// receiver method, and a Rust `impl` block can be in a file other than the
+/// file of the type. An entry has the name of the receiver type, the lines that
+/// the methods cover, and no fields. The entries are in the order of the first
+/// method of each type.
+fn classes_declared_elsewhere(
+    methods: &[&Symbol],
+    to_function: &dyn Fn(&Symbol) -> OutlineFunction,
+) -> Vec<OutlineClass> {
+    let mut classes: Vec<OutlineClass> = Vec::new();
+    for symbol in methods {
+        let Some(owner) = symbol.receiver_type.as_deref() else {
+            continue;
+        };
+        let method = to_function(symbol);
+        match classes.iter_mut().find(|class| class.name == owner) {
+            Some(class) => {
+                class.start_line = class.start_line.min(method.start_line);
+                class.end_line = class.end_line.max(method.end_line);
+                class.methods.push(method);
+            }
+            None => classes.push(OutlineClass {
+                name: owner.to_string(),
+                start_line: method.start_line,
+                end_line: method.end_line,
+                is_exported: false,
+                methods: vec![method],
+                fields: Vec::new(),
+            }),
+        }
+    }
+    classes
 }
 
 fn truncate_120(s: &str) -> String {
@@ -502,6 +545,73 @@ mod tests {
     fn test_outline_unknown_extension() {
         let result = outline_file(Path::new("/tmp/unknown.xyz123"));
         assert!(result.is_err(), "Unknown extension should return Err");
+    }
+
+    fn outline_of(suffix: &str, source: &str) -> FileOutline {
+        let tmp = tempfile::NamedTempFile::with_suffix(suffix).unwrap();
+        std::fs::write(tmp.path(), source).unwrap();
+        outline_file(tmp.path()).unwrap()
+    }
+
+    fn assert_owner_without_type(result: &FileOutline, owner: &str, method: &str) {
+        let top: Vec<&str> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(!top.contains(&method), "{method} is top-level: {top:?}");
+        let class = result
+            .classes
+            .iter()
+            .find(|class| class.name == owner)
+            .unwrap_or_else(|| panic!("no entry for {owner}: {:?}", result.classes));
+        assert!(
+            class.methods.iter().any(|m| m.name == method),
+            "{method} is not under {owner}: {:?}",
+            class.methods
+        );
+    }
+
+    #[test]
+    fn test_cpp_method_of_a_type_in_another_file_is_listed_under_the_type() {
+        let result = outline_of(
+            ".cpp",
+            "#include \"shape.hpp\"\n\nvoid Shape::draw() {}\n\nvoid helper() {}\n",
+        );
+        assert_owner_without_type(&result, "Shape", "draw");
+        let top: Vec<&str> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(top, ["helper"]);
+        let class = &result.classes[0];
+        assert_eq!((class.start_line, class.end_line), (3, 3));
+    }
+
+    #[test]
+    fn test_go_method_of_a_type_in_another_file_is_listed_under_the_type() {
+        let result = outline_of(
+            ".go",
+            "package server\n\nfunc (s *Server) Start() {}\n\nfunc helper() {}\n",
+        );
+        assert_owner_without_type(&result, "Server", "Start");
+        let top: Vec<&str> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(top, ["helper"]);
+    }
+
+    #[test]
+    fn test_rust_impl_of_a_type_in_another_file_is_listed_under_the_type() {
+        let result = outline_of(
+            ".rs",
+            "use super::Shape;\n\nimpl Shape {\n    fn draw(&self) {}\n}\n\nfn helper() {}\n",
+        );
+        assert_owner_without_type(&result, "Shape", "draw");
+        let top: Vec<&str> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(top, ["helper"]);
+    }
+
+    #[test]
+    fn test_a_method_of_a_type_in_the_file_keeps_the_entry_of_the_type() {
+        let result = outline_of(
+            ".go",
+            "package server\n\ntype Server struct{}\n\nfunc (s *Server) Start() {}\n",
+        );
+        assert_eq!(result.classes.len(), 1);
+        assert_eq!(result.classes[0].start_line, 3);
+        assert_owner_without_type(&result, "Server", "Start");
     }
 
     #[test]
