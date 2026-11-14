@@ -37,14 +37,15 @@ struct GenerateWindow {
 /// `--since` wins over `--days`, which is the alias. Without the two flags, the window is one
 /// year.
 fn generate_window(since: Option<&str>, days: Option<u32>) -> crate::core::Result<GenerateWindow> {
-    let (label, since) = match (since, days) {
-        (Some(since), _) => (since.to_string(), since.to_string()),
-        (None, Some(days)) => (format!("{days} days"), format!("{days}d")),
-        (None, None) => ("1y".to_string(), "1y".to_string()),
+    let since = match (since, days) {
+        (Some(since), _) if crate::git::is_since_all(since) => "all".to_string(),
+        (Some(since), _) => since.trim().to_lowercase(),
+        (None, Some(days)) => format!("{days}d"),
+        (None, None) => "1y".to_string(),
     };
     Ok(GenerateWindow {
         days: super::analyzers::since_flag_days(&since)?,
-        label,
+        label: since.clone(),
         since,
     })
 }

@@ -178,9 +178,17 @@ fn test_since_wins_over_days_in_the_one_window() {
 #[test]
 fn test_days_alone_gives_the_window_for_every_part() {
     let window = generate_window(None, Some(30)).expect("window");
-    assert_eq!(window.label, "30 days");
+    assert_eq!(window.label, "30d");
     assert_eq!(window.since, "30d");
     assert_eq!(window.days, 30);
+}
+
+#[test]
+fn test_the_label_is_the_normalised_window() {
+    assert_eq!(generate_window(None, Some(30)).expect("window").label, "30d");
+    assert_eq!(generate_window(Some(" 1Y "), None).expect("window").label, "1y");
+    assert_eq!(generate_window(Some(" Forever "), None).expect("window").label, "all");
+    assert_eq!(generate_window(None, None).expect("window").label, "1y");
 }
 
 #[cfg(unix)]
