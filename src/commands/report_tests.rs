@@ -195,6 +195,37 @@ fn test_a_window_of_zero_days_is_an_error() {
     assert!(generate_window(None, Some(0)).is_err());
 }
 
+fn generate_with_data_file_as_directory(name: &str) -> String {
+    let (directory, path) = repository();
+    let data = directory.path().join("data");
+    std::fs::create_dir_all(data.join(name)).expect("a directory in the place of the file");
+    let result = run(
+        &path,
+        &Config::default(),
+        &subcommand(&[
+            "generate",
+            "--data",
+            data.to_str().expect("utf-8"),
+            "--skip",
+            "trend,churn,changes,ownership,temporal,hotspot,defect,tdg",
+        ]),
+        None,
+    );
+    format!("{:?}", result.expect_err("the write fails"))
+}
+
+#[test]
+fn test_generate_fails_when_metadata_json_cannot_be_written() {
+    let message = generate_with_data_file_as_directory("metadata.json");
+    assert!(message.contains("metadata.json"), "{message}");
+}
+
+#[test]
+fn test_generate_fails_when_score_json_cannot_be_written() {
+    let message = generate_with_data_file_as_directory("score.json");
+    assert!(message.contains("score.json"), "{message}");
+}
+
 #[test]
 fn test_generate_writes_the_one_window_into_metadata() {
     let (directory, path) = repository();

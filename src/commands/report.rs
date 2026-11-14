@@ -134,7 +134,7 @@ pub fn run(
                 "paths": [path.display().to_string()]
             });
             let metadata_path = args.data.join("metadata.json");
-            std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
+            let metadata_text = serde_json::to_string_pretty(&metadata)?;
 
             let changes_path = args.data.join("diff.json");
             match changes {
@@ -204,6 +204,17 @@ pub fn run(
             let completed = std::sync::atomic::AtomicU64::new(0);
             let write_errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
             let output_dir = &args.data;
+            match write_atomically(&metadata_path, &metadata_text) {
+                Ok(()) => {
+                    if progress.is_none() {
+                        eprintln!("Generated: {}", metadata_path.display());
+                    }
+                }
+                Err(error) => write_errors
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(format!("{}: {error}", metadata_path.display())),
+            }
 
             // Helper: run an analyzer and save its JSON output
             macro_rules! run_analyzer {
@@ -349,12 +360,19 @@ pub fn run(
                     Err(e) => json!({"error": e.to_string()}),
                 };
                 let output_path = output_dir.join("score.json");
-                std::fs::write(&output_path, serde_json::to_string_pretty(&result)?)?;
-                let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                if let Some(ref bar) = progress {
-                    bar.set_position(done);
-                } else {
-                    eprintln!("Generated: {}", output_path.display());
+                match write_atomically(&output_path, &serde_json::to_string_pretty(&result)?) {
+                    Ok(()) => {
+                        let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        if let Some(ref bar) = progress {
+                            bar.set_position(done);
+                        } else {
+                            eprintln!("Generated: {}", output_path.display());
+                        }
+                    }
+                    Err(error) => write_errors
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(format!("{}: {error}", output_path.display())),
                 }
             }
 
