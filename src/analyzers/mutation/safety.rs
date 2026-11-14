@@ -169,11 +169,9 @@ impl MutationGuard {
 
 impl Drop for MutationGuard {
     fn drop(&mut self) {
-        if self.modified {
-            if write_in_place(&self.path, &self.original).is_err() {
-                if let Some(backup) = self.backup.take() {
-                    let _ = backup.keep();
-                }
+        if self.modified && write_in_place(&self.path, &self.original).is_err() {
+            if let Some(backup) = self.backup.take() {
+                let _ = backup.keep();
             }
         }
         self.active_mutations.lock().remove(&self.path);
