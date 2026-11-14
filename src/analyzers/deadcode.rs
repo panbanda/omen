@@ -217,7 +217,7 @@ impl AnalyzerTrait for Analyzer {
                 .zip(&trees)
                 .map(|(facts, tree)| (facts.file.as_str(), tree))
                 .collect(),
-            definitions: &all_definitions,
+            by_name: &keys_by_name,
         };
         let mut unresolved_paths = 0usize;
         for path_use in &path_uses {
@@ -1232,7 +1232,8 @@ struct RustPaths<'a> {
     modules: RustModules<'a>,
     files: HashMap<&'a str, &'a FileSymbols>,
     trees: HashMap<&'a str, &'a parser::ParseResult>,
-    definitions: &'a HashMap<String, Definition>,
+    /// The keys of the definitions, by name.
+    by_name: &'a HashMap<String, Vec<String>>,
 }
 
 impl<'a> RustPaths<'a> {
@@ -1285,18 +1286,30 @@ impl<'a> RustPaths<'a> {
         Some((file, chain))
     }
 
-    /// The key of the function that the path names from `(file, chain)`.
-    fn function(&self, file: &str, chain: &[String], segments: &[String]) -> Option<String> {
-        let (name, modules) = segments.split_last()?;
-        let (file, chain) = self.module(file, chain, modules)?;
+    /// The keys of the functions that the path names from `(file, chain)`. Conditional
+    /// definitions of one name, as `#[cfg(...)]` alternatives, have the ordinals `~2`, `~3`.
+    /// Each of them is a function that the path can name.
+    fn function(&self, file: &str, chain: &[String], segments: &[String]) -> Vec<String> {
+        let Some((name, modules)) = segments.split_last() else {
+            return Vec::new();
+        };
+        let Some((file, chain)) = self.module(file, chain, modules) else {
+            return Vec::new();
+        };
         let path = chain
             .iter()
             .chain(std::iter::once(name))
             .cloned()
             .collect::<Vec<String>>()
             .join(".");
-        let key = format!("{file}#{path}");
-        self.definitions.contains_key(&key).then_some(key)
+        let prefix = format!("{file}#");
+        self.by_name
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter(|key| key.starts_with(&prefix) && key_path(key) == path)
+            .cloned()
+            .collect()
     }
 
     /// The `use` bindings that sit in the module `(file, chain)`.
@@ -1331,7 +1344,7 @@ impl<'a> RustPaths<'a> {
         let segments = &path_use.segments;
         let first = segments.first().map(String::as_str).unwrap_or("");
         if matches!(first, "crate" | "self" | "super") {
-            return self.function(file, chain, segments).into_iter().collect();
+            return self.function(file, chain, segments);
         }
         let bindings = self.bindings(file, chain);
         for binding in &bindings {
@@ -1347,12 +1360,14 @@ impl<'a> RustPaths<'a> {
                 .map(str::to_string)
                 .collect();
             full.extend(segments[1..].iter().cloned());
-            if let Some(key) = self.function(file, chain, &full) {
-                return vec![key];
+            let found = self.function(file, chain, &full);
+            if !found.is_empty() {
+                return found;
             }
         }
-        if let Some(key) = self.function(file, chain, segments) {
-            return vec![key];
+        let found = self.function(file, chain, segments);
+        if !found.is_empty() {
+            return found;
         }
         for binding in &bindings {
             if binding.kind != ImportKind::Wildcard {
@@ -1366,8 +1381,9 @@ impl<'a> RustPaths<'a> {
             let Some((glob_file, glob_chain)) = self.module(file, chain, &glob) else {
                 continue;
             };
-            if let Some(key) = self.function(&glob_file, &glob_chain, segments) {
-                return vec![key];
+            let found = self.function(&glob_file, &glob_chain, segments);
+            if !found.is_empty() {
+                return found;
             }
         }
         Vec::new()
@@ -3974,6 +3990,14 @@ mod index_tests {
             .collect();
         dead.sort();
         (dead, result.summary.unresolved_paths)
+    }
+
+    #[test]
+    fn test_a_serde_path_roots_each_conditional_definition_of_the_function() {
+        let source = "#[cfg(feature = \"a\")]\nfn fallback() -> u32 {\n    1\n}\n\n#[cfg(not(feature = \"a\"))]\nfn fallback() -> u32 {\n    2\n}\n\nfn unused() {}\n\nstruct Holder {\n    #[serde(default = \"crate::fallback\")]\n    value: u32,\n}\n";
+        let (dead, unresolved) = dead_of_files(&[("lib.rs", source)]);
+        assert_eq!(dead, [("lib.rs".to_string(), 11)]);
+        assert_eq!(unresolved, 0);
     }
 
     #[test]
