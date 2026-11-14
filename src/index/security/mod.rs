@@ -4,8 +4,10 @@
 //! [`spec`] names. The matcher reports the fact that the sink exists. It does
 //! not say that the code has a vulnerability, and it does not follow data.
 
+pub mod analysis;
 pub mod entry;
 mod matcher;
+pub mod reach;
 pub mod spec;
 mod syntax;
 
