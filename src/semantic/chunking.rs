@@ -5,7 +5,7 @@
 //! chunks. Each chunk carries its parent type (class/struct/impl) when applicable.
 
 use crate::index::extract::FileSymbols;
-use crate::index::model::Symbol;
+use crate::index::model::{Symbol, SymbolKind};
 
 /// Maximum characters per chunk. Functions longer than this get split at
 /// statement boundaries.
@@ -30,18 +30,40 @@ pub struct Chunk {
     pub total_chunks: u32,
 }
 
-/// The definitions of a file that the search indexes: the functions, the
-/// methods, and the constructors, in source order. The index holds only
-/// definitions that have a name, because a search result needs a name.
+/// The definitions of a file that the search indexes, in source order: the
+/// functions, the methods, and the constructors, and each other kind of symbol
+/// except a variable. The index holds only definitions that have a name,
+/// because a search result needs a name.
 pub fn searchable_symbols(facts: &FileSymbols) -> Vec<&Symbol> {
     facts
         .symbols
         .iter()
         .filter(|symbol| {
-            symbol.is_callable()
-                && (symbol.body_range.is_some() || facts.language == crate::core::Language::Ruby)
+            if symbol.is_callable() {
+                symbol.body_range.is_some() || facts.language == crate::core::Language::Ruby
+            } else {
+                symbol.kind != SymbolKind::Variable
+            }
         })
         .collect()
+}
+
+/// The `symbol_type` of the documents of a symbol.
+pub fn symbol_type_name(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Function | SymbolKind::Method | SymbolKind::Constructor => "function",
+        SymbolKind::Class => "class",
+        SymbolKind::Struct => "struct",
+        SymbolKind::Interface => "interface",
+        SymbolKind::Trait => "trait",
+        SymbolKind::Enum => "enum",
+        SymbolKind::Module => "module",
+        SymbolKind::TypeAlias => "type_alias",
+        SymbolKind::Field => "field",
+        SymbolKind::Constant => "constant",
+        SymbolKind::Variable => "variable",
+        SymbolKind::Macro => "macro",
+    }
 }
 
 /// Extract chunks from the facts of a file.
@@ -74,7 +96,7 @@ pub fn extract_chunks(source: &[u8], facts: &FileSymbols, rel_path: &str) -> Vec
             all_chunks.push(Chunk {
                 file_path: rel_path.to_string(),
                 symbol_name: func.name.clone(),
-                symbol_type: "function".to_string(),
+                symbol_type: symbol_type_name(func.kind).to_string(),
                 parent_name: parent_name.clone(),
                 signature: func.signature.clone(),
                 content: body,
@@ -92,7 +114,7 @@ pub fn extract_chunks(source: &[u8], facts: &FileSymbols, rel_path: &str) -> Vec
                 all_chunks.push(Chunk {
                     file_path: rel_path.to_string(),
                     symbol_name: func.name.clone(),
-                    symbol_type: "function".to_string(),
+                    symbol_type: symbol_type_name(func.kind).to_string(),
                     parent_name: parent_name.clone(),
                     signature: func.signature.clone(),
                     content: chunk_body,
@@ -470,6 +492,21 @@ mod tests {
             parent_of(source, Language::Rust, "src/lib.rs").as_deref(),
             Some("Foo")
         );
+    }
+
+    #[test]
+    fn a_type_and_a_constant_have_documents_with_their_kind() {
+        let source =
+            b"pub struct Point {\n    x: i32,\n}\n\nconst LIMIT: usize = 3;\n\nfn run() {}\n";
+        let chunks = chunks_of(source, Language::Rust, "src/lib.rs");
+        let kinds: Vec<(&str, &str)> = chunks
+            .iter()
+            .map(|chunk| (chunk.symbol_name.as_str(), chunk.symbol_type.as_str()))
+            .collect();
+
+        assert!(kinds.contains(&("Point", "struct")), "{kinds:?}");
+        assert!(kinds.contains(&("LIMIT", "constant")), "{kinds:?}");
+        assert!(kinds.contains(&("run", "function")), "{kinds:?}");
     }
 
     #[test]
