@@ -883,6 +883,52 @@ fn test_csharp_target_typed_new_counts_as_construction() {
 }
 
 #[test]
+fn test_csharp_target_typed_new_into_a_nullable_value_type_is_not_a_construction() {
+    let cases = [
+        (
+            "struct.cs",
+            "struct Part {\n    public Part() {}\n}\n\nclass Factory {\n    Part? Make() => new();\n}\n",
+            1,
+        ),
+        (
+            "unknown.cs",
+            "class Factory {\n    Part? Make() => new();\n}\n",
+            1,
+        ),
+        (
+            "class.cs",
+            "class Part {}\n\nclass Factory {\n    Part? Make() => new();\n}\n",
+            2,
+        ),
+    ];
+    let mut failed = Vec::new();
+    for (file, source, rfc) in cases {
+        let analysis = analyze(&[(file, source)]);
+        if class(&analysis, "Factory").rfc != rfc {
+            failed.push(file);
+        }
+    }
+    assert!(failed.is_empty(), "wrong rfc: {failed:?}");
+}
+
+#[test]
+fn test_csharp_target_typed_new_has_the_range_of_the_new_expression() {
+    let source = "class Part {}\n\nclass Factory {\n    Part Make()\n    {\n        return new();\n    }\n}\n";
+    let read = |_: &Path| Ok(source.as_bytes().to_vec());
+    let list = |_: &Path| -> Vec<PathBuf> { Vec::new() };
+    let files = vec![PathBuf::from("Factory.cs")];
+    let index = CodeIndex::build(Path::new("."), &files, &read, &list);
+    let constructions: Vec<_> = index.files[0]
+        .references
+        .iter()
+        .filter(|reference| reference.name == "Part")
+        .collect();
+    assert_eq!(constructions.len(), 1);
+    assert_eq!(constructions[0].name_range.start_line, 6);
+    assert_eq!(constructions[0].name_range.start_column, 15);
+}
+
+#[test]
 fn test_csharp_target_typed_new_reads_the_declared_type() {
     let declared = [
         "Part Make() => new();",

@@ -462,6 +462,12 @@ pub trait LanguageSpec: Sync {
             .next()
     }
 
+    /// The name of the type that a construction node builds, when the node
+    /// does not hold the name itself, as a target-typed `new()` does.
+    fn construction_name(&self, _node: Node<'_>, _source: &[u8]) -> Option<String> {
+        None
+    }
+
     /// The node kinds of the function values that have parameters of their own.
     fn lambda_kinds(&self) -> &'static [&'static str] {
         &[]
@@ -1274,7 +1280,10 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         let owner = position_of(owner);
         let text = String::from_utf8_lossy(&parsed.source[call.callee.name_node.byte_range()]);
         let name = match call.kind {
-            ReferenceKind::Construct => split_type(&text).1,
+            ReferenceKind::Construct => extractor
+                .spec
+                .construction_name(call.callee.name_node, &parsed.source)
+                .unwrap_or_else(|| split_type(&text).1),
             ReferenceKind::Call => text.to_string(),
         };
         references.push(Reference {

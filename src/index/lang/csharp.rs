@@ -140,7 +140,8 @@ fn has_modifier(node: Node<'_>, keywords: &[&str], context: &Context<'_, '_>) ->
 /// The type node that a target-typed `new()` takes its type from. The syntax
 /// gives it for a declared variable, a field, a property, and a returned
 /// value. Other places have no such node, and the construction is not read.
-fn implicit_target<'tree>(node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Node<'tree>> {
+fn implicit_target<'tree>(node: Node<'tree>, source: &[u8]) -> Option<Node<'tree>> {
+    let text = |node: Node<'_>| String::from_utf8_lossy(&source[node.byte_range()]).to_string();
     let parent = node.parent()?;
     let declared = match parent.kind() {
         "equals_value_clause" | VARIABLE_DECLARATOR => {
@@ -172,7 +173,7 @@ fn implicit_target<'tree>(node: Node<'tree>, context: &Context<'_, 'tree>) -> Op
             let mut cursor = owner.walk();
             let is_async = owner
                 .children(&mut cursor)
-                .any(|child| child.kind() == MODIFIER && context.text(child) == "async");
+                .any(|child| child.kind() == MODIFIER && text(child) == "async");
             if is_async {
                 return None;
             }
@@ -183,8 +184,14 @@ fn implicit_target<'tree>(node: Node<'tree>, context: &Context<'_, 'tree>) -> Op
         PROPERTY_DECLARATION => parent.child_by_field_name("type")?,
         _ => return None,
     };
+    // `T?` of a value type is `Nullable<T>`, and `new()` does not construct `T`.
+    // Only a class that the file declares is known to be a reference type.
     let declared = match declared.kind() {
-        "nullable_type" => declared.named_child(0)?,
+        "nullable_type" => {
+            let inner = declared.named_child(0)?;
+            let (_, name) = split_type(&text(inner));
+            declares_only_reference_types(node, &name, source).then_some(inner)?
+        }
         _ => declared,
     };
     matches!(
@@ -194,11 +201,51 @@ fn implicit_target<'tree>(node: Node<'tree>, context: &Context<'_, 'tree>) -> Op
     .then_some(declared)
 }
 
+/// Tells if the file declares a type with the name, and every such type is a class.
+fn declares_only_reference_types(node: Node<'_>, name: &str, source: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let (mut classes, mut others) = (0, 0);
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        let mut cursor = current.walk();
+        stack.extend(current.named_children(&mut cursor));
+        let declares = matches!(
+            current.kind(),
+            "class_declaration"
+                | "struct_declaration"
+                | "interface_declaration"
+                | "enum_declaration"
+                | RECORD_DECLARATION
+                | "record_struct_declaration"
+        ) && current
+            .child_by_field_name("name")
+            .is_some_and(|declared| source[declared.byte_range()] == *name.as_bytes());
+        if !declares {
+            continue;
+        }
+        let mut inner = current.walk();
+        let is_struct = current
+            .children(&mut inner)
+            .any(|child| child.kind() == STRUCT_KEYWORD);
+        let is_class = current.kind() == "class_declaration"
+            || (current.kind() == RECORD_DECLARATION && !is_struct);
+        if is_class {
+            classes += 1;
+        } else {
+            others += 1;
+        }
+    }
+    classes > 0 && others == 0
+}
+
 fn implicit_construction<'tree>(
     node: Node<'tree>,
     context: &Context<'_, 'tree>,
 ) -> Option<Call<'tree>> {
-    let type_node = implicit_target(node, context)?;
+    let type_node = implicit_target(node, context.source)?;
     let (qualifier, _) = split_type(&context.text(type_node));
     let mut cursor = node.walk();
     let arguments = node
@@ -207,7 +254,7 @@ fn implicit_construction<'tree>(
         .map_or(0, |list| list.named_child_count());
     Some(Call {
         callee: Callee {
-            name_node: type_node,
+            name_node: node,
             receiver: None,
             qualifier,
         },
@@ -217,6 +264,15 @@ fn implicit_construction<'tree>(
 }
 
 impl LanguageSpec for CSharp {
+    fn construction_name(&self, node: Node<'_>, source: &[u8]) -> Option<String> {
+        if node.kind() != IMPLICIT_OBJECT_CREATION_EXPRESSION {
+            return None;
+        }
+        let target = implicit_target(node, source)?;
+        let text = String::from_utf8_lossy(&source[target.byte_range()]).to_string();
+        Some(split_type(&text).1)
+    }
+
     fn block_kinds(&self) -> Vec<&'static str> {
         vec!["block"]
     }
