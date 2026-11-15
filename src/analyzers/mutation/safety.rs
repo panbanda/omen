@@ -29,7 +29,8 @@ static RESTORE_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 pub const RESTORE_FAILURE_EXIT_CODE: i32 = 74;
 
 #[cfg(unix)]
-const HANDLED_SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+const HANDLED_SIGNALS: [libc::c_int; 4] =
+    [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT];
 
 #[cfg(unix)]
 extern "C" fn mark_interrupted(signal: libc::c_int) {

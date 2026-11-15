@@ -793,6 +793,13 @@ fn test_mutation_sigterm_to_the_process_group_restores_active_source_file() {
 #[cfg(unix)]
 #[cfg(feature = "mutation")]
 #[test]
+fn test_mutation_sigquit_restores_active_source_file() {
+    assert_signal_restores_active_source_file(libc::SIGQUIT, false, "", 131);
+}
+
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+#[test]
 fn test_mutation_sighup_restores_active_source_file() {
     assert_signal_restores_active_source_file(libc::SIGHUP, false, "", 129);
 }
