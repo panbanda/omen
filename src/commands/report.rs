@@ -10,19 +10,91 @@ use crate::config::Config;
 use crate::core::progress::is_tty;
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 
-/// Gives an error that lists the files that a run could not write.
-fn check_writes(errors: &std::sync::Mutex<Vec<String>>) -> crate::core::Result<()> {
-    let failed = errors
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
-    if failed.is_empty() {
-        return Ok(());
+/// One change that `report generate` makes in the data directory.
+enum Output {
+    Write(PathBuf, String),
+    Remove(PathBuf),
+}
+
+impl Output {
+    fn path(&self) -> &std::path::Path {
+        match self {
+            Output::Write(path, _) | Output::Remove(path) => path,
+        }
     }
-    Err(crate::core::Error::analysis(format!(
-        "The report data was not written: {}",
-        failed.join("; ")
-    )))
+}
+
+/// Make all changes, or none.
+///
+/// First, each new file goes to a temporary file in the directory of its target. If a target is
+/// not a file, or if a temporary file fails, nothing changes. Then each temporary file replaces
+/// its target. If a replacement fails, the function puts the earlier files back.
+fn commit_outputs(outputs: &[Output]) -> Result<(), String> {
+    let describe = |path: &std::path::Path, error: &dyn std::fmt::Display| {
+        format!("{}: {error}", path.display())
+    };
+    let mut old_content: Vec<Option<Vec<u8>>> = Vec::new();
+    for output in outputs {
+        let path = output.path();
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_file() => {
+                old_content.push(Some(std::fs::read(path).map_err(|e| describe(path, &e))?));
+            }
+            Ok(_) => return Err(describe(path, &"the target is not a file")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => old_content.push(None),
+            Err(error) => return Err(describe(path, &error)),
+        }
+    }
+
+    let mut staged: Vec<Option<tempfile::NamedTempFile>> = Vec::new();
+    for output in outputs {
+        let Output::Write(path, text) = output else {
+            staged.push(None);
+            continue;
+        };
+        let directory = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(std::path::Path::new("."));
+        let stage = || -> std::io::Result<tempfile::NamedTempFile> {
+            use std::io::Write;
+            let mut file = tempfile::NamedTempFile::new_in(directory)?;
+            file.write_all(text.as_bytes())?;
+            file.as_file().sync_all()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.as_file()
+                    .set_permissions(std::fs::Permissions::from_mode(0o644))?;
+            }
+            Ok(file)
+        };
+        staged.push(Some(stage().map_err(|e| describe(path, &e))?));
+    }
+
+    for (index, (output, stage)) in outputs.iter().zip(staged).enumerate() {
+        let result = match (output, stage) {
+            (Output::Write(path, _), Some(file)) => {
+                file.persist(path).map(|_| ()).map_err(|e| e.error)
+            }
+            (Output::Remove(path), _) => match std::fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                _ => Ok(()),
+            },
+            (Output::Write(..), None) => unreachable!("each write has a staged file"),
+        };
+        if let Err(error) = result {
+            for (done, content) in outputs[..index].iter().zip(&old_content) {
+                let path = done.path();
+                let _ = match content {
+                    Some(bytes) => crate::core::write_atomically(path, bytes, 0o644),
+                    None => std::fs::remove_file(path),
+                };
+            }
+            return Err(describe(output.path(), &error));
+        }
+    }
+    Ok(())
 }
 
 /// The one history window of `report generate`. Each part reads it.
@@ -48,10 +120,6 @@ fn generate_window(since: Option<&str>, days: Option<u32>) -> crate::core::Resul
         label: since.clone(),
         since,
     })
-}
-
-fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    crate::core::write_atomically(path, text.as_bytes(), 0o644)
 }
 
 /// The data files that `report generate` writes and that `report validate` expects.
@@ -192,8 +260,6 @@ fn generate(
         None
     };
 
-    let completed = std::sync::atomic::AtomicU64::new(0);
-    let write_errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     let output_dir = &args.data;
 
     // The results stay in memory until all analyzers have finished. A file that
@@ -209,21 +275,6 @@ fn generate(
                 .get_or_insert(error);
         }
     };
-    let write_staged =
-        |output_path: &std::path::Path, text: &str| match write_atomically(output_path, text) {
-            Ok(()) => {
-                let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                if let Some(ref bar) = progress {
-                    bar.set_position(done);
-                } else {
-                    eprintln!("Generated: {}", output_path.display());
-                }
-            }
-            Err(error) => write_errors
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(format!("{}: {error}", output_path.display())),
-        };
 
     // Helper: run an analyzer and keep its JSON output
     macro_rules! run_analyzer {
@@ -383,46 +434,73 @@ fn generate(
         return Err(error);
     }
 
-    // Phase 3: Write. No file changes before this point.
-    write_staged(&metadata_path, &metadata_text);
-    match changes_text {
-        Some(text) => write_staged(&changes_path, &text),
-        None => match std::fs::remove_file(&changes_path) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
-            _ => {}
-        },
-    }
-    let staged = std::mem::take(&mut *staged.lock().unwrap_or_else(|p| p.into_inner()));
-    for (output_path, text) in &staged {
-        write_staged(output_path, text);
-    }
-    check_writes(&write_errors)?;
-
-    // Phase 4: Score (reads the generated JSON files, nearly instant)
+    // Phase 3: Score, from the results of this run in memory.
+    let mut outputs: Vec<Output> = vec![Output::Write(metadata_path, metadata_text)];
+    outputs.push(match changes_text {
+        Some(text) => Output::Write(changes_path, text),
+        None => Output::Remove(changes_path),
+    });
+    outputs.extend(
+        std::mem::take(&mut *staged.lock().unwrap_or_else(|p| p.into_inner()))
+            .into_iter()
+            .map(|(output_path, text)| Output::Write(output_path, text)),
+    );
     if !skip_list.contains(&"score") {
         if let Some(ref bar) = progress {
             bar.set_message("score...");
         }
+        let document = |name: &str| {
+            outputs.iter().find_map(|output| match output {
+                Output::Write(output_path, text)
+                    if output_path.file_name().is_some_and(|file| file == name) =>
+                {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
+        };
         let result: Value =
-            match crate::score::compute_from_data_dir(output_dir, ctx.files.files().len()) {
+            match crate::score::compute_from_documents(&document, ctx.files.files().len()) {
                 Ok(r) => {
                     serde_json::to_value(&r).unwrap_or(json!({"error": "serialization failed"}))
                 }
                 Err(e) => json!({"error": e.to_string()}),
             };
-        write_staged(
-            &output_dir.join("score.json"),
-            &serde_json::to_string_pretty(&result)?,
-        );
+        outputs.push(Output::Write(
+            output_dir.join("score.json"),
+            serde_json::to_string_pretty(&result)?,
+        ));
     }
-    if let Some(text) = &trend_text {
-        write_staged(&output_dir.join("trend.json"), text);
+    // A trend that failed leaves no trend.json: an old one must not stay beside new data.
+    if !skip_list.contains(&"trend") {
+        let trend_path = output_dir.join("trend.json");
+        outputs.push(match trend_text {
+            Some(text) => Output::Write(trend_path, text),
+            None => Output::Remove(trend_path),
+        });
     }
 
-    if let Some(bar) = progress {
-        bar.finish_with_message("done");
+    // Phase 4: Commit all outputs, or none.
+    commit_outputs(&outputs).map_err(|error| {
+        crate::core::Error::analysis(format!("The report data was not written: {error}"))
+    })?;
+    let written = outputs
+        .iter()
+        .filter(|output| matches!(output, Output::Write(..)))
+        .count();
+    match progress {
+        Some(bar) => {
+            bar.set_position(written as u64);
+            bar.finish_with_message("done");
+        }
+        None => {
+            for output in &outputs {
+                if let Output::Write(output_path, _) = output {
+                    eprintln!("Generated: {}", output_path.display());
+                }
+            }
+        }
     }
-    check_writes(&write_errors)?;
     eprintln!("Report data generated in: {}", output_dir.display());
     Ok(())
 }

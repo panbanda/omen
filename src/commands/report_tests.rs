@@ -1,6 +1,10 @@
 use super::*;
 use crate::commands::testing::repository;
 
+fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    crate::core::write_atomically(path, text.as_bytes(), 0o644)
+}
+
 fn subcommand(arguments: &[&str]) -> ReportSubcommand {
     use clap::Parser;
     let mut full = vec!["omen", "report"];
@@ -204,6 +208,102 @@ fn test_generate_fails_when_trend_json_cannot_be_written() {
     );
     let message = format!("{:?}", result.expect_err("the write fails"));
     assert!(message.contains("trend.json"), "{message}");
+}
+
+fn names_in(directory: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(directory)
+        .expect("list")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn test_a_failed_write_leaves_every_old_file_unchanged() {
+    let (directory, path) = repository();
+    git_in(&path, &["init", "-q"]);
+    git_in(&path, &["add", "."]);
+    git_in(&path, &["commit", "-q", "-m", "first"]);
+    let data = directory.path().join("data");
+    std::fs::create_dir_all(data.join("security.json"))
+        .expect("a directory in the place of a file");
+    let old = ["metadata", "complexity", "satd", "score", "trend"];
+    for name in old {
+        std::fs::write(data.join(format!("{name}.json")), format!("old {name}")).expect("old");
+    }
+
+    let result = run(
+        &path,
+        &Config::default(),
+        &subcommand(&[
+            "generate",
+            "--data",
+            data.to_str().expect("utf-8"),
+            "--skip",
+            "churn,changes,ownership,temporal,hotspot,defect,tdg",
+        ]),
+        None,
+    );
+
+    let message = format!("{:?}", result.expect_err("the write fails"));
+    assert!(message.contains("security.json"), "{message}");
+    for name in old {
+        assert_eq!(
+            std::fs::read_to_string(data.join(format!("{name}.json"))).expect("read"),
+            format!("old {name}"),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        names_in(&data),
+        [
+            "complexity.json",
+            "metadata.json",
+            "satd.json",
+            "score.json",
+            "security.json",
+            "trend.json"
+        ]
+    );
+}
+
+#[test]
+fn test_a_failed_trend_does_not_leave_the_old_trend_beside_new_data() {
+    let (directory, git_path) = repository();
+    git_in(&git_path, &["init", "-q"]);
+    git_in(&git_path, &["add", "."]);
+    git_in(&git_path, &["commit", "-q", "-m", "first"]);
+    let data = directory.path().join("data");
+    let arguments = [
+        "generate",
+        "--data",
+        data.to_str().expect("utf-8"),
+        "--skip",
+        "churn,changes,ownership,temporal,hotspot,defect,tdg",
+    ];
+    run(&git_path, &Config::default(), &subcommand(&arguments), None).expect("first run");
+    assert!(data.join("trend.json").is_file());
+    let first_metadata = std::fs::read_to_string(data.join("metadata.json")).expect("read");
+
+    let (_other, plain_path) = repository();
+    run(
+        &plain_path,
+        &Config::default(),
+        &subcommand(&arguments),
+        None,
+    )
+    .expect("a trend failure is a warning");
+
+    assert!(!data.join("trend.json").exists());
+    let second_metadata = std::fs::read_to_string(data.join("metadata.json")).expect("read");
+    assert_ne!(first_metadata, second_metadata);
 }
 
 #[test]

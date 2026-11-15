@@ -412,37 +412,40 @@ pub fn compute_from_components(components: &Components<'_>, file_count: usize) -
     acc.into_analysis(file_count)
 }
 
-/// Compute the health score from pre-generated JSON files (avoids re-running analyzers).
+/// Compute the health score from the JSON documents of the analyzers (avoids re-running them).
 ///
-/// Reads analyzer results from the given directory and computes the composite score.
-/// Used by `report generate` to avoid redundantly re-running all sub-analyzers.
-pub fn compute_from_data_dir(data_dir: &std::path::Path, file_count: usize) -> Result<Analysis> {
-    fn load<T: serde::de::DeserializeOwned>(data_dir: &std::path::Path, name: &str) -> Option<T> {
-        let path = data_dir.join(name);
-        let content = match std::fs::read_to_string(&path) {
-            Ok(content) => content,
-            Err(error) => {
-                tracing::warn!(path = %path.display(), %error, "Failed to read score component");
-                return None;
-            }
+/// `document` gives the JSON text of a result by its file name, for example `complexity.json`.
+/// A document that is missing or not valid has no part in the score. `report generate` uses
+/// the results of its own run, so the score never reads a file of an earlier run.
+pub fn compute_from_documents(
+    document: &dyn Fn(&str) -> Option<String>,
+    file_count: usize,
+) -> Result<Analysis> {
+    fn load<T: serde::de::DeserializeOwned>(
+        document: &dyn Fn(&str) -> Option<String>,
+        name: &str,
+    ) -> Option<T> {
+        let Some(content) = document(name) else {
+            tracing::warn!(name, "A score component is missing");
+            return None;
         };
         match serde_json::from_str(&content) {
             Ok(result) => Some(result),
             Err(error) => {
-                tracing::warn!(path = %path.display(), %error, "Failed to parse score component");
+                tracing::warn!(name, %error, "Failed to parse score component");
                 None
             }
         }
     }
 
-    let complexity = load(data_dir, "complexity.json");
-    let satd = load(data_dir, "satd.json");
-    let stubs = load(data_dir, "stubs.json");
-    let duplicates = load(data_dir, "clones.json");
-    let cohesion = load(data_dir, "cohesion.json");
-    let tdg = load(data_dir, "tdg.json");
-    let graph = load(data_dir, "graph.json");
-    let smells = load(data_dir, "smells.json");
+    let complexity = load(document, "complexity.json");
+    let satd = load(document, "satd.json");
+    let stubs = load(document, "stubs.json");
+    let duplicates = load(document, "clones.json");
+    let cohesion = load(document, "cohesion.json");
+    let tdg = load(document, "tdg.json");
+    let graph = load(document, "graph.json");
+    let smells = load(document, "smells.json");
 
     compute_from_components(
         &Components {
