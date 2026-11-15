@@ -150,6 +150,7 @@ impl CallSyntax {
                 None => (None, None),
             };
             return Some(Callee {
+                target: None,
                 name_node,
                 receiver,
                 qualifier,
@@ -180,6 +181,7 @@ impl CallSyntax {
                 other => other,
             };
             return Some(Callee {
+                target: None,
                 name_node,
                 receiver,
                 qualifier,
@@ -187,12 +189,14 @@ impl CallSyntax {
         }
         if Self::is_word(self.super_words, callee, context) {
             return Some(Callee {
+                target: None,
                 name_node: callee,
                 receiver: Some(Receiver::Super),
                 qualifier: None,
             });
         }
         self.names.contains(&kind).then_some(Callee {
+            target: None,
             name_node: callee,
             receiver: None,
             qualifier: None,
@@ -247,6 +251,7 @@ impl CallSyntax {
         let (qualifier, _) = split_type(&context.text(type_node));
         Some(Call {
             callee: Callee {
+                target: None,
                 name_node: type_node,
                 receiver: None,
                 qualifier,
@@ -322,6 +327,18 @@ pub struct Callee<'tree> {
     pub name_node: Node<'tree>,
     pub receiver: Option<Receiver>,
     pub qualifier: Option<String>,
+    /// The type that a construction builds, when the node of the construction
+    /// does not hold the name of the type, as a target-typed `new()` does.
+    pub target: Option<ConstructionTarget>,
+}
+
+/// The type that a target-typed construction builds.
+#[derive(Debug, Clone)]
+pub struct ConstructionTarget {
+    pub name: String,
+    /// The declared type is optional: the construction builds the type only
+    /// when the type is a reference type.
+    pub nullable: bool,
 }
 
 /// A call site before the walk gives it an enclosing definition.

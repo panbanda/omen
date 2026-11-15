@@ -42,6 +42,7 @@ impl LanguageSpec for Bash {
         let arguments = node.children_by_field_name("argument", &mut cursor).count();
         Some(Call {
             callee: Callee {
+                target: None,
                 name_node: word,
                 receiver: None,
                 qualifier: None,

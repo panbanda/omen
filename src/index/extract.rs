@@ -296,6 +296,10 @@ pub struct Context<'a, 'tree> {
     pub file: &'a str,
     pub source: &'a [u8],
     pub scopes: &'a [Scope<'tree>],
+    /// The ancestors of the node at which the walk is, the nearest last.
+    pub ancestors: &'a [Node<'tree>],
+    /// The members recorder of the file, which has the type parameters read so far.
+    pub members: Option<&'a Recorder>,
     /// The ID of the node at which the walk is, and the parent of that node.
     pub current: Option<(usize, Option<Node<'tree>>)>,
 }
@@ -463,19 +467,6 @@ pub trait LanguageSpec: Sync {
             .filter(|candidate| self.lambda_kinds().contains(&candidate.kind()))
             .map(|lambda| lambda.byte_range())
             .next()
-    }
-
-    /// Tells if the type that a construction node builds is declared as an
-    /// optional type, so that the construction builds the type only when the
-    /// type is a reference type.
-    fn is_nullable_construction(&self, _node: Node<'_>, _source: &[u8]) -> bool {
-        false
-    }
-
-    /// The name of the type that a construction node builds, when the node
-    /// does not hold the name itself, as a target-typed `new()` does.
-    fn construction_name(&self, _node: Node<'_>, _source: &[u8]) -> Option<String> {
-        None
     }
 
     /// The node kinds of the function values that have parameters of their own.
@@ -690,6 +681,8 @@ impl<'tree> Extractor<'_, 'tree> {
             file: self.file,
             source: self.source,
             scopes: &self.scopes,
+            ancestors: &self.ancestors,
+            members: self.members.as_ref(),
             current: Some((node.id(), self.ancestors.last().copied())),
         };
         let name_node = match rule.name {
@@ -786,6 +779,8 @@ impl<'tree> Extractor<'_, 'tree> {
                 file: self.file,
                 source: self.source,
                 scopes: &self.scopes,
+                ancestors: &self.ancestors,
+                members: self.members.as_ref(),
                 current: Some((node.id(), self.ancestors.last().copied())),
             };
             if imports {
@@ -802,6 +797,8 @@ impl<'tree> Extractor<'_, 'tree> {
                 file: self.file,
                 source: self.source,
                 scopes: &self.scopes,
+                ancestors: &self.ancestors,
+                members: self.members.as_ref(),
                 current: Some((node.id(), self.ancestors.last().copied())),
             };
             let owner = self.owner();
@@ -862,6 +859,8 @@ impl<'tree> Extractor<'_, 'tree> {
                     file: self.file,
                     source: self.source,
                     scopes: &self.scopes,
+                    ancestors: &self.ancestors,
+                    members: self.members.as_ref(),
                     current: Some((node.id(), self.ancestors.last().copied())),
                 },
             ),
@@ -1427,16 +1426,18 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     for (call, range, owner, via_closure, receiver) in calls {
         let (start_byte, end_byte) = (range.start, range.end);
         let owner = position_of(owner);
-        let nullable_target = call.kind == ReferenceKind::Construct
-            && extractor
-                .spec
-                .is_nullable_construction(call.callee.name_node, &parsed.source);
+        let nullable_target = call
+            .callee
+            .target
+            .as_ref()
+            .is_some_and(|target| target.nullable);
         let text = String::from_utf8_lossy(&parsed.source[call.callee.name_node.byte_range()]);
         let name = match call.kind {
-            ReferenceKind::Construct => extractor
-                .spec
-                .construction_name(call.callee.name_node, &parsed.source)
-                .unwrap_or_else(|| split_type(&text).1),
+            ReferenceKind::Construct => call
+                .callee
+                .target
+                .as_ref()
+                .map_or_else(|| split_type(&text).1, |target| target.name.clone()),
             ReferenceKind::Call => text.to_string(),
         };
         references.push(Reference {

@@ -211,6 +211,7 @@ impl LanguageSpec for Ruby {
     fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
         let parent_call = |word: Node<'tree>| Call {
             callee: Callee {
+                target: None,
                 name_node: word,
                 receiver: Some(Receiver::Super),
                 qualifier: None,
@@ -245,6 +246,7 @@ impl LanguageSpec for Ruby {
                 });
                 (!binds && !parameter).then_some(Call {
                     callee: Callee {
+                        target: None,
                         name_node: node,
                         receiver: None,
                         qualifier: None,

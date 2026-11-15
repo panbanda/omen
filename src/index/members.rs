@@ -269,15 +269,11 @@ const PARAMETER_LISTS: &[&str] = &[
 /// inner list of a template template parameter are in scope in that list
 /// only, not in the name or the default argument of the parameter.
 fn declaration_scope<'tree>(ancestors: &[Node<'tree>]) -> Option<Node<'tree>> {
-    for ancestor in ancestors.iter().rev() {
-        if let Some(parent) = ancestor.parent() {
-            if ancestor.kind() == "template_parameter_list"
-                && parent.kind() == "template_template_parameter_declaration"
-            {
-                return Some(*ancestor);
-            }
-        }
-        if !PARAMETER_LISTS.contains(&ancestor.kind()) {
+    for (index, ancestor) in ancestors.iter().enumerate().rev() {
+        let inner_template_list = ancestor.kind() == "template_parameter_list"
+            && index > 0
+            && ancestors[index - 1].kind() == "template_template_parameter_declaration";
+        if inner_template_list || !PARAMETER_LISTS.contains(&ancestor.kind()) {
             return Some(*ancestor);
         }
     }
@@ -413,6 +409,10 @@ pub struct Recorder {
     /// The range of each type-parameter name, and the range of the
     /// declaration in which the parameter is in scope.
     type_parameters: Vec<(ByteRange, ByteRange)>,
+    /// For the name of each type parameter read so far, the largest end of
+    /// the declarations that have it. The walk is in source order, thus a
+    /// declaration that ends after a node and was read before it contains it.
+    declared_ends: HashMap<Vec<u8>, usize>,
     pub blocks: Vec<PendingBlock>,
 }
 
@@ -446,9 +446,18 @@ impl Recorder {
                 boundaries: Vec::new(),
                 uses: Vec::new(),
                 type_parameters: Vec::new(),
+                declared_ends: HashMap::new(),
                 blocks: Vec::new(),
             }),
         }
+    }
+
+    /// Tells if a type parameter with the name was declared before the walk
+    /// reached a node that ends at `end`, in a declaration that contains it.
+    pub fn is_type_parameter_in_scope(&self, name: &str, end: usize) -> bool {
+        self.declared_ends
+            .get(name.as_bytes())
+            .is_some_and(|farthest| *farthest >= end)
     }
 
     /// Records the node. `bits` are the roles of the kind of the node.
@@ -473,6 +482,12 @@ impl Recorder {
             };
             if let Some(declaration) = declaration {
                 for name in type_parameter_names(self.language, node) {
+                    let (_, end) = range_of(declaration);
+                    let farthest = self
+                        .declared_ends
+                        .entry(source[name.0..name.1].to_vec())
+                        .or_insert(0);
+                    *farthest = (*farthest).max(end);
                     self.type_parameters.push((name, range_of(declaration)));
                 }
             }

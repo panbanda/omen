@@ -271,6 +271,7 @@ impl LanguageSpec for Rust {
             .is_some_and(|before| [".", "::", ":"].contains(&context.text(before).as_str()));
         (!qualified).then_some(Call {
             callee: Callee {
+                target: None,
                 name_node: node,
                 receiver: None,
                 qualifier: None,

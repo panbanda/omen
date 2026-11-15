@@ -241,6 +241,7 @@ impl LanguageSpec for Php {
                 .filter(|qualifier| !qualifier.is_empty());
             return Some(Call {
                 callee: Callee {
+                    target: None,
                     name_node: *type_node,
                     receiver: None,
                     qualifier,
@@ -262,6 +263,7 @@ impl LanguageSpec for Php {
             .map(|(qualifier, _)| qualifier.to_string());
         Some(Call {
             callee: Callee {
+                target: None,
                 name_node: name,
                 receiver: None,
                 qualifier: qualifier.filter(|qualifier| !qualifier.is_empty()),

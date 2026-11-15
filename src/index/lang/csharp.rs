@@ -140,36 +140,43 @@ fn has_modifier(node: Node<'_>, keywords: &[&str], context: &Context<'_, '_>) ->
 /// The type node that a target-typed `new()` takes its type from. The syntax
 /// gives it for a declared variable, a field, a property, and a returned
 /// value. Other places have no such node, and the construction is not read.
-fn implicit_target<'tree>(node: Node<'tree>, source: &[u8]) -> Option<(Node<'tree>, bool)> {
+/// The walk gives the ancestors of the node, thus no search of the tree runs.
+fn implicit_target<'tree>(
+    node: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Option<(Node<'tree>, bool)> {
+    let source = context.source;
+    let ancestors = context.ancestors;
     let text = |node: Node<'_>| String::from_utf8_lossy(&source[node.byte_range()]).to_string();
-    let parent = node.parent()?;
+    let parent_index = ancestors.len().checked_sub(1)?;
+    let parent = ancestors[parent_index];
     let declared = match parent.kind() {
         "equals_value_clause" | VARIABLE_DECLARATOR => {
-            let mut declaration = parent.parent()?;
-            if declaration.kind() == VARIABLE_DECLARATOR {
-                declaration = declaration.parent()?;
+            let mut declaration_index = parent_index.checked_sub(1)?;
+            if ancestors[declaration_index].kind() == VARIABLE_DECLARATOR {
+                declaration_index = declaration_index.checked_sub(1)?;
             }
+            let declaration = ancestors[declaration_index];
             match declaration.kind() {
                 VARIABLE_DECLARATION => declaration.child_by_field_name("type")?,
                 _ => return None,
             }
         }
         "arrow_expression_clause" | "return_statement" => {
-            let mut owner = parent.parent()?;
-            while !matches!(
-                owner.kind(),
-                "method_declaration"
-                    | "local_function_statement"
-                    | PROPERTY_DECLARATION
-                    | "indexer_declaration"
-                    | LAMBDA_EXPRESSION
-                    | ANONYMOUS_METHOD_EXPRESSION
-                    | "constructor_declaration"
-                    | "operator_declaration"
-                    | "conversion_operator_declaration"
-            ) {
-                owner = owner.parent()?;
-            }
+            let owner = ancestors[..parent_index].iter().rev().find(|owner| {
+                matches!(
+                    owner.kind(),
+                    "method_declaration"
+                        | "local_function_statement"
+                        | PROPERTY_DECLARATION
+                        | "indexer_declaration"
+                        | LAMBDA_EXPRESSION
+                        | ANONYMOUS_METHOD_EXPRESSION
+                        | "constructor_declaration"
+                        | "operator_declaration"
+                        | "conversion_operator_declaration"
+                )
+            })?;
             let mut cursor = owner.walk();
             let is_async = owner
                 .children(&mut cursor)
@@ -194,67 +201,22 @@ fn implicit_target<'tree>(node: Node<'tree>, source: &[u8]) -> Option<(Node<'tre
         declared.kind(),
         IDENTIFIER | "qualified_name" | GENERIC_NAME
     );
-    // A type parameter hides an unqualified name only.
+    // A type parameter hides an unqualified name only. The recorder has the
+    // type parameters of the declarations that contain the node.
     let (qualifier, name) = split_type(&text(declared));
-    (simple && (qualifier.is_some() || !is_type_parameter(node, &name, source)))
-        .then_some((declared, nullable))
-}
-
-/// The declarations that can have type parameters.
-const GENERIC_DECLARATIONS: [&str; 8] = [
-    "class_declaration",
-    "struct_declaration",
-    "interface_declaration",
-    "record_declaration",
-    "delegate_declaration",
-    "method_declaration",
-    "local_function_statement",
-    "record_struct_declaration",
-];
-
-/// Tells if the name is a type parameter of a class or a method that
-/// contains the node. A type parameter hides a type of the repository. Only
-/// the declarations are read, and the members of a class are not.
-fn is_type_parameter(node: Node<'_>, name: &str, source: &[u8]) -> bool {
-    let mut ancestor = node.parent();
-    while let Some(current) = ancestor {
-        if GENERIC_DECLARATIONS.contains(&current.kind()) {
-            let list = current.child_by_field_name("type_parameters").or_else(|| {
-                let mut cursor = current.walk();
-                let found = current
-                    .named_children(&mut cursor)
-                    .find(|child| child.kind() == "type_parameter_list");
-                found
-            });
-            if let Some(list) = list {
-                let mut cursor = list.walk();
-                let declared = list
-                    .named_children(&mut cursor)
-                    .filter(|parameter| parameter.kind() == "type_parameter")
-                    .filter_map(|parameter| {
-                        let mut inner = parameter.walk();
-                        let identifier = parameter
-                            .named_children(&mut inner)
-                            .find(|child| child.kind() == IDENTIFIER);
-                        identifier
-                    })
-                    .any(|identifier| source[identifier.byte_range()] == *name.as_bytes());
-                if declared {
-                    return true;
-                }
-            }
-        }
-        ancestor = current.parent();
-    }
-    false
+    let hidden = qualifier.is_none()
+        && context
+            .members
+            .is_some_and(|members| members.is_type_parameter_in_scope(&name, node.end_byte()));
+    (simple && !hidden).then_some((declared, nullable))
 }
 
 fn implicit_construction<'tree>(
     node: Node<'tree>,
     context: &Context<'_, 'tree>,
 ) -> Option<Call<'tree>> {
-    let (type_node, _) = implicit_target(node, context.source)?;
-    let (qualifier, _) = split_type(&context.text(type_node));
+    let (type_node, nullable) = implicit_target(node, context)?;
+    let (qualifier, name) = split_type(&context.text(type_node));
     let mut cursor = node.walk();
     let arguments = node
         .named_children(&mut cursor)
@@ -265,6 +227,7 @@ fn implicit_construction<'tree>(
             name_node: node,
             receiver: None,
             qualifier,
+            target: Some(crate::index::calls::ConstructionTarget { name, nullable }),
         },
         kind: ReferenceKind::Construct,
         arguments: vec![crate::index::calls::Argument::Other; arguments],
@@ -272,20 +235,6 @@ fn implicit_construction<'tree>(
 }
 
 impl LanguageSpec for CSharp {
-    fn is_nullable_construction(&self, node: Node<'_>, source: &[u8]) -> bool {
-        node.kind() == IMPLICIT_OBJECT_CREATION_EXPRESSION
-            && implicit_target(node, source).is_some_and(|(_, nullable)| nullable)
-    }
-
-    fn construction_name(&self, node: Node<'_>, source: &[u8]) -> Option<String> {
-        if node.kind() != IMPLICIT_OBJECT_CREATION_EXPRESSION {
-            return None;
-        }
-        let (target, _) = implicit_target(node, source)?;
-        let text = String::from_utf8_lossy(&source[target.byte_range()]).to_string();
-        Some(split_type(&text).1)
-    }
-
     fn block_kinds(&self) -> Vec<&'static str> {
         vec!["block"]
     }
@@ -344,6 +293,7 @@ impl LanguageSpec for CSharp {
             .map_or(0, |arguments| arguments.named_child_count());
         Some(Call {
             callee: Callee {
+                target: None,
                 name_node: word,
                 receiver: Some(receiver),
                 qualifier: None,
