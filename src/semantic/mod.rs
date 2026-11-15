@@ -15,7 +15,6 @@
 pub mod cache;
 pub mod chunking;
 pub mod multi_repo;
-pub mod prior;
 pub mod search;
 pub mod sync;
 pub mod tfidf;
@@ -88,10 +87,7 @@ impl SemanticSearch {
     pub fn index(&self, file_config: &Config) -> Result<SyncStats> {
         let file_set = FileSet::from_path(&self.root_path, file_config)?;
         let sync_manager = SyncManager::new(&self.cache);
-        let stats = sync_manager.sync(&file_set, &self.root_path)?;
-        let priors = prior::priors_of_files(&self.root_path, file_set.files())?;
-        self.cache.replace_priors(&priors)?;
-        Ok(stats)
+        sync_manager.sync(&file_set, &self.root_path)
     }
 
     /// Search for symbols matching the query.

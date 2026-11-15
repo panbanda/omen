@@ -48,17 +48,7 @@ impl<'a> SearchEngine<'a> {
     /// Build a TF-IDF engine from cached symbols.
     fn build_tfidf(&self) -> Result<TfidfEngine> {
         let symbols = self.cache.get_all_symbols()?;
-        let priors = self.cache.get_priors()?;
-        let mut docs = documents(symbols, None);
-        for (_, meta) in &mut docs {
-            let place = (
-                meta.file_path.clone(),
-                meta.symbol_name.clone(),
-                meta.definition_line,
-            );
-            meta.prior = priors.get(&place).map_or(0.0, |prior| *prior as f32);
-        }
-        Ok(TfidfEngine::fit(&docs))
+        Ok(TfidfEngine::fit(&documents(symbols, None)))
     }
 
     /// Search for symbols matching the query.
@@ -178,7 +168,6 @@ pub(super) fn documents(symbols: Vec<CachedSymbol>, label: Option<&str>) -> Vec<
                 end_line,
                 cyclomatic_complexity: symbol.cyclomatic_complexity,
                 cognitive_complexity: symbol.cognitive_complexity,
-                prior: 0.0,
             };
             (symbol.enriched_text, meta)
         })
@@ -409,7 +398,6 @@ mod tests {
             end_line: definition_line + 3,
             cyclomatic_complexity: None,
             cognitive_complexity: None,
-            prior: 0.0,
         }
     }
 
