@@ -393,12 +393,17 @@ impl std::str::FromStr for ChurnWindow {
     }
 }
 
+/// Checks a `--since` value with the parser of the MCP tools, and keeps the text.
+fn parse_window(value: &str) -> std::result::Result<String, String> {
+    crate::git::since_to_days(value).map(|_| value.to_string())
+}
+
 /// The `--since` window of `defect` and `hotspot`.
 #[derive(Args)]
 pub struct ChurnWindowArgs {
     /// Time period to measure churn over (e.g. 30d, 3m, 1y, all). The window
     /// ends at the analyzed revision's own date, not at the current time.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_window)]
     pub since: Option<String>,
 }
 
@@ -426,7 +431,7 @@ pub struct TemporalArgs {
     pub common: AnalyzerArgs,
 
     /// Time period to analyze (e.g., 30d, 3m, 1y, all). The default is 30d.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_window)]
     pub since: Option<String>,
 }
 
@@ -436,7 +441,7 @@ pub struct ChurnArgs {
     pub common: AnalyzerArgs,
 
     /// Time period to analyze (e.g., 3m, 6m, 1y, 2y, all)
-    #[arg(long)]
+    #[arg(long, value_parser = parse_window)]
     pub since: Option<String>,
 }
 
@@ -2699,6 +2704,31 @@ mod tests {
             panic!("expected Temporal command");
         };
         assert_eq!(args.since, None);
+    }
+
+    #[test]
+    fn test_a_since_that_is_not_a_window_is_a_usage_error() {
+        for command in ["churn", "defect", "hotspot", "temporal"] {
+            for bad in ["garbage", "0d", "2024-01-01", ""] {
+                let error = Cli::try_parse_from(["omen", command, "--since", bad])
+                    .err()
+                    .unwrap_or_else(|| panic!("expected {command} --since {bad:?} to fail"));
+                assert_eq!(
+                    error.kind(),
+                    clap::error::ErrorKind::ValueValidation,
+                    "{command} {bad:?}"
+                );
+                let message = error.to_string();
+                assert!(message.contains("--since"), "{message}");
+                assert!(message.contains("30d"), "{message}");
+            }
+            for good in ["30d", "6m", "1y", "all"] {
+                assert!(
+                    Cli::try_parse_from(["omen", command, "--since", good]).is_ok(),
+                    "{command} {good}"
+                );
+            }
+        }
     }
 
     #[test]

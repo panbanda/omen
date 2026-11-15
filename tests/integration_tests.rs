@@ -1852,6 +1852,18 @@ fn test_churn_since_flag_runs_successfully() {
 }
 
 #[test]
+fn test_a_since_that_is_not_a_window_exits_with_the_usage_code() {
+    for command in ["churn", "defect", "hotspot", "temporal"] {
+        omen()
+            .args(["-p", ".", "-f", "json", command, "--since", "garbage"])
+            .assert()
+            .code(2)
+            .stderr(predicates::str::contains("--since"))
+            .stderr(predicates::str::contains("garbage"));
+    }
+}
+
+#[test]
 fn test_churn_days_flag_is_rejected() {
     omen()
         .args(["-p", ".", "-f", "json", "churn", "--days", "180"])
