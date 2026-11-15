@@ -65,15 +65,15 @@ const MIRRORS: &[Mirror] = &[
     mirror("satd", &["satd"]),
     mirror("deadcode", &["deadcode"]),
     mirror("stubs", &["stubs"]),
-    mirror("churn", &["churn"]),
+    mirror("churn", &["churn"]).option(&["--since", "3650d"], r#"{"since": "3650d"}"#),
     mirror("clones", &["clones"]).option(&["--include-tests"], r#"{"include_tests": true}"#),
-    mirror("defect", &["defect"]),
+    mirror("defect", &["defect"]).option(&["--since", "3650d"], r#"{"since": "3650d"}"#),
     mirror("changes", &["changes"]),
     mirror("diff", &["diff"]).option(&["--target", "main"], r#"{"base": "main"}"#),
     mirror("tdg", &["tdg"]),
     mirror("graph", &["graph"]),
-    mirror("hotspot", &["hotspot"]),
-    mirror("temporal", &["temporal"]),
+    mirror("hotspot", &["hotspot"]).option(&["--since", "3650d"], r#"{"since": "3650d"}"#),
+    mirror("temporal", &["temporal"]).option(&["--since", "3650d"], r#"{"since": "3650d"}"#),
     mirror("ownership", &["ownership"]),
     mirror("cohesion", &["cohesion"]),
     mirror("repomap", &["repomap"]),
@@ -538,6 +538,10 @@ const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
     (("outline", "file"), "file"),
     (("clones", "include_tests"), "include_tests"),
     (("diff", "base"), "target"),
+    (("churn", "since"), "since"),
+    (("defect", "since"), "since"),
+    (("hotspot", "since"), "since"),
+    (("temporal", "since"), "since"),
     (("flags", "provider"), "provider"),
     (("flags", "stale_days"), "stale_days"),
     (("search", "query"), "query"),
@@ -621,7 +625,6 @@ const FILE_FILTER: &str = "The tools have no file filter. They read each file be
 const GATE: &str = "A tool gives data and does not apply a gate.";
 const PULL_REQUEST_COMMENT: &str =
     "Only the Markdown comment of the CLI uses the flag. A tool gives JSON and does not write a comment.";
-const SINCE: &str = "The tool reads the window from the configuration and has no parameter for it.";
 const PROCESS: &str = "The flag controls the CLI process, not the analysis.";
 
 /// The CLI flags that have no tool parameter, each with the reason. The
@@ -670,9 +673,6 @@ const CLI_ONLY: &[((&str, &str), &str)] = &[
         ("search query", "path"),
         "The search tools read the index of the MCP root and have no `path` parameter.",
     ),
-    (("churn", "since"), SINCE),
-    (("defect", "since"), SINCE),
-    (("hotspot", "since"), SINCE),
 ];
 
 /// The identifiers of the arguments of a command, with the global arguments.

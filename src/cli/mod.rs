@@ -96,7 +96,7 @@ pub enum Command {
 
     /// Detect temporally coupled files
     #[command(alias = "tc", visible_alias = "temporal-coupling")]
-    Temporal(AnalyzerArgs),
+    Temporal(TemporalArgs),
 
     /// Analyze code ownership and bus factor
     #[command(alias = "own", visible_alias = "bus-factor")]
@@ -418,6 +418,16 @@ pub struct HotspotArgs {
 
     #[command(flatten)]
     pub window: ChurnWindowArgs,
+}
+
+#[derive(Args)]
+pub struct TemporalArgs {
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+
+    /// Time period to analyze (e.g., 30d, 3m, 1y, all). The default is 30d.
+    #[arg(long)]
+    pub since: Option<String>,
 }
 
 #[derive(Args)]
@@ -2678,11 +2688,26 @@ mod tests {
     }
 
     #[test]
+    fn test_temporal_accepts_since() {
+        let cli = parse(&["omen", "temporal", "--since", "90d"]);
+        let Command::Temporal(args) = cli.command else {
+            panic!("expected Temporal command");
+        };
+        assert_eq!(args.since.as_deref(), Some("90d"));
+        let cli = parse(&["omen", "temporal"]);
+        let Command::Temporal(args) = cli.command else {
+            panic!("expected Temporal command");
+        };
+        assert_eq!(args.since, None);
+    }
+
+    #[test]
     fn test_the_days_flag_is_rejected() {
         for args in [
             ["omen", "churn", "--days", "30"].as_slice(),
             ["omen", "defect", "--days", "90"].as_slice(),
             ["omen", "hotspot", "--days", "180"].as_slice(),
+            ["omen", "temporal", "--days", "30"].as_slice(),
             ["omen", "report", "generate", "--days", "90"].as_slice(),
         ] {
             let error = Cli::try_parse_from(args)

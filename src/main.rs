@@ -214,14 +214,13 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             )?;
         }
         Command::Temporal(args) => {
-            analyzers::run_plain(
-                Plain::Temporal,
-                path,
-                &config,
-                format,
-                &scope_of(cli, args),
-                &mut stdout(),
-            )?;
+            let request = WindowedRequest {
+                scope: scope_of(cli, &args.common),
+                window: WindowRequest {
+                    since: args.since.clone(),
+                },
+            };
+            analyzers::run_temporal(path, &config, format, &request, &mut stdout())?;
         }
         Command::Ownership(args) => {
             analyzers::run_plain(

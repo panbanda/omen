@@ -234,6 +234,10 @@ expression: "responses[0]"
             "path": {
               "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
+            },
+            "since": {
+              "description": "The time window of git history to read, such as 30d, 3m, or 1y. The value all reads the whole history. The default is `churn.since` in the configuration.",
+              "type": "string"
             }
           },
           "type": "object"
@@ -306,6 +310,10 @@ expression: "responses[0]"
             },
             "path": {
               "description": "The file or directory to analyze. The default is the repository root.",
+              "type": "string"
+            },
+            "since": {
+              "description": "The time window of git history to read, such as 30d, 3m, or 1y. The value all reads the whole history. The default is `defect.since` in the configuration.",
               "type": "string"
             }
           },
@@ -455,6 +463,10 @@ expression: "responses[0]"
             "path": {
               "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
+            },
+            "since": {
+              "description": "The time window of git history to read, such as 30d, 3m, or 1y. The value all reads the whole history. The default is `hotspot.since` in the configuration.",
+              "type": "string"
             }
           },
           "type": "object"
@@ -482,6 +494,11 @@ expression: "responses[0]"
             },
             "path": {
               "description": "The file or directory to analyze. The default is the repository root.",
+              "type": "string"
+            },
+            "since": {
+              "default": "30d",
+              "description": "The time window of git history to read, such as 30d, 3m, or 1y. The value all reads the whole history.",
               "type": "string"
             }
           },

@@ -38,6 +38,7 @@ Use the replacement.
 | `-p` as the short form of `--period` (`score trend`) | `--period` |
 | `-p` as the short form of `--port` (`report serve`) | `--port` |
 | `--days N` (`churn`, `hotspot`, `defect`, `report generate`) | `--since Nd` |
+| MCP argument `days` (`churn`, `defect`, `hotspot`, `temporal`) | `since`, for example `"30d"` |
 
 The flags `-p`, `-f`, `-c`, `-v`, and `-j` are global. On each command, `-p` is
 the repository path. `stubs --gate` has no default value in the CLI. If the
@@ -274,7 +275,7 @@ tools used a fixed value and did not read the configuration.
 
 | Tool | Setting | Before 5.0 | From 5.0 | Change in a client |
 |---|---|---|---|---|
-| `churn` | `days` | 30 | `churn.since` of the configuration. The built-in default is `6m`, which is 180 days. The argument `days` is removed. | Set `churn.since = "30d"` in the configuration to keep the old window. |
+| `churn` | `days` | 30 | `churn.since` of the configuration. The built-in default is `6m`, which is 180 days. The argument `days` is removed. | Send `since: "30d"` to keep the old window. |
 | `clones` | `similarity` | 0.7 | `duplicates.min_similarity` of the configuration. The built-in default is 0.9. | Send `similarity: 0.7` to keep the old threshold. |
 | `clones` | `min_tokens` | 50 | `duplicates.min_tokens` of the configuration. The built-in default is 50. | None, unless the configuration sets the value. |
 | `clones` | Test code | Not read. | `exclude_tests` of the configuration applies. The new `include_tests` argument reads test code. | None, unless the configuration sets `exclude_tests = false`. |

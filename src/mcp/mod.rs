@@ -2341,6 +2341,74 @@ mod tests {
     }
 
     #[test]
+    fn a_since_that_is_not_a_window_is_an_invalid_argument() {
+        let (server, temp_dir) = create_git_test_server();
+        for tool in ["churn", "defect", "hotspot", "temporal"] {
+            for bad in ["garbage", "0d", "2024-01-01", ""] {
+                let body = error_of(
+                    &server,
+                    tool,
+                    json!({"path": temp_dir.path(), "since": bad}),
+                );
+                assert_eq!(body["error"]["code"], "invalid_argument", "{tool} {bad:?}");
+                assert_eq!(body["error"]["param"], "since", "{tool} {bad:?}");
+                assert!(
+                    body["error"]["expected"].as_str().unwrap().contains("30d"),
+                    "{tool} {bad:?}"
+                );
+                assert_eq!(body["error"]["received"], bad, "{tool} {bad:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_since_of_the_wrong_type_is_an_invalid_argument() {
+        let (server, temp_dir) = create_git_test_server();
+        let body = error_of(
+            &server,
+            "churn",
+            json!({"path": temp_dir.path(), "since": 30}),
+        );
+        assert_eq!(body["error"]["code"], "invalid_argument");
+        assert_eq!(body["error"]["param"], "since");
+    }
+
+    fn period_days_of(server: &McpServer, tool: &str, arguments: Value) -> Value {
+        let response = server
+            .handle_tool_call(Some(json!({"name": tool, "arguments": arguments})))
+            .unwrap();
+        let envelope: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        envelope["result"]["period_days"].clone()
+    }
+
+    #[test]
+    fn the_since_argument_sets_the_window_of_churn_and_temporal() {
+        let (server, temp_dir) = create_git_test_server();
+        let path = temp_dir.path();
+        assert_eq!(
+            period_days_of(&server, "churn", json!({"path": path, "since": "3650d"})),
+            3650
+        );
+        assert_eq!(
+            period_days_of(&server, "temporal", json!({"path": path, "since": "321d"})),
+            321
+        );
+        assert_eq!(
+            period_days_of(&server, "temporal", json!({"path": path})),
+            30
+        );
+        for tool in ["defect", "hotspot"] {
+            let response = server
+                .handle_tool_call(Some(
+                    json!({"name": tool, "arguments": {"path": path, "since": "all"}}),
+                ))
+                .unwrap();
+            assert!(response["isError"].is_null(), "{tool}");
+        }
+    }
+
+    #[test]
     fn an_unknown_argument_is_an_error_with_suggestions() {
         let (server, _temp_dir) = create_test_server();
         let body = error_of(&server, "complexity", json!({"pth": "."}));

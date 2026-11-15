@@ -166,7 +166,6 @@ pub fn run_analyzer_instance<A: Analyzer>(
 pub enum Plain {
     Tdg,
     Graph,
-    Temporal,
     Ownership,
     Cohesion,
     Repomap,
@@ -188,10 +187,6 @@ pub fn run_plain(
         }
         Plain::Graph => {
             run_analyzer::<analyzers::graph::Analyzer>(path, config, format, scope, out).map(drop)
-        }
-        Plain::Temporal => {
-            run_analyzer::<analyzers::temporal::Analyzer>(path, config, format, scope, out)
-                .map(drop)
         }
         Plain::Ownership => {
             run_analyzer::<analyzers::ownership::Analyzer>(path, config, format, scope, out)
@@ -276,6 +271,28 @@ pub fn run_defect(
         format,
         Some(&request.scope),
         defect_analyzer(window),
+        out,
+    )
+    .map(drop)
+}
+
+pub fn run_temporal(
+    path: &PathBuf,
+    config: &Config,
+    format: Format,
+    request: &WindowedRequest,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let days = churn_window(
+        request.window.since.as_deref(),
+        analyzers::temporal::DEFAULT_DAYS,
+    )?;
+    run_analyzer_instance(
+        path,
+        config,
+        format,
+        Some(&request.scope),
+        analyzers::temporal::Analyzer::new().with_days(days),
         out,
     )
     .map(drop)

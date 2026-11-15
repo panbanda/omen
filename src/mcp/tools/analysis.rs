@@ -10,6 +10,28 @@ use crate::mcp::McpServer;
 /// The largest history window: 100 years.
 const MAX_DAYS: u64 = 36_500;
 
+const SINCE_DESCRIPTION: &str = "The time window of git history to read, such as 30d, 3m, or 1y. \
+    The value all reads the whole history.";
+
+const SINCE_EXPECTED: &str = "a time window such as 30d, 3m, 1y, or all";
+
+/// The days of the `since` argument, or `default_days` when the call has no `since`.
+fn window_days(arguments: &Arguments, default_days: u32) -> Result<u32, ToolError> {
+    let Some(since) = arguments.string("since") else {
+        return Ok(default_days);
+    };
+    crate::git::since_to_days(since).map_err(|_| {
+        ToolError::new(
+            ErrorCode::InvalidArgument,
+            "The value of `since` is not a time window.",
+        )
+        .with_param("since")
+        .with_expected(SINCE_EXPECTED)
+        .with_received(&serde_json::Value::String(since.to_string()))
+        .with_next("Send the call again with a window such as `30d`, `3m`, `1y`, or `all`.")
+    })
+}
+
 pub(super) static COMPLEXITY: ToolSpec = ToolSpec {
     name: "complexity",
     description: "Gives the cyclomatic complexity and the cognitive complexity of each function. \
@@ -61,10 +83,17 @@ pub(super) static STUBS: ToolSpec = ToolSpec {
 pub(super) static CHURN: ToolSpec = ToolSpec {
     name: "churn",
     description: "Finds the files that change most frequently in the git history.",
-    params: &[PATH],
+    params: &[
+        PATH,
+        Param::string("since", SINCE_DESCRIPTION)
+            .with_default(ParamDefault::Configuration("churn.since")),
+    ],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
-        let days = crate::commands::analyzers::configured_churn_days(&server.config);
+        let days = window_days(
+            arguments,
+            crate::commands::analyzers::configured_churn_days(&server.config),
+        )?;
         server.analyze(arguments, crate::commands::analyzers::churn_analyzer(days))
     },
 };
@@ -113,10 +142,14 @@ pub(super) static CLONES: ToolSpec = ToolSpec {
 pub(super) static DEFECT: ToolSpec = ToolSpec {
     name: "defect",
     description: "Gives the defect probability of each file from PMAT metrics.",
-    params: &[PATH],
+    params: &[
+        PATH,
+        Param::string("since", SINCE_DESCRIPTION)
+            .with_default(ParamDefault::Configuration("defect.since")),
+    ],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
-        let days = server.config.defect.since.days();
+        let days = window_days(arguments, server.config.defect.since.days())?;
         server.analyze(arguments, crate::commands::analyzers::defect_analyzer(days))
     },
 };
@@ -183,10 +216,14 @@ pub(super) static GRAPH: ToolSpec = ToolSpec {
 pub(super) static HOTSPOT: ToolSpec = ToolSpec {
     name: "hotspot",
     description: "Finds the files that have high churn and high complexity.",
-    params: &[PATH],
+    params: &[
+        PATH,
+        Param::string("since", SINCE_DESCRIPTION)
+            .with_default(ParamDefault::Configuration("hotspot.since")),
+    ],
     paginated: Pagination::Field("hotspots"),
     handler: |server, arguments| {
-        let days = server.config.hotspot.since.days();
+        let days = window_days(arguments, server.config.hotspot.since.days())?;
         server.analyze(
             arguments,
             crate::commands::analyzers::hotspot_analyzer(days),
@@ -197,10 +234,17 @@ pub(super) static HOTSPOT: ToolSpec = ToolSpec {
 pub(super) static TEMPORAL: ToolSpec = ToolSpec {
     name: "temporal",
     description: "Finds the files that change together in the git history.",
-    params: &[PATH],
+    params: &[
+        PATH,
+        Param::string("since", SINCE_DESCRIPTION).with_default(ParamDefault::String("30d")),
+    ],
     paginated: Pagination::Field("couplings"),
     handler: |server, arguments| {
-        server.analyze(arguments, crate::analyzers::temporal::Analyzer::new())
+        let days = window_days(arguments, crate::analyzers::temporal::DEFAULT_DAYS)?;
+        server.analyze(
+            arguments,
+            crate::analyzers::temporal::Analyzer::new().with_days(days),
+        )
     },
 };
 

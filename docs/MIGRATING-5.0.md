@@ -409,7 +409,7 @@ An argument that is absent takes the value of the related command: the value in 
 | `churn` | `days` | 30 | `churn.since`. The default is `6m`. The argument `days` is removed. |
 | `clones` | `similarity` | 0.7 | `duplicates.min_similarity`. The default is 0.9. |
 
-Set the old value in the configuration to keep the old behavior. The arguments `days` of the tools `churn`, `defect`, `hotspot`, and `temporal` are removed. A call that sends `days` gets the error `unknown_argument`. The tools `churn`, `defect`, and `hotspot` read their window from `churn.since`, `defect.since`, and `hotspot.since`. The tool `temporal` uses 30 days. The MCP tools `clones`, `changes`, and `satd` now read their configuration keys.
+Set the old value in the configuration to keep the old behavior. The arguments `days` of the tools `churn`, `defect`, `hotspot`, and `temporal` are removed. A call that sends `days` gets the error `unknown_argument`. Use the argument `since` with a duration. `days: 30` becomes `since: "30d"`. The value `all` reads the whole history. A value that is not a window gives the error `invalid_argument`. Without `since`, the tools `churn`, `defect`, and `hotspot` read `churn.since`, `defect.since`, and `hotspot.since`. The tool `temporal` uses `30d`. The command `temporal` has the new flag `--since`, with the same default. The MCP tools `clones`, `changes`, and `satd` now read their configuration keys.
 
 ## Other changes
 

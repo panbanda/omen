@@ -173,10 +173,13 @@ mod tests {
     #[test]
     fn a_default_from_the_configuration_is_not_in_the_schema() {
         for (tool, param) in [
+            ("churn", "since"),
             ("flags", "stale_days"),
             ("clones", "min_tokens"),
             ("clones", "similarity"),
             ("flags", "provider"),
+            ("defect", "since"),
+            ("hotspot", "since"),
         ] {
             let schema = input_schema(find(tool).expect("specification"));
             let property = &schema["properties"][param];
