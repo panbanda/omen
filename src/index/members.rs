@@ -204,8 +204,10 @@ fn first_identifier(node: Node<'_>) -> Option<Node<'_>> {
     found
 }
 
-/// The scopes of the type parameters of a file, by name. The scopes of one
-/// name are nested or apart, thus a scope has the one scope that encloses it.
+/// The scopes of the type parameters of a file, by name. For the scopes of
+/// one name, sorted by start, a scope contains a range when its start is not
+/// after the range and its end is not before it. The largest end of the
+/// scopes that start before a position tells that, in one binary search.
 struct TypeParameterScopes<'a> {
     by_name: HashMap<&'a [u8], Vec<ScopeEntry>>,
 }
@@ -214,34 +216,31 @@ type ByteRange = (usize, usize);
 
 struct ScopeEntry {
     start: usize,
-    end: usize,
-    enclosing: Option<usize>,
+    /// The largest end of this scope and of the scopes before it.
+    farthest_end: usize,
 }
 
 impl<'a> TypeParameterScopes<'a> {
     fn new(declared: &[(ByteRange, ByteRange)], source: &'a [u8]) -> Self {
-        let mut ranges: HashMap<&'a [u8], Vec<(usize, usize)>> = HashMap::new();
+        let mut ranges: HashMap<&'a [u8], Vec<ByteRange>> = HashMap::new();
         for ((from, to), scope) in declared {
             ranges.entry(&source[*from..*to]).or_default().push(*scope);
         }
         let by_name = ranges
             .into_iter()
             .map(|(name, mut scopes)| {
-                scopes.sort_unstable_by_key(|(start, end)| (*start, std::cmp::Reverse(*end)));
-                scopes.dedup();
-                let mut entries: Vec<ScopeEntry> = Vec::with_capacity(scopes.len());
-                let mut open: Vec<usize> = Vec::new();
-                for (start, end) in scopes {
-                    while open.last().is_some_and(|top| entries[*top].end <= start) {
-                        open.pop();
-                    }
-                    entries.push(ScopeEntry {
-                        start,
-                        end,
-                        enclosing: open.last().copied(),
-                    });
-                    open.push(entries.len() - 1);
-                }
+                scopes.sort_unstable();
+                let mut farthest_end = 0;
+                let entries = scopes
+                    .into_iter()
+                    .map(|(start, end)| {
+                        farthest_end = farthest_end.max(end);
+                        ScopeEntry {
+                            start,
+                            farthest_end,
+                        }
+                    })
+                    .collect();
                 (name, entries)
             })
             .collect();
@@ -253,17 +252,8 @@ impl<'a> TypeParameterScopes<'a> {
         let Some(entries) = self.by_name.get(name) else {
             return false;
         };
-        let mut found = entries
-            .partition_point(|entry| entry.start <= start)
-            .checked_sub(1);
-        while let Some(position) = found {
-            let entry = &entries[position];
-            if end <= entry.end {
-                return true;
-            }
-            found = entry.enclosing;
-        }
-        false
+        let before = entries.partition_point(|entry| entry.start <= start);
+        before > 0 && entries[before - 1].farthest_end >= end
     }
 }
 
@@ -1129,4 +1119,26 @@ fn is_primitive_type(name: &str) -> bool {
             | "this"
             | "super"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nested_scopes_of_one_name_are_looked_up_in_logarithmic_time() {
+        let depth = 100_000;
+        let source = b"T";
+        let declared: Vec<(ByteRange, ByteRange)> = (0..depth)
+            .map(|level| ((0, 1), (level, 2 * depth - level)))
+            .collect();
+        let scopes = TypeParameterScopes::new(&declared, source);
+        let started = std::time::Instant::now();
+        for level in 0..depth - 1 {
+            let position = 2 * depth - level - 1;
+            assert!(scopes.hides(b"T", position, position + 1) || level == 0);
+        }
+        assert!(!scopes.hides(b"T", 2 * depth + 5, 2 * depth + 6));
+        assert!(started.elapsed().as_secs() < 2, "{:?}", started.elapsed());
+    }
 }
