@@ -3,11 +3,14 @@
 //! Stores symbols keyed by (file_path, symbol_name, content_hash) for efficient
 //! retrieval and staleness detection.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::core::{Error, Result};
+
+use super::prior::DefinitionPlace;
 
 /// SQLite cache for semantic search symbols.
 pub struct EmbeddingCache {
@@ -34,7 +37,7 @@ const UPSERT_SYMBOL_SQL: &str = r#"
 /// Change this value when the chunks that omen makes for one source file change.
 /// A cache that an older version made then has chunks that are not valid for
 /// files that did not change, so omen builds the index again.
-const INDEX_VERSION: u32 = 1;
+const INDEX_VERSION: u32 = 2;
 
 const SCHEMA_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS symbols (
@@ -70,6 +73,14 @@ const SCHEMA_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS priors (
+        file_path TEXT NOT NULL,
+        symbol_name TEXT NOT NULL,
+        definition_line INTEGER NOT NULL,
+        prior REAL NOT NULL,
+        PRIMARY KEY (file_path, symbol_name, definition_line)
     );
 "#;
 
@@ -464,6 +475,35 @@ impl EmbeddingCache {
         Ok(files)
     }
 
+    /// Replace the graph priors of the definitions.
+    pub fn replace_priors(&self, priors: &HashMap<DefinitionPlace, f64>) -> Result<()> {
+        let fail = |e: rusqlite::Error| Error::analysis(format!("Failed to store the priors: {e}"));
+        let transaction = self.conn.unchecked_transaction().map_err(fail)?;
+        transaction.execute("DELETE FROM priors", []).map_err(fail)?;
+        for ((file_path, symbol_name, line), prior) in priors {
+            transaction
+                .execute(
+                    "INSERT INTO priors (file_path, symbol_name, definition_line, prior) VALUES (?1, ?2, ?3, ?4)",
+                    params![file_path, symbol_name, line, prior],
+                )
+                .map_err(fail)?;
+        }
+        transaction.commit().map_err(fail)
+    }
+
+    /// Get the graph priors of the definitions.
+    pub fn get_priors(&self) -> Result<HashMap<DefinitionPlace, f64>> {
+        let fail = |e: rusqlite::Error| Error::analysis(format!("Failed to read the priors: {e}"));
+        let mut statement = self
+            .conn
+            .prepare_cached("SELECT file_path, symbol_name, definition_line, prior FROM priors")
+            .map_err(fail)?;
+        let rows = statement
+            .query_map([], |row| Ok(((row.get(0)?, row.get(1)?, row.get(2)?), row.get(3)?)))
+            .map_err(fail)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(fail)
+    }
+
     /// Get the number of cached symbols.
     pub fn symbol_count(&self) -> Result<usize> {
         let count: i64 = self
@@ -774,6 +814,24 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert!(files.contains(&"src/a.rs".to_string()));
         assert!(files.contains(&"src/b.rs".to_string()));
+    }
+
+    #[test]
+    fn the_priors_replace_the_earlier_priors() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let place = |name: &str| ("src/a.rs".to_string(), name.to_string(), 3);
+
+        cache
+            .replace_priors(&HashMap::from([(place("old"), 0.5)]))
+            .unwrap();
+        cache
+            .replace_priors(&HashMap::from([(place("new"), 1.0)]))
+            .unwrap();
+
+        assert_eq!(
+            cache.get_priors().unwrap(),
+            HashMap::from([(place("new"), 1.0)])
+        );
     }
 
     #[test]

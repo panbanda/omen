@@ -23,6 +23,8 @@ pub struct DocMeta {
     pub end_line: u32,
     pub cyclomatic_complexity: Option<u32>,
     pub cognitive_complexity: Option<u32>,
+    /// The graph prior in the range 0 to 1. See `docs/benchmarks/search-experiments.md`.
+    pub prior: f32,
 }
 
 /// Sparse vector: parallel arrays of column indices and values.
@@ -59,6 +61,9 @@ impl SparseVec {
         }
     }
 }
+
+/// The weight of the graph prior in the score of a document.
+const PRIOR_WEIGHT: f32 = 0.1;
 
 /// Maximum vocabulary size (top terms by document frequency).
 const MAX_VOCAB: usize = 10_000;
@@ -133,6 +138,12 @@ impl TfidfEngine {
         }
     }
 
+    /// The cosine similarity of a document, raised by at most `PRIOR_WEIGHT`
+    /// for a document with the largest graph prior.
+    fn score(&self, query_vec: &SparseVec, index: usize, doc_vec: &SparseVec) -> f32 {
+        query_vec.dot(doc_vec) * (1.0 + PRIOR_WEIGHT * self.doc_meta[index].prior)
+    }
+
     /// A total order for two hits: the higher score first, then the file, the
     /// line, the name, the ordinal, and the chunk line. Thus equal scores give
     /// one order in each run.
@@ -166,7 +177,7 @@ impl TfidfEngine {
             .doc_vectors
             .iter()
             .enumerate()
-            .map(|(i, doc_vec)| (i, query_vec.dot(doc_vec)))
+            .map(|(i, doc_vec)| (i, self.score(&query_vec, i, doc_vec)))
             .collect();
 
         scored.retain(|(_, score)| *score > 0.0);
@@ -198,7 +209,7 @@ impl TfidfEngine {
             .iter()
             .enumerate()
             .filter(|(i, _)| files.contains(&self.doc_meta[*i].file_path.as_str()))
-            .map(|(i, doc_vec)| (i, query_vec.dot(doc_vec)))
+            .map(|(i, doc_vec)| (i, self.score(&query_vec, i, doc_vec)))
             .collect();
 
         scored.retain(|(_, score)| *score > 0.0);
@@ -282,6 +293,7 @@ mod tests {
             end_line: 5,
             cyclomatic_complexity: None,
             cognitive_complexity: None,
+            prior: 0.0,
         }
     }
 
@@ -397,6 +409,53 @@ mod tests {
 
         assert!(!results.is_empty());
         assert_eq!(results[0].0.symbol_name, "parse_source_code");
+    }
+
+    fn with_prior(name: &str, prior: f32) -> DocMeta {
+        DocMeta {
+            prior,
+            ..make_meta(name)
+        }
+    }
+
+    #[test]
+    fn the_prior_puts_a_document_before_one_with_the_same_text() {
+        let docs = vec![
+            ("fn alpha() { shared }".to_string(), with_prior("alpha", 0.0)),
+            ("fn alpha() { shared }".to_string(), with_prior("beta", 1.0)),
+        ];
+        let engine = TfidfEngine::fit(&docs);
+        let results = engine.search("shared", 2);
+
+        assert_eq!(results[0].0.symbol_name, "beta");
+        assert_eq!(results[1].0.symbol_name, "alpha");
+        assert!((results[0].1 / results[1].1 - 1.1).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_prior_does_not_overcome_a_much_better_match() {
+        let docs = vec![
+            ("needle".to_string(), with_prior("exact", 0.0)),
+            (
+                "needle haystack straw hay more words here".to_string(),
+                with_prior("popular", 1.0),
+            ),
+        ];
+        let engine = TfidfEngine::fit(&docs);
+        let results = engine.search("needle", 2);
+
+        assert_eq!(results[0].0.symbol_name, "exact");
+    }
+
+    #[test]
+    fn the_prior_gives_no_score_to_a_document_without_a_query_term() {
+        let docs = vec![
+            ("fn alpha() { shared }".to_string(), with_prior("alpha", 1.0)),
+            ("fn other() { unrelated }".to_string(), with_prior("other", 1.0)),
+        ];
+        let engine = TfidfEngine::fit(&docs);
+
+        assert_eq!(engine.search("shared", 5).len(), 1);
     }
 
     #[test]
