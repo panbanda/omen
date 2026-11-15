@@ -13,7 +13,7 @@ const USING_DIRECTIVE: &str = "using_directive";
 const FILE_SCOPED_NAMESPACE_DECLARATION: &str = "file_scoped_namespace_declaration";
 const STATIC_KEYWORD: &str = "static";
 
-use crate::index::calls::{Call, CallSyntax, Callee, LocalName};
+use crate::index::calls::{split_type, Call, CallSyntax, Callee, LocalName};
 use crate::index::model::{Receiver, ReferenceKind};
 
 const VARIABLE_DECLARATION: &str = "variable_declaration";
@@ -22,6 +22,7 @@ const PROPERTY_DECLARATION: &str = "property_declaration";
 const FOREACH_STATEMENT: &str = "foreach_statement";
 const CONSTRUCTOR_INITIALIZER: &str = "constructor_initializer";
 const IDENTIFIER: &str = "identifier";
+const IMPLICIT_OBJECT_CREATION_EXPRESSION: &str = "implicit_object_creation_expression";
 
 const CALL_SYNTAX: CallSyntax = CallSyntax {
     calls: &[("invocation_expression", "function", "arguments")],
@@ -136,6 +137,88 @@ fn has_modifier(node: Node<'_>, keywords: &[&str], context: &Context<'_, '_>) ->
     found
 }
 
+/// The type node that a target-typed `new()` takes its type from. The syntax
+/// gives it for a declared variable, a field, a property, and a returned
+/// value. Other places have no such node, and the construction is not read.
+fn implicit_target<'tree>(
+    node: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Option<Node<'tree>> {
+    let parent = node.parent()?;
+    let declared = match parent.kind() {
+        "equals_value_clause" | VARIABLE_DECLARATOR => {
+            let mut declaration = parent.parent()?;
+            if declaration.kind() == VARIABLE_DECLARATOR {
+                declaration = declaration.parent()?;
+            }
+            match declaration.kind() {
+                VARIABLE_DECLARATION => declaration.child_by_field_name("type")?,
+                _ => return None,
+            }
+        }
+        "arrow_expression_clause" | "return_statement" => {
+            let mut owner = parent.parent()?;
+            while !matches!(
+                owner.kind(),
+                "method_declaration"
+                    | "local_function_statement"
+                    | PROPERTY_DECLARATION
+                    | "indexer_declaration"
+                    | LAMBDA_EXPRESSION
+                    | ANONYMOUS_METHOD_EXPRESSION
+                    | "constructor_declaration"
+                    | "operator_declaration"
+                    | "conversion_operator_declaration"
+            ) {
+                owner = owner.parent()?;
+            }
+            let mut cursor = owner.walk();
+            let is_async = owner
+                .children(&mut cursor)
+                .any(|child| child.kind() == MODIFIER && context.text(child) == "async");
+            if is_async {
+                return None;
+            }
+            owner
+                .child_by_field_name("returns")
+                .or_else(|| owner.child_by_field_name("type"))?
+        }
+        PROPERTY_DECLARATION => parent.child_by_field_name("type")?,
+        _ => return None,
+    };
+    let declared = match declared.kind() {
+        "nullable_type" => declared.named_child(0)?,
+        _ => declared,
+    };
+    matches!(
+        declared.kind(),
+        IDENTIFIER | "qualified_name" | GENERIC_NAME
+    )
+    .then_some(declared)
+}
+
+fn implicit_construction<'tree>(
+    node: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Option<Call<'tree>> {
+    let type_node = implicit_target(node, context)?;
+    let (qualifier, _) = split_type(&context.text(type_node));
+    let mut cursor = node.walk();
+    let arguments = node
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "argument_list")
+        .map_or(0, |list| list.named_child_count());
+    Some(Call {
+        callee: Callee {
+            name_node: type_node,
+            receiver: None,
+            qualifier,
+        },
+        kind: ReferenceKind::Construct,
+        arguments: vec![crate::index::calls::Argument::Other; arguments],
+    })
+}
+
 impl LanguageSpec for CSharp {
     fn block_kinds(&self) -> Vec<&'static str> {
         vec!["block"]
@@ -147,7 +230,7 @@ impl LanguageSpec for CSharp {
 
     fn call_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().call_kinds();
-        kinds.push(CONSTRUCTOR_INITIALIZER);
+        kinds.extend([CONSTRUCTOR_INITIALIZER, IMPLICIT_OBJECT_CREATION_EXPRESSION]);
         kinds
     }
 
@@ -169,6 +252,9 @@ impl LanguageSpec for CSharp {
     /// `: base(...)` after a constructor calls the constructor of the parent
     /// class. `: this(...)` calls a different constructor of the same class.
     fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
+        if node.kind() == IMPLICIT_OBJECT_CREATION_EXPRESSION {
+            return implicit_construction(node, context);
+        }
         if node.kind() != CONSTRUCTOR_INITIALIZER {
             return self.call_syntax().call(node, context);
         }

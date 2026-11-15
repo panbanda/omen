@@ -821,3 +821,33 @@ fn test_type_parameter_that_shadows_a_class_is_not_coupling() {
         assert_eq!(class(&analysis, "Box").cbo, 0, "{file}");
     }
 }
+
+#[test]
+fn test_csharp_target_typed_new_counts_as_construction() {
+    let source = "class Part {}\n\nclass Factory {\n    Part Make() { return new(); }\n}\n";
+    let analysis = analyze(&[("Factory.cs", source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+}
+
+#[test]
+fn test_csharp_target_typed_new_reads_the_declared_type() {
+    let declared = [
+        "Part Make() => new();",
+        "void Make() { Part part = new(); }",
+        "Part? Make() { return new(); }",
+    ];
+    for member in declared {
+        let source = format!("class Part {{}}\n\nclass Factory {{\n    {member}\n}}\n");
+        let analysis = analyze(&[("Factory.cs", &source)]);
+        assert_eq!(class(&analysis, "Factory").rfc, 2, "{member}");
+    }
+    let abstained = [
+        "async Task<Part> Make() { return new(); }",
+        "Part Make(Part other) { return other ?? new(); }",
+    ];
+    for member in abstained {
+        let source = format!("class Part {{}}\n\nclass Factory {{\n    {member}\n}}\n");
+        let analysis = analyze(&[("Factory.cs", &source)]);
+        assert_eq!(class(&analysis, "Factory").rfc, 1, "{member}");
+    }
+}
