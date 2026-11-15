@@ -484,7 +484,7 @@ impl AnalyzerTrait for Analyzer {
         // After an interrupt the executor starts no test command, and the
         // mutants that it did not run look like build errors. This call does
         // not return in that case, thus no report comes from such results.
-        run.conclude();
+        run.conclude()?;
         let executed_results = executed_results
             .map_err(|_| Error::analysis("Mutation executor thread panicked"))??;
 

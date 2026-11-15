@@ -303,43 +303,40 @@ fn is_in_git_repository(path: &Path) -> bool {
         .any(|dir| dir.join(".git").exists())
 }
 
-/// Report a restore that failed: keep a backup that exists, print the path of
-/// the backup and the commands to recover, and mark the process as failed.
+/// The recovery text of each restore that failed and that no run has reported yet.
+static RESTORE_FAILURES: parking_lot::Mutex<Vec<String>> = parking_lot::Mutex::new(Vec::new());
+
+/// Record a restore that failed: keep a backup that exists, print the path of the backup and
+/// the commands to recover, and keep the text for the run that reports the failure.
 fn report_failed_restore(record: &RestoreRecord, error: &std::io::Error) {
     RESTORE_FAILED.store(true, Ordering::SeqCst);
-    match ensure_backup(record) {
-        Some(backup) => eprintln!(
+    let text = match ensure_backup(record) {
+        Some(backup) => format!(
             "omen: restore of {} failed: {error}\n{}",
             record.path.display(),
             recovery_text(&record.path, &backup, is_in_git_repository(&record.path))
         ),
-        None => eprintln!(
+        None => format!(
             "omen: restore of {} failed: {error}\nomen could not write a backup file, so the original content is lost. If the file had no change before the run, run: git checkout -- {}",
             record.path.display(),
             shell_word(&record.path)
         ),
+    };
+    eprintln!("{text}");
+    RESTORE_FAILURES.lock().push(text);
+}
+
+/// The error for the restores that failed since the last call, if there are any. A run calls
+/// this after it restored each file. The library does not stop the process: the command line
+/// maps the error to its exit status.
+fn restore_failure_error() -> Option<Error> {
+    let failures = std::mem::take(&mut *RESTORE_FAILURES.lock());
+    if failures.is_empty() {
+        return None;
     }
-}
-
-#[cfg(not(test))]
-fn exit_after_failed_restore() {
-    std::process::exit(RESTORE_FAILURE_EXIT_CODE);
-}
-
-#[cfg(test)]
-static EXIT_REQUESTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-#[cfg(test)]
-fn exit_after_failed_restore() {
-    EXIT_REQUESTS.fetch_add(1, Ordering::SeqCst);
-}
-
-/// Exit with `RESTORE_FAILURE_EXIT_CODE` if a restore failed. A run calls this
-/// after it restored each file, never inside a guard.
-fn exit_if_restore_failed() {
-    if RESTORE_FAILED.load(Ordering::SeqCst) {
-        exit_after_failed_restore();
-    }
+    Some(Error::RestoreFailed {
+        recovery: failures.join("\n"),
+    })
 }
 
 /// RAII guard that ensures a file is restored to its original content.
@@ -916,10 +913,13 @@ impl ActiveRun {
     /// If an interrupt came during the run, this function restores each file
     /// and stops the process with the status 130. It does not return, thus
     /// the caller cannot make a report from results that are not complete.
-    pub fn conclude(mut self) {
+    ///
+    /// If a restore failed, the function returns an error with the recovery text. The
+    /// command line maps the error to the exit status 74.
+    pub fn conclude(mut self) -> Result<()> {
         self.concluded = true;
         INTERRUPT_GATE.conclude(&ProcessEnvironment);
-        exit_if_restore_failed();
+        restore_failure_error().map_or(Ok(()), Err)
     }
 }
 
@@ -1439,7 +1439,7 @@ mod tests {
         let run = begin_run().unwrap();
         let during_the_run = sigint_disposition();
         let second = begin_run().unwrap();
-        run.conclude();
+        run.conclude().unwrap();
         let after_one_of_two_runs = sigint_disposition();
         drop(second);
         let after_the_last_run = sigint_disposition();
@@ -1933,7 +1933,7 @@ mod tests {
     #[test]
     fn test_a_failed_restore_does_not_stop_the_restore_of_other_guards() {
         let _serial = PAUSE_TESTS.lock();
-        EXIT_REQUESTS.store(0, Ordering::SeqCst);
+        drop(restore_failure_error());
         let temp_dir = TempDir::new().unwrap();
         let first = temp_dir.path().join("first.rs");
         let second = temp_dir.path().join("second.rs");
@@ -1948,10 +1948,14 @@ mod tests {
 
         drop(first_guard);
 
-        assert_eq!(EXIT_REQUESTS.load(Ordering::SeqCst), 0);
         drop(second_guard);
         assert_eq!(fs::read(&second).unwrap(), b"second");
+        assert!(restore_failure_error().is_some());
         RESTORE_FAILED.store(false, Ordering::SeqCst);
+        remove_kept_backups();
+    }
+
+    fn remove_kept_backups() {
         for entry in fs::read_dir(std::env::temp_dir()).unwrap().flatten() {
             if entry
                 .file_name()
@@ -2136,15 +2140,28 @@ mod tests {
     }
 
     #[test]
-    fn test_the_run_exits_after_a_failed_restore_when_it_concludes() {
+    fn test_the_run_gives_a_typed_error_after_a_failed_restore() {
         let _serial = PAUSE_TESTS.lock();
-        EXIT_REQUESTS.store(0, Ordering::SeqCst);
-        exit_if_restore_failed();
-        assert_eq!(EXIT_REQUESTS.load(Ordering::SeqCst), 0);
-        RESTORE_FAILED.store(true, Ordering::SeqCst);
-        exit_if_restore_failed();
+        drop(restore_failure_error());
+        assert!(restore_failure_error().is_none());
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        fs::remove_file(&file_path).unwrap();
+        fs::create_dir(&file_path).unwrap();
+        drop(guard);
+
+        let error = restore_failure_error().expect("the restore failed");
+
+        let Error::RestoreFailed { recovery } = error else {
+            panic!("a typed restore error");
+        };
+        assert!(recovery.contains("cp "), "{recovery}");
+        assert!(restore_failure_error().is_none());
         RESTORE_FAILED.store(false, Ordering::SeqCst);
-        assert_eq!(EXIT_REQUESTS.load(Ordering::SeqCst), 1);
+        remove_kept_backups();
     }
 
     #[test]
