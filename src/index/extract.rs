@@ -1090,12 +1090,42 @@ pub fn rebound_scope_kinds(language: Language) -> Vec<&'static str> {
                 "for_statement",
                 "lexical_declaration",
                 "variable_declaration",
+                "import_statement",
+                "import_clause",
+                "namespace_import",
+                "import_specifier",
                 "assignment_expression",
                 "member_expression",
             ]);
             kinds
         }
         _ => Vec::new(),
+    }
+}
+
+/// Gives each local name that an `import` statement binds: the default
+/// import, the namespace, and each named import under its alias.
+fn import_bindings(statement: Node<'_>, mark: &mut dyn FnMut(Node<'_>)) {
+    let mut stack = vec![statement];
+    while let Some(current) = stack.pop() {
+        let mut cursor = current.walk();
+        for child in current.named_children(&mut cursor) {
+            match (current.kind(), child.kind()) {
+                ("import_clause" | "namespace_import" | "import_require_clause", "identifier") => {
+                    mark(child);
+                }
+                ("import_specifier", _) => {
+                    let local = current
+                        .child_by_field_name("alias")
+                        .or_else(|| current.child_by_field_name("name"));
+                    if let Some(local) = local {
+                        mark(local);
+                    }
+                    break;
+                }
+                _ => stack.push(child),
+            }
+        }
     }
 }
 
@@ -1133,6 +1163,8 @@ fn scope_bindings(scope: Node<'_>, parent: Option<Node<'_>>, source: &[u8]) -> u
             for statement in scope.named_children(&mut cursor) {
                 if statement.kind() == "lexical_declaration" {
                     declarators(statement, &mut mark);
+                } else if statement.kind() == "import_statement" {
+                    import_bindings(statement, &mut mark);
                 }
             }
         }
@@ -1634,6 +1666,22 @@ mod tests {
         ] {
             assert_eq!(rebound_in(source), ["fetch"], "{source}");
         }
+    }
+
+    #[test]
+    fn test_import_bindings_are_local_bindings_of_a_global_object_name() {
+        for source in [
+            "import window from './objects.js'; window.fetch = r;",
+            "import { window } from './objects.js'; window.fetch = r;",
+            "import { objects as window } from './objects.js'; window.fetch = r;",
+            "import * as window from './objects.js'; window.fetch = r;",
+            "import self, { other } from './objects.js'; self.fetch = r;",
+            "import other, * as globalThis from './objects.js'; globalThis.fetch = r;",
+        ] {
+            assert!(rebound_in(source).is_empty(), "{source}");
+        }
+        let unrelated = "import { window as other } from './objects.js'; window.fetch = r;";
+        assert_eq!(rebound_in(unrelated), ["fetch"]);
     }
 
     #[test]
