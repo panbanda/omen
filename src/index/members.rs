@@ -210,6 +210,8 @@ struct TypeParameterScopes<'a> {
     by_name: HashMap<&'a [u8], Vec<ScopeEntry>>,
 }
 
+type ByteRange = (usize, usize);
+
 struct ScopeEntry {
     start: usize,
     end: usize,
@@ -217,7 +219,7 @@ struct ScopeEntry {
 }
 
 impl<'a> TypeParameterScopes<'a> {
-    fn new(declared: &[((usize, usize), (usize, usize))], source: &'a [u8]) -> Self {
+    fn new(declared: &[(ByteRange, ByteRange)], source: &'a [u8]) -> Self {
         let mut ranges: HashMap<&'a [u8], Vec<(usize, usize)>> = HashMap::new();
         for ((from, to), scope) in declared {
             ranges.entry(&source[*from..*to]).or_default().push(*scope);
@@ -420,7 +422,7 @@ pub struct Recorder {
     uses: Vec<RawUse>,
     /// The range of each type-parameter name, and the range of the
     /// declaration in which the parameter is in scope.
-    type_parameters: Vec<((usize, usize), (usize, usize))>,
+    type_parameters: Vec<(ByteRange, ByteRange)>,
     pub blocks: Vec<PendingBlock>,
 }
 
