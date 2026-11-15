@@ -30,9 +30,9 @@ A rule does not apply in these cases:
 - The repository binds the name again: a C or C++ `#define`, a Bash `alias`, an
   assignment to `globalThis`, `window`, `global`, or `self`, or a Ruby `class << Name`.
   A parameter or a variable with one of these names is not the global object. A Rust
-  `macro_rules!` whose body has `use` or `extern crate` can bind the name of a
-  dependency, so a path that starts with a dependency name is not external in a
-  repository that has such a macro.
+  `macro_rules!` body or a macro invocation with the token `use` or `extern crate`
+  (outside literals) can bind any crate name. A Rust path that starts with a crate
+  name, `std` and `core` included, is not external in a repository that has such a macro.
 - A PHP function, method, or class name matches a repository name when the case is
   ignored. A property or a constant has a case-sensitive name and does not hide a function.
 
@@ -110,7 +110,7 @@ The columns `Unique` and `Ambiguous` give the counts before the change.
 | omen | TypeScript | 61 | 5 | 26 | 16 | 25 | 35 | 10 |
 | ripgrep | Bash | 6 | 0 | 29 | 8 | 0 | 21 | 21 |
 | ripgrep | Ruby | 0 | 0 | 22 | 22 | 0 | 0 | 0 |
-| ripgrep | Rust | 6356 | 2414 | 5541 | 4854 | 468 | 1155 | 687 |
+| ripgrep | Rust | 6356 | 2414 | 5541 | 4937 | 468 | 1072 | 604 |
 | cobra | Go | 2157 | 117 | 1487 | 529 | 647 | 1605 | 958 |
 | zod | Bash | 0 | 0 | 5 | 0 | 0 | 5 | 5 |
 | zod | JavaScript | 10 | 0 | 7 | 4 | 12 | 15 | 3 |
@@ -137,7 +137,7 @@ correct reference.
 | Repository | Language | New External | Joined | SCIP external | SCIP in repository | Join failures | Precision |
 |---|---|---|---|---|---|---|---|
 | omen | Rust | 3455 | 3441 | 3441 | 0 | 14 | 100% |
-| ripgrep | Rust | 687 | 662 | 662 | 0 | 25 | 100% |
+| ripgrep | Rust | 604 | 581 | 581 | 0 | 23 | 100% |
 | cobra | Go | 958 | 675 | 675 | 0 | 283 | 100% |
 | zod | TypeScript | 2106 | 2076 | 2076 | 0 | 30 | 100% |
 
