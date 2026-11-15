@@ -76,7 +76,7 @@ pub struct MutationGuard {
     original: Vec<u8>,
     /// Whether the file has been modified.
     modified: bool,
-    /// A copy of the original content in the directory of the file. It stays on
+    /// A copy of the original content in the temporary directory. It stays on
     /// disk only if a restore fails or the process dies.
     backup: Option<tempfile::NamedTempFile>,
     active_mutations: ActiveMutations,
@@ -130,7 +130,7 @@ impl MutationGuard {
             return Ok(());
         }
         if self.backup.is_none() {
-            self.backup = Some(save_backup(&self.path, &self.original)?);
+            self.backup = Some(save_backup(&self.original)?);
         }
         active.insert(self.path.clone(), self.original.clone());
         // A write that fails can truncate the file first, so the file counts as
@@ -741,13 +741,14 @@ pub fn write_in_place(path: impl AsRef<Path>, content: &[u8]) -> Result<()> {
     file.sync_all().map_err(Error::Io)
 }
 
-/// Save the original content in a new file with a random name next to the source.
-fn save_backup(path: &Path, original: &[u8]) -> Result<tempfile::NamedTempFile> {
-    let directory = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let mut backup = tempfile::NamedTempFile::new_in(directory).map_err(Error::Io)?;
+/// Save the original content in a new private file in the temporary directory.
+///
+/// The file is not in the repository, so a test command does not see it.
+fn save_backup(original: &[u8]) -> Result<tempfile::NamedTempFile> {
+    let mut backup = tempfile::Builder::new()
+        .prefix("omen-mutation-backup-")
+        .tempfile_in(std::env::temp_dir())
+        .map_err(Error::Io)?;
     backup.write_all(original).map_err(Error::Io)?;
     backup.as_file().sync_all().map_err(Error::Io)?;
     Ok(backup)
@@ -1459,6 +1460,32 @@ mod tests {
         assert_eq!(fs::read(&file_path).unwrap(), b"original content");
         drop(guard);
         assert_eq!(fs::read(&file_path).unwrap(), b"original content");
+    }
+
+    #[test]
+    fn test_backup_is_not_in_the_source_directory_during_a_mutation() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"content").unwrap();
+
+        let names: Vec<_> = fs::read_dir(temp_dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("test.rs")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_backup_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let backup = save_backup(b"original").unwrap();
+        let mode = backup.as_file().metadata().unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0);
+        assert!(backup.path().starts_with(std::env::temp_dir()));
     }
 
     #[test]
