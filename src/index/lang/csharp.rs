@@ -231,8 +231,8 @@ impl LanguageSpec for CSharp {
         kinds
     }
 
-    fn parameter_block(&self, node: Node<'_>) -> Option<std::ops::Range<usize>> {
-        (node.kind() == LAMBDA_EXPRESSION).then(|| node.byte_range())
+    fn lambda_kinds(&self) -> &'static [&'static str] {
+        &[LAMBDA_EXPRESSION, ANONYMOUS_METHOD_EXPRESSION]
     }
 
     fn local_kinds(&self) -> Vec<&'static str> {

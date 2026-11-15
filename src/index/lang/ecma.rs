@@ -507,8 +507,8 @@ impl LanguageSpec for Ecma {
         }
     }
 
-    fn parameter_block(&self, node: Node<'_>) -> Option<std::ops::Range<usize>> {
-        (node.kind() == ARROW_FUNCTION).then(|| node.byte_range())
+    fn lambda_kinds(&self) -> &'static [&'static str] {
+        FUNCTION_VALUE_KINDS
     }
 
     fn local_kinds(&self) -> Vec<&'static str> {

@@ -1348,14 +1348,27 @@ mod tests {
         let javascript = "const callback = fetch => fetch('/local');\nfunction run() { return fetch('/remote'); }\n";
         let csharp = "using System;\nclass Program {\n    void Callback() {\n        Action<string> action = Console => Console.WriteLine(\"a\");\n    }\n    void Run() {\n        Console.WriteLine(\"b\");\n    }\n}\n";
         let java = "import java.util.function.Function;\nclass Main {\n    void callback() {\n        Function<String, Integer> parse = Integer -> Integer.length();\n    }\n    void run() {\n        Integer.parseInt(\"2\");\n    }\n}\n";
+        let mut failed = Vec::new();
+        let parenthesized =
+            "consume((fetch) => fetch('/local'));\nfunction run() { return fetch('/remote'); }\n";
+        let typescript = "consume((fetch: string) => fetch);\nconsume(function (fetch) { return fetch('/x'); });\nfunction run() { return fetch('/remote'); }\n";
+        let csharp_typed = "using System;\nclass Widget {}\nclass Program {\n    void Callback() {\n        Take((Widget Console) => Console.WriteLine(\"a\"));\n        Take(delegate (Widget Console) { Console.WriteLine(\"c\"); });\n        Console.WriteLine(\"b\");\n    }\n}\n";
+        let java_typed = "class Widget {}\nclass Main {\n    void callback() {\n        take((Widget Integer) -> Integer.length());\n        Integer.parseInt(\"2\");\n    }\n}\n";
         for (file, source, name) in [
+            ("b.js", parenthesized, "fetch"),
+            ("c.ts", typescript, "fetch"),
+            ("Typed.cs", csharp_typed, "WriteLine"),
+            ("Typed.java", java_typed, "parseInt"),
             ("a.js", javascript, "fetch"),
             ("Program.cs", csharp, "WriteLine"),
             ("Main.java", java, "parseInt"),
         ] {
             let found = statuses(&[(file, source)], file, name);
-            assert_eq!(found.last().map(String::as_str), Some("External"), "{file}");
+            if found.last().map(String::as_str) != Some("External") {
+                failed.push(file);
+            }
         }
+        assert!(failed.is_empty(), "shadowed outside the lambda: {failed:?}");
     }
 
     #[test]

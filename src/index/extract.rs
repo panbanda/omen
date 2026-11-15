@@ -450,8 +450,21 @@ pub trait LanguageSpec: Sync {
     /// The bytes in which the parameters that the node at `node` binds are
     /// visible, when the node is a function value that opens no scope of its
     /// own. Without a range, a parameter is visible in the whole owner.
-    fn parameter_block(&self, _node: Node<'_>) -> Option<std::ops::Range<usize>> {
-        None
+    fn parameter_block(
+        &self,
+        node: Node<'_>,
+        ancestors: &[Node<'_>],
+    ) -> Option<std::ops::Range<usize>> {
+        let nearest = std::iter::once(node).chain(ancestors.iter().rev().take(2).copied());
+        nearest
+            .filter(|candidate| self.lambda_kinds().contains(&candidate.kind()))
+            .map(|lambda| lambda.byte_range())
+            .next()
+    }
+
+    /// The node kinds of the function values that have parameters of their own.
+    fn lambda_kinds(&self) -> &'static [&'static str] {
+        &[]
     }
 
     /// Tells if the names that the declaration at `node` binds end with the
@@ -786,7 +799,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 let mut names = Vec::new();
                 self.spec.locals(node, &context, &mut names);
                 let block = self.block_of(node);
-                let parameter_block = self.spec.parameter_block(node);
+                let parameter_block = self.spec.parameter_block(node, &self.ancestors);
                 self.locals.extend(names.into_iter().map(|name| {
                     let block = if name.is_parameter {
                         parameter_block.clone()
