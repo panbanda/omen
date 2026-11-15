@@ -127,6 +127,10 @@ pub fn syntax_kinds(language: Language) -> Vec<(&'static str, Vec<&'static str>)
             ("member_declaration", syntax.declarations.to_vec()),
             ("member_access", syntax.accesses.to_vec()),
             ("member_implicit", syntax.implicit.to_vec()),
+            (
+                "member_type_parameter",
+                type_parameter_kinds(language).to_vec(),
+            ),
         ],
     }
 }
@@ -143,11 +147,16 @@ pub const TYPE_PARAMETER: u8 = 64;
 fn type_parameter_kinds(language: Language) -> &'static [&'static str] {
     match language {
         Language::Go => &["type_parameter_declaration", "method_declaration"],
-        Language::Cpp => &["type_parameter_declaration"],
+        Language::Cpp => &[
+            "type_parameter_declaration",
+            "optional_type_parameter_declaration",
+            "variadic_type_parameter_declaration",
+        ],
+        Language::Python => &["type_parameter"],
         Language::Java | Language::CSharp | Language::TypeScript | Language::Tsx => {
             &["type_parameter"]
         }
-        Language::Rust => &["type_parameter", "constrained_type_parameter"],
+        Language::Rust => &["type_parameter"],
         _ => &[],
     }
 }
@@ -158,6 +167,15 @@ fn type_parameter_names(language: Language, node: Node<'_>) -> Vec<(usize, usize
         return receiver_type_parameters(node);
     }
     const NAMES: &[&str] = &["identifier", "type_identifier"];
+    if language == Language::Python {
+        // The node is the bracketed list. Each name is the first identifier of one entry.
+        let mut cursor = node.walk();
+        return node
+            .named_children(&mut cursor)
+            .filter_map(|entry| first_identifier(entry))
+            .map(range_of)
+            .collect();
+    }
     for field in ["name", "left"] {
         if let Some(name) = node.child_by_field_name(field) {
             return vec![range_of(name)];
@@ -174,6 +192,25 @@ fn type_parameter_names(language: Language, node: Node<'_>) -> Vec<(usize, usize
         names.next().into_iter().collect()
     }
 }
+
+fn first_identifier(node: Node<'_>) -> Option<Node<'_>> {
+    if node.kind() == "identifier" {
+        return Some(node);
+    }
+    let mut cursor = node.walk();
+    let found = node
+        .named_children(&mut cursor)
+        .find_map(|child| first_identifier(child));
+    found
+}
+
+/// The nodes that hold type parameters and are not the declaration in which they are in scope.
+const PARAMETER_LISTS: &[&str] = &[
+    "template_parameter_list",
+    "template_template_parameter_declaration",
+    "type_parameter_list",
+    "type_parameters",
+];
 
 /// The names that a Go receiver such as `(b *Box[T, U])` binds as type parameters.
 fn receiver_type_parameters(method: Node<'_>) -> Vec<(usize, usize)> {
@@ -360,7 +397,11 @@ impl Recorder {
         if bits & TYPE_PARAMETER != 0 {
             let declaration = match node.kind() {
                 "method_declaration" => Some(node),
-                _ => ancestors.iter().rev().nth(1).copied(),
+                _ => ancestors
+                    .iter()
+                    .rev()
+                    .find(|ancestor| !PARAMETER_LISTS.contains(&ancestor.kind()))
+                    .copied(),
             };
             if let Some(declaration) = declaration {
                 for name in type_parameter_names(self.language, node) {

@@ -805,6 +805,40 @@ fn test_go_type_parameter_that_shadows_a_package_type_is_not_coupling() {
 }
 
 #[test]
+fn test_every_form_of_type_parameter_shadows_a_class() {
+    let cases = [
+        (
+            "default.cpp",
+            "class Item {};\ntemplate<class Item = int>\nclass Box {\n    Item value;\n};\n",
+        ),
+        (
+            "variadic.cpp",
+            "class Item {};\ntemplate<typename... Item>\nclass Box {\n    Item* value;\n};\n",
+        ),
+        (
+            "template.cpp",
+            "class Item {};\ntemplate<template<class> class Item>\nclass Box {\n    Item<int> value;\n};\n",
+        ),
+        (
+            "class.py",
+            "class Item:\n    pass\n\nclass Box[Item]:\n    def get(self, value: Item) -> Item:\n        return value\n",
+        ),
+        (
+            "method.py",
+            "class Item:\n    pass\n\nclass Box:\n    def get[Item](self, value: Item) -> Item:\n        return value\n",
+        ),
+    ];
+    let mut failed = Vec::new();
+    for (file, source) in cases {
+        let analysis = analyze(&[(file, source)]);
+        if class(&analysis, "Box").cbo != 0 {
+            failed.push(file);
+        }
+    }
+    assert!(failed.is_empty(), "coupled to a type parameter: {failed:?}");
+}
+
+#[test]
 fn test_go_receiver_type_parameters_are_in_scope_in_the_method() {
     let source = "package p\n\ntype T struct{}\n\ntype Box[T any] struct {\n\tvalue T\n}\n\nfunc (b Box[T]) Get() T {\n\treturn b.value\n}\n\nfunc (b *Box[T]) Put(next T) {\n\tb.value = next\n}\n";
     let analysis = analyze(&[("box.go", source)]);
