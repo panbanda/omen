@@ -1276,6 +1276,14 @@ mod tests {
     }
 
     #[test]
+    fn test_rust_dotted_path_dependency_is_not_external() {
+        let main = "fn run() {\n    local_alias::work();\n}\n";
+        let manifest = "[dependencies]\nlocal_alias.path = \"../local\"\nlocal_alias.package = \"local-pkg\"\n";
+        let files = [("src/main.rs", main), ("Cargo.toml", manifest)];
+        assert!(!external(&files, "src/main.rs", "work"));
+    }
+
+    #[test]
     fn test_rust_macro_can_bind_a_path_head() {
         let main = "mod local {\n    pub(crate) fn run() {}\n}\nmacro_rules! expose {\n    () => { use crate::local as generated; }\n}\nexpose!();\n\nfn main() {\n    generated::run();\n}\n";
         assert!(!external(&[("main.rs", main)], "main.rs", "run"));

@@ -249,83 +249,47 @@ impl Manifests {
     }
 }
 
-/// Tells if an inline table has the key `path`. Text that does not parse as
-/// a value is read by its braces and the word `path`, so that a crate of the
-/// repository is never an external name.
-fn has_path_key(value: &str) -> bool {
-    let parsed = toml::from_str::<toml::Table>(&format!("value = {value}"));
-    match parsed.ok().and_then(|mut table| table.remove("value")) {
-        Some(toml::Value::Table(table)) => table.contains_key("path"),
-        Some(_) => false,
-        None => value.contains("path") && value.trim_start().starts_with('{'),
-    }
-}
-
 /// The names with which Rust source refers to the dependencies in a
 /// `Cargo.toml` file. A name has `_` for `-`. The key of a dependency is its
 /// name in the source, also when `package` renames it. The tables are
 /// `dependencies`, `dev-dependencies`, `build-dependencies`, and
-/// `workspace.dependencies`, and the same tables of `target.<condition>`.
+/// `workspace.dependencies`, and the same tables of `target.<condition>`. A
+/// dependency whose value has a `path` key, in any form of TOML, is a crate of
+/// the repository and is not in the result. A manifest that does not parse has
+/// no dependency.
 pub fn rust_dependency_names(cargo_toml: &str) -> BTreeSet<String> {
     const KINDS: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
-    let unquote = |name: &str| {
-        name.trim()
-            .trim_matches(|quote| quote == '"' || quote == '\'')
-            .replace('-', "_")
+    let Ok(manifest) = toml::from_str::<toml::Table>(cargo_toml) else {
+        return BTreeSet::new();
     };
-    let mut names = BTreeSet::new();
-    let mut in_table = false;
-    // The name of the dependency that a table of its own describes.
-    let mut single: Option<String> = None;
-    let mut paths = BTreeSet::new();
-    for line in cargo_toml.lines().map(str::trim) {
-        if let Some(header) = line.strip_prefix('[') {
-            single = None;
-            let header = header.trim_start_matches('[');
-            let header = header.split(']').next().unwrap_or_default().trim();
-            in_table = false;
-            // The kind is a whole segment: `dependencies`, `workspace.dependencies`,
-            // or `target.<condition>.dev-dependencies`. A segment after it names one dependency.
-            let found = KINDS.iter().find_map(|kind| {
-                let after = header.rfind(kind)? + kind.len();
-                let before = header[..after - kind.len()].chars().last();
-                let whole = before.is_none_or(|character| character == '.')
-                    && header[after..]
-                        .chars()
-                        .next()
-                        .is_none_or(|character| character == '.');
-                whole.then_some(after)
-            });
-            if let Some(after) = found {
-                match header[after..].strip_prefix('.') {
-                    Some(name) => {
-                        names.insert(unquote(name));
-                        single = Some(unquote(name));
-                    }
-                    None => in_table = true,
-                }
-            }
-            continue;
-        }
-        if let (Some(name), Some((key, _))) = (&single, line.split_once('=')) {
-            if key.trim() == "path" {
-                paths.insert(name.clone());
-            }
-        }
-        if in_table && !line.starts_with('#') {
-            if let Some((key, value)) = line.split_once('=') {
-                let key = key.trim().split('.').next().unwrap_or_default();
-                if !key.is_empty() {
-                    names.insert(unquote(key));
-                    // `name = { path = "dir" }` is a crate of the repository.
-                    if has_path_key(value) {
-                        paths.insert(unquote(key));
-                    }
-                }
+    let mut tables: Vec<&toml::Table> = Vec::new();
+    fn table_of(value: Option<&toml::Value>) -> Option<&toml::Table> {
+        value.and_then(toml::Value::as_table)
+    }
+    for kind in KINDS {
+        tables.extend(table_of(manifest.get(kind)));
+    }
+    tables.extend(table_of(
+        table_of(manifest.get("workspace")).and_then(|w| w.get("dependencies")),
+    ));
+    if let Some(targets) = table_of(manifest.get("target")) {
+        for target in targets.values().filter_map(|value| value.as_table()) {
+            for kind in KINDS {
+                tables.extend(table_of(target.get(kind)));
             }
         }
     }
-    names.retain(|name| !paths.contains(name));
+    let mut names = BTreeSet::new();
+    for table in tables {
+        for (key, value) in table {
+            let is_path = value
+                .as_table()
+                .is_some_and(|dependency| dependency.contains_key("path"));
+            if !is_path {
+                names.insert(key.replace('-', "_"));
+            }
+        }
+    }
     names
 }
 
@@ -1270,6 +1234,23 @@ mod tests {
         let names = rust_dependency_names(manifest);
         let found: Vec<&str> = names.iter().map(String::as_str).collect();
         assert_eq!(found, ["algo", "plain"]);
+    }
+
+    #[test]
+    fn test_path_key_in_any_form_of_toml_makes_a_repository_crate() {
+        let manifest = "[dependencies]\nlocal_alias.path = \"../local\"\nlocal_alias.package = \"local-pkg\"\ntabled = \"1\"\nexternal = { version = \"1\" }\n\n[dependencies.long_form]\npath = \"../long\"\n\n[dependencies.long_external]\nversion = \"2\"\n\n[target.'cfg(unix)'.dependencies]\ntarget_local = { path = \"../t\" }\ntarget_external = \"1\"\n\n[workspace.dependencies]\nshared_local = { path = \"shared\" }\nshared_external = \"3\"\n";
+        let names = rust_dependency_names(manifest);
+        let found: Vec<&str> = names.iter().map(String::as_str).collect();
+        assert_eq!(
+            found,
+            [
+                "external",
+                "long_external",
+                "shared_external",
+                "tabled",
+                "target_external"
+            ]
+        );
     }
 
     #[test]
