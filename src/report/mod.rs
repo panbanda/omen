@@ -2,6 +2,7 @@
 //!
 //! This module generates interactive HTML reports matching the Go version exactly.
 
+pub mod generation;
 mod render;
 mod types;
 

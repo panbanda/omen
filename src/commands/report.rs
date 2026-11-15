@@ -30,15 +30,27 @@ impl Output {
 /// not a file, or if a temporary file fails, nothing changes. Then each temporary file replaces
 /// its target. If a replacement fails, the function puts the earlier files back.
 fn commit_outputs(outputs: &[Output]) -> Result<(), String> {
+    commit_outputs_with(outputs, &|_| Ok(()))
+}
+
+/// `after_each` is a seam: it runs after each change, and a test uses it to inject a fault.
+fn commit_outputs_with(
+    outputs: &[Output],
+    after_each: &dyn Fn(usize) -> std::io::Result<()>,
+) -> Result<(), String> {
     let describe = |path: &std::path::Path, error: &dyn std::fmt::Display| {
         format!("{}: {error}", path.display())
     };
-    let mut old_content: Vec<Option<Vec<u8>>> = Vec::new();
+    let mut old_content: Vec<Option<(Vec<u8>, u32)>> = Vec::new();
     for output in outputs {
         let path = output.path();
         match std::fs::symlink_metadata(path) {
             Ok(metadata) if metadata.is_file() => {
-                old_content.push(Some(std::fs::read(path).map_err(|e| describe(path, &e))?));
+                let mode = unix_mode_of(&metadata);
+                old_content.push(Some((
+                    std::fs::read(path).map_err(|e| describe(path, &e))?,
+                    mode,
+                )));
             }
             Ok(_) => return Err(describe(path, &"the target is not a file")),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => old_content.push(None),
@@ -83,18 +95,43 @@ fn commit_outputs(outputs: &[Output]) -> Result<(), String> {
             },
             (Output::Write(..), None) => unreachable!("each write has a staged file"),
         };
+        let result = result.and_then(|()| after_each(index));
         if let Err(error) = result {
-            for (done, content) in outputs[..index].iter().zip(&old_content) {
+            let mut message = describe(output.path(), &error);
+            for (done, content) in outputs[..=index].iter().zip(&old_content) {
                 let path = done.path();
-                let _ = match content {
-                    Some(bytes) => crate::core::write_atomically(path, bytes, 0o644),
-                    None => std::fs::remove_file(path),
+                let undone = match content {
+                    Some((bytes, mode)) => crate::core::write_atomically(path, bytes, *mode),
+                    None => match std::fs::remove_file(path) {
+                        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                        _ => Ok(()),
+                    },
                 };
+                if let Err(rollback_error) = undone {
+                    message.push_str(&format!(
+                        "; rollback failed for {}: {rollback_error}",
+                        path.display()
+                    ));
+                }
             }
-            return Err(describe(output.path(), &error));
+            return Err(message);
         }
     }
     Ok(())
+}
+
+/// The permission bits of a file, for a rollback.
+fn unix_mode_of(metadata: &std::fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o7777
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        0o644
+    }
 }
 
 /// The one history window of `report generate`. Each part reads it.
@@ -186,6 +223,7 @@ fn generate(
     args: &crate::cli::ReportGenerateArgs,
     git_ref: Option<&str>,
     source: Option<std::sync::Arc<dyn crate::core::ContentSource>>,
+    commit: &dyn Fn(&[Output]) -> Result<(), String>,
 ) -> crate::core::Result<()> {
     use serde_json::{json, Value};
 
@@ -224,15 +262,7 @@ fn generate(
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "unknown".to_string());
-    let metadata = json!({
-        "repository": repo_name,
-        "generated_at": chrono::Utc::now().to_rfc3339(),
-        "since": window.label,
-        "omen_version": env!("CARGO_PKG_VERSION"),
-        "paths": [path.display().to_string()]
-    });
-    let metadata_path = args.data.join("metadata.json");
-    let metadata_text = serde_json::to_string_pretty(&metadata)?;
+    let generated_at = chrono::Utc::now().to_rfc3339();
 
     let changes_path = args.data.join("diff.json");
     let changes_text = changes
@@ -435,13 +465,16 @@ fn generate(
     }
 
     // Phase 3: Score, from the results of this run in memory.
-    let mut outputs: Vec<Output> = vec![Output::Write(metadata_path, metadata_text)];
+    let mut outputs: Vec<Output> = Vec::new();
     outputs.push(match changes_text {
         Some(text) => Output::Write(changes_path, text),
         None => Output::Remove(changes_path),
     });
+    let mut analyzer_outputs =
+        std::mem::take(&mut *staged.lock().unwrap_or_else(|p| p.into_inner()));
+    analyzer_outputs.sort();
     outputs.extend(
-        std::mem::take(&mut *staged.lock().unwrap_or_else(|p| p.into_inner()))
+        analyzer_outputs
             .into_iter()
             .map(|(output_path, text)| Output::Write(output_path, text)),
     );
@@ -449,15 +482,20 @@ fn generate(
         if let Some(ref bar) = progress {
             bar.set_message("score...");
         }
+        // The score is the score of the final directory: a file of this run, or else the
+        // file of an earlier run that stays because its analyzer is skipped.
         let document = |name: &str| {
-            outputs.iter().find_map(|output| match output {
-                Output::Write(output_path, text)
-                    if output_path.file_name().is_some_and(|file| file == name) =>
-                {
-                    Some(text.clone())
-                }
-                _ => None,
-            })
+            outputs
+                .iter()
+                .find_map(|output| match output {
+                    Output::Write(output_path, text)
+                        if output_path.file_name().is_some_and(|file| file == name) =>
+                    {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                })
+                .or_else(|| std::fs::read_to_string(output_dir.join(name)).ok())
         };
         let result: Value =
             match crate::score::compute_from_documents(&document, ctx.files.files().len()) {
@@ -480,8 +518,64 @@ fn generate(
         });
     }
 
+    // metadata.json comes last. It names the generation: the digest of each file that is in
+    // the data directory after the commit. Thus a commit that stops in the middle leaves
+    // files that do not match, and `report validate` and `report render` find them.
+    let mut files = std::collections::BTreeMap::new();
+    let mut reused = Vec::new();
+    for name in ANALYZER_NAMES {
+        let file_name = format!("{name}.json");
+        let written = outputs.iter().find_map(|output| match output {
+            Output::Write(output_path, text)
+                if output_path
+                    .file_name()
+                    .is_some_and(|file| *file == *file_name) =>
+            {
+                Some(text.clone().into_bytes())
+            }
+            _ => None,
+        });
+        match written {
+            Some(bytes) => {
+                files.insert(file_name, crate::report::generation::digest(&bytes));
+            }
+            None if skip_list.contains(&name) => {
+                if let Ok(bytes) = std::fs::read(output_dir.join(&file_name)) {
+                    files.insert(file_name.clone(), crate::report::generation::digest(&bytes));
+                    reused.push(file_name);
+                }
+            }
+            None => {}
+        }
+    }
+    if let Some(Output::Write(_, text)) = outputs.iter().find(|output| {
+        output
+            .path()
+            .file_name()
+            .is_some_and(|file| file == "diff.json")
+    }) {
+        files.insert(
+            "diff.json".to_string(),
+            crate::report::generation::digest(text.as_bytes()),
+        );
+    }
+    let metadata = json!({
+        "repository": repo_name,
+        "generated_at": generated_at,
+        "since": window.label,
+        "omen_version": env!("CARGO_PKG_VERSION"),
+        "paths": [path.display().to_string()],
+        "generation": crate::report::generation::generation_id(&generated_at, &files),
+        "files": files,
+        "reused": reused,
+    });
+    outputs.push(Output::Write(
+        output_dir.join("metadata.json"),
+        serde_json::to_string_pretty(&metadata)?,
+    ));
+
     // Phase 4: Commit all outputs, or none.
-    commit_outputs(&outputs).map_err(|error| {
+    commit(&outputs).map_err(|error| {
         crate::core::Error::analysis(format!("The report data was not written: {error}"))
     })?;
     let written = outputs
@@ -512,7 +606,9 @@ pub fn run(
     git_ref: Option<&str>,
 ) -> crate::core::Result<()> {
     match subcommand {
-        ReportSubcommand::Generate(args) => generate(path, config, args, git_ref, None)?,
+        ReportSubcommand::Generate(args) => {
+            generate(path, config, args, git_ref, None, &commit_outputs)?
+        }
         ReportSubcommand::Validate(args) => {
             // Basic validation: check that expected JSON files exist and are valid JSON
             // File list matches Go version
@@ -543,6 +639,11 @@ pub fn run(
                 }
             }
 
+            errors.extend(crate::report::generation::check(
+                &args.data,
+                &EXPECTED_DATA_FILES,
+            ));
+
             if errors.is_empty() {
                 eprintln!("All {} data files are valid.", valid_count);
             } else {
@@ -551,8 +652,9 @@ pub fn run(
                     eprintln!("  - {}", error);
                 }
                 return Err(crate::core::Error::config(format!(
-                    "{} validation errors found",
-                    errors.len()
+                    "{} validation errors found: {}",
+                    errors.len(),
+                    errors.join("; ")
                 )));
             }
         }

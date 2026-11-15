@@ -127,8 +127,15 @@ fn test_a_file_that_changed_during_analysis_fails_generate_and_keeps_the_old_fil
     };
     let source = std::sync::Arc::new(crate::commands::testing::ChangingSource::new(&path));
 
-    let error = generate(&path, &Config::default(), &args, None, Some(source))
-        .expect_err("a changed file fails the command");
+    let error = generate(
+        &path,
+        &Config::default(),
+        &args,
+        None,
+        Some(source),
+        &commit_outputs,
+    )
+    .expect_err("a changed file fails the command");
 
     assert!(
         error.to_string().contains("changed or became unreadable"),
@@ -223,6 +230,193 @@ fn names_in(directory: &std::path::Path) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+const FAST_SKIP: &str = "churn,changes,ownership,temporal,hotspot,defect,tdg";
+
+fn generate_args(data: &std::path::Path, skip: &str) -> crate::cli::ReportGenerateArgs {
+    let ReportSubcommand::Generate(args) = subcommand(&[
+        "generate",
+        "--data",
+        data.to_str().expect("utf-8"),
+        "--skip",
+        skip,
+    ]) else {
+        unreachable!("the arguments name `generate`");
+    };
+    args
+}
+
+/// A commit that stops after it replaced each file except `metadata.json`, as a process that
+/// dies in the middle of a commit.
+fn commit_without_metadata(outputs: &[Output]) -> Result<(), String> {
+    for output in outputs {
+        if let Output::Write(path, text) = output {
+            if path.file_name().is_some_and(|name| name != "metadata.json") {
+                write_atomically(path, text).map_err(|error| error.to_string())?;
+            }
+        }
+    }
+    Err("the process stopped".to_string())
+}
+
+#[test]
+fn test_validate_and_render_find_a_commit_that_stopped_in_the_middle() {
+    let (directory, path) = repository();
+    let data = directory.path().join("data");
+    let args = generate_args(&data, &format!("trend,{FAST_SKIP}"));
+    generate(
+        &path,
+        &Config::default(),
+        &args,
+        None,
+        None,
+        &commit_outputs,
+    )
+    .expect("first run");
+    let validate = || {
+        run(
+            &path,
+            &Config::default(),
+            &subcommand(&["validate", "--data", data.to_str().expect("utf-8")]),
+            None,
+        )
+    };
+    let first_problem = format!("{:?}", validate().expect_err("the trend file is missing"));
+    assert!(
+        !first_problem.contains("generation"),
+        "a complete run has no mix: {first_problem}"
+    );
+    std::fs::write(
+        path.join("shop.py"),
+        "def helper():\n    if True:\n        return 3\n    return 1\n",
+    )
+    .expect("change the source");
+
+    generate(
+        &path,
+        &Config::default(),
+        &args,
+        None,
+        None,
+        &commit_without_metadata,
+    )
+    .expect_err("the commit stops");
+
+    let message = format!("{:?}", validate().expect_err("a mix is an error"));
+    assert!(message.contains("generation"), "{message}");
+    let render = crate::report::Renderer::new()
+        .expect("renderer")
+        .render_to_file(&data, &directory.path().join("report.html"));
+    let message = format!("{:?}", render.expect_err("render finds the mix"));
+    assert!(message.contains("generation"), "{message}");
+}
+
+#[test]
+fn test_the_score_is_the_score_of_the_final_directory() {
+    let (directory, path) = repository();
+    let data = directory.path().join("data");
+    generate(
+        &path,
+        &Config::default(),
+        &generate_args(&data, &format!("trend,{FAST_SKIP}")),
+        None,
+        None,
+        &commit_outputs,
+    )
+    .expect("first run");
+    let first_score = std::fs::read_to_string(data.join("score.json")).expect("score");
+
+    generate(
+        &path,
+        &Config::default(),
+        &generate_args(&data, &format!("trend,complexity,{FAST_SKIP}")),
+        None,
+        None,
+        &commit_outputs,
+    )
+    .expect("second run");
+
+    let document = |name: &str| std::fs::read_to_string(data.join(name)).ok();
+    let expected = crate::score::compute_from_documents(&document, 2).expect("score");
+    let stored: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(data.join("score.json")).expect("score"))
+            .expect("JSON");
+    let first: serde_json::Value = serde_json::from_str(&first_score).expect("JSON");
+    // The sum of the weights has no fixed order, so the last digit of the total can differ.
+    let without_total = |mut value: serde_json::Value| {
+        let total = value["overall_score"].take().as_f64().expect("total");
+        (value, total)
+    };
+    let (stored, stored_total) = without_total(stored);
+    let (expected, expected_total) = without_total(serde_json::to_value(expected).expect("value"));
+    let (first, first_total) = without_total(first);
+    assert_eq!(stored, expected);
+    assert_eq!(
+        stored, first,
+        "the kept complexity.json keeps its part of the score"
+    );
+    assert!((stored_total - expected_total).abs() < 1e-9);
+    assert!((stored_total - first_total).abs() < 1e-9);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_rollback_keeps_the_mode_of_each_old_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("directory");
+    let first = directory.path().join("first.json");
+    let second = directory.path().join("second.json");
+    std::fs::write(&first, "old first").expect("old");
+    std::fs::set_permissions(&first, std::fs::Permissions::from_mode(0o600)).expect("mode");
+    let outputs = [
+        Output::Write(first.clone(), "new first".to_string()),
+        Output::Write(second.clone(), "new second".to_string()),
+    ];
+
+    let error = commit_outputs_with(&outputs, &|index| {
+        if index == 1 {
+            Err(std::io::Error::other("injected fault"))
+        } else {
+            Ok(())
+        }
+    })
+    .expect_err("the commit fails");
+
+    assert!(error.contains("injected fault"), "{error}");
+    assert_eq!(std::fs::read_to_string(&first).expect("read"), "old first");
+    let mode = std::fs::metadata(&first)
+        .expect("metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+    assert!(!second.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_failed_rollback_is_in_the_error() {
+    use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let directory = tempfile::tempdir().expect("directory");
+    let first = directory.path().join("first.json");
+    std::fs::write(&first, "old first").expect("old");
+    let outputs = [Output::Write(first.clone(), "new first".to_string())];
+    let locked = directory.path().to_path_buf();
+
+    let error = commit_outputs_with(&outputs, &|_| {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555))?;
+        Err(std::io::Error::other("injected fault"))
+    })
+    .expect_err("the commit fails");
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755))
+        .expect("unlock");
+
+    assert!(error.contains("injected fault"), "{error}");
+    assert!(error.contains("rollback"), "{error}");
+    assert!(error.contains("first.json"), "{error}");
 }
 
 #[test]
