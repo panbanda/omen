@@ -946,6 +946,13 @@ fn test_csharp_target_typed_new_under_a_type_parameter_abstains() {
 }
 
 #[test]
+fn test_csharp_qualified_type_is_not_hidden_by_a_type_parameter() {
+    let source = "namespace Repo {\n    class Part {}\n}\n\nclass Factory<Part> where Part : struct {\n    Repo.Part? Make() => new();\n}\n";
+    let analysis = analyze(&[("Factory.cs", source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+}
+
+#[test]
 fn test_csharp_nullable_target_typed_new_is_decided_by_the_repository_kinds() {
     let factory = "class Factory {\n    Part? Make() => new();\n}\n";
     let cases = [

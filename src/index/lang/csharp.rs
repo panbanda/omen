@@ -194,8 +194,10 @@ fn implicit_target<'tree>(node: Node<'tree>, source: &[u8]) -> Option<(Node<'tre
         declared.kind(),
         IDENTIFIER | "qualified_name" | GENERIC_NAME
     );
-    let name = split_type(&text(declared)).1;
-    (simple && !is_type_parameter(node, &name, source)).then_some((declared, nullable))
+    // A type parameter hides an unqualified name only.
+    let (qualifier, name) = split_type(&text(declared));
+    (simple && (qualifier.is_some() || !is_type_parameter(node, &name, source)))
+        .then_some((declared, nullable))
 }
 
 /// Tells if the name is a type parameter of the class or the method that
