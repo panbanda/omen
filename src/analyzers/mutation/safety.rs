@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crate::core::{Error, Result};
 
-type ActiveMutations = Arc<parking_lot::Mutex<HashMap<PathBuf, RestoreRecord>>>;
+type ActiveMutations = Arc<parking_lot::Mutex<HashMap<PathBuf, Option<RestoreRecord>>>>;
 
 static ACTIVE_MUTATIONS: LazyLock<ActiveMutations> =
     LazyLock::new(|| Arc::new(parking_lot::Mutex::new(HashMap::new())));
@@ -315,6 +315,18 @@ impl MutationGuard {
             .transpose()
             .map_err(Error::Io)?;
         let real_path = fs::canonicalize(&path).map_err(Error::Io)?;
+        // The map has one entry for each file with a guard. A second guard would
+        // replace the record of the first, and the original content would be lost.
+        {
+            let mut active = active_mutations.lock();
+            if active.contains_key(&real_path) {
+                return Err(Error::analysis(format!(
+                    "{} is already in a mutation in this process",
+                    path.display()
+                )));
+            }
+            active.insert(real_path.clone(), None);
+        }
 
         Ok(Self {
             link,
@@ -372,7 +384,7 @@ impl MutationGuard {
             self.backup = Some(save_backup(&self.original)?);
         }
         let record = self.record();
-        active.insert(self.path.clone(), record.clone());
+        active.insert(self.real_path.clone(), Some(record.clone()));
         // A write that fails can truncate the file first, so the file counts as
         // modified from the first write.
         self.modified = true;
@@ -380,7 +392,7 @@ impl MutationGuard {
             match record.restore() {
                 Ok(()) => {
                     self.modified = false;
-                    active.remove(&self.path);
+                    active.insert(self.real_path.clone(), None);
                 }
                 Err(restore_error) => self.give_up_restore(&record, &restore_error),
             }
@@ -426,13 +438,13 @@ impl MutationGuard {
         // can leave an empty file.
         let active_mutations = Arc::clone(&self.active_mutations);
         let mut active = active_mutations.lock();
-        if active.contains_key(&self.path) {
+        if matches!(active.get(&self.real_path), Some(Some(_))) {
             self.record()
                 .restore_with(self.restore_writer)
                 .map_err(Error::Io)?;
         }
         self.modified = false;
-        active.remove(&self.path);
+        active.insert(self.real_path.clone(), None);
         Ok(())
     }
 }
@@ -441,27 +453,27 @@ impl Drop for MutationGuard {
     fn drop(&mut self) {
         let active_mutations = Arc::clone(&self.active_mutations);
         let mut active = active_mutations.lock();
-        if self.modified && active.contains_key(&self.path) {
+        if self.modified && matches!(active.get(&self.real_path), Some(Some(_))) {
             let record = self.record();
             if let Err(error) = record.restore_with(self.restore_writer) {
                 self.give_up_restore(&record, &error);
-                active.remove(&self.path);
+                active.remove(&self.real_path);
                 return;
             }
         }
-        active.remove(&self.path);
+        active.remove(&self.real_path);
     }
 }
 
 fn restore_registered_mutations(
-    active_mutations: &parking_lot::Mutex<HashMap<PathBuf, RestoreRecord>>,
+    active_mutations: &parking_lot::Mutex<HashMap<PathBuf, Option<RestoreRecord>>>,
     interrupted: &std::sync::atomic::AtomicBool,
 ) {
     interrupted.store(true, Ordering::SeqCst);
     let mut active = active_mutations.lock();
     let paths: Vec<PathBuf> = active.keys().cloned().collect();
     for path in paths {
-        let Some(record) = active.get(&path) else {
+        let Some(Some(record)) = active.get(&path) else {
             continue;
         };
         match record.restore() {
@@ -469,7 +481,7 @@ fn restore_registered_mutations(
                 if let Some(backup) = &record.backup {
                     let _ = fs::remove_file(backup);
                 }
-                active.remove(&path);
+                active.insert(path, None);
             }
             Err(error) => report_failed_restore(record, &error),
         }
@@ -1903,6 +1915,24 @@ mod tests {
         guard.restore_writer = write_all_bytes;
         guard.restore().unwrap();
         assert_eq!(fs::read(&file_path).unwrap(), b"original content");
+    }
+
+    #[test]
+    fn test_a_second_guard_for_the_same_file_is_refused() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut first = MutationGuard::new(&file_path).unwrap();
+        first.apply(b"mutated").unwrap();
+
+        let error = MutationGuard::new(temp_dir.path().join("./test.rs"))
+            .err()
+            .expect("the second guard is refused");
+
+        assert!(error.to_string().contains("test.rs"), "{error}");
+        drop(first);
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+        assert!(MutationGuard::new(&file_path).is_ok());
     }
 
     #[test]
