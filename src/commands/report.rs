@@ -244,6 +244,22 @@ fn generate(
     source: Option<std::sync::Arc<dyn crate::core::ContentSource>>,
     commit: &dyn Fn(&[Output]) -> Result<(), String>,
 ) -> crate::core::Result<()> {
+    generate_with(path, config, args, git_ref, source, commit, &|file| {
+        std::fs::read(file)
+    })
+}
+
+/// `read_file` reads the file of an earlier run that a skipped analyzer keeps. It is a seam
+/// for a test.
+fn generate_with(
+    path: &PathBuf,
+    config: &Config,
+    args: &crate::cli::ReportGenerateArgs,
+    git_ref: Option<&str>,
+    source: Option<std::sync::Arc<dyn crate::core::ContentSource>>,
+    commit: &dyn Fn(&[Output]) -> Result<(), String>,
+    read_file: &dyn Fn(&std::path::Path) -> std::io::Result<Vec<u8>>,
+) -> crate::core::Result<()> {
     use serde_json::{json, Value};
 
     let window = generate_window(args.since.as_deref(), args.days)?;
@@ -497,6 +513,19 @@ fn generate(
             .into_iter()
             .map(|(output_path, text)| Output::Write(output_path, text)),
     );
+    // Each file that a skipped analyzer keeps is read one time. The score and the manifest
+    // use these bytes, so a file that changes later cannot give the score one version and
+    // the manifest another.
+    let kept: std::collections::BTreeMap<String, Vec<u8>> = ANALYZER_NAMES
+        .iter()
+        .filter(|name| skip_list.contains(name))
+        .filter_map(|name| {
+            let file_name = format!("{name}.json");
+            read_file(&output_dir.join(&file_name))
+                .ok()
+                .map(|bytes| (file_name, bytes))
+        })
+        .collect();
     if !skip_list.contains(&"score") {
         if let Some(ref bar) = progress {
             bar.set_message("score...");
@@ -514,7 +543,10 @@ fn generate(
                     }
                     _ => None,
                 })
-                .or_else(|| std::fs::read_to_string(output_dir.join(name)).ok())
+                .or_else(|| {
+                    kept.get(name)
+                        .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+                })
         };
         let result: Value =
             match crate::score::compute_from_documents(&document, ctx.files.files().len()) {
@@ -559,8 +591,8 @@ fn generate(
                 files.insert(file_name, crate::report::generation::digest(&bytes));
             }
             None if skip_list.contains(&name) => {
-                if let Ok(bytes) = std::fs::read(output_dir.join(&file_name)) {
-                    files.insert(file_name.clone(), crate::report::generation::digest(&bytes));
+                if let Some(bytes) = kept.get(&file_name) {
+                    files.insert(file_name.clone(), crate::report::generation::digest(bytes));
                     reused.push(file_name);
                 }
             }

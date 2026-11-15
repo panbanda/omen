@@ -355,6 +355,58 @@ fn test_the_score_is_the_score_of_the_final_directory() {
 }
 
 #[test]
+fn test_a_reused_file_is_read_once_for_the_score_and_the_manifest() {
+    let (directory, path) = repository();
+    let data = directory.path().join("data");
+    generate(
+        &path,
+        &Config::default(),
+        &generate_args(&data, &format!("trend,{FAST_SKIP}")),
+        None,
+        None,
+        &commit_outputs,
+    )
+    .expect("first run");
+    let first_bytes = std::fs::read(data.join("complexity.json")).expect("read");
+    let reads = std::cell::RefCell::new(Vec::new());
+    let changing_reader = |path: &std::path::Path| -> std::io::Result<Vec<u8>> {
+        let mut reads = reads.borrow_mut();
+        reads.push(path.to_path_buf());
+        if reads.len() == 1 {
+            Ok(first_bytes.clone())
+        } else {
+            Ok(b"{\"another\": \"file\"}".to_vec())
+        }
+    };
+
+    generate_with(
+        &path,
+        &Config::default(),
+        &generate_args(&data, &format!("trend,complexity,{FAST_SKIP}")),
+        None,
+        None,
+        &commit_outputs,
+        &changing_reader,
+    )
+    .expect("second run");
+
+    let reused: Vec<_> = reads
+        .borrow()
+        .iter()
+        .filter(|path| path.ends_with("complexity.json"))
+        .cloned()
+        .collect();
+    assert_eq!(reused.len(), 1, "{reused:?}");
+    let metadata: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(data.join("metadata.json")).expect("read"))
+            .expect("JSON");
+    assert_eq!(
+        metadata["files"]["complexity.json"],
+        crate::report::generation::digest(&first_bytes)
+    );
+}
+
+#[test]
 fn test_the_old_metadata_is_gone_before_the_first_file_is_replaced() {
     let directory = tempfile::tempdir().expect("directory");
     let metadata = directory.path().join("metadata.json");
