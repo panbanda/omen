@@ -343,21 +343,15 @@ fn test_the_score_is_the_score_of_the_final_directory() {
         serde_json::from_str(&std::fs::read_to_string(data.join("score.json")).expect("score"))
             .expect("JSON");
     let first: serde_json::Value = serde_json::from_str(&first_score).expect("JSON");
-    // The sum of the weights has no fixed order, so the last digit of the total can differ.
-    let without_total = |mut value: serde_json::Value| {
-        let total = value["overall_score"].take().as_f64().expect("total");
-        (value, total)
-    };
-    let (stored, stored_total) = without_total(stored);
-    let (expected, expected_total) = without_total(serde_json::to_value(expected).expect("value"));
-    let (first, first_total) = without_total(first);
-    assert_eq!(stored, expected);
+    assert_eq!(stored, serde_json::to_value(expected).expect("value"));
     assert_eq!(
         stored, first,
         "the kept complexity.json keeps its part of the score"
     );
-    assert!((stored_total - expected_total).abs() < 1e-9);
-    assert!((stored_total - first_total).abs() < 1e-9);
+    assert_eq!(
+        stored["overall_score"].as_f64().map(f64::to_bits),
+        first["overall_score"].as_f64().map(f64::to_bits)
+    );
 }
 
 #[cfg(unix)]

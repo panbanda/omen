@@ -1,6 +1,8 @@
 //! Composite health score analyzer.
 
 mod debt;
+#[cfg(test)]
+mod determinism_tests;
 pub mod trend;
 
 use std::collections::HashMap;
