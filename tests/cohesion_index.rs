@@ -961,6 +961,22 @@ fn test_csharp_target_typed_new_under_a_type_parameter_abstains() {
 }
 
 #[test]
+fn test_csharp_target_typed_new_in_a_class_with_many_methods_is_linear() {
+    let methods = 10_000;
+    let mut source = String::from("class Part {}\n\nclass Factory<T> {\n");
+    for index in 0..methods {
+        source.push_str(&format!(
+            "    void Make{index}() {{ Part part = new(); }}\n"
+        ));
+    }
+    source.push_str("}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Factory.cs", &source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, methods + 1);
+    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+}
+
+#[test]
 fn test_csharp_qualified_type_is_not_hidden_by_a_type_parameter() {
     let source = "namespace Repo {\n    class Part {}\n}\n\nclass Factory<Part> where Part : struct {\n    Repo.Part? Make() => new();\n}\n";
     let analysis = analyze(&[("Factory.cs", source)]);

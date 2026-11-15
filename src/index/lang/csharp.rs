@@ -200,32 +200,49 @@ fn implicit_target<'tree>(node: Node<'tree>, source: &[u8]) -> Option<(Node<'tre
         .then_some((declared, nullable))
 }
 
-/// Tells if the name is a type parameter of the class or the method that
-/// contains the node. A type parameter hides a type of the repository.
+/// The declarations that can have type parameters.
+const GENERIC_DECLARATIONS: [&str; 8] = [
+    "class_declaration",
+    "struct_declaration",
+    "interface_declaration",
+    "record_declaration",
+    "delegate_declaration",
+    "method_declaration",
+    "local_function_statement",
+    "record_struct_declaration",
+];
+
+/// Tells if the name is a type parameter of a class or a method that
+/// contains the node. A type parameter hides a type of the repository. Only
+/// the declarations are read, and the members of a class are not.
 fn is_type_parameter(node: Node<'_>, name: &str, source: &[u8]) -> bool {
     let mut ancestor = node.parent();
     while let Some(current) = ancestor {
-        let mut cursor = current.walk();
-        let declared = current
-            .named_children(&mut cursor)
-            .filter(|child| child.kind() == "type_parameter_list")
-            .any(|list| {
-                let mut inner = list.walk();
-                let found = list
-                    .named_children(&mut inner)
-                    .filter(|parameter| parameter.kind() == "type_parameter")
-                    .filter_map(|parameter| {
-                        let mut walk = parameter.walk();
-                        let name = parameter
-                            .named_children(&mut walk)
-                            .find(|child| child.kind() == IDENTIFIER);
-                        name
-                    })
-                    .any(|identifier| source[identifier.byte_range()] == *name.as_bytes());
+        if GENERIC_DECLARATIONS.contains(&current.kind()) {
+            let list = current.child_by_field_name("type_parameters").or_else(|| {
+                let mut cursor = current.walk();
+                let found = current
+                    .named_children(&mut cursor)
+                    .find(|child| child.kind() == "type_parameter_list");
                 found
             });
-        if declared {
-            return true;
+            if let Some(list) = list {
+                let mut cursor = list.walk();
+                let declared = list
+                    .named_children(&mut cursor)
+                    .filter(|parameter| parameter.kind() == "type_parameter")
+                    .filter_map(|parameter| {
+                        let mut inner = parameter.walk();
+                        let identifier = parameter
+                            .named_children(&mut inner)
+                            .find(|child| child.kind() == IDENTIFIER);
+                        identifier
+                    })
+                    .any(|identifier| source[identifier.byte_range()] == *name.as_bytes());
+                if declared {
+                    return true;
+                }
+            }
         }
         ancestor = current.parent();
     }
