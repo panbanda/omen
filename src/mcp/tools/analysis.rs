@@ -10,8 +10,6 @@ use crate::mcp::McpServer;
 /// The largest history window: 100 years.
 const MAX_DAYS: u64 = 36_500;
 
-const DAYS_DESCRIPTION: &str = "The number of days of git history to read.";
-
 pub(super) static COMPLEXITY: ToolSpec = ToolSpec {
     name: "complexity",
     description: "Gives the cyclomatic complexity and the cognitive complexity of each function. \
@@ -63,16 +61,10 @@ pub(super) static STUBS: ToolSpec = ToolSpec {
 pub(super) static CHURN: ToolSpec = ToolSpec {
     name: "churn",
     description: "Finds the files that change most frequently in the git history.",
-    params: &[
-        PATH,
-        Param::integer("days", 1, MAX_DAYS, DAYS_DESCRIPTION)
-            .with_default(ParamDefault::Configuration("churn.since")),
-    ],
+    params: &[PATH],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
-        let days = arguments.count_u32("days").unwrap_or(
-            crate::commands::analyzers::configured_churn_days(&server.config),
-        );
+        let days = crate::commands::analyzers::configured_churn_days(&server.config);
         server.analyze(arguments, crate::commands::analyzers::churn_analyzer(days))
     },
 };
@@ -121,16 +113,10 @@ pub(super) static CLONES: ToolSpec = ToolSpec {
 pub(super) static DEFECT: ToolSpec = ToolSpec {
     name: "defect",
     description: "Gives the defect probability of each file from PMAT metrics.",
-    params: &[
-        PATH,
-        Param::integer("days", 1, MAX_DAYS, DAYS_DESCRIPTION)
-            .with_default(ParamDefault::Configuration("defect.since")),
-    ],
+    params: &[PATH],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
-        let days = arguments
-            .count_u32("days")
-            .unwrap_or(server.config.defect.since.days());
+        let days = server.config.defect.since.days();
         server.analyze(arguments, crate::commands::analyzers::defect_analyzer(days))
     },
 };
@@ -197,16 +183,10 @@ pub(super) static GRAPH: ToolSpec = ToolSpec {
 pub(super) static HOTSPOT: ToolSpec = ToolSpec {
     name: "hotspot",
     description: "Finds the files that have high churn and high complexity.",
-    params: &[
-        PATH,
-        Param::integer("days", 1, MAX_DAYS, DAYS_DESCRIPTION)
-            .with_default(ParamDefault::Configuration("hotspot.since")),
-    ],
+    params: &[PATH],
     paginated: Pagination::Field("hotspots"),
     handler: |server, arguments| {
-        let days = arguments
-            .count_u32("days")
-            .unwrap_or(server.config.hotspot.since.days());
+        let days = server.config.hotspot.since.days();
         server.analyze(
             arguments,
             crate::commands::analyzers::hotspot_analyzer(days),
@@ -217,18 +197,10 @@ pub(super) static HOTSPOT: ToolSpec = ToolSpec {
 pub(super) static TEMPORAL: ToolSpec = ToolSpec {
     name: "temporal",
     description: "Finds the files that change together in the git history.",
-    params: &[
-        PATH,
-        Param::integer("days", 1, MAX_DAYS, DAYS_DESCRIPTION)
-            .with_default(ParamDefault::Integer(30)),
-    ],
+    params: &[PATH],
     paginated: Pagination::Field("couplings"),
     handler: |server, arguments| {
-        let days = arguments.count_u32("days").unwrap_or(30);
-        server.analyze(
-            arguments,
-            crate::analyzers::temporal::Analyzer::new().with_days(days),
-        )
+        server.analyze(arguments, crate::analyzers::temporal::Analyzer::new())
     },
 };
 

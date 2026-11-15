@@ -217,12 +217,6 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
-            "days": {
-              "description": "The number of days of git history to read. The default is `churn.since` in the configuration.",
-              "maximum": 36500,
-              "minimum": 1,
-              "type": "integer"
-            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -296,12 +290,6 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
-            "days": {
-              "description": "The number of days of git history to read. The default is `defect.since` in the configuration.",
-              "maximum": 36500,
-              "minimum": 1,
-              "type": "integer"
-            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -450,12 +438,6 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
-            "days": {
-              "description": "The number of days of git history to read. The default is `hotspot.since` in the configuration.",
-              "maximum": 36500,
-              "minimum": 1,
-              "type": "integer"
-            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -484,13 +466,6 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
-            "days": {
-              "default": 30,
-              "description": "The number of days of git history to read.",
-              "maximum": 36500,
-              "minimum": 1,
-              "type": "integer"
-            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",

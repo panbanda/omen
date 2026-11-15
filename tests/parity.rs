@@ -56,9 +56,6 @@ impl Mirror {
     }
 }
 
-const WIDE: &[&str] = &["--days", "36500"];
-const WIDE_ARGUMENTS: &str = r#"{"days": 36500}"#;
-
 const MIRRORS: &[Mirror] = &[
     mirror("context", &["context"])
         .not_paged()
@@ -68,14 +65,14 @@ const MIRRORS: &[Mirror] = &[
     mirror("satd", &["satd"]),
     mirror("deadcode", &["deadcode"]),
     mirror("stubs", &["stubs"]),
-    mirror("churn", &["churn"]).option(WIDE, WIDE_ARGUMENTS),
+    mirror("churn", &["churn"]),
     mirror("clones", &["clones"]).option(&["--include-tests"], r#"{"include_tests": true}"#),
-    mirror("defect", &["defect"]).option(WIDE, WIDE_ARGUMENTS),
+    mirror("defect", &["defect"]),
     mirror("changes", &["changes"]),
     mirror("diff", &["diff"]).option(&["--target", "main"], r#"{"base": "main"}"#),
     mirror("tdg", &["tdg"]),
     mirror("graph", &["graph"]),
-    mirror("hotspot", &["hotspot"]).option(WIDE, WIDE_ARGUMENTS),
+    mirror("hotspot", &["hotspot"]),
     mirror("temporal", &["temporal"]),
     mirror("ownership", &["ownership"]),
     mirror("cohesion", &["cohesion"]),
@@ -539,11 +536,8 @@ fn a_limit_cuts_the_same_lists_on_the_two_sides() {
 const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
     (("context", "max_tokens"), "max_tokens"),
     (("outline", "file"), "file"),
-    (("churn", "days"), "days"),
     (("clones", "include_tests"), "include_tests"),
-    (("defect", "days"), "days"),
     (("diff", "base"), "target"),
-    (("hotspot", "days"), "days"),
     (("flags", "provider"), "provider"),
     (("flags", "stale_days"), "stale_days"),
     (("search", "query"), "query"),
@@ -595,7 +589,6 @@ const MCP_ONLY: &[((&str, &str), &str)] = &[
         ("diff", "head"),
         "An alias of `base` that the tool keeps for old clients.",
     ),
-    (("temporal", "days"), NO_FLAG_FIXED_VALUE),
     (("repomap", "max_symbols"), NO_FLAG_FIXED_VALUE),
     (("repomap", "compact"), TABLE_ENCODING),
     (
@@ -628,7 +621,7 @@ const FILE_FILTER: &str = "The tools have no file filter. They read each file be
 const GATE: &str = "A tool gives data and does not apply a gate.";
 const PULL_REQUEST_COMMENT: &str =
     "Only the Markdown comment of the CLI uses the flag. A tool gives JSON and does not write a comment.";
-const SINCE: &str = "The tool accepts the window only as `days`.";
+const SINCE: &str = "The tool reads the window from the configuration and has no parameter for it.";
 const PROCESS: &str = "The flag controls the CLI process, not the analysis.";
 
 /// The CLI flags that have no tool parameter, each with the reason. The

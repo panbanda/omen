@@ -5,11 +5,11 @@ expression: body
 {
   "error": {
     "code": "invalid_argument",
-    "expected": "an integer from 1 to 36500",
-    "message": "The value of `days` is not correct.",
-    "next": "Send the call again with a correct value for `days`.",
-    "param": "days",
-    "received": "30",
+    "expected": "an integer from 0 to 4294967295",
+    "message": "The value of `depth` is not correct.",
+    "next": "Send the call again with a correct value for `depth`.",
+    "param": "depth",
+    "received": "3",
     "suggestions": []
   }
 }

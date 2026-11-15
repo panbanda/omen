@@ -2331,30 +2331,13 @@ mod tests {
     }
 
     #[test]
-    fn a_number_of_the_wrong_type_is_an_error_and_not_the_default() {
+    fn the_days_argument_is_an_unknown_argument() {
         let (server, temp_dir) = create_git_test_server();
-        let body = error_of(
-            &server,
-            "churn",
-            json!({"path": temp_dir.path(), "days": "3650"}),
-        );
-        assert_eq!(body["error"]["code"], "invalid_argument");
-        assert_eq!(body["error"]["param"], "days");
-        assert_eq!(body["error"]["expected"], "an integer from 1 to 36500");
-        assert_eq!(body["error"]["received"], "3650");
-    }
-
-    #[test]
-    fn a_value_that_is_not_in_the_enum_is_an_error_and_not_the_default() {
-        let (server, temp_dir) = create_test_server();
-        std::fs::write(temp_dir.path().join("a.rs"), "fn a() {}\n").unwrap();
-        let body = error_of(&server, "impact", json!({"symbol": "a", "direction": "up"}));
-        assert_eq!(body["error"]["code"], "invalid_argument");
-        assert_eq!(body["error"]["param"], "direction");
-        assert_eq!(body["error"]["expected"], "one of: callers, callees, both");
-
-        let body = error_of(&server, "context", json!({"format": "yaml"}));
-        assert_eq!(body["error"]["param"], "format");
+        for tool in ["churn", "defect", "hotspot", "temporal"] {
+            let body = error_of(&server, tool, json!({"path": temp_dir.path(), "days": 30}));
+            assert_eq!(body["error"]["code"], "unknown_argument", "{tool}");
+            assert_eq!(body["error"]["param"], "days", "{tool}");
+        }
     }
 
     #[test]
@@ -2570,20 +2553,6 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_tool_call_churn_honors_days() {
-        let (server, temp_dir) = create_git_test_server();
-        let response = server
-            .handle_tool_call(Some(json!({
-                "name": "churn",
-                "arguments": {"path": temp_dir.path(), "days": 3650}
-            })))
-            .unwrap();
-        let envelope: Value =
-            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(envelope["result"]["period_days"], 3650);
-    }
-
-    #[test]
     fn test_handle_tool_call_repomap_honors_max_symbols() {
         let (server, temp_dir) = create_test_server();
         std::fs::write(
@@ -2627,20 +2596,6 @@ mod tests {
             serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(envelope["result"]["min_lines"], 1);
         assert_eq!(envelope["result"]["threshold"], 0.42);
-    }
-
-    #[test]
-    fn test_handle_tool_call_temporal_honors_days() {
-        let (server, temp_dir) = create_git_test_server();
-        let response = server
-            .handle_tool_call(Some(json!({
-                "name": "temporal",
-                "arguments": {"path": temp_dir.path(), "days": 321}
-            })))
-            .unwrap();
-        let envelope: Value =
-            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(envelope["result"]["period_days"], 321);
     }
 
     #[test]

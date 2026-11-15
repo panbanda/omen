@@ -48,7 +48,7 @@ omen search query "parse config" -n 5
 omen report generate --data ./data
 ```
 
-The flag `--days` is not removed. It is an alias for `--since` on `churn`, `hotspot`, `defect`, and `report generate`. If you give both, `--since` wins. For `report generate`, one window applies to the metadata, the churn, and the trend.
+The flag `--days` is removed from `churn`, `hotspot`, `defect`, and `report generate`. Use `--since` with a duration. `--days 30` becomes `--since 30d`. For `report generate`, one window applies to the metadata, the churn, and the trend.
 
 ### Gates
 
@@ -406,10 +406,10 @@ An argument that is absent takes the value of the related command: the value in 
 
 | Tool | Argument | Before 5.0 | From 5.0 |
 |---|---|---|---|
-| `churn` | `days` | 30 | `churn.since`. The default is `6m`. |
+| `churn` | `days` | 30 | `churn.since`. The default is `6m`. The argument `days` is removed. |
 | `clones` | `similarity` | 0.7 | `duplicates.min_similarity`. The default is 0.9. |
 
-Send the old value to keep the old behavior. The MCP tools `clones`, `changes`, and `satd` now read their configuration keys.
+Set the old value in the configuration to keep the old behavior. The arguments `days` of the tools `churn`, `defect`, `hotspot`, and `temporal` are removed. A call that sends `days` gets the error `unknown_argument`. The tools `churn`, `defect`, and `hotspot` read their window from `churn.since`, `defect.since`, and `hotspot.since`. The tool `temporal` uses 30 days. The MCP tools `clones`, `changes`, and `satd` now read their configuration keys.
 
 ## Other changes
 

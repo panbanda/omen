@@ -20,10 +20,6 @@ placed in a doc comment or code comment at each site.
 
 No entries.
 
-Note: `--days` is a **kept** alias for `--since` on `churn`, `hotspot`,
-`defect`, and `report generate`. It is not scheduled for removal, so it carries
-no marker.
-
 ## Removed in 5.0
 
 Omen 5.0 removed each item in this section. There is no alias and no shim.
@@ -41,6 +37,7 @@ Use the replacement.
 | `--path` / `-p` of `mutation train` | the global `--path` / `-p` |
 | `-p` as the short form of `--period` (`score trend`) | `--period` |
 | `-p` as the short form of `--port` (`report serve`) | `--port` |
+| `--days N` (`churn`, `hotspot`, `defect`, `report generate`) | `--since Nd` |
 
 The flags `-p`, `-f`, `-c`, `-v`, and `-j` are global. On each command, `-p` is
 the repository path. `stubs --gate` has no default value in the CLI. If the
@@ -264,7 +261,6 @@ envelope.
 
 These bounds are new:
 
-- `days` of `churn`, `defect`, `hotspot`, and `temporal`: 1 to 36500.
 - `stale_days` of `flags`: 1 to 36500.
 - `min_tokens` of `clones`, `top_k` of the search tools, and `max_tokens` of
   `context`: 1 or more.
@@ -278,7 +274,7 @@ tools used a fixed value and did not read the configuration.
 
 | Tool | Setting | Before 5.0 | From 5.0 | Change in a client |
 |---|---|---|---|---|
-| `churn` | `days` | 30 | `churn.since` of the configuration. The built-in default is `6m`, which is 180 days. | Send `days: 30` to keep the old window. |
+| `churn` | `days` | 30 | `churn.since` of the configuration. The built-in default is `6m`, which is 180 days. The argument `days` is removed. | Set `churn.since = "30d"` in the configuration to keep the old window. |
 | `clones` | `similarity` | 0.7 | `duplicates.min_similarity` of the configuration. The built-in default is 0.9. | Send `similarity: 0.7` to keep the old threshold. |
 | `clones` | `min_tokens` | 50 | `duplicates.min_tokens` of the configuration. The built-in default is 50. | None, unless the configuration sets the value. |
 | `clones` | Test code | Not read. | `exclude_tests` of the configuration applies. The new `include_tests` argument reads test code. | None, unless the configuration sets `exclude_tests = false`. |

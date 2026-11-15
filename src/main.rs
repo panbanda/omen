@@ -180,7 +180,6 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 scope: scope_of(cli, &args.common),
                 window: WindowRequest {
                     since: args.window.since.clone(),
-                    days: args.window.days,
                 },
             };
             analyzers::run_defect(path, &config, format, &request, &mut stdout())?;
@@ -190,7 +189,6 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 scope: scope_of(cli, &args.common),
                 window: WindowRequest {
                     since: args.window.since.clone(),
-                    days: args.window.days,
                 },
             };
             analyzers::run_hotspot(path, &config, format, &request, &mut stdout())?;
@@ -270,7 +268,6 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 scope: scope_of(cli, &args.common),
                 window: WindowRequest {
                     since: args.since.clone(),
-                    days: args.days,
                 },
             };
             analyzers::run_churn(path, &config, format, &request, &mut stdout())?;

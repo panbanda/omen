@@ -1840,7 +1840,7 @@ fn test_mutation_glob_and_exclude_still_work() {
 }
 
 // ---------------------------------------------------------------------------
-// Time window: --since / --days on churn
+// Time window: --since on churn
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1852,11 +1852,12 @@ fn test_churn_since_flag_runs_successfully() {
 }
 
 #[test]
-fn test_churn_days_alias_still_runs_successfully() {
+fn test_churn_days_flag_is_rejected() {
     omen()
         .args(["-p", ".", "-f", "json", "churn", "--days", "180"])
         .assert()
-        .success();
+        .failure()
+        .stderr(predicates::str::contains("--days"));
 }
 
 // ---------------------------------------------------------------------------
