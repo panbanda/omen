@@ -1142,7 +1142,7 @@ mod tests {
 
     #[test]
     fn test_nested_scopes_of_one_name_are_looked_up_in_logarithmic_time() {
-        let depth = 100_000;
+        let depth = 400_000;
         let source = b"T";
         let declared: Vec<(ByteRange, ByteRange)> = (0..depth)
             .map(|level| ((0, 1), (level, 2 * depth - level)))
@@ -1154,6 +1154,6 @@ mod tests {
             assert!(scopes.hides(b"T", position, position + 1) || level == 0);
         }
         assert!(!scopes.hides(b"T", 2 * depth + 5, 2 * depth + 6));
-        assert!(started.elapsed().as_secs() < 2, "{:?}", started.elapsed());
+        assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
     }
 }

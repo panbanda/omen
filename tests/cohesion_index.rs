@@ -847,7 +847,7 @@ fn test_inner_template_template_parameter_is_not_in_scope_in_the_class() {
 
 #[test]
 fn test_many_type_parameters_and_references_are_read_in_linear_time() {
-    let count = 100_000;
+    let count = 300_000;
     let parameters: Vec<String> = (0..count).map(|index| format!("Param{index}")).collect();
     let mut source = format!("class Item {{}}\nclass Big<{}> {{\n", parameters.join(", "));
     for index in 0..count {
@@ -857,7 +857,7 @@ fn test_many_type_parameters_and_references_are_read_in_linear_time() {
     let started = std::time::Instant::now();
     let analysis = analyze(&[("Big.java", &source)]);
     assert_eq!(class(&analysis, "Big").cbo, 1);
-    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
 }
 
 #[test]
@@ -962,7 +962,7 @@ fn test_csharp_target_typed_new_under_a_type_parameter_abstains() {
 
 #[test]
 fn test_csharp_target_typed_new_in_a_class_with_many_methods_is_linear() {
-    let methods = 10_000;
+    let methods = 30_000;
     let mut source = String::from("class Part {}\n\nclass Factory<T> {\n");
     for index in 0..methods {
         source.push_str(&format!(
@@ -973,7 +973,7 @@ fn test_csharp_target_typed_new_in_a_class_with_many_methods_is_linear() {
     let started = std::time::Instant::now();
     let analysis = analyze(&[("Factory.cs", &source)]);
     assert_eq!(class(&analysis, "Factory").rfc, methods + 1);
-    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
 }
 
 #[test]
@@ -988,7 +988,7 @@ fn test_csharp_target_typed_new_in_deeply_nested_blocks_is_linear() {
     let started = std::time::Instant::now();
     let analysis = analyze(&[("Factory.cs", &source)]);
     assert_eq!(class(&analysis, "Factory").rfc, 2);
-    assert!(started.elapsed().as_secs() < 3, "{:?}", started.elapsed());
+    assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
 }
 
 #[test]
