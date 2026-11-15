@@ -786,3 +786,27 @@ fn test_analyzer_does_not_parse_source() {
         );
     }
 }
+
+#[test]
+fn test_csharp_record_primary_base_is_the_parent() {
+    let source = "record Root(int X);\nrecord Child(int X) : Root(X);\n";
+    let analysis = analyze(&[("Records.cs", source)]);
+    let child = class(&analysis, "Child");
+    assert_eq!(child.parent_class.as_deref(), Some("Root"));
+    assert_eq!(child.dit, 1);
+    assert_eq!(class(&analysis, "Root").noc, 1);
+}
+
+#[test]
+fn test_go_type_parameter_that_shadows_a_package_type_is_not_coupling() {
+    let source = "package p\n\ntype T struct{}\n\ntype Box[T any] struct {\n\tvalue T\n}\n";
+    let analysis = analyze(&[("box.go", source)]);
+    assert_eq!(class(&analysis, "Box").cbo, 0);
+}
+
+#[test]
+fn test_csharp_target_typed_new_counts_as_construction() {
+    let source = "class Part {}\n\nclass Factory {\n    Part Make() { return new(); }\n}\n";
+    let analysis = analyze(&[("Factory.cs", source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+}

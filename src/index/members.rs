@@ -820,12 +820,7 @@ pub fn bases(language: Language, node: Node<'_>, source: &[u8]) -> Vec<String> {
             let mut cursor = bases.walk();
             let names = bases
                 .named_children(&mut cursor)
-                .filter(|base| {
-                    !matches!(
-                        base.kind(),
-                        "argument_list" | "primary_constructor_base_type"
-                    )
-                })
+                .filter(|base| base.kind() != "argument_list")
                 .map(|base| simple_type_name(text(base, source)))
                 .filter(|name| !name.is_empty())
                 .collect();
