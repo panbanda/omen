@@ -49,11 +49,8 @@ pub fn parse_unchanged(
     read: impl FnOnce() -> crate::core::Result<Vec<u8>>,
     parse: impl FnOnce(&[u8]) -> Option<ParseResult>,
 ) -> crate::core::Result<Option<ParseResult>> {
-    let changed = || {
-        crate::core::Error::analysis(format!(
-            "{} changed or became unreadable during analysis; run the command again",
-            facts.file
-        ))
+    let changed = || crate::core::Error::ChangedDuringAnalysis {
+        file: facts.file.to_string(),
     };
     let content = read().map_err(|_| changed())?;
     if !facts.is_content_of_facts(&content) {

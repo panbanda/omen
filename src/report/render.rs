@@ -69,6 +69,16 @@ impl Renderer {
 
     /// Render generates HTML from the data directory into a byte buffer.
     fn render_to_bytes(&self, data_dir: &Path) -> Result<Vec<u8>> {
+        let problems = crate::report::generation::check(
+            data_dir,
+            &crate::commands::report::EXPECTED_DATA_FILES,
+        );
+        if !problems.is_empty() {
+            return Err(crate::core::Error::config(format!(
+                "the data directory has files of more than one generation; run `omen report generate` again: {}",
+                problems.join("; ")
+            )));
+        }
         let data = self.load_data(data_dir)?;
         let roots = &data.metadata.paths;
 
@@ -1169,8 +1179,18 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Write a data file. A data directory needs `metadata.json`, so the function writes a
+    /// minimal one if the directory has none.
     fn write_fixture(path: &Path, value: serde_json::Value) {
         fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let metadata = path.with_file_name("metadata.json");
+        if !metadata.exists() {
+            fs::write(
+                metadata,
+                r#"{"repository":"test","generated_at":"2026-01-01T00:00:00Z","since":"1y","omen_version":"test"}"#,
+            )
+            .unwrap();
+        }
     }
 
     #[test]

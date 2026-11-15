@@ -73,6 +73,8 @@ pub struct ExecutorConfig {
     pub capture_output: bool,
     /// Number of parallel workers (0 = num_cpus).
     pub jobs: usize,
+    /// The mutation run that owns the guards. A failed restore is reported to this run.
+    pub run_id: u64,
     /// Progress callback (optional).
     progress_callback: Option<Arc<ProgressCallback>>,
 }
@@ -98,6 +100,7 @@ impl Default for ExecutorConfig {
             working_dir: None,
             capture_output: false,
             jobs: 0,
+            run_id: 0,
             progress_callback: None,
         }
     }
@@ -110,6 +113,12 @@ impl ExecutorConfig {
             test_command: command.into(),
             ..Default::default()
         }
+    }
+
+    /// Set the run that owns the guards of the executor.
+    pub fn run_id(mut self, run_id: u64) -> Self {
+        self.run_id = run_id;
+        self
     }
 
     /// Set the timeout.
@@ -184,7 +193,8 @@ impl MutantExecutor {
         let start = Instant::now();
 
         // Create guard to ensure file is restored
-        let mut guard = MutationGuard::new(self.config.mutant_file(mutant))?;
+        let mut guard =
+            MutationGuard::new_for_run(self.config.mutant_file(mutant), self.config.run_id)?;
 
         // Apply the mutation
         let mutated_content = mutant.apply(source);
@@ -401,8 +411,14 @@ async fn execute_mutant_async(
 ) -> MutationResult {
     let start = Instant::now();
 
+    let file = config.mutant_file(mutant);
+    if let Some(reason) = super::safety::mutation_refusal(&file) {
+        super::safety::report_refusal_once(&file, &reason);
+        return MutationResult::new(mutant.clone(), MutantStatus::Skipped, 0);
+    }
+
     // Create guard to ensure file is restored
-    let guard = match MutationGuard::new(config.mutant_file(mutant)) {
+    let guard = match MutationGuard::new_for_run(config.mutant_file(mutant), config.run_id) {
         Ok(g) => g,
         Err(_) => {
             return MutationResult::new(mutant.clone(), MutantStatus::BuildError, 0);
@@ -879,6 +895,35 @@ mod tests {
 
         // "true" always succeeds, so mutant survives
         assert_eq!(result.status, MutantStatus::Survived);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_async_executor_skips_a_file_with_a_hard_link() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"let x = 42;").unwrap();
+        fs::hard_link(&file_path, temp_dir.path().join("other.rs")).unwrap();
+        let mutant = Mutant::new(
+            "mut-1",
+            &file_path,
+            "CRR",
+            1,
+            1,
+            "42",
+            "0",
+            "test mutation",
+            (8, 10),
+        );
+        let executor = AsyncMutantExecutor::new(ExecutorConfig::with_command("true").jobs(1));
+
+        let result = executor
+            .execute_mutant(&mutant, b"let x = 42;")
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, MutantStatus::Skipped);
+        assert_eq!(fs::read(&file_path).unwrap(), b"let x = 42;");
     }
 
     #[tokio::test]

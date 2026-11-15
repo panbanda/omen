@@ -10,19 +10,147 @@ use crate::config::Config;
 use crate::core::progress::is_tty;
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 
-/// Gives an error that lists the files that a run could not write.
-fn check_writes(errors: &std::sync::Mutex<Vec<String>>) -> crate::core::Result<()> {
-    let failed = errors
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
-    if failed.is_empty() {
-        return Ok(());
+/// One change that `report generate` makes in the data directory.
+enum Output {
+    Write(PathBuf, String),
+    Remove(PathBuf),
+}
+
+impl Output {
+    fn path(&self) -> &std::path::Path {
+        match self {
+            Output::Write(path, _) | Output::Remove(path) => path,
+        }
     }
-    Err(crate::core::Error::analysis(format!(
-        "The report data was not written: {}",
-        failed.join("; ")
-    )))
+}
+
+/// Make all changes, or none.
+///
+/// First, each new file goes to a temporary file in the directory of its target. If a target is
+/// not a file, or if a temporary file fails, nothing changes. Then each temporary file replaces
+/// its target. If a replacement fails, the function puts the earlier files back.
+fn commit_outputs(outputs: &[Output]) -> Result<(), String> {
+    commit_outputs_with(outputs, &|_| Ok(()))
+}
+
+/// `after_each` is a seam: it runs after each change, and a test uses it to inject a fault.
+fn commit_outputs_with(
+    outputs: &[Output],
+    after_each: &dyn Fn(usize) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let describe = |path: &std::path::Path, error: &dyn std::fmt::Display| {
+        format!("{}: {error}", path.display())
+    };
+    let mut old_content: Vec<Option<(Vec<u8>, u32)>> = Vec::new();
+    for output in outputs {
+        let path = output.path();
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_file() => {
+                let mode = unix_mode_of(&metadata);
+                old_content.push(Some((
+                    std::fs::read(path).map_err(|e| describe(path, &e))?,
+                    mode,
+                )));
+            }
+            Ok(_) => return Err(describe(path, &"the target is not a file")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => old_content.push(None),
+            Err(error) => return Err(describe(path, &error)),
+        }
+    }
+
+    let mut staged: Vec<Option<tempfile::NamedTempFile>> = Vec::new();
+    for output in outputs {
+        let Output::Write(path, text) = output else {
+            staged.push(None);
+            continue;
+        };
+        let directory = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(std::path::Path::new("."));
+        let stage = || -> std::io::Result<tempfile::NamedTempFile> {
+            use std::io::Write;
+            let mut file = tempfile::NamedTempFile::new_in(directory)?;
+            file.write_all(text.as_bytes())?;
+            file.as_file().sync_all()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.as_file()
+                    .set_permissions(std::fs::Permissions::from_mode(0o644))?;
+            }
+            Ok(file)
+        };
+        staged.push(Some(stage().map_err(|e| describe(path, &e))?));
+    }
+
+    // Remove the old metadata.json now that each new file is staged and before the first
+    // replacement. A stop in the middle then leaves a directory without metadata, which
+    // `report validate` and `report render` reject. The new metadata.json is the last output.
+    let metadata_index = outputs.iter().rposition(|output| {
+        output
+            .path()
+            .file_name()
+            .is_some_and(|name| name == "metadata.json")
+    });
+    if let Some(index) = metadata_index {
+        match std::fs::remove_file(outputs[index].path()) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(describe(outputs[index].path(), &error));
+            }
+            _ => {}
+        }
+    }
+
+    for (index, (output, stage)) in outputs.iter().zip(staged).enumerate() {
+        let result = match (output, stage) {
+            (Output::Write(path, _), Some(file)) => {
+                file.persist(path).map(|_| ()).map_err(|e| e.error)
+            }
+            (Output::Remove(path), _) => match std::fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                _ => Ok(()),
+            },
+            (Output::Write(..), None) => unreachable!("each write has a staged file"),
+        };
+        let result = result.and_then(|()| after_each(index));
+        if let Err(error) = result {
+            let mut message = describe(output.path(), &error);
+            let last_changed = index.max(metadata_index.unwrap_or(0));
+            for (done, content) in outputs[..=last_changed].iter().zip(&old_content) {
+                let path = done.path();
+                let undone = match content {
+                    Some((bytes, mode)) => crate::core::write_atomically(path, bytes, *mode),
+                    None => match std::fs::remove_file(path) {
+                        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                        _ => Ok(()),
+                    },
+                };
+                if let Err(rollback_error) = undone {
+                    message.push_str(&format!(
+                        "; rollback failed for {}: {rollback_error}",
+                        path.display()
+                    ));
+                }
+            }
+            return Err(message);
+        }
+    }
+    Ok(())
+}
+
+/// The permission bits of a file, for a rollback.
+fn unix_mode_of(metadata: &std::fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o7777
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        0o644
+    }
 }
 
 /// The one history window of `report generate`. Each part reads it.
@@ -50,10 +178,6 @@ fn generate_window(since: Option<&str>, days: Option<u32>) -> crate::core::Resul
     })
 }
 
-fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    crate::core::write_atomically(path, text.as_bytes(), 0o644)
-}
-
 /// The data files that `report generate` writes and that `report validate` expects.
 pub(crate) const EXPECTED_DATA_FILES: [&str; 21] = [
     "metadata",
@@ -79,349 +203,462 @@ pub(crate) const EXPECTED_DATA_FILES: [&str; 21] = [
     "trend",
 ];
 
+/// Each name is a command name. It is also the artifact file stem and the `--skip` value.
+const ANALYZER_NAMES: [&str; 20] = [
+    "complexity",
+    "satd",
+    "stubs",
+    "deadcode",
+    "churn",
+    "clones",
+    "defect",
+    "changes",
+    "tdg",
+    "graph",
+    "hotspot",
+    "temporal",
+    "ownership",
+    "cohesion",
+    "repomap",
+    "smells",
+    "flags",
+    "security",
+    "score",
+    "trend",
+];
+
+/// The number of files that `generate` counts as done.
+fn progress_total(skip_list: &[&str], has_diff: bool) -> u64 {
+    let analyzers = ANALYZER_NAMES
+        .iter()
+        .filter(|name| !skip_list.contains(name))
+        .count();
+    (analyzers + 1 + usize::from(has_diff)) as u64
+}
+
+fn generate(
+    path: &PathBuf,
+    config: &Config,
+    args: &crate::cli::ReportGenerateArgs,
+    git_ref: Option<&str>,
+    source: Option<std::sync::Arc<dyn crate::core::ContentSource>>,
+    commit: &dyn Fn(&[Output]) -> Result<(), String>,
+) -> crate::core::Result<()> {
+    generate_with(path, config, args, git_ref, source, commit, &|file| {
+        std::fs::read(file)
+    })
+}
+
+/// `read_file` reads the file of an earlier run that a skipped analyzer keeps. It is a seam
+/// for a test.
+fn generate_with(
+    path: &PathBuf,
+    config: &Config,
+    args: &crate::cli::ReportGenerateArgs,
+    git_ref: Option<&str>,
+    source: Option<std::sync::Arc<dyn crate::core::ContentSource>>,
+    commit: &dyn Fn(&[Output]) -> Result<(), String>,
+    read_file: &dyn Fn(&std::path::Path) -> std::io::Result<Vec<u8>>,
+) -> crate::core::Result<()> {
+    use serde_json::{json, Value};
+
+    let window = generate_window(args.since.as_deref(), args.days)?;
+    // The reference is checked before the first write, so a failed run keeps
+    // the files of an earlier run.
+    let changes = git_ref
+        .map(|reference| -> crate::core::Result<_> {
+            let mut changes = crate::changeset::build::compute(path, Some(reference), config)?;
+            changes.security = Some(crate::changeset::security::compute(
+                path,
+                Some(reference),
+                config,
+                &changes,
+            )?);
+            Ok(changes)
+        })
+        .transpose()?;
+    std::fs::create_dir_all(&args.data)?;
+
+    let file_set = FileSet::from_path(path, config)?;
+    let git_root = crate::git::GitRepo::open(path)
+        .ok()
+        .map(|r| r.root().to_path_buf());
+    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
+    if let Some(ref git_path) = git_root {
+        ctx = ctx.with_git_path(git_path);
+    }
+    if let Some(source) = source {
+        ctx = ctx.with_content_source(source);
+    }
+
+    // Generate metadata.json (matches Go structure)
+    // Canonicalize path to handle "." and get actual directory name
+    let repo_name = std::fs::canonicalize(path)
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "unknown".to_string());
+    let generated_at = chrono::Utc::now().to_rfc3339();
+
+    let changes_path = args.data.join("diff.json");
+    let changes_text = changes
+        .map(|changes| serde_json::to_string_pretty(&changes))
+        .transpose()?;
+
+    let skip_list: Vec<&str> = args
+        .skip
+        .as_deref()
+        .map(|s| s.split(',').collect())
+        .unwrap_or_default();
+
+    // Set up progress bar
+    let progress = if is_tty() {
+        let bar = ProgressBar::new(progress_total(&skip_list, changes_text.is_some()));
+        bar.set_style(
+            ProgressStyle::default_bar()
+                .template("{prefix:.bold} [{bar:30.green/white}] {pos}/{len} {msg}")
+                .expect("valid template")
+                .progress_chars("=>-"),
+        );
+        bar.set_prefix("Generating");
+        Some(bar)
+    } else {
+        None
+    };
+
+    let output_dir = &args.data;
+
+    // The results stay in memory until all analyzers have finished. A file that
+    // changed during the analysis fails the command before the first write, so the
+    // data directory never has a mix of old and new files.
+    let staged: std::sync::Mutex<Vec<(PathBuf, String)>> = std::sync::Mutex::new(Vec::new());
+    let changed_file: std::sync::Mutex<Option<crate::core::Error>> = std::sync::Mutex::new(None);
+    let keep_if_changed = |error: crate::core::Error| {
+        if matches!(error, crate::core::Error::ChangedDuringAnalysis { .. }) {
+            changed_file
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_or_insert(error);
+        }
+    };
+
+    // Helper: run an analyzer and keep its JSON output
+    macro_rules! run_analyzer {
+                ($analyzer:expr, $name:expr, $filename:expr) => {{
+                    if !skip_list.contains(&$name) {
+                        let result: Value = match $analyzer.analyze(&ctx) {
+                            Ok(r) => serde_json::to_value(&r)
+                                .unwrap_or(json!({"error": "serialization failed"})),
+                            Err(e) => {
+                                let entry = json!({"error": e.to_string()});
+                                keep_if_changed(e);
+                                entry
+                            }
+                        };
+                        let output_path = output_dir.join(format!("{}.json", $filename));
+                        staged
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push((
+                                output_path,
+                                serde_json::to_string_pretty(&result).unwrap_or_default(),
+                            ));
+                    }
+                }};
+            }
+
+    // Phase 1: Run all analyzers in parallel groups.
+    // Group A: File-parsing analyzers (CPU-bound, share tree-sitter work)
+    // Group B: Git-heavy analyzers (I/O-bound, overlap with CPU work)
+    // Group C: Mixed analyzers (benefit from warm OS caches)
+    let security_analyzer = crate::analyzers::security::Analyzer::from_config(config)?;
+
+    std::thread::scope(|s| {
+        // Group A: file-based analyzers
+        s.spawn(|| {
+            run_analyzer!(
+                crate::analyzers::complexity::Analyzer::default(),
+                "complexity",
+                "complexity"
+            );
+            run_analyzer!(crate::analyzers::satd::Analyzer::default(), "satd", "satd");
+            run_analyzer!(crate::analyzers::stubs::Analyzer::new(), "stubs", "stubs");
+            run_analyzer!(security_analyzer, "security", "security");
+            run_analyzer!(
+                crate::analyzers::deadcode::Analyzer::default(),
+                "deadcode",
+                "deadcode"
+            );
+            run_analyzer!(
+                crate::analyzers::duplicates::Analyzer::default(),
+                "clones",
+                "clones"
+            );
+            run_analyzer!(
+                crate::analyzers::cohesion::Analyzer::default(),
+                "cohesion",
+                "cohesion"
+            );
+            run_analyzer!(
+                crate::analyzers::repomap::Analyzer::default(),
+                "repomap",
+                "repomap"
+            );
+        });
+
+        // Group B: git-heavy analyzers (ownership is the longest at ~57s)
+        s.spawn(|| {
+            run_analyzer!(
+                crate::analyzers::ownership::Analyzer::default(),
+                "ownership",
+                "ownership"
+            );
+            run_analyzer!(
+                crate::analyzers::churn::Analyzer::new().with_days(window.days),
+                "churn",
+                "churn"
+            );
+            run_analyzer!(
+                crate::analyzers::temporal::Analyzer::default(),
+                "temporal",
+                "temporal"
+            );
+            run_analyzer!(
+                crate::analyzers::changes::Analyzer::default(),
+                "changes",
+                "changes"
+            );
+        });
+
+        // Group C: mixed file+git analyzers
+        s.spawn(|| {
+            run_analyzer!(
+                crate::analyzers::graph::Analyzer::default(),
+                "graph",
+                "graph"
+            );
+            run_analyzer!(
+                crate::analyzers::smells::Analyzer::default(),
+                "smells",
+                "smells"
+            );
+            run_analyzer!(
+                crate::analyzers::flags::Analyzer::default(),
+                "flags",
+                "flags"
+            );
+            run_analyzer!(
+                crate::analyzers::defect::Analyzer::from_config(config),
+                "defect",
+                "defect"
+            );
+            run_analyzer!(
+                crate::analyzers::hotspot::Analyzer::from_config(config),
+                "hotspot",
+                "hotspot"
+            );
+            run_analyzer!(crate::analyzers::tdg::Analyzer::default(), "tdg", "tdg");
+        });
+    });
+
+    // Phase 2: Trend data (analyzes historical commits). It needs no file of the
+    // other analyzers.
+    let mut trend_text = None;
+    if !skip_list.contains(&"trend") {
+        if let Some(ref bar) = progress {
+            bar.set_message("trend...");
+        }
+        let samples = args.samples.or_else(|| {
+            // All the history has no number of days. Use 50 years.
+            let days = if window.days == u32::MAX {
+                (365 * 50) as f64
+            } else {
+                window.days as f64
+            };
+            Some(crate::score::default_sample_count(days))
+        });
+        match crate::score::analyze_trend(
+            path,
+            config,
+            &window.since,
+            crate::cli::TrendPeriod::Monthly,
+            samples,
+        ) {
+            Ok(trend_data) => trend_text = Some(serde_json::to_string_pretty(&trend_data)?),
+            Err(e) => {
+                eprintln!("Warning: trend analysis failed: {}", e);
+                keep_if_changed(e);
+            }
+        }
+    }
+
+    if let Some(error) = changed_file
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+    {
+        return Err(error);
+    }
+
+    // Phase 3: Score, from the results of this run in memory.
+    let mut outputs: Vec<Output> = Vec::new();
+    outputs.push(match changes_text {
+        Some(text) => Output::Write(changes_path, text),
+        None => Output::Remove(changes_path),
+    });
+    let mut analyzer_outputs =
+        std::mem::take(&mut *staged.lock().unwrap_or_else(|p| p.into_inner()));
+    analyzer_outputs.sort();
+    outputs.extend(
+        analyzer_outputs
+            .into_iter()
+            .map(|(output_path, text)| Output::Write(output_path, text)),
+    );
+    // Each file that a skipped analyzer keeps is read one time. The score and the manifest
+    // use these bytes, so a file that changes later cannot give the score one version and
+    // the manifest another.
+    let kept: std::collections::BTreeMap<String, Vec<u8>> = ANALYZER_NAMES
+        .iter()
+        .filter(|name| skip_list.contains(name))
+        .filter_map(|name| {
+            let file_name = format!("{name}.json");
+            read_file(&output_dir.join(&file_name))
+                .ok()
+                .map(|bytes| (file_name, bytes))
+        })
+        .collect();
+    if !skip_list.contains(&"score") {
+        if let Some(ref bar) = progress {
+            bar.set_message("score...");
+        }
+        // The score is the score of the final directory: a file of this run, or else the
+        // file of an earlier run that stays because its analyzer is skipped.
+        let document = |name: &str| {
+            outputs
+                .iter()
+                .find_map(|output| match output {
+                    Output::Write(output_path, text)
+                        if output_path.file_name().is_some_and(|file| file == name) =>
+                    {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                })
+                .or_else(|| {
+                    kept.get(name)
+                        .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+                })
+        };
+        let result: Value =
+            match crate::score::compute_from_documents(&document, ctx.files.files().len()) {
+                Ok(r) => {
+                    serde_json::to_value(&r).unwrap_or(json!({"error": "serialization failed"}))
+                }
+                Err(e) => json!({"error": e.to_string()}),
+            };
+        outputs.push(Output::Write(
+            output_dir.join("score.json"),
+            serde_json::to_string_pretty(&result)?,
+        ));
+    }
+    // A trend that failed leaves no trend.json: an old one must not stay beside new data.
+    if !skip_list.contains(&"trend") {
+        let trend_path = output_dir.join("trend.json");
+        outputs.push(match trend_text {
+            Some(text) => Output::Write(trend_path, text),
+            None => Output::Remove(trend_path),
+        });
+    }
+
+    // metadata.json comes last. It names the generation: the digest of each file that is in
+    // the data directory after the commit. Thus a commit that stops in the middle leaves
+    // files that do not match, and `report validate` and `report render` find them.
+    let mut files = std::collections::BTreeMap::new();
+    let mut reused = Vec::new();
+    for name in ANALYZER_NAMES {
+        let file_name = format!("{name}.json");
+        let written = outputs.iter().find_map(|output| match output {
+            Output::Write(output_path, text)
+                if output_path
+                    .file_name()
+                    .is_some_and(|file| *file == *file_name) =>
+            {
+                Some(text.clone().into_bytes())
+            }
+            _ => None,
+        });
+        match written {
+            Some(bytes) => {
+                files.insert(file_name, crate::report::generation::digest(&bytes));
+            }
+            None if skip_list.contains(&name) => {
+                if let Some(bytes) = kept.get(&file_name) {
+                    files.insert(file_name.clone(), crate::report::generation::digest(bytes));
+                    reused.push(file_name);
+                }
+            }
+            None => {}
+        }
+    }
+    if let Some(Output::Write(_, text)) = outputs.iter().find(|output| {
+        output
+            .path()
+            .file_name()
+            .is_some_and(|file| file == "diff.json")
+    }) {
+        files.insert(
+            "diff.json".to_string(),
+            crate::report::generation::digest(text.as_bytes()),
+        );
+    }
+    let metadata = json!({
+        "repository": repo_name,
+        "generated_at": generated_at,
+        "since": window.label,
+        "omen_version": env!("CARGO_PKG_VERSION"),
+        "paths": [path.display().to_string()],
+        "generation": crate::report::generation::generation_id(&generated_at, &files),
+        "files": files,
+        "reused": reused,
+    });
+    outputs.push(Output::Write(
+        output_dir.join("metadata.json"),
+        serde_json::to_string_pretty(&metadata)?,
+    ));
+
+    // Phase 4: Commit all outputs, or none.
+    commit(&outputs).map_err(|error| {
+        crate::core::Error::analysis(format!("The report data was not written: {error}"))
+    })?;
+    let written = outputs
+        .iter()
+        .filter(|output| matches!(output, Output::Write(..)))
+        .count();
+    match progress {
+        Some(bar) => {
+            bar.set_position(written as u64);
+            bar.finish_with_message("done");
+        }
+        None => {
+            for output in &outputs {
+                if let Output::Write(output_path, _) = output {
+                    eprintln!("Generated: {}", output_path.display());
+                }
+            }
+        }
+    }
+    eprintln!("Report data generated in: {}", output_dir.display());
+    Ok(())
+}
+
 pub fn run(
     path: &PathBuf,
     config: &Config,
     subcommand: &ReportSubcommand,
     git_ref: Option<&str>,
 ) -> crate::core::Result<()> {
-    use serde_json::{json, Value};
-
     match subcommand {
         ReportSubcommand::Generate(args) => {
-            let window = generate_window(args.since.as_deref(), args.days)?;
-            // The reference is checked before the first write, so a failed run keeps
-            // the files of an earlier run.
-            let changes = git_ref
-                .map(|reference| -> crate::core::Result<_> {
-                    let mut changes =
-                        crate::changeset::build::compute(path, Some(reference), config)?;
-                    changes.security = Some(crate::changeset::security::compute(
-                        path,
-                        Some(reference),
-                        config,
-                        &changes,
-                    )?);
-                    Ok(changes)
-                })
-                .transpose()?;
-            std::fs::create_dir_all(&args.data)?;
-
-            let file_set = FileSet::from_path(path, config)?;
-            let git_root = crate::git::GitRepo::open(path)
-                .ok()
-                .map(|r| r.root().to_path_buf());
-            let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
-            if let Some(ref git_path) = git_root {
-                ctx = ctx.with_git_path(git_path);
-            }
-
-            // Generate metadata.json (matches Go structure)
-            // Canonicalize path to handle "." and get actual directory name
-            let repo_name = std::fs::canonicalize(path)
-                .ok()
-                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-                .unwrap_or_else(|| "unknown".to_string());
-            let metadata = json!({
-                "repository": repo_name,
-                "generated_at": chrono::Utc::now().to_rfc3339(),
-                "since": window.label,
-                "omen_version": env!("CARGO_PKG_VERSION"),
-                "paths": [path.display().to_string()]
-            });
-            let metadata_path = args.data.join("metadata.json");
-            let metadata_text = serde_json::to_string_pretty(&metadata)?;
-
-            let changes_path = args.data.join("diff.json");
-            match changes {
-                Some(changes) => {
-                    write_atomically(&changes_path, &serde_json::to_string_pretty(&changes)?)?;
-                }
-                None => match std::fs::remove_file(&changes_path) {
-                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                        return Err(error.into())
-                    }
-                    _ => {}
-                },
-            }
-
-            let skip_list: Vec<&str> = args
-                .skip
-                .as_deref()
-                .map(|s| s.split(',').collect())
-                .unwrap_or_default();
-
-            // Each name is a command name. It is also the artifact file stem and the
-            // `--skip` value.
-            let analyzer_names = [
-                "complexity",
-                "satd",
-                "stubs",
-                "deadcode",
-                "churn",
-                "clones",
-                "defect",
-                "changes",
-                "tdg",
-                "graph",
-                "hotspot",
-                "temporal",
-                "ownership",
-                "cohesion",
-                "repomap",
-                "smells",
-                "flags",
-                "security",
-                "score",
-                "trend",
-            ];
-            let total_analyzers = analyzer_names
-                .iter()
-                .filter(|n| !skip_list.contains(*n))
-                .count();
-
-            // Set up progress bar
-            let progress = if is_tty() {
-                let bar = ProgressBar::new(total_analyzers as u64);
-                bar.set_style(
-                    ProgressStyle::default_bar()
-                        .template("{prefix:.bold} [{bar:30.green/white}] {pos}/{len} {msg}")
-                        .expect("valid template")
-                        .progress_chars("=>-"),
-                );
-                bar.set_prefix("Generating");
-                Some(bar)
-            } else {
-                None
-            };
-
-            let completed = std::sync::atomic::AtomicU64::new(0);
-            let write_errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-            let output_dir = &args.data;
-            match write_atomically(&metadata_path, &metadata_text) {
-                Ok(()) => {
-                    if progress.is_none() {
-                        eprintln!("Generated: {}", metadata_path.display());
-                    }
-                }
-                Err(error) => write_errors
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .push(format!("{}: {error}", metadata_path.display())),
-            }
-
-            // Helper: run an analyzer and save its JSON output
-            macro_rules! run_analyzer {
-                ($analyzer:expr, $name:expr, $filename:expr) => {{
-                    if !skip_list.contains(&$name) {
-                        let result: Value = match $analyzer.analyze(&ctx) {
-                            Ok(r) => serde_json::to_value(&r)
-                                .unwrap_or(json!({"error": "serialization failed"})),
-                            Err(e) => json!({"error": e.to_string()}),
-                        };
-                        let output_path = output_dir.join(format!("{}.json", $filename));
-                        match write_atomically(
-                            &output_path,
-                            &serde_json::to_string_pretty(&result).unwrap_or_default(),
-                        ) {
-                            Ok(()) => {
-                                let done =
-                                    completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                                        + 1;
-                                if let Some(ref bar) = progress {
-                                    bar.set_position(done);
-                                } else {
-                                    eprintln!("Generated: {}", output_path.display());
-                                }
-                            }
-                            Err(error) => write_errors
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                .push(format!("{}: {error}", output_path.display())),
-                        }
-                    }
-                }};
-            }
-
-            // Phase 1: Run all analyzers in parallel groups.
-            // Group A: File-parsing analyzers (CPU-bound, share tree-sitter work)
-            // Group B: Git-heavy analyzers (I/O-bound, overlap with CPU work)
-            // Group C: Mixed analyzers (benefit from warm OS caches)
-            let security_analyzer = crate::analyzers::security::Analyzer::from_config(config)?;
-
-            std::thread::scope(|s| {
-                // Group A: file-based analyzers
-                s.spawn(|| {
-                    run_analyzer!(
-                        crate::analyzers::complexity::Analyzer::default(),
-                        "complexity",
-                        "complexity"
-                    );
-                    run_analyzer!(crate::analyzers::satd::Analyzer::default(), "satd", "satd");
-                    run_analyzer!(crate::analyzers::stubs::Analyzer::new(), "stubs", "stubs");
-                    run_analyzer!(security_analyzer, "security", "security");
-                    run_analyzer!(
-                        crate::analyzers::deadcode::Analyzer::default(),
-                        "deadcode",
-                        "deadcode"
-                    );
-                    run_analyzer!(
-                        crate::analyzers::duplicates::Analyzer::default(),
-                        "clones",
-                        "clones"
-                    );
-                    run_analyzer!(
-                        crate::analyzers::cohesion::Analyzer::default(),
-                        "cohesion",
-                        "cohesion"
-                    );
-                    run_analyzer!(
-                        crate::analyzers::repomap::Analyzer::default(),
-                        "repomap",
-                        "repomap"
-                    );
-                });
-
-                // Group B: git-heavy analyzers (ownership is the longest at ~57s)
-                s.spawn(|| {
-                    run_analyzer!(
-                        crate::analyzers::ownership::Analyzer::default(),
-                        "ownership",
-                        "ownership"
-                    );
-                    run_analyzer!(
-                        crate::analyzers::churn::Analyzer::new().with_days(window.days),
-                        "churn",
-                        "churn"
-                    );
-                    run_analyzer!(
-                        crate::analyzers::temporal::Analyzer::default(),
-                        "temporal",
-                        "temporal"
-                    );
-                    run_analyzer!(
-                        crate::analyzers::changes::Analyzer::default(),
-                        "changes",
-                        "changes"
-                    );
-                });
-
-                // Group C: mixed file+git analyzers
-                s.spawn(|| {
-                    run_analyzer!(
-                        crate::analyzers::graph::Analyzer::default(),
-                        "graph",
-                        "graph"
-                    );
-                    run_analyzer!(
-                        crate::analyzers::smells::Analyzer::default(),
-                        "smells",
-                        "smells"
-                    );
-                    run_analyzer!(
-                        crate::analyzers::flags::Analyzer::default(),
-                        "flags",
-                        "flags"
-                    );
-                    run_analyzer!(
-                        crate::analyzers::defect::Analyzer::from_config(config),
-                        "defect",
-                        "defect"
-                    );
-                    run_analyzer!(
-                        crate::analyzers::hotspot::Analyzer::from_config(config),
-                        "hotspot",
-                        "hotspot"
-                    );
-                    run_analyzer!(crate::analyzers::tdg::Analyzer::default(), "tdg", "tdg");
-                });
-            });
-
-            check_writes(&write_errors)?;
-
-            // Phase 2: Score (reads pre-generated JSON files, nearly instant)
-            if !skip_list.contains(&"score") {
-                if let Some(ref bar) = progress {
-                    bar.set_message("score...");
-                }
-                let result: Value = match crate::score::compute_from_data_dir(
-                    output_dir,
-                    ctx.files.files().len(),
-                ) {
-                    Ok(r) => {
-                        serde_json::to_value(&r).unwrap_or(json!({"error": "serialization failed"}))
-                    }
-                    Err(e) => json!({"error": e.to_string()}),
-                };
-                let output_path = output_dir.join("score.json");
-                match write_atomically(&output_path, &serde_json::to_string_pretty(&result)?) {
-                    Ok(()) => {
-                        let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        if let Some(ref bar) = progress {
-                            bar.set_position(done);
-                        } else {
-                            eprintln!("Generated: {}", output_path.display());
-                        }
-                    }
-                    Err(error) => write_errors
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .push(format!("{}: {error}", output_path.display())),
-                }
-            }
-
-            // Phase 3: Trend data (analyzes historical commits)
-            if !skip_list.contains(&"trend") {
-                if let Some(ref bar) = progress {
-                    bar.set_message("trend...");
-                }
-                let samples = args.samples.or_else(|| {
-                    // All the history has no number of days. Use 50 years.
-                    let days = if window.days == u32::MAX {
-                        (365 * 50) as f64
-                    } else {
-                        window.days as f64
-                    };
-                    Some(crate::score::default_sample_count(days))
-                });
-                match crate::score::analyze_trend(
-                    path,
-                    config,
-                    &window.since,
-                    crate::cli::TrendPeriod::Monthly,
-                    samples,
-                ) {
-                    Ok(trend_data) => {
-                        let output_path = output_dir.join("trend.json");
-                        if let Err(e) = write_atomically(
-                            &output_path,
-                            &serde_json::to_string_pretty(&trend_data)?,
-                        ) {
-                            write_errors
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                .push(format!("{}: {e}", output_path.display()));
-                        } else {
-                            let done =
-                                completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                            if let Some(ref bar) = progress {
-                                bar.set_position(done);
-                            } else {
-                                eprintln!("Generated: {}", output_path.display());
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: trend analysis failed: {}", e);
-                    }
-                }
-            }
-
-            if let Some(bar) = progress {
-                bar.finish_with_message("done");
-            }
-            check_writes(&write_errors)?;
-            eprintln!("Report data generated in: {}", output_dir.display());
+            generate(path, config, args, git_ref, None, &commit_outputs)?
         }
         ReportSubcommand::Validate(args) => {
             // Basic validation: check that expected JSON files exist and are valid JSON
@@ -435,19 +672,28 @@ pub fn run(
                 let file_path = args.data.join(format!("{}.json", name));
                 if file_path.exists() {
                     match std::fs::read_to_string(&file_path) {
-                        Ok(contents) => match serde_json::from_str::<Value>(&contents) {
-                            Ok(_) => {
-                                valid_count += 1;
-                                eprintln!("Valid: {}.json", name);
+                        Ok(contents) => {
+                            match serde_json::from_str::<serde_json::Value>(&contents) {
+                                Ok(_) => {
+                                    valid_count += 1;
+                                    eprintln!("Valid: {}.json", name);
+                                }
+                                Err(e) => {
+                                    errors.push(format!("{}.json: invalid JSON - {}", name, e))
+                                }
                             }
-                            Err(e) => errors.push(format!("{}.json: invalid JSON - {}", name, e)),
-                        },
+                        }
                         Err(e) => errors.push(format!("{}.json: read error - {}", name, e)),
                     }
                 } else {
                     errors.push(format!("{}.json: missing", name));
                 }
             }
+
+            errors.extend(crate::report::generation::check(
+                &args.data,
+                &EXPECTED_DATA_FILES,
+            ));
 
             if errors.is_empty() {
                 eprintln!("All {} data files are valid.", valid_count);
@@ -457,8 +703,9 @@ pub fn run(
                     eprintln!("  - {}", error);
                 }
                 return Err(crate::core::Error::config(format!(
-                    "{} validation errors found",
-                    errors.len()
+                    "{} validation errors found: {}",
+                    errors.len(),
+                    errors.join("; ")
                 )));
             }
         }

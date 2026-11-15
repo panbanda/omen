@@ -42,6 +42,16 @@ pub enum Error {
     #[error("Analysis error: {message}")]
     Analysis { message: String },
 
+    /// A file that the analysis read changed, or became unreadable, before a
+    /// second read. The error fails the whole command.
+    #[error("Analysis error: {file} changed or became unreadable during analysis; run the command again")]
+    ChangedDuringAnalysis { file: String },
+
+    /// A mutation run could not restore a source file. `recovery` has the path of the backup and
+    /// the commands that restore the file.
+    #[error("A source file was not restored:\n{recovery}")]
+    RestoreFailed { recovery: String },
+
     /// Invalid argument.
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
@@ -77,6 +87,15 @@ impl Error {
         }
     }
 
+    /// The exit status of the process for this error.
+    pub fn exit_status(&self) -> u8 {
+        match self {
+            Self::ThresholdViolation { .. } => 2,
+            Self::RestoreFailed { .. } => 74,
+            _ => 1,
+        }
+    }
+
     /// Create a new git error.
     pub fn git(message: impl Into<String>) -> Self {
         Self::Git(message.into())
@@ -109,6 +128,17 @@ mod tests {
             path: PathBuf::from("test.rs"),
         };
         assert_eq!(err.to_string(), "File not found: test.rs");
+    }
+
+    #[test]
+    fn test_exit_status_of_each_kind_of_error() {
+        assert_eq!(Error::analysis("x").exit_status(), 1);
+        assert_eq!(Error::threshold_violation("x", 1.0).exit_status(), 2);
+        let failed = Error::RestoreFailed {
+            recovery: "cp a b".to_string(),
+        };
+        assert_eq!(failed.exit_status(), 74);
+        assert!(failed.to_string().contains("cp a b"));
     }
 
     #[test]

@@ -56,4 +56,37 @@ pub(crate) mod testing {
         let path = directory.path().to_path_buf();
         (directory, path)
     }
+
+    /// A content source that ends each file with a different comment on each read.
+    /// Thus a second read of a file gives other bytes.
+    pub struct ChangingSource {
+        root: PathBuf,
+        reads: parking_lot::Mutex<std::collections::HashMap<PathBuf, usize>>,
+    }
+
+    impl ChangingSource {
+        pub fn new(root: &std::path::Path) -> Self {
+            Self {
+                root: root.to_path_buf(),
+                reads: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            }
+        }
+    }
+
+    impl crate::core::ContentSource for ChangingSource {
+        fn read(&self, path: &std::path::Path) -> crate::core::Result<Vec<u8>> {
+            let mut content = std::fs::read(self.root.join(path))?;
+            let mut reads = self.reads.lock();
+            let count = reads
+                .entry(path.file_name().map(PathBuf::from).unwrap_or_default())
+                .or_insert(0);
+            *count += 1;
+            content.extend_from_slice(format!("\n# read {count}\n").as_bytes());
+            Ok(content)
+        }
+
+        fn list_directory(&self, _: &std::path::Path) -> crate::core::Result<Vec<PathBuf>> {
+            Ok(Vec::new())
+        }
+    }
 }

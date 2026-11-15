@@ -13,31 +13,41 @@ use std::time::Duration;
 
 use crate::core::{Error, Result};
 
-type ActiveMutations = Arc<parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>>;
+type ActiveMutations = Arc<parking_lot::Mutex<HashMap<PathBuf, Option<RestoreRecord>>>>;
 
 static ACTIVE_MUTATIONS: LazyLock<ActiveMutations> =
     LazyLock::new(|| Arc::new(parking_lot::Mutex::new(HashMap::new())));
 static SIGNAL_HANDLER: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The number of the last signal that the handler got. It is zero if there is none.
+static RECEIVED_SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+/// True after a restore that failed. The process then exits with
+/// `RESTORE_FAILURE_EXIT_CODE`.
+static RESTORE_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The exit status of a run that could not restore a source file.
+pub const RESTORE_FAILURE_EXIT_CODE: i32 = 74;
 
 #[cfg(unix)]
-extern "C" fn mark_interrupted(_: libc::c_int) {
+const HANDLED_SIGNALS: [libc::c_int; 4] =
+    [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT];
+
+#[cfg(unix)]
+extern "C" fn mark_interrupted(signal: libc::c_int) {
+    RECEIVED_SIGNAL.store(signal, Ordering::SeqCst);
     INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
 #[cfg(unix)]
 fn register_interrupt_handler() -> std::result::Result<(), String> {
-    let previous = unsafe {
-        libc::signal(
-            libc::SIGINT,
-            mark_interrupted as *const () as libc::sighandler_t,
-        )
-    };
-    if previous == libc::SIG_ERR {
-        Err(std::io::Error::last_os_error().to_string())
-    } else {
-        Ok(())
+    for signal in HANDLED_SIGNALS {
+        let previous =
+            unsafe { libc::signal(signal, mark_interrupted as *const () as libc::sighandler_t) };
+        if previous == libc::SIG_ERR {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
     }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -65,6 +75,262 @@ fn register_interrupt_handler() -> std::result::Result<(), String> {
     }
 }
 
+/// All that a restore of one source file needs. Each restore path uses it: the
+/// normal restore, the drop of the guard, and the signal watcher.
+#[derive(Clone)]
+struct RestoreRecord {
+    path: PathBuf,
+    original: Vec<u8>,
+    /// The permissions of the file before the first write.
+    permissions: fs::Permissions,
+    /// The target of the symbolic link at `path` before the first write, if it was a link.
+    link: Option<PathBuf>,
+    /// The file that a link at `path` points to.
+    real_path: PathBuf,
+    backup: Option<PathBuf>,
+    run: u64,
+}
+
+/// Writes the original bytes into the staged file of a restore. A test replaces
+/// it to inject a fault or a pause.
+type StageWriter = fn(&mut fs::File, &[u8]) -> std::io::Result<()>;
+
+fn write_all_bytes(file: &mut fs::File, content: &[u8]) -> std::io::Result<()> {
+    file.write_all(content)
+}
+
+impl RestoreRecord {
+    fn restore(&self) -> std::io::Result<()> {
+        self.restore_with(write_all_bytes)
+    }
+
+    /// Replace the file with a new file that has the original bytes and the
+    /// recorded permissions, then read it again to check bytes and permissions.
+    ///
+    /// The new file is complete before the rename, and the rename replaces the
+    /// path itself and never follows a link. Thus a failed restore never leaves
+    /// an empty or partial source, and a link that a test command put at the
+    /// path does not redirect the write to another file.
+    fn restore_with(&self, stage: StageWriter) -> std::io::Result<()> {
+        self.replace_with(&self.original, stage)
+    }
+
+    /// Replace the file with a new file that has `content` and the recorded permissions. A
+    /// mutation and a restore both use this function, so neither can
+    /// leave an empty or partial source.
+    fn replace_with(&self, content: &[u8], stage: StageWriter) -> std::io::Result<()> {
+        let target = match &self.link {
+            Some(link) => {
+                ensure_link(&self.path, link)?;
+                self.real_path.clone()
+            }
+            None => self.path.clone(),
+        };
+        let directory = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut staged = tempfile::NamedTempFile::new_in(directory)?;
+        stage(staged.as_file_mut(), content)?;
+        staged.as_file().set_permissions(self.permissions.clone())?;
+        staged.as_file().sync_all()?;
+        staged.persist(&target).map_err(|error| error.error)?;
+        #[cfg(unix)]
+        fs::File::open(directory)?.sync_all()?;
+
+        if !fs::symlink_metadata(&target)?.is_file() {
+            return Err(std::io::Error::other(
+                "the restored path is not a regular file",
+            ));
+        }
+        if fs::read(&target)? != content {
+            return Err(std::io::Error::other(
+                "the written file differs from the content",
+            ));
+        }
+        if fs::metadata(&target)?.permissions() != self.permissions {
+            return Err(std::io::Error::other(
+                "the permissions of the written file differ from the original",
+            ));
+        }
+        Ok(())
+    }
+}
+/// Make `path` a symbolic link to `link` again if a test command changed it.
+#[cfg(unix)]
+fn ensure_link(path: &Path, link: &Path) -> std::io::Result<()> {
+    if fs::read_link(path).is_ok_and(|current| current == link) {
+        return Ok(());
+    }
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    for attempt in 0..100u32 {
+        let candidate = directory.join(format!(".omen-link-{}-{attempt}", std::process::id()));
+        match std::os::unix::fs::symlink(link, &candidate) {
+            Ok(()) => return fs::rename(&candidate, path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::other("no free name for a temporary link"))
+}
+
+#[cfg(not(unix))]
+fn ensure_link(_: &Path, _: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// The reason why omen does not mutate a file, if there is one.
+///
+/// A mutation and a restore replace the file. A file with more than one hard link is refused,
+/// because the other links would stop sharing the file. A file that the effective user of the
+/// process does not own is refused, because the new file would get another owner.
+pub fn mutation_refusal(path: &Path) -> Option<String> {
+    #[cfg(unix)]
+    {
+        // SAFETY: `geteuid` has no effect on memory.
+        let user = unsafe { libc::geteuid() };
+        mutation_refusal_for(path, user)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+#[cfg(unix)]
+fn mutation_refusal_for(path: &Path, user: u32) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::metadata(path).ok()?;
+    if metadata.nlink() > 1 {
+        return Some(format!(
+            "{} has {} hard links, so omen does not mutate it",
+            path.display(),
+            metadata.nlink()
+        ));
+    }
+    if metadata.uid() != user {
+        return Some(format!(
+            "{} has the owner {}, and omen runs as the user {user}, so omen does not mutate it",
+            path.display(),
+            metadata.uid()
+        ));
+    }
+    None
+}
+
+/// Print a refusal one time for each file. The function returns true if it printed.
+pub fn report_refusal_once(path: &Path, reason: &str) -> bool {
+    static REPORTED: LazyLock<parking_lot::Mutex<std::collections::HashSet<PathBuf>>> =
+        LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashSet::new()));
+    if !REPORTED.lock().insert(path.to_path_buf()) {
+        return false;
+    }
+    eprintln!("omen: skipped the mutants of a file: {reason}");
+    true
+}
+
+/// The path of a backup file that exists and has the original bytes. If the
+/// backup of the record is gone, this function writes a new private file from
+/// the bytes in memory.
+fn ensure_backup(record: &RestoreRecord) -> Option<PathBuf> {
+    if let Some(backup) = &record.backup {
+        if fs::read(backup).is_ok_and(|content| content == record.original) {
+            return Some(backup.clone());
+        }
+    }
+    let mut file = tempfile::Builder::new()
+        .prefix("omen-mutation-backup-")
+        .tempfile_in(std::env::temp_dir())
+        .ok()?;
+    file.write_all(&record.original).ok()?;
+    file.as_file().sync_all().ok()?;
+    file.keep().ok().map(|(_, path)| path)
+}
+
+fn shell_word(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let plain = text
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "_./-+@:=".contains(c));
+    if plain && !text.is_empty() {
+        text.into_owned()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
+fn recovery_text(path: &Path, backup: &Path, in_git: bool) -> String {
+    let mut text = format!(
+        "omen could not restore {}.\nThe original content is in {}.\nTo restore the file, run: cp {} {}\n",
+        path.display(),
+        backup.display(),
+        shell_word(backup),
+        shell_word(path)
+    );
+    if in_git {
+        text.push_str(&format!(
+            "If the file had no change before the run, you can also run: git checkout -- {}\n",
+            shell_word(path)
+        ));
+    }
+    text
+}
+
+fn is_in_git_repository(path: &Path) -> bool {
+    path.ancestors()
+        .skip(1)
+        .any(|dir| dir.join(".git").exists())
+}
+
+/// The recovery text of each restore that failed and that no run has reported yet.
+static RESTORE_FAILURES: parking_lot::Mutex<Vec<(u64, String)>> =
+    parking_lot::Mutex::new(Vec::new());
+
+/// Record a restore that failed: keep a backup that exists, print the path of the backup and
+/// the commands to recover, and keep the text for the run that reports the failure.
+fn report_failed_restore(record: &RestoreRecord, error: &std::io::Error) {
+    RESTORE_FAILED.store(true, Ordering::SeqCst);
+    let text = match ensure_backup(record) {
+        Some(backup) => format!(
+            "omen: restore of {} failed: {error}\n{}",
+            record.path.display(),
+            recovery_text(&record.path, &backup, is_in_git_repository(&record.path))
+        ),
+        None => format!(
+            "omen: restore of {} failed: {error}\nomen could not write a backup file, so the original content is lost. If the file had no change before the run, run: git checkout -- {}",
+            record.path.display(),
+            shell_word(&record.path)
+        ),
+    };
+    eprintln!("{text}");
+    RESTORE_FAILURES.lock().push((record.run, text));
+}
+
+/// The error for the restores of one run that failed since the last call, if there are any. A
+/// run calls this after it restored each file. A run never takes the failure of another run.
+/// The library does not stop the process: the command line maps the error to its exit status.
+fn restore_failure_error_for(run: u64) -> Option<Error> {
+    let mut all = RESTORE_FAILURES.lock();
+    let (own, others): (Vec<_>, Vec<_>) = std::mem::take(&mut *all)
+        .into_iter()
+        .partition(|(owner, _)| *owner == run);
+    *all = others;
+    if own.is_empty() {
+        return None;
+    }
+    Some(Error::RestoreFailed {
+        recovery: own
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    })
+}
+
 /// RAII guard that ensures a file is restored to its original content.
 ///
 /// When the guard is dropped (whether normally or due to panic), it restores
@@ -74,21 +340,37 @@ pub struct MutationGuard {
     path: PathBuf,
     /// Original file content (backup).
     original: Vec<u8>,
+    /// The permissions of the file before the first write.
+    permissions: fs::Permissions,
     /// Whether the file has been modified.
     modified: bool,
-    /// A copy of the original content in the directory of the file. It stays on
-    /// disk only if a restore fails or the process dies.
+    /// A copy of the original content in the temporary directory.
     backup: Option<tempfile::NamedTempFile>,
     active_mutations: ActiveMutations,
     interrupted: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Writes the mutated content. Tests replace it to inject a write fault.
+    writer: StageWriter,
+    /// Writes the original content in a restore of the guard. Tests replace it.
+    restore_writer: StageWriter,
+    /// The run that owns the guard. A failed restore is reported to this run.
+    run: u64,
+    link: Option<PathBuf>,
+    real_path: PathBuf,
 }
 
 impl MutationGuard {
     /// Create a new mutation guard for the given file.
     ///
-    /// Reads and stores the original file content for later restoration.
+    /// Reads and stores the original file content and permissions for later restoration.
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         Self::new_with_state(path, Arc::clone(&ACTIVE_MUTATIONS), None)
+    }
+
+    /// Create a guard that reports a failed restore to the run with this identifier.
+    pub fn new_for_run(path: impl AsRef<Path>, run: u64) -> Result<Self> {
+        let mut guard = Self::new(path)?;
+        guard.run = run;
+        Ok(guard)
     }
 
     fn new_with_state(
@@ -96,16 +378,58 @@ impl MutationGuard {
         active_mutations: ActiveMutations,
         interrupted: Option<Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Self> {
+        Self::new_with_reader(path, active_mutations, interrupted, |path| fs::read(path))
+    }
+
+    /// `read` is a seam: a test runs code at the moment of the read.
+    fn new_with_reader(
+        path: impl AsRef<Path>,
+        active_mutations: ActiveMutations,
+        interrupted: Option<Arc<std::sync::atomic::AtomicBool>>,
+        read: fn(&Path) -> std::io::Result<Vec<u8>>,
+    ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let original = fs::read(&path).map_err(Error::Io)?;
+        if let Some(reason) = mutation_refusal(&path) {
+            return Err(Error::analysis(reason));
+        }
+        let real_path = fs::canonicalize(&path).map_err(Error::Io)?;
+        // The map has one entry for each file with a guard. A second guard would replace the
+        // record of the first, and the original content would be lost. The guard reads the
+        // original below the same lock that claims the entry. Thus no other guard can restore
+        // the file between the read and the claim, and the bytes are never a mutant.
+        let (original, permissions, link) = {
+            let mut active = active_mutations.lock();
+            if active.contains_key(&real_path) {
+                return Err(Error::analysis(format!(
+                    "{} is already in a mutation in this process",
+                    path.display()
+                )));
+            }
+            let original = read(&path).map_err(Error::Io)?;
+            let permissions = fs::metadata(&path).map_err(Error::Io)?.permissions();
+            let link = fs::symlink_metadata(&path)
+                .map_err(Error::Io)?
+                .is_symlink()
+                .then(|| fs::read_link(&path))
+                .transpose()
+                .map_err(Error::Io)?;
+            active.insert(real_path.clone(), None);
+            (original, permissions, link)
+        };
 
         Ok(Self {
+            link,
+            real_path,
             path,
             original,
+            permissions,
             modified: false,
             backup: None,
             active_mutations,
             interrupted,
+            writer: write_all_bytes,
+            restore_writer: write_all_bytes,
+            run: 0,
         })
     }
 
@@ -116,27 +440,64 @@ impl MutationGuard {
             .load(Ordering::SeqCst)
     }
 
+    fn record(&self) -> RestoreRecord {
+        RestoreRecord {
+            path: self.path.clone(),
+            original: self.original.clone(),
+            permissions: self.permissions.clone(),
+            link: self.link.clone(),
+            real_path: self.real_path.clone(),
+            run: self.run,
+            backup: self
+                .backup
+                .as_ref()
+                .map(|backup| backup.path().to_path_buf()),
+        }
+    }
+
     /// Apply a mutation to the file.
     ///
-    /// This writes the mutated content into the existing file, so the inode, the
-    /// owner, the permissions, and a symlink stay as they are. Before the first
-    /// write, it saves the original content in a backup file.
+    /// This replaces the file with a new file that has the mutated content and the same
+    /// permissions. A symlink at the path stays a symlink. Before the first write, it
+    /// saves the original content in a backup file.
+    ///
+    /// The write was in place before (#549) to keep the inode, the owner, and the hard
+    /// links. The guard now refuses a file with more than one hard link and a file that
+    /// the user of the process does not own. Thus no reason for an in-place write
+    /// remains, and a replacement can never leave an empty or partial source.
     pub fn apply(&mut self, content: &[u8]) -> Result<()> {
-        let mut active = self.active_mutations.lock();
+        let active_mutations = Arc::clone(&self.active_mutations);
+        let mut active = active_mutations.lock();
         if self.is_interrupted() {
             return Ok(());
         }
         if self.backup.is_none() {
-            self.backup = Some(save_backup(&self.path, &self.original)?);
+            self.backup = Some(save_backup(&self.original)?);
         }
-        active.insert(self.path.clone(), self.original.clone());
-        if let Err(error) = write_in_place(&self.path, content) {
-            active.remove(&self.path);
+        let record = self.record();
+        active.insert(self.real_path.clone(), Some(record.clone()));
+        // A write that fails can truncate the file first, so the file counts as
+        // modified from the first write.
+        self.modified = true;
+        if let Err(error) = record.replace_with(content, self.writer).map_err(Error::Io) {
+            match record.restore() {
+                Ok(()) => {
+                    self.modified = false;
+                    active.insert(self.real_path.clone(), None);
+                }
+                Err(restore_error) => self.give_up_restore(&record, &restore_error),
+            }
             return Err(error);
         }
-        drop(active);
-        self.modified = true;
         Ok(())
+    }
+
+    /// Report a restore that failed, and keep the backup file on the disk.
+    fn give_up_restore(&mut self, record: &RestoreRecord, error: &std::io::Error) {
+        report_failed_restore(record, error);
+        if let Some(backup) = self.backup.take() {
+            let _ = backup.keep();
+        }
     }
 
     /// Get the original file content.
@@ -158,34 +519,63 @@ impl MutationGuard {
     ///
     /// This is useful for running multiple mutations in sequence.
     pub fn restore(&mut self) -> Result<()> {
-        if self.modified {
-            write_in_place(&self.path, &self.original)?;
-            self.modified = false;
-            self.active_mutations.lock().remove(&self.path);
+        if !self.modified {
+            return Ok(());
         }
+        // The lock of the map covers each write to a source file, so the
+        // signal restore never runs in the middle of this write. The signal
+        // restore removes the entry after a verified restore. The guard must
+        // then not write again: the process exits soon, and a second truncate
+        // can leave an empty file.
+        let active_mutations = Arc::clone(&self.active_mutations);
+        let mut active = active_mutations.lock();
+        if matches!(active.get(&self.real_path), Some(Some(_))) {
+            self.record()
+                .restore_with(self.restore_writer)
+                .map_err(Error::Io)?;
+        }
+        self.modified = false;
+        active.insert(self.real_path.clone(), None);
         Ok(())
     }
 }
 
 impl Drop for MutationGuard {
     fn drop(&mut self) {
-        if self.modified && write_in_place(&self.path, &self.original).is_err() {
-            if let Some(backup) = self.backup.take() {
-                let _ = backup.keep();
+        let active_mutations = Arc::clone(&self.active_mutations);
+        let mut active = active_mutations.lock();
+        if self.modified && matches!(active.get(&self.real_path), Some(Some(_))) {
+            let record = self.record();
+            if let Err(error) = record.restore_with(self.restore_writer) {
+                self.give_up_restore(&record, &error);
+                active.remove(&self.real_path);
+                return;
             }
         }
-        self.active_mutations.lock().remove(&self.path);
+        active.remove(&self.real_path);
     }
 }
 
 fn restore_registered_mutations(
-    active_mutations: &parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>,
+    active_mutations: &parking_lot::Mutex<HashMap<PathBuf, Option<RestoreRecord>>>,
     interrupted: &std::sync::atomic::AtomicBool,
 ) {
     interrupted.store(true, Ordering::SeqCst);
-    let active = active_mutations.lock();
-    for (path, original) in active.iter() {
-        let _ = write_in_place(path, original);
+    let mut active = active_mutations.lock();
+    let paths: Vec<PathBuf> = active.keys().cloned().collect();
+    for path in paths {
+        let Some(Some(record)) = active.get(&path) else {
+            continue;
+        };
+        match record.restore() {
+            Ok(()) => {
+                if let Some(backup) = &record.backup {
+                    let _ = fs::remove_file(backup);
+                }
+                active.insert(path, None);
+            }
+            Err(error) => report_failed_restore(record, &error),
+        }
     }
 }
 
@@ -480,7 +870,19 @@ impl GateEnvironment for ProcessEnvironment {
     }
 
     fn exit(&self, code: i32) {
-        std::process::exit(code);
+        std::process::exit(exit_code_after_interrupt(code));
+    }
+}
+
+/// The exit status after an interrupt: the failure status if a restore failed,
+/// else 128 and the number of the signal, as a shell reports it.
+fn exit_code_after_interrupt(default: i32) -> i32 {
+    if RESTORE_FAILED.load(Ordering::SeqCst) {
+        return RESTORE_FAILURE_EXIT_CODE;
+    }
+    match RECEIVED_SIGNAL.load(Ordering::SeqCst) {
+        0 => default,
+        signal => 128 + signal,
     }
 }
 
@@ -497,18 +899,30 @@ fn stop_active_test_commands() {
 /// decision about an interrupt: the usual end, an error, and a panic.
 #[must_use = "the run ends when this value drops"]
 pub struct ActiveRun {
+    id: u64,
     concluded: bool,
 }
 
+static NEXT_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 impl ActiveRun {
+    /// The identifier of the run. A guard of the run has it.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     /// End the run after its last mutant.
     ///
     /// If an interrupt came during the run, this function restores each file
     /// and stops the process with the status 130. It does not return, thus
     /// the caller cannot make a report from results that are not complete.
-    pub fn conclude(mut self) {
+    ///
+    /// If a restore failed, the function returns an error with the recovery text. The
+    /// command line maps the error to the exit status 74.
+    pub fn conclude(mut self) -> Result<()> {
         self.concluded = true;
         INTERRUPT_GATE.conclude(&ProcessEnvironment);
+        restore_failure_error_for(self.id).map_or(Ok(()), Err)
     }
 }
 
@@ -526,7 +940,10 @@ pub fn begin_run() -> Result<ActiveRun> {
     INTERRUPT_GATE
         .begin(&ProcessEnvironment)
         .map_err(Error::analysis)?;
-    Ok(ActiveRun { concluded: false })
+    Ok(ActiveRun {
+        id: NEXT_RUN.fetch_add(1, Ordering::SeqCst),
+        concluded: false,
+    })
 }
 
 /// Start the thread that reads the interrupt flag. `begin_run` registers the
@@ -551,7 +968,9 @@ pub fn install_signal_handler() -> Result<()> {
 fn remove_interrupt_handler() {
     // SAFETY: `signal` with `SIG_DFL` only changes the signal disposition.
     unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_DFL);
+        for signal in HANDLED_SIGNALS {
+            libc::signal(signal, libc::SIG_DFL);
+        }
     }
 }
 
@@ -712,13 +1131,14 @@ pub fn write_in_place(path: impl AsRef<Path>, content: &[u8]) -> Result<()> {
     file.sync_all().map_err(Error::Io)
 }
 
-/// Save the original content in a new file with a random name next to the source.
-fn save_backup(path: &Path, original: &[u8]) -> Result<tempfile::NamedTempFile> {
-    let directory = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let mut backup = tempfile::NamedTempFile::new_in(directory).map_err(Error::Io)?;
+/// Save the original content in a new private file in the temporary directory.
+///
+/// The file is not in the repository, so a test command does not see it.
+fn save_backup(original: &[u8]) -> Result<tempfile::NamedTempFile> {
+    let mut backup = tempfile::Builder::new()
+        .prefix("omen-mutation-backup-")
+        .tempfile_in(std::env::temp_dir())
+        .map_err(Error::Io)?;
     backup.write_all(original).map_err(Error::Io)?;
     backup.as_file().sync_all().map_err(Error::Io)?;
     Ok(backup)
@@ -1025,7 +1445,7 @@ mod tests {
         let run = begin_run().unwrap();
         let during_the_run = sigint_disposition();
         let second = begin_run().unwrap();
-        run.conclude();
+        run.conclude().unwrap();
         let after_one_of_two_runs = sigint_disposition();
         drop(second);
         let after_the_last_run = sigint_disposition();
@@ -1407,6 +1827,461 @@ mod tests {
     }
 
     #[test]
+    fn test_failed_partial_write_restores_the_source_at_once() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original content").unwrap();
+
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.writer = stage_half_then_fail;
+        assert!(guard.apply(b"mutated content!").is_err());
+
+        assert_eq!(fs::read(&file_path).unwrap(), b"original content");
+        drop(guard);
+        assert_eq!(fs::read(&file_path).unwrap(), b"original content");
+    }
+
+    #[test]
+    fn test_backup_is_not_in_the_source_directory_during_a_mutation() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"content").unwrap();
+
+        let names: Vec<_> = fs::read_dir(temp_dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("test.rs")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_backup_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let backup = save_backup(b"original").unwrap();
+        let mode = backup.as_file().metadata().unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0);
+        assert!(backup.path().starts_with(std::env::temp_dir()));
+    }
+
+    static PAUSE_TESTS: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+    static PAUSE_ENTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static PAUSE_RELEASED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// A write that waits before it truncates the file. A signal restore that
+    /// runs in the wait can finish before the truncate, and the process can
+    /// then exit with an empty file.
+    fn write_after_a_pause(file: &mut fs::File, content: &[u8]) -> std::io::Result<()> {
+        PAUSE_ENTERED.store(true, Ordering::SeqCst);
+        while !PAUSE_RELEASED.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        file.write_all(content)
+    }
+
+    #[test]
+    fn test_the_signal_restore_waits_for_a_restore_of_the_guard() {
+        let _serial = PAUSE_TESTS.lock();
+        PAUSE_ENTERED.store(false, Ordering::SeqCst);
+        PAUSE_RELEASED.store(false, Ordering::SeqCst);
+        let active_mutations = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut guard = MutationGuard::new_with_state(
+            &file_path,
+            Arc::clone(&active_mutations),
+            Some(Arc::clone(&interrupted)),
+        )
+        .unwrap();
+        guard.apply(b"mutated").unwrap();
+        guard.restore_writer = write_after_a_pause;
+        let dropper = std::thread::spawn(move || drop(guard));
+        while !PAUSE_ENTERED.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        let watcher_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let watcher_done = Arc::clone(&watcher_done);
+            std::thread::spawn(move || {
+                restore_registered_mutations(&active_mutations, &interrupted);
+                watcher_done.store(true, Ordering::SeqCst);
+            })
+        };
+        std::thread::sleep(Duration::from_millis(200));
+        let finished_early = watcher_done.load(Ordering::SeqCst);
+        PAUSE_RELEASED.store(true, Ordering::SeqCst);
+        dropper.join().unwrap();
+        watcher.join().unwrap();
+
+        assert!(
+            !finished_early,
+            "the signal restore ran while the guard restored the file"
+        );
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    fn truncate_only(_: &mut fs::File, _: &[u8]) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn stage_half_then_fail(file: &mut fs::File, content: &[u8]) -> std::io::Result<()> {
+        file.write_all(&content[..content.len() / 2])?;
+        Err(std::io::Error::other("disk full"))
+    }
+
+    #[test]
+    fn test_a_failed_restore_does_not_stop_the_restore_of_other_guards() {
+        let _serial = PAUSE_TESTS.lock();
+        drop(restore_failure_error_for(0));
+        let temp_dir = TempDir::new().unwrap();
+        let first = temp_dir.path().join("first.rs");
+        let second = temp_dir.path().join("second.rs");
+        fs::write(&first, b"cleanup-first").unwrap();
+        fs::write(&second, b"second").unwrap();
+        let mut first_guard = MutationGuard::new(&first).unwrap();
+        let mut second_guard = MutationGuard::new(&second).unwrap();
+        first_guard.apply(b"mutated").unwrap();
+        second_guard.apply(b"mutated").unwrap();
+        fs::remove_file(&first).unwrap();
+        fs::create_dir(&first).unwrap();
+
+        drop(first_guard);
+
+        drop(second_guard);
+        assert_eq!(fs::read(&second).unwrap(), b"second");
+        assert!(restore_failure_error_for(0).is_some());
+        RESTORE_FAILED.store(false, Ordering::SeqCst);
+        remove_kept_backups();
+    }
+
+    fn remove_kept_backups() {
+        for entry in fs::read_dir(std::env::temp_dir()).unwrap().flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("omen-mutation-backup-")
+                && fs::read(entry.path()).is_ok_and(|content| content.starts_with(b"cleanup-"))
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_restore_replaces_a_symlink_and_does_not_write_the_victim() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        let victim = temp_dir.path().join("victim.txt");
+        fs::write(&file_path, b"original").unwrap();
+        fs::write(&victim, b"victim").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        fs::remove_file(&file_path).unwrap();
+        std::os::unix::fs::symlink(&victim, &file_path).unwrap();
+
+        drop(guard);
+
+        assert_eq!(fs::read(&victim).unwrap(), b"victim");
+        assert!(fs::symlink_metadata(&file_path).unwrap().is_file());
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    #[test]
+    fn test_a_failed_restore_write_never_leaves_a_partial_source() {
+        let _serial = PAUSE_TESTS.lock();
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original content").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        guard.restore_writer = stage_half_then_fail;
+
+        assert!(guard.restore().is_err());
+
+        let content = fs::read(&file_path).unwrap();
+        assert!(
+            content == b"mutated" || content == b"original content",
+            "{content:?}"
+        );
+        guard.restore_writer = write_all_bytes;
+        guard.restore().unwrap();
+        assert_eq!(fs::read(&file_path).unwrap(), b"original content");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_a_file_of_another_user_is_refused() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let owner = {
+            use std::os::unix::fs::MetadataExt;
+            fs::metadata(&file_path).unwrap().uid()
+        };
+
+        assert!(mutation_refusal_for(&file_path, owner).is_none());
+        let reason = mutation_refusal_for(&file_path, owner + 1).expect("another user");
+        assert!(reason.contains("test.rs"), "{reason}");
+        assert!(reason.contains("owner"), "{reason}");
+    }
+
+    #[test]
+    fn test_a_refusal_is_reported_one_time_for_each_file() {
+        let path = Path::new("/refusal/one.rs");
+        assert!(report_refusal_once(path, "a reason"));
+        assert!(!report_refusal_once(path, "a reason"));
+        assert!(report_refusal_once(
+            Path::new("/refusal/two.rs"),
+            "a reason"
+        ));
+    }
+
+    static GUARD_TO_DROP_AT_THE_READ: parking_lot::Mutex<Option<MutationGuard>> =
+        parking_lot::Mutex::new(None);
+
+    /// Reads the file, then lets the guard of another run restore the file and waits. A second
+    /// guard that has read a mutant must not accept it as the original.
+    fn read_while_the_other_guard_restores(path: &Path) -> std::io::Result<Vec<u8>> {
+        let content = fs::read(path)?;
+        if let Some(guard) = GUARD_TO_DROP_AT_THE_READ.lock().take() {
+            std::thread::spawn(move || drop(guard));
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        Ok(content)
+    }
+
+    #[test]
+    fn test_a_second_guard_never_reads_a_mutant_as_the_original() {
+        let _serial = PAUSE_TESTS.lock();
+        let active_mutations = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut first = MutationGuard::new_with_state(
+            &file_path,
+            Arc::clone(&active_mutations),
+            Some(Arc::new(std::sync::atomic::AtomicBool::new(false))),
+        )
+        .unwrap();
+        first.apply(b"mutant 1").unwrap();
+        *GUARD_TO_DROP_AT_THE_READ.lock() = Some(first);
+
+        let second = MutationGuard::new_with_reader(
+            &file_path,
+            Arc::clone(&active_mutations),
+            None,
+            read_while_the_other_guard_restores,
+        );
+
+        assert!(
+            second.is_err(),
+            "the second guard took the mutant as the original"
+        );
+        drop(GUARD_TO_DROP_AT_THE_READ.lock().take());
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_a_file_with_another_hard_link_is_refused() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        fs::hard_link(&file_path, temp_dir.path().join("other.rs")).unwrap();
+
+        let error = MutationGuard::new(&file_path)
+            .err()
+            .expect("a hard-linked file is refused");
+
+        assert!(error.to_string().contains("test.rs"), "{error}");
+        assert!(error.to_string().contains("hard link"), "{error}");
+        assert!(mutation_refusal(&file_path).is_some());
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    #[test]
+    fn test_a_second_guard_for_the_same_file_is_refused() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut first = MutationGuard::new(&file_path).unwrap();
+        first.apply(b"mutated").unwrap();
+
+        let error = MutationGuard::new(temp_dir.path().join("./test.rs"))
+            .err()
+            .expect("the second guard is refused");
+
+        assert!(error.to_string().contains("test.rs"), "{error}");
+        drop(first);
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+        assert!(MutationGuard::new(&file_path).is_ok());
+    }
+
+    #[test]
+    fn test_a_run_gets_only_its_own_restore_failure() {
+        let _serial = PAUSE_TESTS.lock();
+        // Take ids from the shared counter so a concurrent test's run never has the same id.
+        let run_one = NEXT_RUN.fetch_add(1, Ordering::SeqCst);
+        let run_two = NEXT_RUN.fetch_add(1, Ordering::SeqCst);
+        let temp_dir = TempDir::new().unwrap();
+        let first = temp_dir.path().join("first.rs");
+        let second = temp_dir.path().join("second.rs");
+        fs::write(&first, b"cleanup-first").unwrap();
+        fs::write(&second, b"cleanup-second").unwrap();
+        let mut guard_of_run_one = MutationGuard::new_for_run(&first, run_one).unwrap();
+        let mut guard_of_run_two = MutationGuard::new_for_run(&second, run_two).unwrap();
+        guard_of_run_one.apply(b"mutated").unwrap();
+        guard_of_run_two.apply(b"mutated").unwrap();
+        fs::remove_file(&first).unwrap();
+        fs::create_dir(&first).unwrap();
+
+        drop(guard_of_run_one);
+
+        assert!(
+            restore_failure_error_for(run_two).is_none(),
+            "run 2 took the failure of run 1"
+        );
+        let error = restore_failure_error_for(run_one).expect("run 1 has its failure");
+        assert!(error.to_string().contains("first.rs"), "{error}");
+        drop(guard_of_run_two);
+        assert_eq!(fs::read(&second).unwrap(), b"cleanup-second");
+        RESTORE_FAILED.store(false, Ordering::SeqCst);
+        remove_kept_backups();
+    }
+
+    #[test]
+    fn test_the_run_gives_a_typed_error_after_a_failed_restore() {
+        let _serial = PAUSE_TESTS.lock();
+        drop(restore_failure_error_for(0));
+        assert!(restore_failure_error_for(0).is_none());
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"cleanup-original").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        fs::remove_file(&file_path).unwrap();
+        fs::create_dir(&file_path).unwrap();
+        drop(guard);
+
+        let error = restore_failure_error_for(0).expect("the restore failed");
+
+        let Error::RestoreFailed { recovery } = error else {
+            panic!("a typed restore error");
+        };
+        assert!(recovery.contains("cp "), "{recovery}");
+        assert!(restore_failure_error_for(0).is_none());
+        RESTORE_FAILED.store(false, Ordering::SeqCst);
+        remove_kept_backups();
+    }
+
+    #[test]
+    fn test_a_guard_does_not_write_again_after_the_signal_restore() {
+        let active_mutations = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut guard = MutationGuard::new_with_state(
+            &file_path,
+            Arc::clone(&active_mutations),
+            Some(Arc::clone(&interrupted)),
+        )
+        .unwrap();
+        guard.apply(b"mutated").unwrap();
+        restore_registered_mutations(&active_mutations, &interrupted);
+        guard.restore_writer = truncate_only;
+
+        drop(guard);
+
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).unwrap().permissions().mode() & 0o7777
+    }
+
+    #[cfg(unix)]
+    fn set_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_restore_succeeds_when_the_test_command_made_the_source_read_only() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        set_mode(&file_path, 0o640);
+
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        set_mode(&file_path, 0o444);
+        drop(guard);
+
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+        assert_eq!(mode_of(&file_path), 0o640);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_restore_succeeds_when_the_backup_and_the_write_permission_are_gone() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        fs::remove_file(guard.backup.as_ref().unwrap().path()).unwrap();
+        set_mode(&file_path, 0o444);
+        drop(guard);
+
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+        assert_eq!(mode_of(&file_path), 0o644);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_a_failed_restore_reports_a_backup_that_exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        let record = guard.record();
+        fs::remove_file(record.backup.as_ref().unwrap()).unwrap();
+
+        let reported = ensure_backup(&record).unwrap();
+
+        assert!(reported.exists());
+        assert_eq!(fs::read(&reported).unwrap(), b"original");
+        assert_eq!(mode_of(&reported) & 0o077, 0);
+        fs::remove_file(reported).unwrap();
+    }
+
+    #[test]
+    fn test_the_recovery_text_names_the_backup_and_the_commands() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let backup = temp_dir.path().join("backup");
+        let text = recovery_text(&file_path, &backup, true);
+        assert!(text.contains(&format!("cp {} {}", backup.display(), file_path.display())));
+        assert!(text.contains(&format!("git checkout -- {}", file_path.display())));
+        assert!(!recovery_text(&file_path, &backup, false).contains("git checkout"));
+    }
+
+    #[test]
     fn test_has_uncommitted_changes_no_git() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.rs");
@@ -1565,23 +2440,6 @@ mod tests {
             .file_type()
             .is_symlink());
         assert_eq!(fs::read(&real).unwrap(), b"original");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_mutation_and_restore_keep_the_inode_of_the_file() {
-        use std::os::unix::fs::MetadataExt;
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.rs");
-        fs::write(&file_path, b"original").unwrap();
-        let inode = fs::metadata(&file_path).unwrap().ino();
-
-        let mut guard = MutationGuard::new(&file_path).unwrap();
-        guard.apply(b"mutated").unwrap();
-        assert_eq!(fs::metadata(&file_path).unwrap().ino(), inode);
-        guard.restore().unwrap();
-        assert_eq!(fs::metadata(&file_path).unwrap().ino(), inode);
-        assert_eq!(fs::read(&file_path).unwrap(), b"original");
     }
 
     #[cfg(unix)]

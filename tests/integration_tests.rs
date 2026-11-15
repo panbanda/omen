@@ -704,8 +704,14 @@ fn test_mutation_refuses_dirty_targets_unless_allowed() {
 
 #[cfg(unix)]
 #[cfg(feature = "mutation")]
-#[test]
-fn test_mutation_sigint_restores_active_source_file() {
+fn assert_signal_restores_active_source_file(
+    signal: i32,
+    to_group: bool,
+    test_command_prefix: &str,
+    expected_code: i32,
+) {
+    use std::os::unix::process::CommandExt;
+    let scratch = TempDir::new().unwrap();
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("lib.rs");
     let marker = temp.path().join("test-started");
@@ -727,7 +733,10 @@ fn test_mutation_sigint_restores_active_source_file() {
             .unwrap()
             .success());
     }
-    let test_command = format!("touch '{}' && sleep 2", marker.display());
+    let test_command = format!(
+        "{test_command_prefix}touch '{}' && sleep 2",
+        marker.display()
+    );
     #[allow(deprecated)]
     let mut command = std::process::Command::cargo_bin("omen").unwrap();
     command.args([
@@ -738,6 +747,8 @@ fn test_mutation_sigint_restores_active_source_file() {
         &test_command,
     ]);
     let mut child = command
+        .process_group(0)
+        .env("TMPDIR", scratch.path())
         .current_dir(temp.path())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -753,11 +764,52 @@ fn test_mutation_sigint_restores_active_source_file() {
     assert!(marker.exists(), "mutation test command did not start");
     assert_ne!(std::fs::read_to_string(&source).unwrap(), original);
 
-    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+    let target = if to_group {
+        -(child.id() as i32)
+    } else {
+        child.id() as i32
+    };
+    assert_eq!(unsafe { libc::kill(target, signal) }, 0);
     let status = child.wait().unwrap();
 
-    assert_eq!(status.code(), Some(130));
+    assert_eq!(status.code(), Some(expected_code));
     assert_eq!(std::fs::read_to_string(source).unwrap(), original);
+}
+
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+#[test]
+fn test_mutation_sigint_restores_active_source_file() {
+    assert_signal_restores_active_source_file(libc::SIGINT, false, "", 130);
+}
+
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+#[test]
+fn test_mutation_sigterm_to_the_process_group_restores_active_source_file() {
+    assert_signal_restores_active_source_file(libc::SIGTERM, true, "", 143);
+}
+
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+#[test]
+fn test_mutation_sigquit_restores_active_source_file() {
+    assert_signal_restores_active_source_file(libc::SIGQUIT, false, "", 131);
+}
+
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+#[test]
+fn test_mutation_sighup_restores_active_source_file() {
+    assert_signal_restores_active_source_file(libc::SIGHUP, false, "", 129);
+}
+
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+#[test]
+fn test_mutation_sigterm_restores_a_read_only_source_without_a_backup() {
+    let prefix = "rm -f \"$TMPDIR\"/omen-mutation-backup-*; chmod 0444 lib.rs; ";
+    assert_signal_restores_active_source_file(libc::SIGTERM, false, prefix, 143);
 }
 
 #[test]
