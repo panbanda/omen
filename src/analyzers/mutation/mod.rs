@@ -391,7 +391,8 @@ impl AnalyzerTrait for Analyzer {
         let executor_config = ExecutorConfig::with_command(&test_cmd)
             .timeout(self.timeout_secs)
             .working_dir(project_root)
-            .jobs(self.effective_jobs());
+            .jobs(self.effective_jobs())
+            .run_id(run.id());
         let executor = AsyncMutantExecutor::new(executor_config);
 
         let total_files = ctx.files.len();

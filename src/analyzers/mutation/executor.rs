@@ -73,6 +73,8 @@ pub struct ExecutorConfig {
     pub capture_output: bool,
     /// Number of parallel workers (0 = num_cpus).
     pub jobs: usize,
+    /// The mutation run that owns the guards. A failed restore is reported to this run.
+    pub run_id: u64,
     /// Progress callback (optional).
     progress_callback: Option<Arc<ProgressCallback>>,
 }
@@ -98,6 +100,7 @@ impl Default for ExecutorConfig {
             working_dir: None,
             capture_output: false,
             jobs: 0,
+            run_id: 0,
             progress_callback: None,
         }
     }
@@ -110,6 +113,12 @@ impl ExecutorConfig {
             test_command: command.into(),
             ..Default::default()
         }
+    }
+
+    /// Set the run that owns the guards of the executor.
+    pub fn run_id(mut self, run_id: u64) -> Self {
+        self.run_id = run_id;
+        self
     }
 
     /// Set the timeout.
@@ -184,7 +193,8 @@ impl MutantExecutor {
         let start = Instant::now();
 
         // Create guard to ensure file is restored
-        let mut guard = MutationGuard::new(self.config.mutant_file(mutant))?;
+        let mut guard =
+            MutationGuard::new_for_run(self.config.mutant_file(mutant), self.config.run_id)?;
 
         // Apply the mutation
         let mutated_content = mutant.apply(source);
@@ -408,7 +418,7 @@ async fn execute_mutant_async(
     }
 
     // Create guard to ensure file is restored
-    let guard = match MutationGuard::new(config.mutant_file(mutant)) {
+    let guard = match MutationGuard::new_for_run(config.mutant_file(mutant), config.run_id) {
         Ok(g) => g,
         Err(_) => {
             return MutationResult::new(mutant.clone(), MutantStatus::BuildError, 0);

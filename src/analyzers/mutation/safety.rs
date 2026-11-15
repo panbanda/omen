@@ -88,6 +88,7 @@ struct RestoreRecord {
     /// The file that a link at `path` points to.
     real_path: PathBuf,
     backup: Option<PathBuf>,
+    run: u64,
 }
 
 /// Writes the original bytes into the staged file of a restore. A test replaces
@@ -286,7 +287,8 @@ fn is_in_git_repository(path: &Path) -> bool {
 }
 
 /// The recovery text of each restore that failed and that no run has reported yet.
-static RESTORE_FAILURES: parking_lot::Mutex<Vec<String>> = parking_lot::Mutex::new(Vec::new());
+static RESTORE_FAILURES: parking_lot::Mutex<Vec<(u64, String)>> =
+    parking_lot::Mutex::new(Vec::new());
 
 /// Record a restore that failed: keep a backup that exists, print the path of the backup and
 /// the commands to recover, and keep the text for the run that reports the failure.
@@ -305,19 +307,27 @@ fn report_failed_restore(record: &RestoreRecord, error: &std::io::Error) {
         ),
     };
     eprintln!("{text}");
-    RESTORE_FAILURES.lock().push(text);
+    RESTORE_FAILURES.lock().push((record.run, text));
 }
 
-/// The error for the restores that failed since the last call, if there are any. A run calls
-/// this after it restored each file. The library does not stop the process: the command line
-/// maps the error to its exit status.
-fn restore_failure_error() -> Option<Error> {
-    let failures = std::mem::take(&mut *RESTORE_FAILURES.lock());
-    if failures.is_empty() {
+/// The error for the restores of one run that failed since the last call, if there are any. A
+/// run calls this after it restored each file. A run never takes the failure of another run.
+/// The library does not stop the process: the command line maps the error to its exit status.
+fn restore_failure_error_for(run: u64) -> Option<Error> {
+    let mut all = RESTORE_FAILURES.lock();
+    let (own, others): (Vec<_>, Vec<_>) = std::mem::take(&mut *all)
+        .into_iter()
+        .partition(|(owner, _)| *owner == run);
+    *all = others;
+    if own.is_empty() {
         return None;
     }
     Some(Error::RestoreFailed {
-        recovery: failures.join("\n"),
+        recovery: own
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join("\n"),
     })
 }
 
@@ -342,6 +352,8 @@ pub struct MutationGuard {
     writer: StageWriter,
     /// Writes the original content in a restore of the guard. Tests replace it.
     restore_writer: StageWriter,
+    /// The run that owns the guard. A failed restore is reported to this run.
+    run: u64,
     link: Option<PathBuf>,
     real_path: PathBuf,
 }
@@ -352,6 +364,13 @@ impl MutationGuard {
     /// Reads and stores the original file content and permissions for later restoration.
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         Self::new_with_state(path, Arc::clone(&ACTIVE_MUTATIONS), None)
+    }
+
+    /// Create a guard that reports a failed restore to the run with this identifier.
+    pub fn new_for_run(path: impl AsRef<Path>, run: u64) -> Result<Self> {
+        let mut guard = Self::new(path)?;
+        guard.run = run;
+        Ok(guard)
     }
 
     fn new_with_state(
@@ -410,6 +429,7 @@ impl MutationGuard {
             interrupted,
             writer: write_all_bytes,
             restore_writer: write_all_bytes,
+            run: 0,
         })
     }
 
@@ -427,6 +447,7 @@ impl MutationGuard {
             permissions: self.permissions.clone(),
             link: self.link.clone(),
             real_path: self.real_path.clone(),
+            run: self.run,
             backup: self
                 .backup
                 .as_ref()
@@ -878,10 +899,18 @@ fn stop_active_test_commands() {
 /// decision about an interrupt: the usual end, an error, and a panic.
 #[must_use = "the run ends when this value drops"]
 pub struct ActiveRun {
+    id: u64,
     concluded: bool,
 }
 
+static NEXT_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 impl ActiveRun {
+    /// The identifier of the run. A guard of the run has it.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     /// End the run after its last mutant.
     ///
     /// If an interrupt came during the run, this function restores each file
@@ -893,7 +922,7 @@ impl ActiveRun {
     pub fn conclude(mut self) -> Result<()> {
         self.concluded = true;
         INTERRUPT_GATE.conclude(&ProcessEnvironment);
-        restore_failure_error().map_or(Ok(()), Err)
+        restore_failure_error_for(self.id).map_or(Ok(()), Err)
     }
 }
 
@@ -911,7 +940,10 @@ pub fn begin_run() -> Result<ActiveRun> {
     INTERRUPT_GATE
         .begin(&ProcessEnvironment)
         .map_err(Error::analysis)?;
-    Ok(ActiveRun { concluded: false })
+    Ok(ActiveRun {
+        id: NEXT_RUN.fetch_add(1, Ordering::SeqCst),
+        concluded: false,
+    })
 }
 
 /// Start the thread that reads the interrupt flag. `begin_run` registers the
@@ -1907,7 +1939,7 @@ mod tests {
     #[test]
     fn test_a_failed_restore_does_not_stop_the_restore_of_other_guards() {
         let _serial = PAUSE_TESTS.lock();
-        drop(restore_failure_error());
+        drop(restore_failure_error_for(0));
         let temp_dir = TempDir::new().unwrap();
         let first = temp_dir.path().join("first.rs");
         let second = temp_dir.path().join("second.rs");
@@ -1924,7 +1956,7 @@ mod tests {
 
         drop(second_guard);
         assert_eq!(fs::read(&second).unwrap(), b"second");
-        assert!(restore_failure_error().is_some());
+        assert!(restore_failure_error_for(0).is_some());
         RESTORE_FAILED.store(false, Ordering::SeqCst);
         remove_kept_backups();
     }
@@ -2094,10 +2126,41 @@ mod tests {
     }
 
     #[test]
+    fn test_a_run_gets_only_its_own_restore_failure() {
+        let _serial = PAUSE_TESTS.lock();
+        drop(restore_failure_error_for(1));
+        drop(restore_failure_error_for(2));
+        let temp_dir = TempDir::new().unwrap();
+        let first = temp_dir.path().join("first.rs");
+        let second = temp_dir.path().join("second.rs");
+        fs::write(&first, b"cleanup-first").unwrap();
+        fs::write(&second, b"cleanup-second").unwrap();
+        let mut guard_of_run_one = MutationGuard::new_for_run(&first, 1).unwrap();
+        let mut guard_of_run_two = MutationGuard::new_for_run(&second, 2).unwrap();
+        guard_of_run_one.apply(b"mutated").unwrap();
+        guard_of_run_two.apply(b"mutated").unwrap();
+        fs::remove_file(&first).unwrap();
+        fs::create_dir(&first).unwrap();
+
+        drop(guard_of_run_one);
+
+        assert!(
+            restore_failure_error_for(2).is_none(),
+            "run 2 took the failure of run 1"
+        );
+        let error = restore_failure_error_for(1).expect("run 1 has its failure");
+        assert!(error.to_string().contains("first.rs"), "{error}");
+        drop(guard_of_run_two);
+        assert_eq!(fs::read(&second).unwrap(), b"cleanup-second");
+        RESTORE_FAILED.store(false, Ordering::SeqCst);
+        remove_kept_backups();
+    }
+
+    #[test]
     fn test_the_run_gives_a_typed_error_after_a_failed_restore() {
         let _serial = PAUSE_TESTS.lock();
-        drop(restore_failure_error());
-        assert!(restore_failure_error().is_none());
+        drop(restore_failure_error_for(0));
+        assert!(restore_failure_error_for(0).is_none());
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.rs");
         fs::write(&file_path, b"cleanup-original").unwrap();
@@ -2107,13 +2170,13 @@ mod tests {
         fs::create_dir(&file_path).unwrap();
         drop(guard);
 
-        let error = restore_failure_error().expect("the restore failed");
+        let error = restore_failure_error_for(0).expect("the restore failed");
 
         let Error::RestoreFailed { recovery } = error else {
             panic!("a typed restore error");
         };
         assert!(recovery.contains("cp "), "{recovery}");
-        assert!(restore_failure_error().is_none());
+        assert!(restore_failure_error_for(0).is_none());
         RESTORE_FAILED.store(false, Ordering::SeqCst);
         remove_kept_backups();
     }
