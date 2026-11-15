@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use super::{get_function_node_types, get_tree_sitter_language, queries};
 use crate::core::Language;
-use crate::index::extract::{language_spec, NameRule};
+use crate::index::extract::{self, language_spec, NameRule};
 use crate::index::members;
 
 const LANGUAGES: [Language; 14] = [
@@ -79,6 +79,10 @@ fn index_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {
         ("index_call", spec.call_syntax().kinds()),
         ("index_call_hook", spec.call_hook_kinds()),
         ("index_comment", spec.comment_kinds().to_vec()),
+        (
+            "index_rebound_scope",
+            extract::rebound_scope_kinds(language),
+        ),
     ];
     tables.extend(members::syntax_kinds(language));
     tables

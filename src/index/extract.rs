@@ -1040,24 +1040,45 @@ fn pattern_binds(pattern: Node<'_>, name: &str, source: &[u8]) -> bool {
 /// The names of the global objects of ECMAScript.
 const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "global", "self"];
 
-/// The node kinds that open the scope of a `var`.
-const VARIABLE_SCOPES: [&str; 8] = [
-    "program",
+/// The node kinds whose body is the scope of a `var`, besides the program.
+/// The parameters of such a node are outside this scope.
+const VARIABLE_SCOPES: [&str; 7] = [
     "function_declaration",
     "function_expression",
-    "function",
     "generator_function",
     "generator_function_declaration",
     "arrow_function",
     "method_definition",
+    "class_static_block",
 ];
+
+/// The node kinds that the global object name check reads.
+pub fn rebound_scope_kinds(language: Language) -> Vec<&'static str> {
+    match language {
+        Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx => {
+            let mut kinds = VARIABLE_SCOPES.to_vec();
+            kinds.extend([
+                "program",
+                "statement_block",
+                "for_in_statement",
+                "for_statement",
+                "lexical_declaration",
+                "variable_declaration",
+                "assignment_expression",
+                "member_expression",
+            ]);
+            kinds
+        }
+        _ => Vec::new(),
+    }
+}
 
 /// The global object names that a scope node binds, one bit for each name of
 /// `GLOBAL_OBJECTS`: its parameters, the `let` and `const` variables of its
 /// block, the variable of a loop, the parameter of a `catch` clause, and, for
 /// a function or the program, each `var` that its body declares. A nested
 /// function has its own `var` names.
-fn scope_bindings(scope: Node<'_>, source: &[u8]) -> u8 {
+fn scope_bindings(scope: Node<'_>, parent: Option<Node<'_>>, source: &[u8]) -> u8 {
     let mut mask = 0u8;
     let mut mark = |pattern: Node<'_>| {
         for (bit, name) in GLOBAL_OBJECTS.iter().enumerate() {
@@ -1081,7 +1102,7 @@ fn scope_bindings(scope: Node<'_>, source: &[u8]) -> u8 {
         mark(parameters);
     }
     match scope.kind() {
-        "statement_block" => {
+        "statement_block" | "program" => {
             let mut cursor = scope.walk();
             for statement in scope.named_children(&mut cursor) {
                 if statement.kind() == "lexical_declaration" {
@@ -1109,7 +1130,9 @@ fn scope_bindings(scope: Node<'_>, source: &[u8]) -> u8 {
         }
         _ => {}
     }
-    if VARIABLE_SCOPES.contains(&scope.kind()) {
+    let is_body = scope.kind() == "statement_block"
+        && parent.is_some_and(|parent| VARIABLE_SCOPES.contains(&parent.kind()));
+    if is_body || scope.kind() == "program" {
         let mut stack = vec![scope];
         while let Some(current) = stack.pop() {
             let mut cursor = current.walk();
@@ -1218,7 +1241,8 @@ fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
                         while bound.len() < path.len() {
                             let scope = path[bound.len()];
                             let inherited = bound.last().copied().unwrap_or(0);
-                            bound.push(inherited | scope_bindings(scope, &parsed.source));
+                            let parent = bound.len().checked_sub(1).map(|index| path[index]);
+                            bound.push(inherited | scope_bindings(scope, parent, &parsed.source));
                         }
                         let hidden = bound.last().is_some_and(|mask| mask & (1 << bit) != 0);
                         if !hidden {
@@ -1532,6 +1556,29 @@ mod tests {
         assert_eq!(rebound_in(block), ["fetch"]);
         let nested = "function f() { function g() { var window = {}; } window.fetch = r; }";
         assert_eq!(rebound_in(nested), ["fetch"]);
+    }
+
+    #[test]
+    fn test_top_level_declarations_static_blocks_and_default_parameters() {
+        for source in [
+            "const window = {}; window.fetch = r;",
+            "let self; self.fetch = r;",
+            "function f() { var window; window.fetch = r; }",
+            "function* f() { var window; window.fetch = r; }",
+            "const f = () => { var window; window.fetch = r; };",
+            "class C { m() { var window; window.fetch = r; } }",
+            "class C { static { var window = {}; window.fetch = r; } }",
+        ] {
+            assert!(rebound_in(source).is_empty(), "{source}");
+        }
+        for source in [
+            "class C { static { var window = {}; } } window.fetch = r;",
+            "function f(x = (window.fetch = r)) { var window; }",
+            "const f = (x = (window.fetch = r)) => { var window; };",
+            "class C { m(x = (window.fetch = r)) { var window; } }",
+        ] {
+            assert_eq!(rebound_in(source), ["fetch"], "{source}");
+        }
     }
 
     #[test]
