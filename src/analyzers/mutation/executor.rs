@@ -401,6 +401,11 @@ async fn execute_mutant_async(
 ) -> MutationResult {
     let start = Instant::now();
 
+    if let Some(reason) = super::safety::mutation_refusal(&config.mutant_file(mutant)) {
+        eprintln!("omen: skipped a mutant: {reason}");
+        return MutationResult::new(mutant.clone(), MutantStatus::Skipped, 0);
+    }
+
     // Create guard to ensure file is restored
     let guard = match MutationGuard::new(config.mutant_file(mutant)) {
         Ok(g) => g,
@@ -879,6 +884,35 @@ mod tests {
 
         // "true" always succeeds, so mutant survives
         assert_eq!(result.status, MutantStatus::Survived);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_async_executor_skips_a_file_with_a_hard_link() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"let x = 42;").unwrap();
+        fs::hard_link(&file_path, temp_dir.path().join("other.rs")).unwrap();
+        let mutant = Mutant::new(
+            "mut-1",
+            &file_path,
+            "CRR",
+            1,
+            1,
+            "42",
+            "0",
+            "test mutation",
+            (8, 10),
+        );
+        let executor = AsyncMutantExecutor::new(ExecutorConfig::with_command("true").jobs(1));
+
+        let result = executor
+            .execute_mutant(&mutant, b"let x = 42;")
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, MutantStatus::Skipped);
+        assert_eq!(fs::read(&file_path).unwrap(), b"let x = 42;");
     }
 
     #[tokio::test]

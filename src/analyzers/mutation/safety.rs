@@ -87,6 +87,9 @@ struct RestoreRecord {
     link: Option<PathBuf>,
     /// The file that a link at `path` points to.
     real_path: PathBuf,
+    /// The user and the group of the file before the first write.
+    owner: Option<(u32, u32)>,
+    chown: ChownFn,
     backup: Option<PathBuf>,
 }
 
@@ -111,6 +114,13 @@ impl RestoreRecord {
     /// an empty or partial source, and a link that a test command put at the
     /// path does not redirect the write to another file.
     fn restore_with(&self, stage: StageWriter) -> std::io::Result<()> {
+        self.replace_with(&self.original, stage)
+    }
+
+    /// Replace the file with a new file that has `content`, the recorded permissions, and
+    /// the recorded owner. A mutation and a restore both use this function, so neither can
+    /// leave an empty or partial source.
+    fn replace_with(&self, content: &[u8], stage: StageWriter) -> std::io::Result<()> {
         let target = match &self.link {
             Some(link) => {
                 ensure_link(&self.path, link)?;
@@ -123,7 +133,8 @@ impl RestoreRecord {
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
         let mut staged = tempfile::NamedTempFile::new_in(directory)?;
-        stage(staged.as_file_mut(), &self.original)?;
+        stage(staged.as_file_mut(), content)?;
+        self.restore_owner(staged.path());
         staged.as_file().set_permissions(self.permissions.clone())?;
         staged.as_file().sync_all()?;
         staged.persist(&target).map_err(|error| error.error)?;
@@ -135,18 +146,62 @@ impl RestoreRecord {
                 "the restored path is not a regular file",
             ));
         }
-        if fs::read(&target)? != self.original {
+        if fs::read(&target)? != content {
             return Err(std::io::Error::other(
-                "the restored file differs from the original",
+                "the written file differs from the content",
             ));
         }
         if fs::metadata(&target)?.permissions() != self.permissions {
             return Err(std::io::Error::other(
-                "the restored permissions differ from the original",
+                "the permissions of the written file differ from the original",
             ));
         }
         Ok(())
     }
+
+    /// Give the new file the owner of the original. Only the owner of the process or
+    /// root can do this, so a failure is a warning and not an error.
+    fn restore_owner(&self, path: &Path) {
+        let Some((uid, gid)) = self.owner else {
+            return;
+        };
+        let current = owner_of(path);
+        if current == Some((uid, gid)) {
+            return;
+        }
+        if let Err(error) = (self.chown)(path, uid, gid) {
+            eprintln!(
+                "omen: the owner of {} is now different from the original ({uid}:{gid}): {error}",
+                self.path.display()
+            );
+        }
+    }
+}
+
+/// Sets the owner of a file. A test replaces it.
+type ChownFn = fn(&Path, u32, u32) -> std::io::Result<()>;
+
+#[cfg(unix)]
+fn owner_of(path: &Path) -> Option<(u32, u32)> {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path)
+        .ok()
+        .map(|metadata| (metadata.uid(), metadata.gid()))
+}
+
+#[cfg(not(unix))]
+fn owner_of(_: &Path) -> Option<(u32, u32)> {
+    None
+}
+
+#[cfg(unix)]
+fn change_owner(path: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
+    std::os::unix::fs::chown(path, Some(uid), Some(gid))
+}
+
+#[cfg(not(unix))]
+fn change_owner(_: &Path, _: u32, _: u32) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Make `path` a symbolic link to `link` again if a test command changed it.
@@ -173,6 +228,26 @@ fn ensure_link(path: &Path, link: &Path) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn ensure_link(_: &Path, _: &Path) -> std::io::Result<()> {
     Ok(())
+}
+
+/// The reason why omen does not mutate a file, if there is one.
+///
+/// A file with more than one hard link is refused. A mutation and a restore replace the
+/// file, so the other links would stop sharing the file.
+pub fn mutation_refusal(path: &Path) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let links = fs::metadata(path).ok()?.nlink();
+        if links > 1 {
+            return Some(format!(
+                "{} has {links} hard links, so omen does not mutate it",
+                path.display()
+            ));
+        }
+    }
+    let _ = path;
+    None
 }
 
 /// The path of a backup file that exists and has the original bytes. If the
@@ -285,7 +360,9 @@ pub struct MutationGuard {
     active_mutations: ActiveMutations,
     interrupted: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Writes the mutated content. Tests replace it to inject a write fault.
-    writer: fn(&Path, &[u8]) -> Result<()>,
+    writer: StageWriter,
+    owner: Option<(u32, u32)>,
+    chown: ChownFn,
     /// Writes the original content in a restore of the guard. Tests replace it.
     restore_writer: StageWriter,
     link: Option<PathBuf>,
@@ -306,6 +383,9 @@ impl MutationGuard {
         interrupted: Option<Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
+        if let Some(reason) = mutation_refusal(&path) {
+            return Err(Error::analysis(reason));
+        }
         let original = fs::read(&path).map_err(Error::Io)?;
         let permissions = fs::metadata(&path).map_err(Error::Io)?.permissions();
         let link = fs::symlink_metadata(&path)
@@ -315,6 +395,7 @@ impl MutationGuard {
             .transpose()
             .map_err(Error::Io)?;
         let real_path = fs::canonicalize(&path).map_err(Error::Io)?;
+        let owner = owner_of(&path);
         // The map has one entry for each file with a guard. A second guard would
         // replace the record of the first, and the original content would be lost.
         {
@@ -338,7 +419,9 @@ impl MutationGuard {
             backup: None,
             active_mutations,
             interrupted,
-            writer: |path, content| write_in_place(path, content),
+            writer: write_all_bytes,
+            owner,
+            chown: change_owner,
             restore_writer: write_all_bytes,
         })
     }
@@ -357,6 +440,8 @@ impl MutationGuard {
             permissions: self.permissions.clone(),
             link: self.link.clone(),
             real_path: self.real_path.clone(),
+            owner: self.owner,
+            chown: self.chown,
             backup: self
                 .backup
                 .as_ref()
@@ -366,14 +451,15 @@ impl MutationGuard {
 
     /// Apply a mutation to the file.
     ///
-    /// This writes the mutated content into the existing file, so the inode, the
-    /// owner, the permissions, and a symlink stay as they are. Before the first
-    /// write, it saves the original content in a backup file.
+    /// This replaces the file with a new file that has the mutated content, the same
+    /// permissions, and the same owner, if the process can set the owner. A symlink at
+    /// the path stays a symlink. Before the first write, it saves the original content
+    /// in a backup file.
     ///
-    /// The mutant write is in place for that reason (#549): a replacement of the file
-    /// would change the inode and the owner of a source file of the user. A restore does
-    /// not need this, and it replaces the file, so a failed restore never leaves a
-    /// partial source.
+    /// The write was in place before (#549) to keep the inode, the owner, and the hard
+    /// links. The guard now records the owner, and it refuses a file with more than one
+    /// hard link. Thus no reason for an in-place write remains, and a replacement can
+    /// never leave an empty or partial source.
     pub fn apply(&mut self, content: &[u8]) -> Result<()> {
         let active_mutations = Arc::clone(&self.active_mutations);
         let mut active = active_mutations.lock();
@@ -388,7 +474,7 @@ impl MutationGuard {
         // A write that fails can truncate the file first, so the file counts as
         // modified from the first write.
         self.modified = true;
-        if let Err(error) = (self.writer)(&self.path, content) {
+        if let Err(error) = record.replace_with(content, self.writer).map_err(Error::Io) {
             match record.restore() {
                 Ok(()) => {
                     self.modified = false;
@@ -1721,17 +1807,6 @@ mod tests {
         assert_eq!(entries[0].file_name(), "test.rs");
     }
 
-    fn write_then_fail(path: &Path, content: &[u8]) -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(path)
-            .map_err(Error::Io)?;
-        file.write_all(&content[..content.len() / 2])
-            .map_err(Error::Io)?;
-        Err(Error::Io(std::io::Error::other("disk full")))
-    }
-
     #[test]
     fn test_failed_partial_write_restores_the_source_at_once() {
         let temp_dir = TempDir::new().unwrap();
@@ -1739,7 +1814,7 @@ mod tests {
         fs::write(&file_path, b"original content").unwrap();
 
         let mut guard = MutationGuard::new(&file_path).unwrap();
-        guard.writer = write_then_fail;
+        guard.writer = stage_half_then_fail;
         assert!(guard.apply(b"mutated content!").is_err());
 
         assert_eq!(fs::read(&file_path).unwrap(), b"original content");
@@ -1915,6 +1990,73 @@ mod tests {
         guard.restore_writer = write_all_bytes;
         guard.restore().unwrap();
         assert_eq!(fs::read(&file_path).unwrap(), b"original content");
+    }
+
+    static CHOWN_CALLS: parking_lot::Mutex<Vec<(u32, u32)>> = parking_lot::Mutex::new(Vec::new());
+
+    fn record_chown(_: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
+        CHOWN_CALLS.lock().push((uid, gid));
+        Ok(())
+    }
+
+    fn refuse_chown(_: &Path, _: u32, _: u32) -> std::io::Result<()> {
+        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_the_restore_sets_the_recorded_owner_when_it_differs() {
+        let _serial = PAUSE_TESTS.lock();
+        CHOWN_CALLS.lock().clear();
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        let (uid, gid) = guard.owner.unwrap();
+        guard.owner = Some((uid + 1, gid + 1));
+        guard.chown = record_chown;
+        guard.apply(b"mutated").unwrap();
+        CHOWN_CALLS.lock().clear();
+
+        guard.restore().unwrap();
+
+        assert_eq!(*CHOWN_CALLS.lock(), [(uid + 1, gid + 1)]);
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_a_refused_chown_does_not_fail_the_restore() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        let (uid, gid) = guard.owner.unwrap();
+        guard.owner = Some((uid + 1, gid + 1));
+        guard.chown = refuse_chown;
+
+        guard.apply(b"mutated").unwrap();
+        guard.restore().unwrap();
+
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_a_file_with_another_hard_link_is_refused() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        fs::hard_link(&file_path, temp_dir.path().join("other.rs")).unwrap();
+
+        let error = MutationGuard::new(&file_path)
+            .err()
+            .expect("a hard-linked file is refused");
+
+        assert!(error.to_string().contains("test.rs"), "{error}");
+        assert!(error.to_string().contains("hard link"), "{error}");
+        assert!(mutation_refusal(&file_path).is_some());
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
     }
 
     #[test]
@@ -2205,22 +2347,6 @@ mod tests {
             .file_type()
             .is_symlink());
         assert_eq!(fs::read(&real).unwrap(), b"original");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_mutation_keeps_the_inode_of_the_file() {
-        use std::os::unix::fs::MetadataExt;
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.rs");
-        fs::write(&file_path, b"original").unwrap();
-        let inode = fs::metadata(&file_path).unwrap().ino();
-
-        let mut guard = MutationGuard::new(&file_path).unwrap();
-        guard.apply(b"mutated").unwrap();
-        assert_eq!(fs::metadata(&file_path).unwrap().ino(), inode);
-        guard.restore().unwrap();
-        assert_eq!(fs::read(&file_path).unwrap(), b"original");
     }
 
     #[cfg(unix)]
