@@ -81,6 +81,8 @@ pub struct MutationGuard {
     backup: Option<tempfile::NamedTempFile>,
     active_mutations: ActiveMutations,
     interrupted: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Writes the mutated content. Tests replace it to inject a write fault.
+    writer: fn(&Path, &[u8]) -> Result<()>,
 }
 
 impl MutationGuard {
@@ -106,6 +108,7 @@ impl MutationGuard {
             backup: None,
             active_mutations,
             interrupted,
+            writer: |path, content| write_in_place(path, content),
         })
     }
 
@@ -130,13 +133,37 @@ impl MutationGuard {
             self.backup = Some(save_backup(&self.path, &self.original)?);
         }
         active.insert(self.path.clone(), self.original.clone());
-        if let Err(error) = write_in_place(&self.path, content) {
-            active.remove(&self.path);
+        // A write that fails can truncate the file first, so the file counts as
+        // modified from the first write.
+        self.modified = true;
+        if let Err(error) = (self.writer)(&self.path, content) {
+            drop(active);
+            if self.restore_verified() {
+                self.modified = false;
+                self.active_mutations.lock().remove(&self.path);
+            } else {
+                self.keep_backup();
+            }
             return Err(error);
         }
-        drop(active);
-        self.modified = true;
         Ok(())
+    }
+
+    fn restore_verified(&self) -> bool {
+        write_in_place(&self.path, &self.original).is_ok()
+            && fs::read(&self.path).is_ok_and(|content| content == self.original)
+    }
+
+    fn keep_backup(&mut self) {
+        if let Some(backup) = self.backup.take() {
+            if let Ok((_, path)) = backup.keep() {
+                tracing::error!(
+                    "could not restore {}; the original content is in {}",
+                    self.path.display(),
+                    path.display()
+                );
+            }
+        }
     }
 
     /// Get the original file content.
@@ -159,7 +186,11 @@ impl MutationGuard {
     /// This is useful for running multiple mutations in sequence.
     pub fn restore(&mut self) -> Result<()> {
         if self.modified {
-            write_in_place(&self.path, &self.original)?;
+            if !self.restore_verified() {
+                return Err(Error::Io(std::io::Error::other(
+                    "the restored file differs from the original",
+                )));
+            }
             self.modified = false;
             self.active_mutations.lock().remove(&self.path);
         }
@@ -169,10 +200,8 @@ impl MutationGuard {
 
 impl Drop for MutationGuard {
     fn drop(&mut self) {
-        if self.modified && write_in_place(&self.path, &self.original).is_err() {
-            if let Some(backup) = self.backup.take() {
-                let _ = backup.keep();
-            }
+        if self.modified && !self.restore_verified() {
+            self.keep_backup();
         }
         self.active_mutations.lock().remove(&self.path);
     }
@@ -1404,6 +1433,32 @@ mod tests {
             .collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].file_name(), "test.rs");
+    }
+
+    fn write_then_fail(path: &Path, content: &[u8]) -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .map_err(Error::Io)?;
+        file.write_all(&content[..content.len() / 2])
+            .map_err(Error::Io)?;
+        Err(Error::Io(std::io::Error::other("disk full")))
+    }
+
+    #[test]
+    fn test_failed_partial_write_restores_the_source_at_once() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original content").unwrap();
+
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.writer = write_then_fail;
+        assert!(guard.apply(b"mutated content!").is_err());
+
+        assert_eq!(fs::read(&file_path).unwrap(), b"original content");
+        drop(guard);
+        assert_eq!(fs::read(&file_path).unwrap(), b"original content");
     }
 
     #[test]
