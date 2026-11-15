@@ -139,6 +139,13 @@ fn test_a_file_that_changed_during_analysis_fails_generate_and_keeps_the_old_fil
 }
 
 #[test]
+fn test_the_progress_total_counts_each_file_that_generate_counts() {
+    assert_eq!(progress_total(&[], false), 21);
+    assert_eq!(progress_total(&[], true), 22);
+    assert_eq!(progress_total(&["trend", "score"], false), 19);
+}
+
+#[test]
 fn test_generate_fails_when_an_analyzer_file_cannot_be_written() {
     let (directory, path) = repository();
     let data = directory.path().join("data");

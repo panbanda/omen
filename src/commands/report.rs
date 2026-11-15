@@ -79,6 +79,39 @@ pub(crate) const EXPECTED_DATA_FILES: [&str; 21] = [
     "trend",
 ];
 
+/// Each name is a command name. It is also the artifact file stem and the `--skip` value.
+const ANALYZER_NAMES: [&str; 20] = [
+    "complexity",
+    "satd",
+    "stubs",
+    "deadcode",
+    "churn",
+    "clones",
+    "defect",
+    "changes",
+    "tdg",
+    "graph",
+    "hotspot",
+    "temporal",
+    "ownership",
+    "cohesion",
+    "repomap",
+    "smells",
+    "flags",
+    "security",
+    "score",
+    "trend",
+];
+
+/// The number of files that `generate` counts as done.
+fn progress_total(skip_list: &[&str], has_diff: bool) -> u64 {
+    let analyzers = ANALYZER_NAMES
+        .iter()
+        .filter(|name| !skip_list.contains(name))
+        .count();
+    (analyzers + 1 + usize::from(has_diff)) as u64
+}
+
 fn generate(
     path: &PathBuf,
     config: &Config,
@@ -144,38 +177,9 @@ fn generate(
         .map(|s| s.split(',').collect())
         .unwrap_or_default();
 
-    // Each name is a command name. It is also the artifact file stem and the
-    // `--skip` value.
-    let analyzer_names = [
-        "complexity",
-        "satd",
-        "stubs",
-        "deadcode",
-        "churn",
-        "clones",
-        "defect",
-        "changes",
-        "tdg",
-        "graph",
-        "hotspot",
-        "temporal",
-        "ownership",
-        "cohesion",
-        "repomap",
-        "smells",
-        "flags",
-        "security",
-        "score",
-        "trend",
-    ];
-    let total_analyzers = analyzer_names
-        .iter()
-        .filter(|n| !skip_list.contains(*n))
-        .count();
-
     // Set up progress bar
     let progress = if is_tty() {
-        let bar = ProgressBar::new(total_analyzers as u64);
+        let bar = ProgressBar::new(progress_total(&skip_list, changes_text.is_some()));
         bar.set_style(
             ProgressStyle::default_bar()
                 .template("{prefix:.bold} [{bar:30.green/white}] {pos}/{len} {msg}")
