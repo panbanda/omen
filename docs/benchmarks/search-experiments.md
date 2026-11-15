@@ -81,9 +81,9 @@ base `search` code is unchanged.
 
 ## Result of experiment A
 
-The experiment fixed 22 queries of the ledger, and 24 queries got a rank where
-the base had none. The queries are for types, constants, and fields that the
-base does not index. The gate does not let a gain pay for a loss.
+24 queries got a hit in the first 10 results where the base had none, and 2
+queries lost one. Thus the net change of hit@10 is 22. The queries that gained
+are for types, constants, and fields that the base does not index. The gate does not let a gain pay for a loss.
 
 These 22 queries have a worse rank:
 
@@ -135,9 +135,9 @@ different result. This corpus does not measure it.
 
 ## Tables
 
-Each cell has recall@1, recall@5, recall@10, and MRR (all results), in this
-order. The column `Queries` has the number of queries, and one of them is a
-negative query. Each cell has 6 to 9 queries, so one query changes a cell by
+Each cell has hit@1, hit@5, hit@10, and MRR (all results), in this order. The
+column `Queries` has the number of positive queries. Each group also has one
+negative query, which the column does not count. Each cell has 6 to 9 queries, so one query changes a cell by
 0.11 to 0.17.
 
 | Language | Type | Queries | Base | A | B on the base |
