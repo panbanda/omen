@@ -1319,15 +1319,18 @@ mod tests {
     }
 
     #[test]
+    fn test_php_property_and_constant_names_are_case_sensitive() {
+        let app = "<?php\nclass Settings {\n    public string $STRLEN;\n    const STRPOS = 1;\n}\n\nfunction run(string $value): int {\n    return strlen($value) + strpos($value, 'a');\n}\n";
+        assert!(external(&[("app.php", app)], "app.php", "strlen"));
+        assert!(external(&[("app.php", app)], "app.php", "strpos"));
+    }
+
+    #[test]
     fn test_assignment_to_a_local_named_like_the_global_object_is_not_a_rebinding() {
         let parameter = "function install(globalThis) {\n  globalThis.fetch = localFetch;\n}\n\nfunction run() {\n  return fetch('/remote');\n}\n";
         let variable = "function install() {\n  const window = {};\n  window.fetch = localFetch;\n}\n\nfunction run() {\n  return fetch('/remote');\n}\n";
         let arrow = "const install = self => { self.fetch = localFetch; };\nfunction run() { return fetch('/remote'); }\n";
-        for (file, source) in [
-            ("a.js", parameter),
-            ("b.ts", variable),
-            ("c.js", arrow),
-        ] {
+        for (file, source) in [("a.js", parameter), ("b.ts", variable), ("c.js", arrow)] {
             assert!(external(&[(file, source)], file, "fetch"), "{file}");
         }
     }

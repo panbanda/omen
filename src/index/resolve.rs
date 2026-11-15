@@ -272,6 +272,12 @@ impl<'a> Resolver<'a> {
             .iter()
             .filter(|facts| facts.language == Language::Php)
             .flat_map(|facts| facts.symbols.iter())
+            .filter(|symbol| {
+                !matches!(
+                    symbol.kind,
+                    SymbolKind::Field | SymbolKind::Constant | SymbolKind::Variable
+                )
+            })
             .map(|symbol| symbol.name.to_ascii_lowercase())
             .collect();
         Self {

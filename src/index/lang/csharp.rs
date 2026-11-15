@@ -140,10 +140,7 @@ fn has_modifier(node: Node<'_>, keywords: &[&str], context: &Context<'_, '_>) ->
 /// The type node that a target-typed `new()` takes its type from. The syntax
 /// gives it for a declared variable, a field, a property, and a returned
 /// value. Other places have no such node, and the construction is not read.
-fn implicit_target<'tree>(
-    node: Node<'tree>,
-    context: &Context<'_, 'tree>,
-) -> Option<Node<'tree>> {
+fn implicit_target<'tree>(node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Node<'tree>> {
     let parent = node.parent()?;
     let declared = match parent.kind() {
         "equals_value_clause" | VARIABLE_DECLARATOR => {
