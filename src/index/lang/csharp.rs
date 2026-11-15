@@ -163,20 +163,7 @@ fn implicit_target<'tree>(
             }
         }
         "arrow_expression_clause" | "return_statement" => {
-            let owner = ancestors[..parent_index].iter().rev().find(|owner| {
-                matches!(
-                    owner.kind(),
-                    "method_declaration"
-                        | "local_function_statement"
-                        | PROPERTY_DECLARATION
-                        | "indexer_declaration"
-                        | LAMBDA_EXPRESSION
-                        | ANONYMOUS_METHOD_EXPRESSION
-                        | "constructor_declaration"
-                        | "operator_declaration"
-                        | "conversion_operator_declaration"
-                )
-            })?;
+            let owner = context.return_owner?;
             let mut cursor = owner.walk();
             let is_async = owner
                 .children(&mut cursor)
@@ -235,6 +222,20 @@ fn implicit_construction<'tree>(
 }
 
 impl LanguageSpec for CSharp {
+    fn return_owner_kinds(&self) -> &'static [&'static str] {
+        &[
+            "method_declaration",
+            "local_function_statement",
+            PROPERTY_DECLARATION,
+            "indexer_declaration",
+            LAMBDA_EXPRESSION,
+            ANONYMOUS_METHOD_EXPRESSION,
+            "constructor_declaration",
+            "operator_declaration",
+            "conversion_operator_declaration",
+        ]
+    }
+
     fn block_kinds(&self) -> Vec<&'static str> {
         vec!["block"]
     }

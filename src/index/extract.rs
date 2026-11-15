@@ -298,6 +298,8 @@ pub struct Context<'a, 'tree> {
     pub scopes: &'a [Scope<'tree>],
     /// The ancestors of the node at which the walk is, the nearest last.
     pub ancestors: &'a [Node<'tree>],
+    /// The nearest ancestor whose kind is one of `LanguageSpec::return_owner_kinds`.
+    pub return_owner: Option<Node<'tree>>,
     /// The members recorder of the file, which has the type parameters read so far.
     pub members: Option<&'a Recorder>,
     /// The ID of the node at which the walk is, and the parent of that node.
@@ -469,6 +471,13 @@ pub trait LanguageSpec: Sync {
             .next()
     }
 
+    /// The node kinds of the definitions and function values that a returned
+    /// value belongs to. The walk keeps the nearest one for a construction
+    /// whose type the return type gives.
+    fn return_owner_kinds(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// The node kinds of the function values that have parameters of their own.
     fn lambda_kinds(&self) -> &'static [&'static str] {
         &[]
@@ -619,6 +628,9 @@ struct Extractor<'a, 'tree> {
     facts_of_kinds: Vec<Option<KindFacts>>,
     /// The nodes that contain the current node, from the root.
     ancestors: Vec<Node<'tree>>,
+    return_owner_kinds: &'static [&'static str],
+    /// The ancestors that have a kind of `return_owner_kinds`, the nearest last.
+    return_owners: Vec<Node<'tree>>,
     return_type_field: &'static str,
     /// Each call with its start byte, its owner, and its closure flag.
     calls: Vec<RawCall<'tree>>,
@@ -682,6 +694,7 @@ impl<'tree> Extractor<'_, 'tree> {
             source: self.source,
             scopes: &self.scopes,
             ancestors: &self.ancestors,
+            return_owner: self.return_owners.last().copied(),
             members: self.members.as_ref(),
             current: Some((node.id(), self.ancestors.last().copied())),
         };
@@ -780,6 +793,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 source: self.source,
                 scopes: &self.scopes,
                 ancestors: &self.ancestors,
+                return_owner: self.return_owners.last().copied(),
                 members: self.members.as_ref(),
                 current: Some((node.id(), self.ancestors.last().copied())),
             };
@@ -798,6 +812,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 source: self.source,
                 scopes: &self.scopes,
                 ancestors: &self.ancestors,
+                return_owner: self.return_owners.last().copied(),
                 members: self.members.as_ref(),
                 current: Some((node.id(), self.ancestors.last().copied())),
             };
@@ -860,6 +875,7 @@ impl<'tree> Extractor<'_, 'tree> {
                     source: self.source,
                     scopes: &self.scopes,
                     ancestors: &self.ancestors,
+                    return_owner: self.return_owners.last().copied(),
                     members: self.members.as_ref(),
                     current: Some((node.id(), self.ancestors.last().copied())),
                 },
@@ -913,6 +929,9 @@ impl<'tree> Extractor<'_, 'tree> {
             let node = cursor.node();
             self.enter(node, depth);
             if cursor.goto_first_child() {
+                if self.return_owner_kinds.contains(&node.kind()) {
+                    self.return_owners.push(node);
+                }
                 self.ancestors.push(node);
                 depth += 1;
                 continue;
@@ -925,7 +944,15 @@ impl<'tree> Extractor<'_, 'tree> {
                 if !cursor.goto_parent() {
                     return;
                 }
-                self.ancestors.pop();
+                if let Some(left) = self.ancestors.pop() {
+                    if self
+                        .return_owners
+                        .last()
+                        .is_some_and(|owner| owner.id() == left.id())
+                    {
+                        self.return_owners.pop();
+                    }
+                }
                 depth -= 1;
             }
         }
@@ -1297,6 +1324,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         local_kinds: spec.local_kinds(),
         facts_of_kinds: Vec::new(),
         ancestors: Vec::new(),
+        return_owner_kinds: spec.return_owner_kinds(),
+        return_owners: Vec::new(),
         return_type_field: spec.call_syntax().return_type_field,
         calls: Vec::new(),
         locals: Vec::new(),

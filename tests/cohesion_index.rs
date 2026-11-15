@@ -992,6 +992,21 @@ fn test_csharp_target_typed_new_in_deeply_nested_blocks_is_linear() {
 }
 
 #[test]
+fn test_csharp_returned_new_in_deeply_nested_blocks_is_linear() {
+    let depth = 5_000;
+    let mut source = String::from("class Part {}\n\nclass Factory {\n    Part Make() {\n");
+    for _ in 0..depth {
+        source.push_str("{ if (true) return new();\n");
+    }
+    source.push_str(&"}".repeat(depth));
+    source.push_str("\n    }\n}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Factory.cs", &source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+    assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+}
+
+#[test]
 fn test_csharp_qualified_type_is_not_hidden_by_a_type_parameter() {
     let source = "namespace Repo {\n    class Part {}\n}\n\nclass Factory<Part> where Part : struct {\n    Repo.Part? Make() => new();\n}\n";
     let analysis = analyze(&[("Factory.cs", source)]);
