@@ -1353,7 +1353,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                     .get(end..)
                     .is_some_and(|rest| rest.trim_ascii_start().starts_with(b"->"))
             }),
-            nullable_target: nullable_target,
+            nullable_target,
         });
     }
     FileSymbols {
