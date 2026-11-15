@@ -845,9 +845,10 @@ fn test_inner_template_template_parameter_is_not_in_scope_in_the_class() {
     assert_eq!(class(&analysis, "Box").cbo, 1);
 }
 
-#[test]
-fn test_many_type_parameters_and_references_are_read_in_linear_time() {
-    let count = 300_000;
+fn many_type_parameters_and_references_are_read_in_linear_time_at(
+    size: usize,
+) -> std::time::Duration {
+    let count = size;
     let parameters: Vec<String> = (0..count).map(|index| format!("Param{index}")).collect();
     let mut source = format!("class Item {{}}\nclass Big<{}> {{\n", parameters.join(", "));
     for index in 0..count {
@@ -857,7 +858,19 @@ fn test_many_type_parameters_and_references_are_read_in_linear_time() {
     let started = std::time::Instant::now();
     let analysis = analyze(&[("Big.java", &source)]);
     assert_eq!(class(&analysis, "Big").cbo, 1);
-    assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+    started.elapsed()
+}
+
+#[test]
+fn test_many_type_parameters_and_references_are_read_in_linear_time() {
+    many_type_parameters_and_references_are_read_in_linear_time_at(2_000);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_many_type_parameters_and_references_are_read_in_linear_time() {
+    let elapsed = many_type_parameters_and_references_are_read_in_linear_time_at(300_000);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
 }
 
 #[test]
@@ -960,9 +973,10 @@ fn test_csharp_target_typed_new_under_a_type_parameter_abstains() {
     );
 }
 
-#[test]
-fn test_csharp_target_typed_new_in_a_class_with_many_methods_is_linear() {
-    let methods = 30_000;
+fn csharp_target_typed_new_in_a_class_with_many_methods_is_linear_at(
+    size: usize,
+) -> std::time::Duration {
+    let methods = size as u32;
     let mut source = String::from("class Part {}\n\nclass Factory<T> {\n");
     for index in 0..methods {
         source.push_str(&format!(
@@ -973,12 +987,25 @@ fn test_csharp_target_typed_new_in_a_class_with_many_methods_is_linear() {
     let started = std::time::Instant::now();
     let analysis = analyze(&[("Factory.cs", &source)]);
     assert_eq!(class(&analysis, "Factory").rfc, methods + 1);
-    assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+    started.elapsed()
 }
 
 #[test]
-fn test_csharp_target_typed_new_in_deeply_nested_blocks_is_linear() {
-    let depth = 5_000;
+fn test_csharp_target_typed_new_in_a_class_with_many_methods_is_linear() {
+    csharp_target_typed_new_in_a_class_with_many_methods_is_linear_at(2_000);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_target_typed_new_in_a_class_with_many_methods_is_linear() {
+    let elapsed = csharp_target_typed_new_in_a_class_with_many_methods_is_linear_at(30_000);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
+fn csharp_target_typed_new_in_deeply_nested_blocks_is_linear_at(
+    size: usize,
+) -> std::time::Duration {
+    let depth = size;
     let mut source = String::from("class Part {}\n\nclass Factory<T> {\n    void Make() {\n");
     for _ in 0..depth {
         source.push_str("{ Part part = new();\n");
@@ -988,12 +1015,23 @@ fn test_csharp_target_typed_new_in_deeply_nested_blocks_is_linear() {
     let started = std::time::Instant::now();
     let analysis = analyze(&[("Factory.cs", &source)]);
     assert_eq!(class(&analysis, "Factory").rfc, 2);
-    assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+    started.elapsed()
 }
 
 #[test]
-fn test_csharp_returned_new_in_deeply_nested_blocks_is_linear() {
-    let depth = 5_000;
+fn test_csharp_target_typed_new_in_deeply_nested_blocks_is_linear() {
+    csharp_target_typed_new_in_deeply_nested_blocks_is_linear_at(2_000);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_target_typed_new_in_deeply_nested_blocks_is_linear() {
+    let elapsed = csharp_target_typed_new_in_deeply_nested_blocks_is_linear_at(5_000);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
+fn csharp_returned_new_in_deeply_nested_blocks_is_linear_at(size: usize) -> std::time::Duration {
+    let depth = size;
     let mut source = String::from("class Part {}\n\nclass Factory {\n    Part Make() {\n");
     for _ in 0..depth {
         source.push_str("{ if (true) return new();\n");
@@ -1003,7 +1041,19 @@ fn test_csharp_returned_new_in_deeply_nested_blocks_is_linear() {
     let started = std::time::Instant::now();
     let analysis = analyze(&[("Factory.cs", &source)]);
     assert_eq!(class(&analysis, "Factory").rfc, 2);
-    assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+    started.elapsed()
+}
+
+#[test]
+fn test_csharp_returned_new_in_deeply_nested_blocks_is_linear() {
+    csharp_returned_new_in_deeply_nested_blocks_is_linear_at(2_000);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_returned_new_in_deeply_nested_blocks_is_linear() {
+    let elapsed = csharp_returned_new_in_deeply_nested_blocks_is_linear_at(5_000);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
 }
 
 #[test]

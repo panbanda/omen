@@ -1140,9 +1140,10 @@ fn is_primitive_type(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_nested_scopes_of_one_name_are_looked_up_in_logarithmic_time() {
-        let depth = 400_000;
+    fn nested_scopes_of_one_name_are_looked_up_in_logarithmic_time_at(
+        size: usize,
+    ) -> std::time::Duration {
+        let depth = size;
         let source = b"T";
         let declared: Vec<(ByteRange, ByteRange)> = (0..depth)
             .map(|level| ((0, 1), (level, 2 * depth - level)))
@@ -1154,6 +1155,18 @@ mod tests {
             assert!(scopes.hides(b"T", position, position + 1) || level == 0);
         }
         assert!(!scopes.hides(b"T", 2 * depth + 5, 2 * depth + 6));
-        assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+        started.elapsed()
+    }
+
+    #[test]
+    fn test_nested_scopes_of_one_name_are_looked_up_in_logarithmic_time() {
+        nested_scopes_of_one_name_are_looked_up_in_logarithmic_time_at(2_000);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_scopes_of_one_name_are_looked_up_in_logarithmic_time() {
+        let elapsed = nested_scopes_of_one_name_are_looked_up_in_logarithmic_time_at(400_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 }

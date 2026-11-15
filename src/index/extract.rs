@@ -1542,24 +1542,37 @@ mod tests {
         super::rebound_names(&parsed).into_iter().collect()
     }
 
-    #[test]
-    fn test_global_assignments_in_a_large_block_are_linear() {
+    fn global_assignments_in_a_large_block_are_linear_at(size: usize) -> std::time::Duration {
         let mut source = String::from("function install() {\n  const local = 1;\n");
-        for line in 0..100_000 {
+        for line in 0..size {
             source.push_str(&format!("  window.x{line} = 1;\n"));
         }
         source.push_str("}\n");
         let started = std::time::Instant::now();
         let rebound = rebound_in(&source);
-        assert_eq!(rebound.len(), 100_000);
-        assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+        assert_eq!(rebound.len(), size);
+        let elapsed = started.elapsed();
         let shadowed = source.replace("const local = 1;", "const window = {};");
         assert!(rebound_in(&shadowed).is_empty());
+        elapsed
     }
 
     #[test]
-    fn test_global_assignments_in_deeply_nested_blocks_are_linear() {
-        let depth = 50_000;
+    fn test_global_assignments_in_a_large_block_are_linear() {
+        global_assignments_in_a_large_block_are_linear_at(2_000);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_global_assignments_in_a_large_block_are_linear() {
+        let elapsed = global_assignments_in_a_large_block_are_linear_at(100_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    fn global_assignments_in_deeply_nested_blocks_are_linear_at(
+        size: usize,
+    ) -> std::time::Duration {
+        let depth = size;
         let mut source = String::from("function install() {\n");
         for level in 0..depth {
             source.push_str(&format!("{{ window.x{level} = 1;\n"));
@@ -1569,7 +1582,19 @@ mod tests {
         let started = std::time::Instant::now();
         let rebound = rebound_in(&source);
         assert_eq!(rebound.len(), depth);
-        assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+        started.elapsed()
+    }
+
+    #[test]
+    fn test_global_assignments_in_deeply_nested_blocks_are_linear() {
+        global_assignments_in_deeply_nested_blocks_are_linear_at(2_000);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_global_assignments_in_deeply_nested_blocks_are_linear() {
+        let elapsed = global_assignments_in_deeply_nested_blocks_are_linear_at(50_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
     #[test]
