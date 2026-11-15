@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "language": "ruby",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. The case checks the status of calls. ruby -c accepts the files.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "helper", "category": "free_function", "file": "app.rb", "name": "helper", "kind": "function", "container": null, "start_line": 4, "end_line": 6, "exported": true},
+    {"label": "run", "category": "free_function", "file": "app.rb", "name": "run", "kind": "function", "container": null, "start_line": 8, "end_line": 13, "exported": true},
+    {"label": "decoy", "category": "free_function", "file": "app.rb", "name": "decoy", "kind": "function", "container": null, "start_line": 15, "end_line": 17, "exported": true},
+    {"label": "util_format", "category": "free_function", "file": "util.rb", "name": "format", "kind": "function", "container": null, "start_line": 1, "end_line": 3, "exported": true}
+  ],
+  "calls": [
+    {"label": "kernel_method", "category": "external", "caller": "run", "line": 9, "callee_text": "puts", "expected": [], "status": "external"},
+    {"label": "core_class", "category": "external", "caller": "run", "line": 10, "callee_text": "File.join", "expected": [], "status": "external"},
+    {"label": "kernel_raise", "category": "external", "caller": "run", "line": 12, "callee_text": "raise", "expected": [], "status": "external"},
+    {"label": "same_file_method", "category": "bare_local", "caller": "run", "line": 11, "callee_text": "helper", "expected": ["helper"], "status": "not_external"},
+    {"label": "method_hides_kernel", "category": "shadowing", "caller": "decoy", "line": 16, "callee_text": "format", "expected": ["util_format"], "status": "not_external"}
+  ]
+}

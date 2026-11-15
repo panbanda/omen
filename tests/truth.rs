@@ -31,7 +31,7 @@ use omen::index::model::{
     Exported, ImportBinding, ImportKind as IndexImportKind, ImportTarget, ResolutionStatus, Symbol,
     SymbolKind,
 };
-use omen::index::resolve::resolve_references;
+use omen::index::resolve::resolve_references_with;
 use omen::index::security::analysis::analyze_files;
 use omen::index::security::entry::find_entry_points;
 use omen::index::security::find_sinks;
@@ -172,7 +172,7 @@ fn read_manifests(root: &Path, dir: &Path, manifests: &mut Manifests) {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         if path.is_dir() {
             read_manifests(root, &path, manifests);
-        } else if name == "go.mod" || name.ends_with(".gemspec") {
+        } else if name == "go.mod" || name == "Cargo.toml" || name.ends_with(".gemspec") {
             let text = std::fs::read_to_string(&path).unwrap();
             manifests.add(&relative(root, &path), &text);
         }
@@ -267,6 +267,7 @@ fn observed_calls(files: &[FileSymbols]) -> Vec<ObservedCall> {
             call: reference.name.clone(),
             edges,
             candidates: offered,
+            external: vec![reference.resolution.status == ResolutionStatus::External],
         });
     }
     calls
@@ -332,7 +333,7 @@ fn index_case(dir: &Path) -> (Vec<omen::parser::ParseResult>, Vec<FileSymbols>) 
     let mut manifests = Manifests::default();
     read_manifests(dir, dir, &mut manifests);
     resolve_imports(&mut index_files, &manifests);
-    resolve_references(&mut index_files);
+    resolve_references_with(&mut index_files, &manifests);
     (trees, index_files)
 }
 

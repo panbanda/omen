@@ -182,10 +182,10 @@ mod tests {
                 "1 ->source Unresolved - []",
                 "3 ->source Unresolved - []",
                 "5 ->source Unresolved - []",
-                "9 base>echo Unresolved - []",
-                "18 outer.inner>echo Unresolved - []",
+                "9 base>echo External - []",
+                "18 outer.inner>echo External - []",
                 "20 outer>inner UniqueCandidate LexicalScope [main.sh#outer.inner]",
-                "24 greet>echo Unresolved - []",
+                "24 greet>echo External - []",
                 "28 run>base UniqueCandidate SameFile [main.sh#base]",
                 "28 run>cat Unresolved - []",
                 "30 run>twice UniqueCandidate ImportedModule [lib/util.sh#twice]",
@@ -193,7 +193,7 @@ mod tests {
                 "32 run>greet UniqueCandidate SameFile [main.sh#greet~2]",
                 "33 run>pick Ambiguous ImportedModule [lib/fancy.sh#pick, lib/plain.sh#pick]",
                 "34 run>git Unresolved - []",
-                "38 greet~2>echo Unresolved - []",
+                "38 greet~2>echo External - []",
             ]
         );
     }

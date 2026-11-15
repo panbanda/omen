@@ -207,8 +207,9 @@ impl AnalyzerTrait for Analyzer {
         // definition that holds a reference to each definition that the
         // reference can name. A definition is dead only if no reference can
         // name it: the index gives each candidate of an ambiguous call, and a
-        // call that the index cannot resolve counts for each definition with
-        // that name.
+        // call that the index cannot resolve, or that it marks external, counts
+        // for each definition with that name. A wrong external mark must not
+        // make a definition dead.
         let mut call_graph: HashMap<SharedStr, Vec<SharedStr>> = HashMap::new();
         let mut roots: Vec<SharedStr> = Vec::new();
         let mut candidate_keys: HashSet<SharedStr> = HashSet::new();
@@ -217,7 +218,9 @@ impl AnalyzerTrait for Analyzer {
             let resolution = &reference.resolution;
             let weak = matches!(
                 resolution.status,
-                ResolutionStatus::Unresolved | ResolutionStatus::Ambiguous
+                ResolutionStatus::Unresolved
+                    | ResolutionStatus::Ambiguous
+                    | ResolutionStatus::External
             );
             let mut targets: Vec<SharedStr> = resolution
                 .candidates
@@ -3636,6 +3639,23 @@ mod index_tests {
         )]);
 
         assert!(!dead.contains(&"process".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_an_external_call_keeps_each_same_name_definition_alive() {
+        let dead = dead_names(&[
+            (
+                "util.py",
+                "class Repo:\n    def _append(self, value):\n        return value\n\n    def _unused(self):\n        return 1\n\nlist = Repo()\n",
+            ),
+            (
+                "app.py",
+                "from util import *\n\ndef main():\n    list._append(1)\n",
+            ),
+        ]);
+
+        assert!(dead.contains(&"_unused".to_string()), "{dead:?}");
+        assert!(!dead.contains(&"_append".to_string()), "{dead:?}");
     }
 
     #[test]

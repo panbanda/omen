@@ -573,10 +573,10 @@ mod tests {
                 "27 measure>size.Area UniqueCandidate ReceiverDeclaredType [shapes/shapes.go#Square.Area]",
                 "27 measure>shape.Area Ambiguous NameOnly [shapes/shapes.go#Circle.Area, shapes/shapes.go#Shape.Area, shapes/shapes.go#Square.Area]",
                 "32 shadow>Helper UniqueCandidate LexicalScope [main.go#shadow.Helper]",
-                "37 external>b.WriteString Unresolved - []",
+                "37 external>b.WriteString External - []",
                 "38 external>unknown.Area Unresolved - []",
                 "39 external>strings.ToUpper External - []",
-                "39 external>b.String Unresolved - []",
+                "39 external>b.String External - []",
                 "39 external>tools.Missing Unresolved - []",
             ]
         );

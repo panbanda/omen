@@ -179,6 +179,7 @@ impl LanguageSpec for Java {
             LOCAL_VARIABLE_DECLARATION,
             ENHANCED_FOR_STATEMENT,
             SPREAD_PARAMETER,
+            LAMBDA_EXPRESSION,
         ]);
         kinds
     }
@@ -205,6 +206,35 @@ impl LanguageSpec for Java {
                     value_start: Some(values.start_byte()),
                     is_parameter: false,
                     element: true,
+                    result_index: None,
+                    visible: None,
+                });
+            }
+            return;
+        }
+        if node.kind() == LAMBDA_EXPRESSION {
+            // `name -> body` and `(a, b) -> body` give the types by inference.
+            let parameters = node.child_by_field_name("parameters");
+            let mut names: Vec<Node<'_>> = Vec::new();
+            if let Some(parameters) = parameters {
+                if parameters.kind() == IDENTIFIER {
+                    names.push(parameters);
+                } else if parameters.kind() == "inferred_parameters" {
+                    let mut cursor = parameters.walk();
+                    names.extend(
+                        parameters
+                            .named_children(&mut cursor)
+                            .filter(|child| child.kind() == IDENTIFIER),
+                    );
+                }
+            }
+            for name in names {
+                out.push(LocalName {
+                    name: context.text(name),
+                    type_name: None,
+                    value_start: None,
+                    is_parameter: true,
+                    element: false,
                     result_index: None,
                     visible: None,
                 });
@@ -601,7 +631,7 @@ mod tests {
                 "20 Main.run>List.of External - []",
                 "20 Main.run>local UniqueCandidate EnclosingType [Main.java#Main.local]",
                 "22 Main.run>add.applyAsInt UniqueCandidate LexicalScope [Main.java#Main.run.add]",
-                "22 Main.run>numbers.size Unresolved - []",
+                "22 Main.run>numbers.size External - []",
                 "26 Main.measure>Circle UniqueCandidate QualifiedPath [shop/shapes/Circle.java#Circle.Circle]",
                 "27 Main.measure>size.area UniqueCandidate ReceiverDeclaredType [shop/shapes/Circle.java#Circle.area]",
                 "27 Main.measure>shape.area Ambiguous NameOnly [shop/shapes/Circle.java#Circle.area, shop/shapes/Shape.java#Shape.area]",

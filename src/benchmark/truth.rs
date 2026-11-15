@@ -280,6 +280,18 @@ pub struct CallLabel {
     /// edge is asserted. Measured separately from edges.
     #[serde(default)]
     pub candidates_required: Vec<String>,
+    /// The status that omen must give the call: `external` for a call of a
+    /// definition outside the repository, and `not_external` for a call that
+    /// a repository symbol can receive. Without the field, the status is not checked.
+    #[serde(default)]
+    pub status: Option<ExpectedStatus>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpectedStatus {
+    External,
+    NotExternal,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -381,6 +393,8 @@ pub struct ObservedCall {
     pub call: String,
     pub edges: Vec<Location>,
     pub candidates: Vec<Location>,
+    /// True for each report of the call that has the status `External`.
+    pub external: Vec<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -690,6 +704,19 @@ fn compare_calls(
             format!("{prefix}/no_missed_edge"),
             (!missed_edges.is_empty()).then(|| format!("no edge to {}", join(missed_edges))),
         ));
+        if let Some(status) = call.status {
+            let reported = matching.iter().flat_map(|o| o.external.iter().copied());
+            let wrong =
+                reported.filter(|external| *external != (status == ExpectedStatus::External));
+            let count = wrong.count();
+            out.push(assertion(
+                format!("{prefix}/status"),
+                (matching.is_empty() || count > 0).then(|| match status {
+                    ExpectedStatus::External => "the call is not reported as external".to_string(),
+                    ExpectedStatus::NotExternal => "the call is reported as external".to_string(),
+                }),
+            ));
+        }
         if !candidates_required.is_empty() {
             let missing: Vec<_> = candidates_required.difference(&offered).collect();
             out.push(assertion(
@@ -1361,12 +1388,14 @@ mod tests {
                     call: "helper".to_string(),
                     edges: vec![location("a.rs", "helper", 1)],
                     candidates: vec![location("a.rs", "helper", 1)],
+                    external: vec![false],
                 },
                 ObservedCall {
                     caller: location("main.rs", "caller", 3),
                     call: "area".to_string(),
                     edges: vec![],
                     candidates: vec![location("a.rs", "area", 5)],
+                    external: vec![false],
                 },
             ],
             sinks: vec![],
@@ -1508,6 +1537,47 @@ mod tests {
             failures(&observed),
             ["rust/basics/calls/receiver/no_false_edge"]
         );
+    }
+
+    #[test]
+    fn status_label_checks_each_report_of_the_call() {
+        let mut open = labels();
+        open.calls[1].status = Some(ExpectedStatus::External);
+        let mut observed = correct();
+        let failing = |observed: &Observed, labels: &Labels| -> Vec<String> {
+            compare("rust/basics", labels, observed)
+                .unwrap()
+                .into_iter()
+                .filter(|assertion| !assertion.passed)
+                .map(|assertion| assertion.id)
+                .collect()
+        };
+        assert_eq!(
+            failing(&observed, &open),
+            ["rust/basics/calls/receiver/status"]
+        );
+        observed.calls[1].external = vec![true];
+        assert!(failing(&observed, &open).is_empty());
+        open.calls[1].status = Some(ExpectedStatus::NotExternal);
+        assert_eq!(
+            failing(&observed, &open),
+            ["rust/basics/calls/receiver/status"]
+        );
+    }
+
+    #[test]
+    fn status_label_fails_when_the_call_is_not_reported() {
+        let mut open = labels();
+        open.calls[1].status = Some(ExpectedStatus::NotExternal);
+        let mut observed = correct();
+        observed.calls.remove(1);
+        let ids: Vec<String> = compare("rust/basics", &open, &observed)
+            .unwrap()
+            .into_iter()
+            .filter(|assertion| !assertion.passed)
+            .map(|assertion| assertion.id)
+            .collect();
+        assert!(ids.contains(&"rust/basics/calls/receiver/status".to_string()));
     }
 
     #[test]

@@ -6,6 +6,8 @@
 //! name. A qualifier or a receiver that fails does not continue to the rules
 //! for a bare name.
 
+pub mod external;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, OnceLock};
 
@@ -14,6 +16,7 @@ use rayon::prelude::*;
 
 use super::calls::{element_type, one_result, required_type, split_list, split_type, Argument};
 use super::extract::{name_path, FileSymbols, LinkFacts, Local};
+use super::imports::Manifests;
 use super::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ReferenceKind, Resolution,
     ResolutionBasis as Basis, ResolutionStatus as Status, SharedStr, Symbol, SymbolKind,
@@ -21,7 +24,7 @@ use super::model::{
 use crate::core::Language;
 
 /// Languages that can call the definitions of each other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Family {
     Go,
     Rust,
@@ -193,6 +196,11 @@ fn segments(path: &str) -> Vec<&str> {
 
 struct Resolver<'a> {
     files: &'a [FileSymbols],
+    manifests: &'a Manifests,
+    /// The names that a file of the family binds again: a macro, an alias, and so on.
+    rebound: std::collections::HashSet<(Family, &'a str)>,
+    /// The lower case names of the PHP symbols. PHP names of functions and classes ignore case.
+    php_names: std::collections::HashSet<String>,
     by_name: HashMap<&'a str, Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
@@ -212,7 +220,7 @@ struct Resolver<'a> {
 type TypeQuery = (usize, String, Option<String>);
 
 impl<'a> Resolver<'a> {
-    fn new(files: &'a [FileSymbols]) -> Self {
+    fn new(files: &'a [FileSymbols], manifests: &'a Manifests) -> Self {
         let mut by_name: HashMap<&str, Vec<Id>> = HashMap::new();
         let mut by_file = HashMap::new();
         for (file, facts) in files.iter().enumerate() {
@@ -250,8 +258,27 @@ impl<'a> Resolver<'a> {
                 positions
             })
             .collect();
+        let rebound = files
+            .iter()
+            .flat_map(|facts| {
+                let family = family(facts.language);
+                facts
+                    .rebound
+                    .iter()
+                    .map(move |name| (family, name.as_str()))
+            })
+            .collect();
+        let php_names = files
+            .iter()
+            .filter(|facts| facts.language == Language::Php)
+            .flat_map(|facts| facts.symbols.iter())
+            .map(|symbol| symbol.name.to_ascii_lowercase())
+            .collect();
         Self {
             files,
+            manifests,
+            rebound,
+            php_names,
             by_name,
             by_file,
             locals_by_name,
@@ -1885,6 +1912,13 @@ impl<'a> Resolver<'a> {
 
     fn resolve(&self, file: usize, position: usize, depth: usize) -> Outcome {
         let mut outcome = self.resolve_by_rules(file, position, depth);
+        // The other rules found no candidate. The source can still show a
+        // definition outside the repository.
+        if outcome.status == Status::Unresolved && outcome.candidates.is_empty() {
+            if let Some(external) = self.external(file, position) {
+                return external;
+            }
+        }
         // A Python or C++ call of a class makes an object. It runs the constructor.
         if matches!(self.family(file), Family::Python | Family::C) {
             let arity = self.files[file].references[position].arity;
@@ -2111,9 +2145,15 @@ impl<'a> Resolver<'a> {
 /// `resolve_imports` first. The function puts `files` in path order, thus the
 /// result does not depend on the order of the input.
 pub fn resolve_references(files: &mut [FileSymbols]) {
+    resolve_references_with(files, &Manifests::default());
+}
+
+/// Like `resolve_references`. The manifests give the dependencies that Rust
+/// source can name without an import.
+pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests) {
     files.sort_by(|left, right| left.file.cmp(&right.file));
     let resolutions: Vec<Vec<Resolution>> = {
-        let resolver = Resolver::new(files);
+        let resolver = Resolver::new(files, manifests);
         (0..files.len())
             .into_par_iter()
             .map(|file| {
@@ -2685,13 +2725,12 @@ mod tests {
 #[cfg(test)]
 pub(crate) mod testing {
     use super::*;
-    use crate::index::imports::testing::index;
 
     /// One line for each call in `file`:
     /// `line caller>callee status basis [candidate keys]`.
     pub(crate) fn rows(files: &[(&str, &str)], file: &str) -> Vec<String> {
-        let mut facts = index(files);
-        resolve_references(&mut facts);
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(files);
+        resolve_references_with(&mut facts, &manifests);
         let facts = facts.iter().find(|facts| facts.file == file).unwrap();
         facts
             .references

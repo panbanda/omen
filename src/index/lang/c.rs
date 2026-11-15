@@ -498,7 +498,7 @@ mod tests {
                 "23 run>missing Unresolved - []",
                 "28 dynamic>pick Unresolved - []",
                 "28 dynamic>table.insert Unresolved - []",
-                "28 dynamic>strlen Unresolved - []",
+                "28 dynamic>strlen External - []",
                 "28 dynamic>SQUARE Unresolved - []",
             ]
         );
