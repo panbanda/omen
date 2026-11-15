@@ -42,6 +42,11 @@ pub enum Error {
     #[error("Analysis error: {message}")]
     Analysis { message: String },
 
+    /// A file that the analysis read changed, or became unreadable, before a
+    /// second read. The error fails the whole command.
+    #[error("Analysis error: {file} changed or became unreadable during analysis; run the command again")]
+    ChangedDuringAnalysis { file: String },
+
     /// Invalid argument.
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),

@@ -15,6 +15,17 @@ pub fn run(
     format: Format,
     out: &mut dyn Write,
 ) -> Result<()> {
+    run_with_source(path, config, scope, format, out, None)
+}
+
+fn run_with_source(
+    path: &PathBuf,
+    config: &Config,
+    scope: &Scope,
+    format: Format,
+    out: &mut dyn Write,
+    source: Option<std::sync::Arc<dyn crate::core::ContentSource>>,
+) -> Result<()> {
     let mut out = out;
     use serde_json::{json, Value};
 
@@ -46,6 +57,22 @@ pub fn run(
     } else {
         ctx
     };
+    let ctx = match source {
+        Some(source) => ctx.with_content_source(source),
+        None => ctx,
+    };
+
+    let changed_file: parking_lot::Mutex<Option<crate::core::Error>> =
+        parking_lot::Mutex::new(None);
+
+    fn keep_if_changed(
+        slot: &parking_lot::Mutex<Option<crate::core::Error>>,
+        error: crate::core::Error,
+    ) {
+        if matches!(error, crate::core::Error::ChangedDuringAnalysis { .. }) {
+            slot.lock().get_or_insert(error);
+        }
+    }
 
     macro_rules! run_and_collect {
         ($ctx:expr, $analyzer:ty, $name:expr) => {{
@@ -56,7 +83,9 @@ pub fn run(
                     Err(e) => json!({ "analyzer": $name, "error": format!("serialization failed: {e}") }),
                 },
                 Err(e) => {
-                    json!({ "analyzer": $name, "error": e.to_string() })
+                    let entry = json!({ "analyzer": $name, "error": e.to_string() });
+                    keep_if_changed(&changed_file, e);
+                    entry
                 }
             }
         }};
@@ -70,7 +99,11 @@ pub fn run(
                     Ok(v) => json!({ "analyzer": $name, "result": v }),
                     Err(e) => json!({ "analyzer": $name, "error": format!("serialization failed: {e}") }),
                 },
-                Err(e) => json!({ "analyzer": $name, "error": e.to_string() }),
+                Err(e) => {
+                    let entry = json!({ "analyzer": $name, "error": e.to_string() });
+                    keep_if_changed(&changed_file, e);
+                    entry
+                }
             }
         }};
     }
@@ -180,6 +213,10 @@ pub fn run(
     };
     results.push(score);
 
+    if let Some(error) = changed_file.into_inner() {
+        return Err(error);
+    }
+
     // `--top` and `--offset` apply to each section as they apply to the
     // single command. SARIF keeps each finding.
     let top = scope.top.unwrap_or(0);
@@ -243,6 +280,27 @@ mod tests {
         for expected in ["complexity", "satd", "stubs", "score", "tdg", "hotspot"] {
             assert!(names.contains(&expected), "{expected}: {names:?}");
         }
+    }
+
+    #[test]
+    fn test_a_file_that_changed_during_analysis_fails_the_command() {
+        let (_directory, path) = repository();
+        let source = std::sync::Arc::new(crate::commands::testing::ChangingSource::new(&path));
+        let mut out = Vec::new();
+        let result = run_with_source(
+            &path,
+            &Config::default(),
+            &Scope::default(),
+            Format::Json,
+            &mut out,
+            Some(source),
+        );
+        let error = result.expect_err("a changed file fails the command");
+        assert!(
+            error.to_string().contains("changed or became unreadable"),
+            "{error}"
+        );
+        assert!(out.is_empty());
     }
 
     #[test]

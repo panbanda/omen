@@ -107,6 +107,38 @@ fn test_an_analyzer_file_replaces_the_old_file_in_one_step() {
 }
 
 #[test]
+fn test_a_file_that_changed_during_analysis_fails_generate_and_keeps_the_old_files() {
+    let (directory, path) = repository();
+    let data = directory.path().join("data");
+    std::fs::create_dir_all(&data).expect("data directory");
+    std::fs::write(data.join("complexity.json"), "old").expect("old file");
+    let ReportSubcommand::Generate(args) = subcommand(&[
+        "generate",
+        "--data",
+        data.to_str().expect("utf-8"),
+        "--skip",
+        "trend,churn,changes,ownership,temporal,hotspot,defect,tdg",
+    ]) else {
+        unreachable!("the arguments name `generate`");
+    };
+    let source = std::sync::Arc::new(crate::commands::testing::ChangingSource::new(&path));
+
+    let error = generate(&path, &Config::default(), &args, None, Some(source))
+        .expect_err("a changed file fails the command");
+
+    assert!(
+        error.to_string().contains("changed or became unreadable"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(data.join("complexity.json")).expect("read"),
+        "old"
+    );
+    assert!(!data.join("metadata.json").exists());
+    assert!(!data.join("security.json").exists());
+}
+
+#[test]
 fn test_generate_fails_when_an_analyzer_file_cannot_be_written() {
     let (directory, path) = repository();
     let data = directory.path().join("data");
