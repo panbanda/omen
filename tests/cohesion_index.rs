@@ -805,8 +805,19 @@ fn test_go_type_parameter_that_shadows_a_package_type_is_not_coupling() {
 }
 
 #[test]
-fn test_csharp_target_typed_new_counts_as_construction() {
-    let source = "class Part {}\n\nclass Factory {\n    Part Make() { return new(); }\n}\n";
-    let analysis = analyze(&[("Factory.cs", source)]);
-    assert_eq!(class(&analysis, "Factory").rfc, 2);
+fn test_type_parameter_that_shadows_a_class_is_not_coupling() {
+    let cases = [
+        ("Box.java", "class Item {}\nclass Box<Item> {\n    Item value;\n}\n"),
+        ("Box.cs", "class Item {}\nclass Box<Item> {\n    Item value;\n}\n"),
+        ("box.ts", "class Item {}\nclass Box<Item> {\n    value: Item;\n}\n"),
+        ("box.rs", "struct Item;\nstruct Box<Item> {\n    value: Item,\n}\n"),
+        (
+            "box.cpp",
+            "class Item {};\ntemplate <typename Item>\nclass Box {\n    Item value;\n};\n",
+        ),
+    ];
+    for (file, source) in cases {
+        let analysis = analyze(&[(file, source)]);
+        assert_eq!(class(&analysis, "Box").cbo, 0, "{file}");
+    }
 }

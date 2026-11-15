@@ -137,6 +137,39 @@ pub const DECLARATION: u8 = 4;
 pub const ACCESS: u8 = 8;
 pub const IMPLICIT: u8 = 16;
 pub const BOUNDARY: u8 = 32;
+pub const TYPE_PARAMETER: u8 = 64;
+
+/// The kinds of the nodes that declare a type parameter.
+fn type_parameter_kinds(language: Language) -> &'static [&'static str] {
+    match language {
+        Language::Go | Language::Cpp => &["type_parameter_declaration"],
+        Language::Java | Language::CSharp | Language::TypeScript | Language::Tsx => {
+            &["type_parameter"]
+        }
+        Language::Rust => &["type_parameter", "constrained_type_parameter"],
+        _ => &[],
+    }
+}
+
+/// The ranges of the names that a type-parameter node declares.
+fn type_parameter_names(language: Language, node: Node<'_>) -> Vec<(usize, usize)> {
+    const NAMES: &[&str] = &["identifier", "type_identifier"];
+    for field in ["name", "left"] {
+        if let Some(name) = node.child_by_field_name(field) {
+            return vec![range_of(name)];
+        }
+    }
+    let mut cursor = node.walk();
+    let mut names = node
+        .named_children(&mut cursor)
+        .filter(|child| NAMES.contains(&child.kind()))
+        .map(range_of);
+    if language == Language::Go {
+        names.collect()
+    } else {
+        names.next().into_iter().collect()
+    }
+}
 
 /// The kinds of the expressions whose operator can add a decision point.
 const LOGICAL_KINDS: &[&str] = &["binary_expression", "logical_expression"];
@@ -161,6 +194,9 @@ pub fn kind_bits(language: Language, syntax: &ClassSyntax, kind: &str) -> u8 {
     }
     if syntax.implicit.contains(&kind) {
         bits |= IMPLICIT;
+    }
+    if type_parameter_kinds(language).contains(&kind) {
+        bits |= TYPE_PARAMETER;
     }
     bits
 }
@@ -231,6 +267,9 @@ pub struct Recorder {
     decisions: Vec<usize>,
     boundaries: Vec<(usize, usize)>,
     uses: Vec<RawUse>,
+    /// The range of each type-parameter name, and the range of the
+    /// declaration in which the parameter is in scope.
+    type_parameters: Vec<((usize, usize), (usize, usize))>,
     pub blocks: Vec<PendingBlock>,
 }
 
@@ -263,6 +302,7 @@ impl Recorder {
                 decisions: Vec::new(),
                 boundaries: Vec::new(),
                 uses: Vec::new(),
+                type_parameters: Vec::new(),
                 blocks: Vec::new(),
             }),
         }
@@ -282,6 +322,13 @@ impl Recorder {
         }
         if bits & BOUNDARY != 0 {
             self.boundaries.push(range_of(node));
+        }
+        if bits & TYPE_PARAMETER != 0 {
+            if let Some(declaration) = ancestors.iter().rev().nth(1).copied() {
+                for name in type_parameter_names(self.language, node) {
+                    self.type_parameters.push((name, range_of(declaration)));
+                }
+            }
         }
         let Some(scope) = scopes
             .iter()
@@ -445,7 +492,12 @@ impl Recorder {
             let name = strip_sigil(language, name);
             let (slot, kind) = match raw.kind {
                 UseKind::Reference => {
-                    if !is_valid_class_reference(name, language) {
+                    let type_parameter = self.type_parameters.iter().any(|(declared, scope)| {
+                        scope.0 <= raw.start
+                            && raw.end <= scope.1
+                            && source[declared.0..declared.1] == *name.as_bytes()
+                    });
+                    if type_parameter || !is_valid_class_reference(name, language) {
                         continue;
                     }
                     (0u8, UseKind::Reference)
