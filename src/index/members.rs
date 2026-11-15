@@ -212,6 +212,25 @@ const PARAMETER_LISTS: &[&str] = &[
     "type_parameters",
 ];
 
+/// The node in which a type parameter is in scope. The parameters of the
+/// inner list of a template template parameter are in scope in that
+/// parameter only.
+fn declaration_scope<'tree>(ancestors: &[Node<'tree>]) -> Option<Node<'tree>> {
+    for ancestor in ancestors.iter().rev() {
+        if let Some(parent) = ancestor.parent() {
+            if ancestor.kind() == "template_parameter_list"
+                && parent.kind() == "template_template_parameter_declaration"
+            {
+                return Some(parent);
+            }
+        }
+        if !PARAMETER_LISTS.contains(&ancestor.kind()) {
+            return Some(*ancestor);
+        }
+    }
+    None
+}
+
 /// The names that a Go receiver such as `(b *Box[T, U])` binds as type parameters.
 fn receiver_type_parameters(method: Node<'_>) -> Vec<(usize, usize)> {
     let mut names = Vec::new();
@@ -397,11 +416,7 @@ impl Recorder {
         if bits & TYPE_PARAMETER != 0 {
             let declaration = match node.kind() {
                 "method_declaration" => Some(node),
-                _ => ancestors
-                    .iter()
-                    .rev()
-                    .find(|ancestor| !PARAMETER_LISTS.contains(&ancestor.kind()))
-                    .copied(),
+                _ => declaration_scope(ancestors),
             };
             if let Some(declaration) = declaration {
                 for name in type_parameter_names(self.language, node) {
