@@ -1037,35 +1037,76 @@ fn pattern_binds(pattern: Node<'_>, name: &str, source: &[u8]) -> bool {
     }
 }
 
-/// Tells if a parameter or a variable in scope at `node` has the name `name`.
-fn is_bound_at(node: Node<'_>, name: &str, source: &[u8]) -> bool {
+/// The names of the global objects of ECMAScript.
+const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "global", "self"];
+
+/// The global object names that a scope node binds, one bit for each name of
+/// `GLOBAL_OBJECTS`: its parameters, the variables declared in its block, the
+/// variable of a loop, and the parameter of a `catch` clause.
+fn scope_bindings(scope: Node<'_>, source: &[u8]) -> u8 {
+    let mut mask = 0u8;
+    let mut mark = |pattern: Node<'_>| {
+        for (bit, name) in GLOBAL_OBJECTS.iter().enumerate() {
+            if pattern_binds(pattern, name, source) {
+                mask |= 1 << bit;
+            }
+        }
+    };
+    let declarators = |declaration: Node<'_>, mark: &mut dyn FnMut(Node<'_>)| {
+        if !matches!(
+            declaration.kind(),
+            "lexical_declaration" | "variable_declaration"
+        ) {
+            return;
+        }
+        let mut cursor = declaration.walk();
+        for declarator in declaration.named_children(&mut cursor) {
+            if let Some(binding) = declarator.child_by_field_name("name") {
+                mark(binding);
+            }
+        }
+    };
+    let parameters = scope
+        .child_by_field_name("parameters")
+        .or_else(|| scope.child_by_field_name("parameter"));
+    if let Some(parameters) = parameters {
+        mark(parameters);
+    }
+    match scope.kind() {
+        "statement_block" | "program" => {
+            let mut cursor = scope.walk();
+            for statement in scope.named_children(&mut cursor) {
+                declarators(statement, &mut mark);
+            }
+        }
+        "for_in_statement" => {
+            if scope.child_by_field_name("kind").is_some() {
+                if let Some(left) = scope.child_by_field_name("left") {
+                    mark(left);
+                }
+            }
+        }
+        "for_statement" => {
+            if let Some(initializer) = scope.child_by_field_name("initializer") {
+                declarators(initializer, &mut mark);
+            }
+        }
+        _ => {}
+    }
+    mask
+}
+
+/// Tells if a parameter or a variable in scope at `node` is the global
+/// object name `GLOBAL_OBJECTS[bit]`. The cache holds the bindings of each
+/// scope node, so that each scope is read once.
+fn is_bound_at(node: Node<'_>, bit: usize, source: &[u8], cache: &mut HashMap<usize, u8>) -> bool {
     let mut ancestor = node.parent();
     while let Some(current) = ancestor {
-        let parameters = current
-            .child_by_field_name("parameters")
-            .or_else(|| current.child_by_field_name("parameter"));
-        if parameters.is_some_and(|parameters| pattern_binds(parameters, name, source)) {
+        let mask = *cache
+            .entry(current.id())
+            .or_insert_with(|| scope_bindings(current, source));
+        if mask & (1 << bit) != 0 {
             return true;
-        }
-        if matches!(current.kind(), "statement_block" | "program") {
-            let mut cursor = current.walk();
-            let declared = current.named_children(&mut cursor).any(|statement| {
-                if !matches!(
-                    statement.kind(),
-                    "lexical_declaration" | "variable_declaration"
-                ) {
-                    return false;
-                }
-                let mut inner = statement.walk();
-                let found = statement
-                    .named_children(&mut inner)
-                    .filter_map(|declarator| declarator.child_by_field_name("name"))
-                    .any(|binding| pattern_binds(binding, name, source));
-                found
-            });
-            if declared {
-                return true;
-            }
         }
         ancestor = current.parent();
     }
@@ -1100,7 +1141,7 @@ fn has_import_tokens(node: Node<'_>, source: &[u8]) -> bool {
 }
 
 fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
-    const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "global", "self"];
+    let mut bindings: HashMap<usize, u8> = HashMap::new();
     let text =
         |node: Node<'_>| String::from_utf8_lossy(&parsed.source[node.byte_range()]).to_string();
     let mut names = BTreeSet::new();
@@ -1138,8 +1179,11 @@ fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
                 let property = target.and_then(|target| target.child_by_field_name("property"));
                 if let (Some(object), Some(property)) = (object, property) {
                     let object_name = text(object);
-                    if GLOBAL_OBJECTS.contains(&object_name.as_str())
-                        && !is_bound_at(node, &object_name, &parsed.source)
+                    let global = GLOBAL_OBJECTS
+                        .iter()
+                        .position(|name| *name == object_name.as_str());
+                    if global
+                        .is_some_and(|bit| !is_bound_at(node, bit, &parsed.source, &mut bindings))
                     {
                         names.insert(text(property));
                     }
@@ -1393,6 +1437,46 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
 mod tests {
     use super::testing::rows;
     use crate::core::Language;
+
+    fn rebound_in(source: &str) -> Vec<String> {
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::JavaScript,
+                std::path::Path::new("a.js"),
+            )
+            .unwrap();
+        super::rebound_names(&parsed).into_iter().collect()
+    }
+
+    #[test]
+    fn test_global_assignments_in_a_large_block_are_linear() {
+        let mut source = String::from("function install() {\n  const local = 1;\n");
+        for line in 0..50_000 {
+            source.push_str(&format!("  window.x{line} = 1;\n"));
+        }
+        source.push_str("}\n");
+        let started = std::time::Instant::now();
+        let rebound = rebound_in(&source);
+        assert_eq!(rebound.len(), 50_000);
+        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+        let shadowed = source.replace("const local = 1;", "const window = {};");
+        assert!(rebound_in(&shadowed).is_empty());
+    }
+
+    #[test]
+    fn test_loop_and_catch_bindings_are_local_bindings_of_a_global_object_name() {
+        for source in [
+            "function f(objects) { for (const window of objects) { window.fetch = r; } }",
+            "function f(objects) { for (let window in objects) { window.fetch = r; } }",
+            "function f() { for (let window = {}; ; ) { window.fetch = r; } }",
+            "function f() { try { g(); } catch (window) { window.fetch = r; } }",
+        ] {
+            assert!(rebound_in(source).is_empty(), "{source}");
+        }
+        let assigned = "function f(objects) { for (window of objects) { } window.fetch = r; }";
+        assert_eq!(rebound_in(assigned), ["fetch"]);
+    }
 
     /// The start line of a symbol is the line of its declaration. The lines
     /// of annotations, attributes, decorators, and comments before the
