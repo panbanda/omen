@@ -65,6 +65,136 @@ The change:
 - A document that has score 0 stays out of the results.
 - The index version in `meta` goes up by one, if the stored data changes.
 
-## Results
+## Decision
 
-Not yet measured.
+Omen adopts neither experiment. Both experiments failed the first condition of
+the adoption rule. Thus we did not run `ledger_never_grows` for either one.
+We did not change a constant, and we did not move a query to `retired`.
+
+| Experiment | Queries with a worse rank | Queries that lose a hit@1 | Decision |
+|---|---|---|---|
+| A: documents for each symbol kind | 22 | 6 | Not adopted |
+| B: graph prior, on the base | 1 | 1 | Not adopted |
+
+The code of each experiment is in a commit that a later commit reverts. The
+base `search` code is unchanged.
+
+## Result of experiment A
+
+The experiment fixed 22 queries of the ledger, and 24 queries got a rank where
+the base had none. The queries are for types, constants, and fields that the
+base does not index. The gate does not let a gain pay for a loss.
+
+These 22 queries have a worse rank:
+
+| Query | Base rank | Rank of A |
+|---|---|---|
+| `cpp/n-times` | 2 | 3 |
+| `csharp/n-around-square` | 4 | 6 |
+| `csharp/n-distance` | 3 | 7 |
+| `csharp/n-increment` | 1 | 2 |
+| `csharp/n-twice-radius` | 7 | 11 |
+| `csharp/n-width-height` | 1 | 2 |
+| `go/c-interface-method` | 1 | 2 |
+| `go/n-make-circle` | 2 | 4 |
+| `go/n-upper-case` | 1 | 2 |
+| `java/n-around-square` | 4 | 5 |
+| `java/n-distance` | 1 | 2 |
+| `java/n-increment` | 1 | 2 |
+| `java/n-twice-radius` | 7 | 11 |
+| `javascript/n-unit-circle` | 5 | 6 |
+| `php/n-twice-radius` | 5 | 7 |
+| `php/n-unit-circle` | 6 | 8 |
+| `python/i-part-side` | 3 | 5 |
+| `python/n-shape-name` | 2 | 3 |
+| `python/n-square-from-length` | 6 | 7 |
+| `python/n-unit-circle` | 3 | 5 |
+| `ruby/n-unit-circle` | 7 | 9 |
+| `rust/n-make-circle` | 2 | 4 |
+
+The queries `csharp/n-twice-radius` and `java/n-twice-radius` also lose their
+hit@10. The six queries `csharp/n-increment`, `csharp/n-width-height`,
+`go/n-upper-case`, `go/c-interface-method`, `java/n-distance`, and
+`java/n-increment` lose their hit@1.
+
+A class document contains the lines of all its methods. Thus a class matches
+many queries for its methods, and it can take a rank before the method. This
+is the same cause as in `search-bm25f.md`. A second experiment that uses the
+signature of a type as its document, and not all its lines, needs its own
+pre-registration.
+
+## Result of experiment B
+
+The prior changes one query: `go/i-part-circle` falls from rank 1 to rank 2.
+Its expected symbol is `Circle` or `NewCircle`, and `Area` takes rank 1
+because the call graph gives `Area` a higher prior. The prior changes no other
+rank. A weight of 0.1 changes the order only when two scores are near, and it
+is wrong in the one case where it changes the order. The fixtures have 5 to 20
+functions, so their call graphs have few edges. A real repository can give a
+different result. This corpus does not measure it.
+
+## Tables
+
+Each cell has recall@1, recall@5, recall@10, and MRR (all results), in this
+order. The column `Queries` has the number of queries, and one of them is a
+negative query. Each cell has 6 to 9 queries, so one query changes a cell by
+0.11 to 0.17.
+
+| Language | Type | Queries | Base | A | B on the base |
+|---|---|---|---|---|---|
+| bash | code_sketch | 7 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 |
+| bash | identifier | 7 | 0.714 / 0.714 / 0.714 / 0.714 | 0.714 / 0.714 / 0.714 / 0.714 | 0.714 / 0.714 / 0.714 / 0.714 |
+| bash | natural_language | 6 | 0.167 / 0.167 / 0.167 / 0.167 | 0.167 / 0.167 / 0.167 / 0.167 | 0.167 / 0.167 / 0.167 / 0.167 |
+| c | code_sketch | 7 | 0.714 / 0.714 / 0.714 / 0.714 | 1.000 / 1.000 / 1.000 / 1.000 | 0.714 / 0.714 / 0.714 / 0.714 |
+| c | identifier | 7 | 0.714 / 0.714 / 0.714 / 0.714 | 0.857 / 0.857 / 0.857 / 0.857 | 0.714 / 0.714 / 0.714 / 0.714 |
+| c | natural_language | 6 | 0.167 / 0.167 / 0.167 / 0.167 | 0.333 / 0.333 / 0.333 / 0.333 | 0.167 / 0.167 / 0.167 / 0.167 |
+| cpp | code_sketch | 7 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 |
+| cpp | identifier | 8 | 0.750 / 0.750 / 0.750 / 0.750 | 0.875 / 0.875 / 0.875 / 0.875 | 0.750 / 0.750 / 0.750 / 0.750 |
+| cpp | natural_language | 6 | 0.000 / 0.333 / 0.500 / 0.167 | 0.000 / 0.500 / 0.667 / 0.194 | 0.000 / 0.333 / 0.500 / 0.167 |
+| csharp | code_sketch | 7 | 0.857 / 0.857 / 0.857 / 0.857 | 1.000 / 1.000 / 1.000 / 1.000 | 0.857 / 0.857 / 0.857 / 0.857 |
+| csharp | identifier | 8 | 0.750 / 0.750 / 0.750 / 0.750 | 0.875 / 0.875 / 0.875 / 0.875 | 0.750 / 0.750 / 0.750 / 0.750 |
+| csharp | natural_language | 6 | 0.333 / 0.667 / 0.833 / 0.454 | 0.000 / 0.333 / 0.667 / 0.233 | 0.333 / 0.667 / 0.833 / 0.454 |
+| go | code_sketch | 6 | 1.000 / 1.000 / 1.000 / 1.000 | 0.833 / 1.000 / 1.000 / 0.917 | 1.000 / 1.000 / 1.000 / 1.000 |
+| go | identifier | 8 | 0.875 / 0.875 / 0.875 / 0.875 | 0.875 / 0.875 / 0.875 / 0.875 | 0.750 / 0.875 / 0.875 / 0.812 |
+| go | natural_language | 6 | 0.333 / 0.667 / 0.667 / 0.500 | 0.167 / 0.667 / 0.667 / 0.375 | 0.333 / 0.667 / 0.667 / 0.500 |
+| java | code_sketch | 7 | 0.857 / 0.857 / 0.857 / 0.857 | 1.000 / 1.000 / 1.000 / 1.000 | 0.857 / 0.857 / 0.857 / 0.857 |
+| java | identifier | 8 | 0.750 / 0.750 / 0.750 / 0.750 | 0.750 / 0.875 / 0.875 / 0.812 | 0.750 / 0.750 / 0.750 / 0.750 |
+| java | natural_language | 6 | 0.333 / 0.500 / 0.667 / 0.399 | 0.167 / 0.667 / 0.667 / 0.382 | 0.333 / 0.500 / 0.667 / 0.399 |
+| javascript | code_sketch | 7 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 |
+| javascript | identifier | 9 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 |
+| javascript | natural_language | 7 | 0.286 / 0.714 / 0.714 / 0.433 | 0.286 / 0.571 / 0.714 / 0.429 | 0.286 / 0.714 / 0.714 / 0.433 |
+| jsx | code_sketch | 7 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 |
+| jsx | identifier | 8 | 0.875 / 0.875 / 0.875 / 0.875 | 0.875 / 0.875 / 0.875 / 0.875 | 0.875 / 0.875 / 0.875 / 0.875 |
+| jsx | natural_language | 6 | 0.333 / 0.667 / 0.667 / 0.431 | 0.333 / 0.667 / 0.667 / 0.431 | 0.333 / 0.667 / 0.667 / 0.431 |
+| php | code_sketch | 8 | 0.875 / 0.875 / 0.875 / 0.875 | 1.000 / 1.000 / 1.000 / 1.000 | 0.875 / 0.875 / 0.875 / 0.875 |
+| php | identifier | 9 | 0.889 / 0.889 / 0.889 / 0.889 | 1.000 / 1.000 / 1.000 / 1.000 | 0.889 / 0.889 / 0.889 / 0.889 |
+| php | natural_language | 7 | 0.143 / 0.286 / 0.429 / 0.195 | 0.286 / 0.286 / 0.571 / 0.324 | 0.143 / 0.286 / 0.429 / 0.195 |
+| python | code_sketch | 6 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 |
+| python | identifier | 7 | 0.714 / 0.857 / 0.857 / 0.762 | 0.714 / 0.857 / 1.000 / 0.761 | 0.714 / 0.857 / 0.857 / 0.762 |
+| python | natural_language | 6 | 0.000 / 0.333 / 0.500 / 0.167 | 0.000 / 0.333 / 0.500 / 0.113 | 0.000 / 0.333 / 0.500 / 0.167 |
+| ruby | code_sketch | 8 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 |
+| ruby | identifier | 8 | 0.750 / 0.750 / 0.750 / 0.750 | 0.875 / 0.875 / 0.875 / 0.875 | 0.750 / 0.750 / 0.750 / 0.750 |
+| ruby | natural_language | 7 | 0.143 / 0.143 / 0.429 / 0.184 | 0.143 / 0.143 / 0.429 / 0.179 | 0.143 / 0.143 / 0.429 / 0.184 |
+| rust | code_sketch | 6 | 0.833 / 0.833 / 0.833 / 0.833 | 1.000 / 1.000 / 1.000 / 1.000 | 0.833 / 0.833 / 0.833 / 0.833 |
+| rust | identifier | 7 | 0.714 / 0.714 / 0.714 / 0.714 | 0.857 / 0.857 / 0.857 / 0.857 | 0.714 / 0.714 / 0.714 / 0.714 |
+| rust | natural_language | 6 | 0.000 / 0.167 / 0.167 / 0.083 | 0.167 / 0.333 / 0.333 / 0.208 | 0.000 / 0.167 / 0.167 / 0.083 |
+| tsx | code_sketch | 7 | 0.857 / 0.857 / 0.857 / 0.857 | 1.000 / 1.000 / 1.000 / 1.000 | 0.857 / 0.857 / 0.857 / 0.857 |
+| tsx | identifier | 9 | 0.667 / 0.667 / 0.667 / 0.667 | 0.778 / 0.778 / 0.778 / 0.778 | 0.667 / 0.667 / 0.667 / 0.667 |
+| tsx | natural_language | 6 | 0.333 / 0.500 / 0.500 / 0.389 | 0.333 / 0.667 / 0.667 / 0.444 | 0.333 / 0.500 / 0.500 / 0.389 |
+| typescript | code_sketch | 7 | 0.857 / 0.857 / 0.857 / 0.857 | 1.000 / 1.000 / 1.000 / 1.000 | 0.857 / 0.857 / 0.857 / 0.857 |
+| typescript | identifier | 8 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 |
+| typescript | natural_language | 7 | 0.143 / 0.571 / 0.571 / 0.310 | 0.286 / 0.714 / 0.714 / 0.452 | 0.143 / 0.571 / 0.571 / 0.310 |
+
+## How to reproduce
+
+The code of experiment A is in commit `c4471ad`. The code of experiment B is in
+commit `5264585`. B in that commit goes on the base, not on A.
+
+1. Run `git cherry-pick <commit>`.
+2. Run `cargo test --test retrieval -- --nocapture`.
+3. The test prints the table. Then it lists each query that differs from the
+   ledger and from the rank baseline.
+
+For A, the unit tests of `chunking.rs` that count chunks also fail. They count
+the documents of types as chunks. We did not correct them, because A is not
+adopted.
