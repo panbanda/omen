@@ -249,6 +249,18 @@ impl Manifests {
     }
 }
 
+/// Tells if an inline table has the key `path`. Text that does not parse as
+/// a value is read by its braces and the word `path`, so that a crate of the
+/// repository is never an external name.
+fn has_path_key(value: &str) -> bool {
+    let parsed = toml::from_str::<toml::Table>(&format!("value = {value}"));
+    match parsed.ok().and_then(|mut table| table.remove("value")) {
+        Some(toml::Value::Table(table)) => table.contains_key("path"),
+        Some(_) => false,
+        None => value.contains("path") && value.trim_start().starts_with('{'),
+    }
+}
+
 /// The names with which Rust source refers to the dependencies in a
 /// `Cargo.toml` file. A name has `_` for `-`. The key of a dependency is its
 /// name in the source, also when `package` renames it. The tables are
@@ -306,7 +318,7 @@ pub fn rust_dependency_names(cargo_toml: &str) -> BTreeSet<String> {
                 if !key.is_empty() {
                     names.insert(unquote(key));
                     // `name = { path = "dir" }` is a crate of the repository.
-                    if value.contains("path") && value.trim_start().starts_with('{') {
+                    if has_path_key(value) {
                         paths.insert(unquote(key));
                     }
                 }
@@ -1251,6 +1263,14 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_inline_dependency_is_a_path_dependency_only_with_a_path_key() {
+        let manifest = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nalgo = { package = \"pathfinding\", version = \"4\" }\nlocal = { path = \"../local\", version = \"1\" }\nspaced = { version = \"1\", path = \"x\" } # path\nplain = \"1\"\n";
+        let names = rust_dependency_names(manifest);
+        let found: Vec<&str> = names.iter().map(String::as_str).collect();
+        assert_eq!(found, ["algo", "plain"]);
+    }
 
     #[test]
     fn test_go_module_path() {
