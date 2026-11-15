@@ -1319,6 +1319,21 @@ mod tests {
     }
 
     #[test]
+    fn test_single_lambda_parameter_does_not_shadow_the_name_outside_its_body() {
+        let javascript = "const callback = fetch => fetch('/local');\nfunction run() { return fetch('/remote'); }\n";
+        let csharp = "using System;\nclass Program {\n    void Callback() {\n        Action<string> action = Console => Console.WriteLine(\"a\");\n    }\n    void Run() {\n        Console.WriteLine(\"b\");\n    }\n}\n";
+        let java = "import java.util.function.Function;\nclass Main {\n    void callback() {\n        Function<String, Integer> parse = Integer -> Integer.length();\n    }\n    void run() {\n        Integer.parseInt(\"2\");\n    }\n}\n";
+        for (file, source, name) in [
+            ("a.js", javascript, "fetch"),
+            ("Program.cs", csharp, "WriteLine"),
+            ("Main.java", java, "parseInt"),
+        ] {
+            let found = statuses(&[(file, source)], file, name);
+            assert_eq!(found.last().map(String::as_str), Some("External"), "{file}");
+        }
+    }
+
+    #[test]
     fn test_ruby_singleton_class_can_rebind_a_core_class() {
         let app = "class << File\n  def join(*parts)\n    'repository'\n  end\nend\n\nFile.join('a', 'b')\n";
         assert!(!external(&[("app.rb", app)], "app.rb", "join"));

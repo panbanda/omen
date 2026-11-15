@@ -447,6 +447,13 @@ pub trait LanguageSpec: Sync {
         Vec::new()
     }
 
+    /// The bytes in which the parameters that the node at `node` binds are
+    /// visible, when the node is a function value that opens no scope of its
+    /// own. Without a range, a parameter is visible in the whole owner.
+    fn parameter_block(&self, _node: Node<'_>) -> Option<std::ops::Range<usize>> {
+        None
+    }
+
     /// Tells if the names that the declaration at `node` binds end with the
     /// nearest block.
     fn is_block_local(&self, _node: Node<'_>) -> bool {
@@ -779,10 +786,13 @@ impl<'tree> Extractor<'_, 'tree> {
                 let mut names = Vec::new();
                 self.spec.locals(node, &context, &mut names);
                 let block = self.block_of(node);
+                let parameter_block = self.spec.parameter_block(node);
                 self.locals.extend(names.into_iter().map(|name| {
-                    let block = (!name.is_parameter && name.visible.is_none())
-                        .then(|| block.clone())
-                        .flatten();
+                    let block = if name.is_parameter {
+                        parameter_block.clone()
+                    } else {
+                        (name.visible.is_none()).then(|| block.clone()).flatten()
+                    };
                     (name, owner, block)
                 }));
             }

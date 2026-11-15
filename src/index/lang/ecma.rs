@@ -507,6 +507,10 @@ impl LanguageSpec for Ecma {
         }
     }
 
+    fn parameter_block(&self, node: Node<'_>) -> Option<std::ops::Range<usize>> {
+        (node.kind() == ARROW_FUNCTION).then(|| node.byte_range())
+    }
+
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
         kinds.extend([FORMAL_PARAMETERS, FOR_IN_STATEMENT, ARROW_FUNCTION]);
