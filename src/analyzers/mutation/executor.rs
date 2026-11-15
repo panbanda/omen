@@ -401,8 +401,9 @@ async fn execute_mutant_async(
 ) -> MutationResult {
     let start = Instant::now();
 
-    if let Some(reason) = super::safety::mutation_refusal(&config.mutant_file(mutant)) {
-        eprintln!("omen: skipped a mutant: {reason}");
+    let file = config.mutant_file(mutant);
+    if let Some(reason) = super::safety::mutation_refusal(&file) {
+        super::safety::report_refusal_once(&file, &reason);
         return MutationResult::new(mutant.clone(), MutantStatus::Skipped, 0);
     }
 
