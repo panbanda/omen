@@ -213,15 +213,15 @@ const PARAMETER_LISTS: &[&str] = &[
 ];
 
 /// The node in which a type parameter is in scope. The parameters of the
-/// inner list of a template template parameter are in scope in that
-/// parameter only.
+/// inner list of a template template parameter are in scope in that list
+/// only, not in the name or the default argument of the parameter.
 fn declaration_scope<'tree>(ancestors: &[Node<'tree>]) -> Option<Node<'tree>> {
     for ancestor in ancestors.iter().rev() {
         if let Some(parent) = ancestor.parent() {
             if ancestor.kind() == "template_parameter_list"
                 && parent.kind() == "template_template_parameter_declaration"
             {
-                return Some(parent);
+                return Some(*ancestor);
             }
         }
         if !PARAMETER_LISTS.contains(&ancestor.kind()) {

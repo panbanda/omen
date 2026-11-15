@@ -846,6 +846,13 @@ fn test_inner_template_template_parameter_is_not_in_scope_in_the_class() {
 }
 
 #[test]
+fn test_inner_template_parameter_is_not_in_scope_in_the_default_argument() {
+    let source = "template<class> class Item {};\n\nclass Box {\n    template<template<class Item> class Holder = Item>\n    void make();\n};\n";
+    let analysis = analyze(&[("box.cpp", source)]);
+    assert_eq!(class(&analysis, "Box").cbo, 1);
+}
+
+#[test]
 fn test_go_receiver_type_parameters_are_in_scope_in_the_method() {
     let source = "package p\n\ntype T struct{}\n\ntype Box[T any] struct {\n\tvalue T\n}\n\nfunc (b Box[T]) Get() T {\n\treturn b.value\n}\n\nfunc (b *Box[T]) Put(next T) {\n\tb.value = next\n}\n";
     let analysis = analyze(&[("box.go", source)]);
