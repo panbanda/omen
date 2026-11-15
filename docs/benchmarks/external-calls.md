@@ -12,8 +12,9 @@ candidate does not change. The rules give one of three kinds of evidence.
 - **Import**: an import from outside the repository binds the first name of the
   qualifier or of the receiver. In Rust, a path that starts with `std`, `core`, `alloc`,
   `proc_macro`, or `test`, with a prelude type, or with the name of a dependency in
-  the nearest `Cargo.toml`, also counts. A dependency with `path` is a crate of the
-  repository and does not count.
+  the nearest `Cargo.toml`, also counts. A dependency with a `path` key is a crate of
+  the repository and does not count. A value that only contains the word `path`, such
+  as `package = "pathfinding"`, has no such key.
 - **Builtin**: the call has no receiver and no qualifier. Its name is in the list of
   builtins of the language, or a header or a library that the file imports provides
   it. No symbol of the repository, no local name, and no import has the name.
@@ -28,7 +29,9 @@ A rule does not apply in these cases:
 - A file has a wildcard import of a repository module. The module can bind any name.
 - The repository binds the name again: a C or C++ `#define`, a Bash `alias`, an
   assignment to `globalThis`, `window`, `global`, or `self`, or a Ruby `class << Name`.
-- A PHP function name matches a repository name when the case is ignored.
+  A parameter or a variable with one of these names is not the global object.
+- A PHP function, method, or class name matches a repository name when the case is
+  ignored. A property or a constant has a case-sensitive name and does not hide a function.
 
 - A repository symbol has the name of a builtin, a class, or a namespace.
 - A local name that the call sees has the name.
@@ -133,7 +136,7 @@ correct reference.
 | omen | Rust | 3455 | 3441 | 3441 | 0 | 14 | 100% |
 | ripgrep | Rust | 719 | 685 | 685 | 0 | 34 | 100% |
 | cobra | Go | 958 | 675 | 675 | 0 | 283 | 100% |
-| zod | TypeScript | 2106 | 2077 | 2077 | 0 | 29 | 100% |
+| zod | TypeScript | 2106 | 2076 | 2076 | 0 | 30 | 100% |
 
 Every precision is above the limit of 98%. No rule is withdrawn.
 
@@ -182,7 +185,8 @@ definition can receive. The version in this document has these changes:
 
 - The deadcode analyzer treats an `External` call as it treats an `Unresolved` call.
 - The index records the parameters of ECMAScript patterns, of Java lambdas without a
-  type, and of C# lambdas without a type, as local names.
+  type, and of C# lambdas without a type, as local names. The name of the single
+  parameter of an arrow function or a lambda is visible in the body of that function only.
 - The rules abstain in the cases that the section "Rules" lists. The count of
   `External` references fell, mostly for Rust and TypeScript. The precision did not fall.
 - Five zod references and 230 litellm references changed from `Unresolved` to
