@@ -287,41 +287,17 @@ fn sample_times(
     times
 }
 
-/// Parse "since" string (like "3m", "6m", "1y", "all") to a DateTime.
+/// The start of a `--since` window. The shared parser of the git module reads the value, so a
+/// window has the same meaning here as in the other commands.
 fn parse_since_to_datetime(since: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
-    if crate::git::is_since_all(since) {
-        // Return a date far enough in the past to cover any repository
+    let days = crate::git::since_to_days(since)
+        .map_err(|error| Error::config(format!("Invalid since value: {error}")))?;
+    if days == u32::MAX {
         return Ok(since_all_start());
     }
-
-    let since = since.trim().to_lowercase();
-
-    // Find where the number ends and the unit begins
-    let first_alpha = since
-        .find(|c: char| c.is_alphabetic())
-        .unwrap_or(since.len());
-    let num_str = &since[..first_alpha];
-    let unit = since[first_alpha..].trim();
-
-    let num: i64 = num_str
-        .trim()
-        .parse()
-        .map_err(|_| Error::config(format!("Invalid since value: {}", since)))?;
-
-    let days_per_unit = match unit {
-        "d" | "day" | "days" => 1,
-        "w" | "wk" | "week" | "weeks" => 7,
-        "m" | "mo" | "mon" | "month" | "months" => 30,
-        "y" | "yr" | "year" | "years" => 365,
-        _ => return Err(Error::config(format!("Unknown time unit: {}", unit))),
-    };
-
-    // A window that no date can hold reaches back before all the history.
-    let start = num
-        .checked_mul(days_per_unit)
-        .and_then(Duration::try_days)
-        .and_then(|duration| now.checked_sub_signed(duration));
-    Ok(start.unwrap_or_else(since_all_start))
+    Ok(now
+        .checked_sub_signed(Duration::days(i64::from(days)))
+        .unwrap_or_else(since_all_start))
 }
 
 /// The start of a window that covers any repository.
@@ -540,11 +516,35 @@ mod tests {
             "9223372036854775807w",
             "9223372036854775807m",
             "9223372036854775807y",
-            "-9223372036854775808d",
+            "18446744073709551615d",
+            "18446744073709551615y",
         ] {
             let result = parse_since_to_datetime(since, now)
                 .unwrap_or_else(|error| panic!("{since}: {error}"));
             assert_eq!(result.timestamp(), 0, "{since}");
+        }
+    }
+
+    #[test]
+    fn test_a_negative_window_is_an_error() {
+        let now = Utc::now();
+        for since in ["-9223372036854775808d", "-1d", "-30d"] {
+            assert!(parse_since_to_datetime(since, now).is_err(), "{since}");
+        }
+    }
+
+    #[test]
+    fn test_trend_and_churn_read_a_window_in_the_same_way() {
+        let now = Utc::now();
+        for since in ["30d", "2w", "3m", "1y", "all", "18446744073709551615d"] {
+            let days = crate::git::since_to_days(since).expect("a window");
+            let start = parse_since_to_datetime(since, now).expect("a window");
+            let expected = if days == u32::MAX {
+                0
+            } else {
+                (now - Duration::days(i64::from(days))).timestamp()
+            };
+            assert!((start.timestamp() - expected).abs() < 1, "{since}");
         }
     }
 
