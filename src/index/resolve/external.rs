@@ -1341,6 +1341,24 @@ mod tests {
     }
 
     #[test]
+    fn test_rust_path_dependency_is_a_crate_of_the_repository() {
+        let cargo = "[dependencies]\nutil = { path = \"util\" }\ncore-lib.workspace = true\nserde_json = \"1\"\n\n[dependencies.local]\npath = \"local\"\n";
+        let main = "fn run() {\n    util::a();\n    core_lib::b();\n    local::c();\n    serde_json::d();\n}\n";
+        let files = [
+            ("main.rs", main),
+            ("Cargo.toml", cargo),
+            ("util/Cargo.toml", "[package]\nname = \"util\"\n"),
+            ("util/src/lib.rs", "pub fn a() {}\n"),
+            ("core-lib/Cargo.toml", "[package]\nname = \"core-lib\"\n"),
+            ("core-lib/src/lib.rs", "pub fn b() {}\n"),
+        ];
+        assert!(!external(&files, "main.rs", "a"));
+        assert!(!external(&files, "main.rs", "b"));
+        assert!(!external(&files, "main.rs", "c"));
+        assert!(external(&files, "main.rs", "d"));
+    }
+
+    #[test]
     fn test_a_call_with_a_candidate_is_never_external() {
         let files = [(
             "app.py",

@@ -232,6 +232,10 @@ impl Manifests {
     /// Tells if the `Cargo.toml` file nearest to `file` declares a dependency
     /// that Rust source calls `name`.
     pub fn declares_rust_dependency(&self, file: &str, name: &str) -> bool {
+        // A dependency that is a crate of the repository is not external.
+        if self.rust_crates.values().any(|library| library == name) {
+            return false;
+        }
         let mut here = directory(file);
         loop {
             if let Some(names) = self.rust_dependencies.get(here) {
@@ -259,8 +263,12 @@ pub fn rust_dependency_names(cargo_toml: &str) -> BTreeSet<String> {
     };
     let mut names = BTreeSet::new();
     let mut in_table = false;
+    // The name of the dependency that a table of its own describes.
+    let mut single: Option<String> = None;
+    let mut paths = BTreeSet::new();
     for line in cargo_toml.lines().map(str::trim) {
         if let Some(header) = line.strip_prefix('[') {
+            single = None;
             let header = header.trim_start_matches('[');
             let header = header.split(']').next().unwrap_or_default().trim();
             in_table = false;
@@ -280,21 +288,32 @@ pub fn rust_dependency_names(cargo_toml: &str) -> BTreeSet<String> {
                 match header[after..].strip_prefix('.') {
                     Some(name) => {
                         names.insert(unquote(name));
+                        single = Some(unquote(name));
                     }
                     None => in_table = true,
                 }
             }
             continue;
         }
+        if let (Some(name), Some((key, _))) = (&single, line.split_once('=')) {
+            if key.trim() == "path" {
+                paths.insert(name.clone());
+            }
+        }
         if in_table && !line.starts_with('#') {
-            if let Some((key, _)) = line.split_once('=') {
+            if let Some((key, value)) = line.split_once('=') {
                 let key = key.trim().split('.').next().unwrap_or_default();
                 if !key.is_empty() {
                     names.insert(unquote(key));
+                    // `name = { path = "dir" }` is a crate of the repository.
+                    if value.contains("path") && value.trim_start().starts_with('{') {
+                        paths.insert(unquote(key));
+                    }
                 }
             }
         }
     }
+    names.retain(|name| !paths.contains(name));
     names
 }
 
