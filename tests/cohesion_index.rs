@@ -919,6 +919,46 @@ fn test_csharp_target_typed_new_into_a_nullable_value_type_is_not_a_construction
 }
 
 #[test]
+fn test_csharp_target_typed_new_under_a_type_parameter_abstains() {
+    let cases = [
+        "class Part {}\n\nclass Factory<Part> where Part : struct {\n    Part? Make() => new();\n}\n",
+        "class Part {}\n\nclass Factory<Part> where Part : new() {\n    Part Make() => new();\n}\n",
+        "class Part {}\n\nclass Factory {\n    Part Make<Part>() where Part : new() => new();\n}\n",
+    ];
+    let mut failed = Vec::new();
+    for (position, source) in cases.iter().enumerate() {
+        let analysis = analyze(&[("Factory.cs", source)]);
+        if class(&analysis, "Factory").rfc != 1 {
+            failed.push(position);
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "constructed a type parameter: {failed:?}"
+    );
+}
+
+#[test]
+fn test_csharp_nullable_target_typed_new_is_decided_by_the_repository_kinds() {
+    let factory = "class Factory {\n    Part? Make() => new();\n}\n";
+    let cases = [
+        ("class Part {}\n", 2),
+        ("record Part(int X);\n", 2),
+        ("struct Part {}\n", 1),
+        ("record struct Part(int X);\n", 1),
+        ("class Part {}\nstruct Part2 {}\n", 2),
+    ];
+    let mut failed = Vec::new();
+    for (part, rfc) in cases {
+        let analysis = analyze(&[("Part.cs", part), ("Factory.cs", factory)]);
+        if class(&analysis, "Factory").rfc != rfc {
+            failed.push(part);
+        }
+    }
+    assert!(failed.is_empty(), "wrong rfc: {failed:?}");
+}
+
+#[test]
 fn test_csharp_target_typed_new_has_the_range_of_the_new_expression() {
     let source = "class Part {}\n\nclass Factory {\n    Part Make()\n    {\n        return new();\n    }\n}\n";
     let read = |_: &Path| Ok(source.as_bytes().to_vec());

@@ -140,7 +140,7 @@ fn has_modifier(node: Node<'_>, keywords: &[&str], context: &Context<'_, '_>) ->
 /// The type node that a target-typed `new()` takes its type from. The syntax
 /// gives it for a declared variable, a field, a property, and a returned
 /// value. Other places have no such node, and the construction is not read.
-fn implicit_target<'tree>(node: Node<'tree>, source: &[u8]) -> Option<Node<'tree>> {
+fn implicit_target<'tree>(node: Node<'tree>, source: &[u8]) -> Option<(Node<'tree>, bool)> {
     let text = |node: Node<'_>| String::from_utf8_lossy(&source[node.byte_range()]).to_string();
     let parent = node.parent()?;
     let declared = match parent.kind() {
@@ -184,68 +184,57 @@ fn implicit_target<'tree>(node: Node<'tree>, source: &[u8]) -> Option<Node<'tree
         PROPERTY_DECLARATION => parent.child_by_field_name("type")?,
         _ => return None,
     };
-    // `T?` of a value type is `Nullable<T>`, and `new()` does not construct `T`.
-    // Only a class that the file declares is known to be a reference type.
-    let declared = match declared.kind() {
-        "nullable_type" => {
-            let inner = declared.named_child(0)?;
-            let (_, name) = split_type(&text(inner));
-            declares_only_reference_types(node, &name, source).then_some(inner)?
-        }
-        _ => declared,
+    // `T?` of a value type is `Nullable<T>`, and `new()` does not construct
+    // `T`. The resolver reads the kinds of the repository types.
+    let (declared, nullable) = match declared.kind() {
+        "nullable_type" => (declared.named_child(0)?, true),
+        _ => (declared, false),
     };
-    matches!(
+    let simple = matches!(
         declared.kind(),
         IDENTIFIER | "qualified_name" | GENERIC_NAME
-    )
-    .then_some(declared)
+    );
+    let name = split_type(&text(declared)).1;
+    (simple && !is_type_parameter(node, &name, source)).then_some((declared, nullable))
 }
 
-/// Tells if the file declares a type with the name, and every such type is a class.
-fn declares_only_reference_types(node: Node<'_>, name: &str, source: &[u8]) -> bool {
-    let mut root = node;
-    while let Some(parent) = root.parent() {
-        root = parent;
-    }
-    let (mut classes, mut others) = (0, 0);
-    let mut stack = vec![root];
-    while let Some(current) = stack.pop() {
+/// Tells if the name is a type parameter of the class or the method that
+/// contains the node. A type parameter hides a type of the repository.
+fn is_type_parameter(node: Node<'_>, name: &str, source: &[u8]) -> bool {
+    let mut ancestor = node.parent();
+    while let Some(current) = ancestor {
         let mut cursor = current.walk();
-        stack.extend(current.named_children(&mut cursor));
-        let declares = matches!(
-            current.kind(),
-            "class_declaration"
-                | "struct_declaration"
-                | "interface_declaration"
-                | "enum_declaration"
-                | RECORD_DECLARATION
-                | "record_struct_declaration"
-        ) && current
-            .child_by_field_name("name")
-            .is_some_and(|declared| source[declared.byte_range()] == *name.as_bytes());
-        if !declares {
-            continue;
+        let declared = current
+            .named_children(&mut cursor)
+            .filter(|child| child.kind() == "type_parameter_list")
+            .any(|list| {
+                let mut inner = list.walk();
+                let found = list
+                    .named_children(&mut inner)
+                    .filter(|parameter| parameter.kind() == "type_parameter")
+                    .filter_map(|parameter| {
+                        let mut walk = parameter.walk();
+                        let name = parameter
+                            .named_children(&mut walk)
+                            .find(|child| child.kind() == IDENTIFIER);
+                        name
+                    })
+                    .any(|identifier| source[identifier.byte_range()] == *name.as_bytes());
+                found
+            });
+        if declared {
+            return true;
         }
-        let mut inner = current.walk();
-        let is_struct = current
-            .children(&mut inner)
-            .any(|child| child.kind() == STRUCT_KEYWORD);
-        let is_class = current.kind() == "class_declaration"
-            || (current.kind() == RECORD_DECLARATION && !is_struct);
-        if is_class {
-            classes += 1;
-        } else {
-            others += 1;
-        }
+        ancestor = current.parent();
     }
-    classes > 0 && others == 0
+    false
 }
 
 fn implicit_construction<'tree>(
     node: Node<'tree>,
     context: &Context<'_, 'tree>,
 ) -> Option<Call<'tree>> {
-    let type_node = implicit_target(node, context.source)?;
+    let (type_node, _) = implicit_target(node, context.source)?;
     let (qualifier, _) = split_type(&context.text(type_node));
     let mut cursor = node.walk();
     let arguments = node
@@ -264,11 +253,16 @@ fn implicit_construction<'tree>(
 }
 
 impl LanguageSpec for CSharp {
+    fn is_nullable_construction(&self, node: Node<'_>, source: &[u8]) -> bool {
+        node.kind() == IMPLICIT_OBJECT_CREATION_EXPRESSION
+            && implicit_target(node, source).is_some_and(|(_, nullable)| nullable)
+    }
+
     fn construction_name(&self, node: Node<'_>, source: &[u8]) -> Option<String> {
         if node.kind() != IMPLICIT_OBJECT_CREATION_EXPRESSION {
             return None;
         }
-        let target = implicit_target(node, source)?;
+        let (target, _) = implicit_target(node, source)?;
         let text = String::from_utf8_lossy(&source[target.byte_range()]).to_string();
         Some(split_type(&text).1)
     }

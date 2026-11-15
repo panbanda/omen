@@ -1969,6 +1969,14 @@ impl<'a> Resolver<'a> {
             } else {
                 self.types(name, reference.qualifier.as_deref(), file)
             };
+            let nullable = facts.reference_facts[position].nullable_target;
+            let only_classes = !types.is_empty()
+                && types
+                    .iter()
+                    .all(|owner| self.symbol(*owner).kind == SymbolKind::Class);
+            if nullable && !only_classes {
+                return Outcome::none(Status::Unresolved);
+            }
             let found: Vec<Id> = types
                 .iter()
                 .flat_map(|owner| self.constructors(*owner, arity))

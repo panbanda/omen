@@ -463,6 +463,11 @@ impl<'a, 'v> Classes<'a, 'v> {
                     call.resolution.status,
                     ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
                 );
+                // A construction of an optional type builds the type only when
+                // the repository shows that it is a class.
+                if call_facts.nullable_target && !resolved {
+                    continue;
+                }
                 {
                     // A call or a construction that resolves to one definition is a call of that
                     // method. Other calls are the same method when they have

@@ -178,6 +178,9 @@ pub struct ReferenceFacts {
     /// `->` follows the receiver. In C and C++ this is a member of the
     /// object that a pointer names.
     pub arrow: bool,
+    /// A construction whose declared type is optional. The resolver gives it
+    /// a candidate only when each type of the repository with the name is a class.
+    pub nullable_target: bool,
 }
 
 /// The names of the value that an index expression reads: `c.items[i]`
@@ -460,6 +463,13 @@ pub trait LanguageSpec: Sync {
             .filter(|candidate| self.lambda_kinds().contains(&candidate.kind()))
             .map(|lambda| lambda.byte_range())
             .next()
+    }
+
+    /// Tells if the type that a construction node builds is declared as an
+    /// optional type, so that the construction builds the type only when the
+    /// type is a reference type.
+    fn is_nullable_construction(&self, _node: Node<'_>, _source: &[u8]) -> bool {
+        false
     }
 
     /// The name of the type that a construction node builds, when the node
@@ -1278,6 +1288,10 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     for (call, range, owner, via_closure, receiver) in calls {
         let (start_byte, end_byte) = (range.start, range.end);
         let owner = position_of(owner);
+        let nullable_target = call.kind == ReferenceKind::Construct
+            && extractor
+                .spec
+                .is_nullable_construction(call.callee.name_node, &parsed.source);
         let text = String::from_utf8_lossy(&parsed.source[call.callee.name_node.byte_range()]);
         let name = match call.kind {
             ReferenceKind::Construct => extractor
@@ -1323,6 +1337,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                     .get(end..)
                     .is_some_and(|rest| rest.trim_ascii_start().starts_with(b"->"))
             }),
+            nullable_target: nullable_target,
         });
     }
     FileSymbols {
