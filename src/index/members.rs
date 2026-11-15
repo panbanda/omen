@@ -142,7 +142,8 @@ pub const TYPE_PARAMETER: u8 = 64;
 /// The kinds of the nodes that declare a type parameter.
 fn type_parameter_kinds(language: Language) -> &'static [&'static str] {
     match language {
-        Language::Go | Language::Cpp => &["type_parameter_declaration"],
+        Language::Go => &["type_parameter_declaration", "method_declaration"],
+        Language::Cpp => &["type_parameter_declaration"],
         Language::Java | Language::CSharp | Language::TypeScript | Language::Tsx => {
             &["type_parameter"]
         }
@@ -153,6 +154,9 @@ fn type_parameter_kinds(language: Language) -> &'static [&'static str] {
 
 /// The ranges of the names that a type-parameter node declares.
 fn type_parameter_names(language: Language, node: Node<'_>) -> Vec<(usize, usize)> {
+    if node.kind() == "method_declaration" {
+        return receiver_type_parameters(node);
+    }
     const NAMES: &[&str] = &["identifier", "type_identifier"];
     for field in ["name", "left"] {
         if let Some(name) = node.child_by_field_name(field) {
@@ -169,6 +173,36 @@ fn type_parameter_names(language: Language, node: Node<'_>) -> Vec<(usize, usize
     } else {
         names.next().into_iter().collect()
     }
+}
+
+/// The names that a Go receiver such as `(b *Box[T, U])` binds as type parameters.
+fn receiver_type_parameters(method: Node<'_>) -> Vec<(usize, usize)> {
+    let mut names = Vec::new();
+    let Some(receiver) = method.child_by_field_name("receiver") else {
+        return names;
+    };
+    let mut stack = vec![receiver];
+    while let Some(node) = stack.pop() {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "type_arguments" {
+                let mut inner = vec![child];
+                while let Some(argument) = inner.pop() {
+                    let mut walk = argument.walk();
+                    for part in argument.named_children(&mut walk) {
+                        if part.kind() == "type_identifier" {
+                            names.push(range_of(part));
+                        } else {
+                            inner.push(part);
+                        }
+                    }
+                }
+            } else {
+                stack.push(child);
+            }
+        }
+    }
+    names
 }
 
 /// The kinds of the expressions whose operator can add a decision point.
@@ -324,7 +358,11 @@ impl Recorder {
             self.boundaries.push(range_of(node));
         }
         if bits & TYPE_PARAMETER != 0 {
-            if let Some(declaration) = ancestors.iter().rev().nth(1).copied() {
+            let declaration = match node.kind() {
+                "method_declaration" => Some(node),
+                _ => ancestors.iter().rev().nth(1).copied(),
+            };
+            if let Some(declaration) = declaration {
                 for name in type_parameter_names(self.language, node) {
                     self.type_parameters.push((name, range_of(declaration)));
                 }

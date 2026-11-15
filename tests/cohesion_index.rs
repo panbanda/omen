@@ -805,6 +805,13 @@ fn test_go_type_parameter_that_shadows_a_package_type_is_not_coupling() {
 }
 
 #[test]
+fn test_go_receiver_type_parameters_are_in_scope_in_the_method() {
+    let source = "package p\n\ntype T struct{}\n\ntype Box[T any] struct {\n\tvalue T\n}\n\nfunc (b Box[T]) Get() T {\n\treturn b.value\n}\n\nfunc (b *Box[T]) Put(next T) {\n\tb.value = next\n}\n";
+    let analysis = analyze(&[("box.go", source)]);
+    assert_eq!(class(&analysis, "Box").cbo, 0);
+}
+
+#[test]
 fn test_type_parameter_that_shadows_a_class_is_not_coupling() {
     let cases = [
         (
