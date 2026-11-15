@@ -204,6 +204,67 @@ fn first_identifier(node: Node<'_>) -> Option<Node<'_>> {
     found
 }
 
+/// The scopes of the type parameters of a file, by name. The scopes of one
+/// name are nested or apart, thus a scope has the one scope that encloses it.
+struct TypeParameterScopes<'a> {
+    by_name: HashMap<&'a [u8], Vec<ScopeEntry>>,
+}
+
+struct ScopeEntry {
+    start: usize,
+    end: usize,
+    enclosing: Option<usize>,
+}
+
+impl<'a> TypeParameterScopes<'a> {
+    fn new(declared: &[((usize, usize), (usize, usize))], source: &'a [u8]) -> Self {
+        let mut ranges: HashMap<&'a [u8], Vec<(usize, usize)>> = HashMap::new();
+        for ((from, to), scope) in declared {
+            ranges.entry(&source[*from..*to]).or_default().push(*scope);
+        }
+        let by_name = ranges
+            .into_iter()
+            .map(|(name, mut scopes)| {
+                scopes.sort_unstable_by_key(|(start, end)| (*start, std::cmp::Reverse(*end)));
+                scopes.dedup();
+                let mut entries: Vec<ScopeEntry> = Vec::with_capacity(scopes.len());
+                let mut open: Vec<usize> = Vec::new();
+                for (start, end) in scopes {
+                    while open.last().is_some_and(|top| entries[*top].end <= start) {
+                        open.pop();
+                    }
+                    entries.push(ScopeEntry {
+                        start,
+                        end,
+                        enclosing: open.last().copied(),
+                    });
+                    open.push(entries.len() - 1);
+                }
+                (name, entries)
+            })
+            .collect();
+        Self { by_name }
+    }
+
+    /// Tells if a type parameter with the name is in scope over the bytes.
+    fn hides(&self, name: &[u8], start: usize, end: usize) -> bool {
+        let Some(entries) = self.by_name.get(name) else {
+            return false;
+        };
+        let mut found = entries
+            .partition_point(|entry| entry.start <= start)
+            .checked_sub(1);
+        while let Some(position) = found {
+            let entry = &entries[position];
+            if end <= entry.end {
+                return true;
+            }
+            found = entry.enclosing;
+        }
+        false
+    }
+}
+
 /// The nodes that hold type parameters and are not the declaration in which they are in scope.
 const PARAMETER_LISTS: &[&str] = &[
     "template_parameter_list",
@@ -569,6 +630,7 @@ impl Recorder {
             .map(|name| strip_sigil(language, name))
             .collect();
 
+        let type_parameters = TypeParameterScopes::new(&self.type_parameters, source);
         let mut pool: HashMap<&str, SharedStr> = HashMap::new();
         let mut seen: HashSet<(u8, u32, &str)> = HashSet::new();
         let mut facts = MemberFacts {
@@ -586,11 +648,7 @@ impl Recorder {
             let name = strip_sigil(language, name);
             let (slot, kind) = match raw.kind {
                 UseKind::Reference => {
-                    let type_parameter = self.type_parameters.iter().any(|(declared, scope)| {
-                        scope.0 <= raw.start
-                            && raw.end <= scope.1
-                            && source[declared.0..declared.1] == *name.as_bytes()
-                    });
+                    let type_parameter = type_parameters.hides(name.as_bytes(), raw.start, raw.end);
                     if type_parameter || !is_valid_class_reference(name, language) {
                         continue;
                     }

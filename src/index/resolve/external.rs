@@ -1369,7 +1369,10 @@ mod tests {
         for (file, source) in [
             ("a.js", "const f = (Math) => Math.max(1);\nMath.max(2);\n"),
             ("b.js", "consume((Math) => Math.max(1));\nMath.max(2);\n"),
-            ("c.ts", "const f = (Math: Maths) => Math.max(1);\nMath.max(2);\n"),
+            (
+                "c.ts",
+                "const f = (Math: Maths) => Math.max(1);\nMath.max(2);\n",
+            ),
         ] {
             let found = statuses(&[(file, source)], file, "max");
             assert_eq!(found.last().map(String::as_str), Some("External"), "{file}");

@@ -846,6 +846,21 @@ fn test_inner_template_template_parameter_is_not_in_scope_in_the_class() {
 }
 
 #[test]
+fn test_many_type_parameters_and_references_are_read_in_linear_time() {
+    let count = 100_000;
+    let parameters: Vec<String> = (0..count).map(|index| format!("Param{index}")).collect();
+    let mut source = format!("class Item {{}}\nclass Big<{}> {{\n", parameters.join(", "));
+    for index in 0..count {
+        source.push_str(&format!("    Param{index} field{index};\n"));
+    }
+    source.push_str("    Item shared;\n}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Big.java", &source)]);
+    assert_eq!(class(&analysis, "Big").cbo, 1);
+    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+}
+
+#[test]
 fn test_inner_template_parameter_is_not_in_scope_in_the_default_argument() {
     let source = "template<class> class Item {};\n\nclass Box {\n    template<template<class Item> class Holder = Item>\n    void make();\n};\n";
     let analysis = analyze(&[("box.cpp", source)]);
