@@ -298,8 +298,9 @@ pub struct Context<'a, 'tree> {
     pub scopes: &'a [Scope<'tree>],
     /// The ancestors of the node at which the walk is, the nearest last.
     pub ancestors: &'a [Node<'tree>],
-    /// The nearest ancestor whose kind is one of `LanguageSpec::return_owner_kinds`.
-    pub return_owner: Option<Node<'tree>>,
+    /// The nearest ancestor whose kind is one of `LanguageSpec::return_owner_kinds`,
+    /// and whether `LanguageSpec::is_asynchronous` tells that it is asynchronous.
+    pub return_owner: Option<(Node<'tree>, bool)>,
     /// The members recorder of the file, which has the type parameters read so far.
     pub members: Option<&'a Recorder>,
     /// The ID of the node at which the walk is, and the parent of that node.
@@ -478,6 +479,12 @@ pub trait LanguageSpec: Sync {
         &[]
     }
 
+    /// Tells if a return owner is asynchronous, so that a returned value is
+    /// not the result of the owner. The walk asks once for each owner.
+    fn is_asynchronous(&self, _owner: Node<'_>, _source: &[u8]) -> bool {
+        false
+    }
+
     /// The node kinds of the function values that have parameters of their own.
     fn lambda_kinds(&self) -> &'static [&'static str] {
         &[]
@@ -630,7 +637,7 @@ struct Extractor<'a, 'tree> {
     ancestors: Vec<Node<'tree>>,
     return_owner_kinds: &'static [&'static str],
     /// The ancestors that have a kind of `return_owner_kinds`, the nearest last.
-    return_owners: Vec<Node<'tree>>,
+    return_owners: Vec<(Node<'tree>, bool)>,
     return_type_field: &'static str,
     /// Each call with its start byte, its owner, and its closure flag.
     calls: Vec<RawCall<'tree>>,
@@ -930,7 +937,8 @@ impl<'tree> Extractor<'_, 'tree> {
             self.enter(node, depth);
             if cursor.goto_first_child() {
                 if self.return_owner_kinds.contains(&node.kind()) {
-                    self.return_owners.push(node);
+                    let asynchronous = self.spec.is_asynchronous(node, self.source);
+                    self.return_owners.push((node, asynchronous));
                 }
                 self.ancestors.push(node);
                 depth += 1;
@@ -948,7 +956,7 @@ impl<'tree> Extractor<'_, 'tree> {
                     if self
                         .return_owners
                         .last()
-                        .is_some_and(|owner| owner.id() == left.id())
+                        .is_some_and(|(owner, _)| owner.id() == left.id())
                     {
                         self.return_owners.pop();
                     }

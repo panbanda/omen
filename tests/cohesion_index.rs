@@ -1042,6 +1042,33 @@ fn timing_csharp_target_typed_new_in_properties_is_linear() {
     assert!(elapsed.as_secs() < 30, "{elapsed:?}");
 }
 
+fn csharp_many_returned_new_in_one_method_at(size: usize, header: &str, rfc: u32) -> Duration {
+    let mut source = format!("class Part {{}}\n\nclass Factory {{\n    {header} {{\n");
+    for _ in 0..size {
+        source.push_str("        if (true) return new();\n");
+    }
+    source.push_str("        return null;\n    }\n}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Factory.cs", &source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, rfc, "{header}");
+    started.elapsed()
+}
+
+type Duration = std::time::Duration;
+
+#[test]
+fn test_csharp_returned_new_in_one_method_depends_on_async() {
+    csharp_many_returned_new_in_one_method_at(2_000, "Part Make()", 2);
+    csharp_many_returned_new_in_one_method_at(2_000, "async Task<Part> Make()", 1);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_returned_new_in_one_method_is_linear() {
+    let elapsed = csharp_many_returned_new_in_one_method_at(50_000, "Part Make()", 2);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
 fn csharp_target_typed_new_in_deeply_nested_blocks_is_linear_at(
     size: usize,
 ) -> std::time::Duration {

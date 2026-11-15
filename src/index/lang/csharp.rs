@@ -163,11 +163,7 @@ fn implicit_target<'tree>(
             }
         }
         "arrow_expression_clause" | "return_statement" => {
-            let owner = context.return_owner?;
-            let mut cursor = owner.walk();
-            let is_async = owner
-                .children(&mut cursor)
-                .any(|child| child.kind() == MODIFIER && text(child) == "async");
+            let (owner, is_async) = context.return_owner?;
             if is_async {
                 return None;
             }
@@ -222,6 +218,14 @@ fn implicit_construction<'tree>(
 }
 
 impl LanguageSpec for CSharp {
+    fn is_asynchronous(&self, owner: Node<'_>, source: &[u8]) -> bool {
+        let mut cursor = owner.walk();
+        let found = owner
+            .children(&mut cursor)
+            .any(|child| child.kind() == MODIFIER && source[child.byte_range()] == *b"async");
+        found
+    }
+
     fn return_owner_kinds(&self) -> &'static [&'static str] {
         &[
             "method_declaration",
