@@ -645,12 +645,14 @@ impl<'a> Resolver<'a> {
     /// No symbol of the repository and no import of the file has the name,
     /// and no wildcard import of the repository can bind it.
     fn is_free_type_name(&self, file: usize, name: &str) -> bool {
-        !self.is_rebound(file, name)
-            && !self.by_name.contains_key(name)
-            && !(self.files[file].language == Language::Php
-                && self.php_names.contains(&name.to_ascii_lowercase()))
-            && self.binding_of(file, name).is_none()
-            && !self.has_repository_wildcard(file)
+        let php_name = self.files[file].language == Language::Php
+            && self.php_names.contains(&name.to_ascii_lowercase());
+        let taken = self.is_rebound(file, name)
+            || self.by_name.contains_key(name)
+            || php_name
+            || self.binding_of(file, name).is_some()
+            || self.has_repository_wildcard(file);
+        !taken
     }
 
     /// No symbol of the repository, no local name that the call sees, and no

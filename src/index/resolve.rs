@@ -2725,7 +2725,6 @@ mod tests {
 #[cfg(test)]
 pub(crate) mod testing {
     use super::*;
-    use crate::index::imports::testing::index;
 
     /// One line for each call in `file`:
     /// `line caller>callee status basis [candidate keys]`.

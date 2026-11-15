@@ -275,7 +275,7 @@ pub fn rust_dependency_names(cargo_toml: &str) -> BTreeSet<String> {
             // The kind is a whole segment: `dependencies`, `workspace.dependencies`,
             // or `target.<condition>.dev-dependencies`. A segment after it names one dependency.
             let found = KINDS.iter().find_map(|kind| {
-                let after = header.rfind(&format!("{kind}"))? + kind.len();
+                let after = header.rfind(kind)? + kind.len();
                 let before = header[..after - kind.len()].chars().last();
                 let whole = before.is_none_or(|character| character == '.')
                     && header[after..]
