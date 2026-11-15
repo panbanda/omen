@@ -1102,9 +1102,13 @@ pub fn rebound_scope_kinds(language: Language) -> Vec<&'static str> {
                 "import_clause",
                 "namespace_import",
                 "import_specifier",
+                "export_statement",
                 "assignment_expression",
                 "member_expression",
             ]);
+            if matches!(language, Language::TypeScript | Language::Tsx) {
+                kinds.extend(["import_alias", "import_require_clause"]);
+            }
             kinds
         }
         _ => Vec::new(),
@@ -1134,6 +1138,16 @@ fn import_bindings(statement: Node<'_>, mark: &mut dyn FnMut(Node<'_>)) {
                 _ => stack.push(child),
             }
         }
+    }
+}
+
+/// Gives the name that a TypeScript `import name = Entity;` binds.
+fn import_alias_binding(alias: Node<'_>, mark: &mut dyn FnMut(Node<'_>)) {
+    if let Some(name) = alias
+        .named_child(0)
+        .filter(|name| name.kind() == "identifier")
+    {
+        mark(name);
     }
 }
 
@@ -1173,6 +1187,15 @@ fn scope_bindings(scope: Node<'_>, parent: Option<Node<'_>>, source: &[u8]) -> u
                     declarators(statement, &mut mark);
                 } else if statement.kind() == "import_statement" {
                     import_bindings(statement, &mut mark);
+                } else if statement.kind() == "import_alias" {
+                    import_alias_binding(statement, &mut mark);
+                } else if statement.kind() == "export_statement" {
+                    let mut inner = statement.walk();
+                    for exported in statement.named_children(&mut inner) {
+                        if exported.kind() == "import_alias" {
+                            import_alias_binding(exported, &mut mark);
+                        }
+                    }
                 }
             }
         }
@@ -1580,6 +1603,30 @@ mod tests {
             )
             .unwrap();
         super::rebound_names(&parsed).into_iter().collect()
+    }
+
+    fn rebound_in_typescript(source: &str) -> Vec<String> {
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::TypeScript,
+                std::path::Path::new("a.ts"),
+            )
+            .unwrap();
+        super::rebound_names(&parsed).into_iter().collect()
+    }
+
+    #[test]
+    fn test_typescript_import_alias_is_a_local_binding_of_a_global_object_name() {
+        for source in [
+            "import window = Objects.window; window.fetch = r;",
+            "import self = require('objects'); self.fetch = r;",
+            "export import global = Objects.Inner.global; global.fetch = r;",
+        ] {
+            assert!(rebound_in_typescript(source).is_empty(), "{source}");
+        }
+        let unrelated = "import other = window.objects; window.fetch = r;";
+        assert_eq!(rebound_in_typescript(unrelated), ["fetch"]);
     }
 
     fn global_assignments_in_a_large_block_are_linear_at(size: usize) -> std::time::Duration {
