@@ -382,23 +382,26 @@ impl MutationGuard {
         active_mutations: ActiveMutations,
         interrupted: Option<Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Self> {
+        Self::new_with_reader(path, active_mutations, interrupted, |path| fs::read(path))
+    }
+
+    /// `read` is a seam: a test runs code at the moment of the read.
+    fn new_with_reader(
+        path: impl AsRef<Path>,
+        active_mutations: ActiveMutations,
+        interrupted: Option<Arc<std::sync::atomic::AtomicBool>>,
+        read: fn(&Path) -> std::io::Result<Vec<u8>>,
+    ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(reason) = mutation_refusal(&path) {
             return Err(Error::analysis(reason));
         }
-        let original = fs::read(&path).map_err(Error::Io)?;
-        let permissions = fs::metadata(&path).map_err(Error::Io)?.permissions();
-        let link = fs::symlink_metadata(&path)
-            .map_err(Error::Io)?
-            .is_symlink()
-            .then(|| fs::read_link(&path))
-            .transpose()
-            .map_err(Error::Io)?;
         let real_path = fs::canonicalize(&path).map_err(Error::Io)?;
-        let owner = owner_of(&path);
-        // The map has one entry for each file with a guard. A second guard would
-        // replace the record of the first, and the original content would be lost.
-        {
+        // The map has one entry for each file with a guard. A second guard would replace the
+        // record of the first, and the original content would be lost. The guard reads the
+        // original below the same lock that claims the entry. Thus no other guard can restore
+        // the file between the read and the claim, and the bytes are never a mutant.
+        let (original, permissions, link, owner) = {
             let mut active = active_mutations.lock();
             if active.contains_key(&real_path) {
                 return Err(Error::analysis(format!(
@@ -406,8 +409,18 @@ impl MutationGuard {
                     path.display()
                 )));
             }
+            let original = read(&path).map_err(Error::Io)?;
+            let permissions = fs::metadata(&path).map_err(Error::Io)?.permissions();
+            let link = fs::symlink_metadata(&path)
+                .map_err(Error::Io)?
+                .is_symlink()
+                .then(|| fs::read_link(&path))
+                .transpose()
+                .map_err(Error::Io)?;
+            let owner = owner_of(&path);
             active.insert(real_path.clone(), None);
-        }
+            (original, permissions, link, owner)
+        };
 
         Ok(Self {
             link,
@@ -2038,6 +2051,51 @@ mod tests {
         guard.apply(b"mutated").unwrap();
         guard.restore().unwrap();
 
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    static GUARD_TO_DROP_AT_THE_READ: parking_lot::Mutex<Option<MutationGuard>> =
+        parking_lot::Mutex::new(None);
+
+    /// Reads the file, then lets the guard of another run restore the file and waits. A second
+    /// guard that has read a mutant must not accept it as the original.
+    fn read_while_the_other_guard_restores(path: &Path) -> std::io::Result<Vec<u8>> {
+        let content = fs::read(path)?;
+        if let Some(guard) = GUARD_TO_DROP_AT_THE_READ.lock().take() {
+            std::thread::spawn(move || drop(guard));
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        Ok(content)
+    }
+
+    #[test]
+    fn test_a_second_guard_never_reads_a_mutant_as_the_original() {
+        let _serial = PAUSE_TESTS.lock();
+        let active_mutations = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut first = MutationGuard::new_with_state(
+            &file_path,
+            Arc::clone(&active_mutations),
+            Some(Arc::new(std::sync::atomic::AtomicBool::new(false))),
+        )
+        .unwrap();
+        first.apply(b"mutant 1").unwrap();
+        *GUARD_TO_DROP_AT_THE_READ.lock() = Some(first);
+
+        let second = MutationGuard::new_with_reader(
+            &file_path,
+            Arc::clone(&active_mutations),
+            None,
+            read_while_the_other_guard_restores,
+        );
+
+        assert!(
+            second.is_err(),
+            "the second guard took the mutant as the original"
+        );
+        drop(GUARD_TO_DROP_AT_THE_READ.lock().take());
         assert_eq!(fs::read(&file_path).unwrap(), b"original");
     }
 
