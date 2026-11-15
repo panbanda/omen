@@ -10,9 +10,10 @@ A rule runs only for a call that has no candidate. The status of a call that has
 candidate does not change. The rules give one of three kinds of evidence.
 
 - **Import**: an import from outside the repository binds the first name of the
-  qualifier or of the receiver. In Rust, a path that starts with `std`, `core`, or
-  `alloc`, with a prelude type, or with a lower case name that nothing in the
-  repository binds, also counts.
+  qualifier or of the receiver. In Rust, a path that starts with `std`, `core`, `alloc`,
+  `proc_macro`, or `test`, with a prelude type, or with the name of a dependency in
+  the nearest `Cargo.toml`, also counts. A dependency with `path` is a crate of the
+  repository and does not count.
 - **Builtin**: the call has no receiver and no qualifier. Its name is in the list of
   builtins of the language, or a header or a library that the file imports provides
   it. No symbol of the repository, no local name, and no import has the name.
@@ -22,6 +23,13 @@ candidate does not change. The rules give one of three kinds of evidence.
 
 A rule does not apply in these cases:
 
+- The receiver has no recorded binding and no import binds it, and a function or a
+  method of the repository has the name of the call.
+- A file has a wildcard import of a repository module. The module can bind any name.
+- The repository binds the name again: a C or C++ `#define`, a Bash `alias`, an
+  assignment to `globalThis`, `window`, `global`, or `self`, or a Ruby `class << Name`.
+- A PHP function name matches a repository name when the case is ignored.
+
 - A repository symbol has the name of a builtin, a class, or a namespace.
 - A local name that the call sees has the name.
 - A member of the repository can extend the external type. Examples are a trait
@@ -29,6 +37,8 @@ A rule does not apply in these cases:
 - A member of the repository has the name of the call, and the rule uses a declared
   type. A pattern can hide the local name, and the index does not model this.
 - A Rust path has a `.`. Such a path is a chain of values, not a path of a crate.
+- A Rust path starts with a lower case name that no manifest declares. A macro can
+  bind the name.
 
 The lists are in `src/index/resolve/external.rs`. `LIST_VERSION` is 1. A test checks that
 each list is sorted, has no duplicate, and is small. A test for each language checks
@@ -67,49 +77,48 @@ positions match the SCIP index.
 
 A check on the pairs of references gave these results:
 
-- The only change of status is `Unresolved` to `External`. No reference changed
-  in another way.
 - The `UniqueCandidate` references and their candidates are the same before and
   after, for all six repositories.
-- The `Ambiguous` references are the same before and after.
+- Almost all changes of status are `Unresolved` to `External`. The section "Review
+  changes" gives the other changes.
 
 ## Counts by status
 
-The columns `Unique` and `Ambiguous` do not change.
+The columns `Unique` and `Ambiguous` give the counts before the change.
 
 | Repository | Language | Unique | Ambiguous | Unresolved before | Unresolved after | External before | External after | New External |
 |---|---|---|---|---|---|---|---|---|
 | omen | Bash | 24 | 12 | 41 | 16 | 0 | 25 | 25 |
 | omen | C | 28 | 17 | 16 | 10 | 0 | 6 | 6 |
-| omen | CSharp | 72 | 2 | 20 | 12 | 4 | 12 | 8 |
-| omen | Cpp | 56 | 15 | 20 | 9 | 0 | 11 | 11 |
-| omen | Go | 34 | 2 | 29 | 23 | 27 | 33 | 6 |
-| omen | Java | 67 | 3 | 33 | 16 | 12 | 29 | 17 |
+| omen | CSharp | 72 | 2 | 20 | 16 | 4 | 8 | 4 |
+| omen | Cpp | 56 | 15 | 20 | 11 | 0 | 9 | 9 |
+| omen | Go | 34 | 2 | 29 | 24 | 27 | 32 | 5 |
+| omen | Java | 67 | 3 | 33 | 21 | 12 | 24 | 12 |
 | omen | JavaScript | 58 | 4 | 34 | 22 | 25 | 37 | 12 |
 | omen | Jsx | 48 | 4 | 15 | 7 | 25 | 33 | 8 |
 | omen | Php | 64 | 24 | 24 | 14 | 5 | 15 | 10 |
-| omen | Python | 49 | 12 | 33 | 27 | 38 | 44 | 6 |
-| omen | Ruby | 55 | 10 | 145 | 126 | 0 | 19 | 19 |
-| omen | Rust | 12006 | 5104 | 25437 | 19611 | 1532 | 7358 | 5826 |
+| omen | Python | 49 | 12 | 33 | 30 | 38 | 41 | 3 |
+| omen | Ruby | 55 | 10 | 145 | 127 | 0 | 18 | 18 |
+| omen | Rust | 12006 | 5104 | 25437 | 21982 | 1532 | 4987 | 3455 |
 | omen | Tsx | 49 | 5 | 15 | 7 | 25 | 33 | 8 |
-| omen | TypeScript | 61 | 5 | 26 | 15 | 25 | 36 | 11 |
+| omen | TypeScript | 61 | 5 | 26 | 16 | 25 | 35 | 10 |
 | ripgrep | Bash | 6 | 0 | 29 | 8 | 0 | 21 | 21 |
 | ripgrep | Ruby | 0 | 0 | 22 | 22 | 0 | 0 | 0 |
-| ripgrep | Rust | 6356 | 2414 | 5541 | 4068 | 468 | 1941 | 1473 |
+| ripgrep | Rust | 6356 | 2414 | 5541 | 4822 | 468 | 1187 | 719 |
 | cobra | Go | 2157 | 117 | 1487 | 529 | 647 | 1605 | 958 |
 | zod | Bash | 0 | 0 | 5 | 0 | 0 | 5 | 5 |
 | zod | JavaScript | 10 | 0 | 7 | 4 | 12 | 15 | 3 |
-| zod | Tsx | 7 | 7 | 100 | 74 | 43 | 69 | 26 |
-| zod | TypeScript | 14460 | 11996 | 16045 | 13028 | 11406 | 14423 | 3017 |
-| rack | Ruby | 3369 | 3303 | 14049 | 12780 | 0 | 1269 | 1269 |
+| zod | Tsx | 7 | 7 | 100 | 81 | 43 | 62 | 19 |
+| zod | TypeScript | 14460 | 11996 | 16045 | 13934 | 11406 | 13512 | 2106 |
+| rack | Ruby | 3369 | 3303 | 14049 | 12855 | 0 | 1194 | 1194 |
 | litellm | Bash | 365 | 0 | 1334 | 1124 | 0 | 210 | 210 |
 | litellm | Go | 1559 | 14 | 4617 | 1832 | 1817 | 4602 | 2785 |
-| litellm | JavaScript | 21 | 11 | 57 | 52 | 18 | 23 | 5 |
-| litellm | Python | 417836 | 77090 | 361667 | 261060 | 172062 | 272669 | 100607 |
+| litellm | JavaScript | 21 | 11 | 57 | 54 | 18 | 21 | 3 |
+| litellm | Python | 417836 | 77090 | 361667 | 264371 | 172062 | 269358 | 97296 |
 | litellm | Ruby | 0 | 0 | 19 | 19 | 0 | 0 | 0 |
-| litellm | Rust | 16347 | 10874 | 43790 | 37458 | 5502 | 11834 | 6332 |
-| litellm | Tsx | 18011 | 2087 | 72267 | 68335 | 78066 | 81998 | 3932 |
-| litellm | TypeScript | 12093 | 1346 | 23465 | 20900 | 19789 | 22354 | 2565 |
+| litellm | Rust | 16347 | 10874 | 43790 | 39482 | 5502 | 9810 | 4308 |
+| litellm | Tsx | 18011 | 2087 | 72267 | 68587 | 78066 | 81681 | 3615 |
+| litellm | TypeScript | 12093 | 1346 | 23465 | 20940 | 19789 | 22156 | 2367 |
 
 ## Precision
 
@@ -121,10 +130,10 @@ correct reference.
 
 | Repository | Language | New External | Joined | SCIP external | SCIP in repository | Join failures | Precision |
 |---|---|---|---|---|---|---|---|
-| omen | Rust | 5826 | 5806 | 5806 | 0 | 20 | 100% |
-| ripgrep | Rust | 1473 | 1277 | 1277 | 0 | 196 | 100% |
+| omen | Rust | 3455 | 3441 | 3441 | 0 | 14 | 100% |
+| ripgrep | Rust | 719 | 685 | 685 | 0 | 34 | 100% |
 | cobra | Go | 958 | 675 | 675 | 0 | 283 | 100% |
-| zod | TypeScript | 3017 | 2975 | 2975 | 0 | 42 | 100% |
+| zod | TypeScript | 2106 | 2077 | 2077 | 0 | 29 | 100% |
 
 Every precision is above the limit of 98%. No rule is withdrawn.
 
@@ -153,17 +162,29 @@ reference that is wrong. A sample is not a measurement of precision.
 
 ## Limits
 
-- The rules do not use the dependencies in `Cargo.toml`, `package.json`, or `go.mod`.
-  A Rust path that starts with a name that nothing binds is a crate of the extern
-  prelude. A macro can make a module that the index does not see.
+- The rules read the dependencies of `Cargo.toml` only. They do not read `package.json`
+  or `go.mod`. A JavaScript import that no file binds is not external.
 - Most `Unresolved` references of omen and ripgrep are calls on an expression or on a
   local name with no declared type, such as `x.unwrap()`. No rule has evidence for
   them. They stay `Unresolved`.
-- The deadcode analyzer keeps a definition alive when an `Unresolved` call has its
-  name. An `External` call does not keep a definition alive. This change is intended.
-  The deadcode ground truth does not change.
+- The deadcode analyzer keeps a definition alive when an `Unresolved` call or an
+  `External` call has its name. A wrong `External` status cannot make a definition dead.
 - A repository symbol with the name of a builtin stops the rule in the whole
   repository, also in a file that cannot see the symbol. This choice loses some
   references and gives no wrong reference.
 - The truth labels for the new cases are development data. The `status` field of a call
   label checks the status. The truth, quality, and retrieval ledgers stay empty.
+
+## Review changes
+
+A review found that the first version gave `External` in cases that a repository
+definition can receive. The version in this document has these changes:
+
+- The deadcode analyzer treats an `External` call as it treats an `Unresolved` call.
+- The index records the parameters of ECMAScript patterns, of Java lambdas without a
+  type, and of C# lambdas without a type, as local names.
+- The rules abstain in the cases that the section "Rules" lists. The count of
+  `External` references fell, mostly for Rust and TypeScript. The precision did not fall.
+- Five zod references and 230 litellm references changed from `Unresolved` to
+  `Ambiguous`, and seven litellm references changed from `Ambiguous` to `Unresolved`.
+  The new local names cause these changes. No edge changed.
