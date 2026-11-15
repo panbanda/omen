@@ -1365,6 +1365,18 @@ mod tests {
     }
 
     #[test]
+    fn test_parenthesized_arrow_parameter_does_not_shadow_the_name_after_the_arrow() {
+        for (file, source) in [
+            ("a.js", "const f = (Math) => Math.max(1);\nMath.max(2);\n"),
+            ("b.js", "consume((Math) => Math.max(1));\nMath.max(2);\n"),
+            ("c.ts", "const f = (Math: Maths) => Math.max(1);\nMath.max(2);\n"),
+        ] {
+            let found = statuses(&[(file, source)], file, "max");
+            assert_eq!(found.last().map(String::as_str), Some("External"), "{file}");
+        }
+    }
+
+    #[test]
     fn test_assignment_to_a_local_named_like_the_global_object_is_not_a_rebinding() {
         let parameter = "function install(globalThis) {\n  globalThis.fetch = localFetch;\n}\n\nfunction run() {\n  return fetch('/remote');\n}\n";
         let variable = "function install() {\n  const window = {};\n  window.fetch = localFetch;\n}\n\nfunction run() {\n  return fetch('/remote');\n}\n";
