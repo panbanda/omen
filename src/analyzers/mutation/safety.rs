@@ -2128,15 +2128,16 @@ mod tests {
     #[test]
     fn test_a_run_gets_only_its_own_restore_failure() {
         let _serial = PAUSE_TESTS.lock();
-        drop(restore_failure_error_for(1));
-        drop(restore_failure_error_for(2));
+        // Take ids from the shared counter so a concurrent test's run never has the same id.
+        let run_one = NEXT_RUN.fetch_add(1, Ordering::SeqCst);
+        let run_two = NEXT_RUN.fetch_add(1, Ordering::SeqCst);
         let temp_dir = TempDir::new().unwrap();
         let first = temp_dir.path().join("first.rs");
         let second = temp_dir.path().join("second.rs");
         fs::write(&first, b"cleanup-first").unwrap();
         fs::write(&second, b"cleanup-second").unwrap();
-        let mut guard_of_run_one = MutationGuard::new_for_run(&first, 1).unwrap();
-        let mut guard_of_run_two = MutationGuard::new_for_run(&second, 2).unwrap();
+        let mut guard_of_run_one = MutationGuard::new_for_run(&first, run_one).unwrap();
+        let mut guard_of_run_two = MutationGuard::new_for_run(&second, run_two).unwrap();
         guard_of_run_one.apply(b"mutated").unwrap();
         guard_of_run_two.apply(b"mutated").unwrap();
         fs::remove_file(&first).unwrap();
@@ -2145,10 +2146,10 @@ mod tests {
         drop(guard_of_run_one);
 
         assert!(
-            restore_failure_error_for(2).is_none(),
+            restore_failure_error_for(run_two).is_none(),
             "run 2 took the failure of run 1"
         );
-        let error = restore_failure_error_for(1).expect("run 1 has its failure");
+        let error = restore_failure_error_for(run_one).expect("run 1 has its failure");
         assert!(error.to_string().contains("first.rs"), "{error}");
         drop(guard_of_run_two);
         assert_eq!(fs::read(&second).unwrap(), b"cleanup-second");
