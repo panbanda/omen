@@ -1072,6 +1072,10 @@ fn is_bound_at(node: Node<'_>, name: &str, source: &[u8]) -> bool {
     false
 }
 
+/// The name that stands in the rebound names for a Rust `macro_rules!` whose
+/// body has a `use` or an `extern crate`. The macro can bind any crate name.
+pub const RUST_MACRO_IMPORT: &str = "<macro import>";
+
 fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
     const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "global", "self"];
     let text =
@@ -1084,6 +1088,18 @@ fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
         match (parsed.language, node.kind()) {
             (Language::C | Language::Cpp, "preproc_def" | "preproc_function_def") => {
                 names.extend(node.child_by_field_name("name").map(text));
+            }
+            (Language::Rust, "macro_definition") => {
+                let body = text(node);
+                let imports = body
+                    .split(|character: char| !(character.is_alphanumeric() || character == '_'))
+                    .filter(|word| !word.is_empty())
+                    .collect::<Vec<_>>()
+                    .windows(2)
+                    .any(|pair| pair[0] == "use" || pair == ["extern", "crate"]);
+                if imports {
+                    names.insert(RUST_MACRO_IMPORT.to_string());
+                }
             }
             (Language::Bash, "command") => {
                 let command = text(node);

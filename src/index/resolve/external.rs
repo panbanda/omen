@@ -727,8 +727,10 @@ impl<'a> Resolver<'a> {
     /// The name is external only when the nearest `Cargo.toml` declares a
     /// dependency with the name. A macro can bind any other name.
     fn is_declared_dependency(&self, file: usize, head: &str) -> bool {
-        self.manifests
-            .declares_rust_dependency(&self.files[file].file, head)
+        !self.is_rebound(file, crate::index::extract::RUST_MACRO_IMPORT)
+            && self
+                .manifests
+                .declares_rust_dependency(&self.files[file].file, head)
             && !["crate", "self", "super"].contains(&head)
     }
 
@@ -1281,6 +1283,17 @@ mod tests {
         let manifest = "[dependencies]\nlocal_alias.path = \"../local\"\nlocal_alias.package = \"local-pkg\"\n";
         let files = [("src/main.rs", main), ("Cargo.toml", manifest)];
         assert!(!external(&files, "src/main.rs", "work"));
+    }
+
+    #[test]
+    fn test_rust_macro_import_can_shadow_a_declared_dependency() {
+        let main = "mod local {\n    pub fn from_str(_: &str) {}\n}\n\nmacro_rules! bind_local {\n    () => { use crate::local as serde_json; }\n}\n\nbind_local!();\n\nfn run() {\n    serde_json::from_str(\"1\");\n}\n";
+        let manifest = "[dependencies]\nserde_json = \"1\"\n";
+        let files = [("src/main.rs", main), ("Cargo.toml", manifest)];
+        assert!(!external(&files, "src/main.rs", "from_str"));
+        let plain = "macro_rules! twice {\n    ($x:expr) => { $x + $x };\n}\n\nfn run() {\n    serde_json::from_str(\"1\");\n}\n";
+        let files = [("src/main.rs", plain), ("Cargo.toml", manifest)];
+        assert!(external(&files, "src/main.rs", "from_str"));
     }
 
     #[test]
