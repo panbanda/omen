@@ -1076,6 +1076,29 @@ fn is_bound_at(node: Node<'_>, name: &str, source: &[u8]) -> bool {
 /// body has a `use` or an `extern crate`. The macro can bind any crate name.
 pub const RUST_MACRO_IMPORT: &str = "<macro import>";
 
+/// Tells if the tokens of a macro, outside string and character literals,
+/// have `use` or `extern crate`.
+fn has_import_tokens(node: Node<'_>, source: &[u8]) -> bool {
+    let mut tokens: Vec<(usize, &[u8])> = Vec::new();
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        if current.kind().contains("literal") || current.kind() == "string_content" {
+            continue;
+        }
+        if current.child_count() == 0 {
+            tokens.push((current.start_byte(), &source[current.byte_range()]));
+            continue;
+        }
+        let mut cursor = current.walk();
+        stack.extend(current.children(&mut cursor));
+    }
+    tokens.sort_unstable_by_key(|(start, _)| *start);
+    tokens
+        .windows(2)
+        .any(|pair| pair[0].1 == b"use" || (pair[0].1 == b"extern" && pair[1].1 == b"crate"))
+        || tokens.last().is_some_and(|last| last.1 == b"use")
+}
+
 fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
     const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "global", "self"];
     let text =
@@ -1089,15 +1112,8 @@ fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
             (Language::C | Language::Cpp, "preproc_def" | "preproc_function_def") => {
                 names.extend(node.child_by_field_name("name").map(text));
             }
-            (Language::Rust, "macro_definition") => {
-                let body = text(node);
-                let imports = body
-                    .split(|character: char| !(character.is_alphanumeric() || character == '_'))
-                    .filter(|word| !word.is_empty())
-                    .collect::<Vec<_>>()
-                    .windows(2)
-                    .any(|pair| pair[0] == "use" || pair == ["extern", "crate"]);
-                if imports {
+            (Language::Rust, "macro_definition" | "macro_invocation") => {
+                if has_import_tokens(node, &parsed.source) {
                     names.insert(RUST_MACRO_IMPORT.to_string());
                 }
             }

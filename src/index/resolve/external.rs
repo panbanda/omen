@@ -704,7 +704,8 @@ impl<'a> Resolver<'a> {
             return false;
         }
         if self.files[scope.file].language == Language::Rust {
-            return !qualifier.contains('.')
+            return !self.is_rebound(scope.file, crate::index::extract::RUST_MACRO_IMPORT)
+                && !qualifier.contains('.')
                 && (RUST_ROOTS.contains(&head)
                     || RUST_RECEIVERS.contains(&head)
                     || self.is_declared_dependency(scope.file, head));
@@ -1294,6 +1295,23 @@ mod tests {
         let plain = "macro_rules! twice {\n    ($x:expr) => { $x + $x };\n}\n\nfn run() {\n    serde_json::from_str(\"1\");\n}\n";
         let files = [("src/main.rs", plain), ("Cargo.toml", manifest)];
         assert!(external(&files, "src/main.rs", "from_str"));
+    }
+
+    #[test]
+    fn test_rust_macro_arguments_and_std_heads_can_be_rebound() {
+        let manifest = "[dependencies]\nserde_json = \"1\"\n";
+        let invoked = "mod local {\n    pub fn from_str(_: &str) {}\n}\n\nmacro_rules! bind {\n    ($item:item) => { $item };\n}\n\nbind!(use crate::local as serde_json;);\n\nfn run() {\n    serde_json::from_str(\"1\");\n}\n";
+        let files = [("src/main.rs", invoked), ("Cargo.toml", manifest)];
+        assert!(!external(&files, "src/main.rs", "from_str"));
+        let std_head = "mod local {\n    pub fn swap() {}\n}\n\nmacro_rules! bind {\n    () => { use crate::local as std; }\n}\n\nbind!();\n\nfn run() {\n    std::swap();\n}\n";
+        assert!(!external(
+            &[("src/main.rs", std_head)],
+            "src/main.rs",
+            "swap"
+        ));
+        let quoted =
+            "fn run() {\n    println!(\"use this\");\n    std::mem::swap(&mut 1, &mut 2);\n}\n";
+        assert!(external(&[("src/main.rs", quoted)], "src/main.rs", "swap"));
     }
 
     #[test]
