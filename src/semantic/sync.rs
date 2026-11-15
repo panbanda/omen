@@ -271,7 +271,6 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let complexity_entries: HashMap<(String, u32, u32), (u32, u32)> = functions
         .iter()
         .zip(definition_ordinals(&functions))
-        .filter(|(func, _)| func.is_callable())
         .map(|(func, ordinal)| {
             let metrics = analyze_symbol_complexity(func, &parse_result);
             (

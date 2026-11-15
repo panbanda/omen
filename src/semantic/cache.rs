@@ -34,7 +34,7 @@ const UPSERT_SYMBOL_SQL: &str = r#"
 /// Change this value when the chunks that omen makes for one source file change.
 /// A cache that an older version made then has chunks that are not valid for
 /// files that did not change, so omen builds the index again.
-const INDEX_VERSION: u32 = 2;
+const INDEX_VERSION: u32 = 1;
 
 const SCHEMA_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS symbols (
