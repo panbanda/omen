@@ -34,7 +34,16 @@ pub fn generation_id(generated_at: &str, files: &BTreeMap<String, String>) -> St
 /// `known` has the file names without the extension that `report generate` writes.
 pub fn check(data_dir: &Path, known: &[&str]) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(data_dir.join("metadata.json")) else {
-        return Vec::new();
+        // A commit that stopped in the middle leaves no metadata.json, so a directory with
+        // data files and without it is not complete.
+        let has_data = known
+            .iter()
+            .any(|stem| data_dir.join(format!("{stem}.json")).exists());
+        return if has_data {
+            vec!["metadata.json: the file is missing, so the data may be from a stopped run".into()]
+        } else {
+            Vec::new()
+        };
     };
     let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&text) else {
         return Vec::new();

@@ -1911,7 +1911,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let first = temp_dir.path().join("first.rs");
         let second = temp_dir.path().join("second.rs");
-        fs::write(&first, b"first").unwrap();
+        fs::write(&first, b"cleanup-first").unwrap();
         fs::write(&second, b"second").unwrap();
         let mut first_guard = MutationGuard::new(&first).unwrap();
         let mut second_guard = MutationGuard::new(&second).unwrap();
@@ -1935,6 +1935,7 @@ mod tests {
                 .file_name()
                 .to_string_lossy()
                 .starts_with("omen-mutation-backup-")
+                && fs::read(entry.path()).is_ok_and(|content| content.starts_with(b"cleanup-"))
             {
                 let _ = fs::remove_file(entry.path());
             }
@@ -2099,7 +2100,7 @@ mod tests {
         assert!(restore_failure_error().is_none());
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.rs");
-        fs::write(&file_path, b"original").unwrap();
+        fs::write(&file_path, b"cleanup-original").unwrap();
         let mut guard = MutationGuard::new(&file_path).unwrap();
         guard.apply(b"mutated").unwrap();
         fs::remove_file(&file_path).unwrap();

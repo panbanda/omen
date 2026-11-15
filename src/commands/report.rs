@@ -84,6 +84,24 @@ fn commit_outputs_with(
         staged.push(Some(stage().map_err(|e| describe(path, &e))?));
     }
 
+    // Remove the old metadata.json now that each new file is staged and before the first
+    // replacement. A stop in the middle then leaves a directory without metadata, which
+    // `report validate` and `report render` reject. The new metadata.json is the last output.
+    let metadata_index = outputs.iter().rposition(|output| {
+        output
+            .path()
+            .file_name()
+            .is_some_and(|name| name == "metadata.json")
+    });
+    if let Some(index) = metadata_index {
+        match std::fs::remove_file(outputs[index].path()) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(describe(outputs[index].path(), &error));
+            }
+            _ => {}
+        }
+    }
+
     for (index, (output, stage)) in outputs.iter().zip(staged).enumerate() {
         let result = match (output, stage) {
             (Output::Write(path, _), Some(file)) => {
@@ -98,7 +116,8 @@ fn commit_outputs_with(
         let result = result.and_then(|()| after_each(index));
         if let Err(error) = result {
             let mut message = describe(output.path(), &error);
-            for (done, content) in outputs[..=index].iter().zip(&old_content) {
+            let last_changed = index.max(metadata_index.unwrap_or(0));
+            for (done, content) in outputs[..=last_changed].iter().zip(&old_content) {
                 let path = done.path();
                 let undone = match content {
                     Some((bytes, mode)) => crate::core::write_atomically(path, bytes, *mode),

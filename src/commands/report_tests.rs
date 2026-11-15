@@ -354,6 +354,94 @@ fn test_the_score_is_the_score_of_the_final_directory() {
     );
 }
 
+#[test]
+fn test_the_old_metadata_is_gone_before_the_first_file_is_replaced() {
+    let directory = tempfile::tempdir().expect("directory");
+    let metadata = directory.path().join("metadata.json");
+    let analyzer = directory.path().join("satd.json");
+    std::fs::write(&metadata, "old metadata").expect("old");
+    std::fs::write(&analyzer, "old satd").expect("old");
+    let outputs = [
+        Output::Write(analyzer.clone(), "new satd".to_string()),
+        Output::Write(metadata.clone(), "new metadata".to_string()),
+    ];
+    let seen = std::cell::Cell::new(None);
+
+    commit_outputs_with(&outputs, &|index| {
+        if index == 0 {
+            seen.set(Some(metadata.exists()));
+        }
+        Ok(())
+    })
+    .expect("the commit works");
+
+    assert_eq!(seen.get(), Some(false), "a stop here leaves no metadata");
+    assert_eq!(
+        std::fs::read_to_string(&metadata).expect("read"),
+        "new metadata"
+    );
+}
+
+#[test]
+fn test_a_failed_commit_puts_the_old_metadata_back() {
+    let directory = tempfile::tempdir().expect("directory");
+    let metadata = directory.path().join("metadata.json");
+    let analyzer = directory.path().join("satd.json");
+    std::fs::write(&metadata, "old metadata").expect("old");
+    std::fs::write(&analyzer, "old satd").expect("old");
+    let outputs = [
+        Output::Write(analyzer.clone(), "new satd".to_string()),
+        Output::Write(metadata.clone(), "new metadata".to_string()),
+    ];
+
+    commit_outputs_with(&outputs, &|index| {
+        if index == 0 {
+            Err(std::io::Error::other("injected fault"))
+        } else {
+            Ok(())
+        }
+    })
+    .expect_err("the commit fails");
+
+    assert_eq!(
+        std::fs::read_to_string(&metadata).expect("read"),
+        "old metadata"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&analyzer).expect("read"),
+        "old satd"
+    );
+}
+
+#[test]
+fn test_render_and_validate_fail_without_metadata() {
+    let (directory, path) = repository();
+    let data = directory.path().join("data");
+    generate(
+        &path,
+        &Config::default(),
+        &generate_args(&data, &format!("trend,{FAST_SKIP}")),
+        None,
+        None,
+        &commit_outputs,
+    )
+    .expect("generate");
+    std::fs::remove_file(data.join("metadata.json")).expect("remove");
+
+    let render = crate::report::Renderer::new()
+        .expect("renderer")
+        .render_to_file(&data, &directory.path().join("report.html"));
+    let message = format!("{:?}", render.expect_err("render needs metadata"));
+    assert!(message.contains("metadata.json"), "{message}");
+    let validate = run(
+        &path,
+        &Config::default(),
+        &subcommand(&["validate", "--data", data.to_str().expect("utf-8")]),
+        None,
+    );
+    assert!(validate.is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn test_a_rollback_keeps_the_mode_of_each_old_file() {
