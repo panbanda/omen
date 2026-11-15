@@ -218,7 +218,20 @@ fn exit_after_failed_restore() {
 }
 
 #[cfg(test)]
-fn exit_after_failed_restore() {}
+static EXIT_REQUESTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+fn exit_after_failed_restore() {
+    EXIT_REQUESTS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Exit with `RESTORE_FAILURE_EXIT_CODE` if a restore failed. A run calls this
+/// after it restored each file, never inside a guard.
+fn exit_if_restore_failed() {
+    if RESTORE_FAILED.load(Ordering::SeqCst) {
+        exit_after_failed_restore();
+    }
+}
 
 /// RAII guard that ensures a file is restored to its original content.
 ///
@@ -381,7 +394,6 @@ impl Drop for MutationGuard {
             if let Err(error) = record.restore_with(self.restore_writer) {
                 self.give_up_restore(&record, &error);
                 active.remove(&self.path);
-                exit_after_failed_restore();
                 return;
             }
         }
@@ -744,6 +756,7 @@ impl ActiveRun {
     pub fn conclude(mut self) {
         self.concluded = true;
         INTERRUPT_GATE.conclude(&ProcessEnvironment);
+        exit_if_restore_failed();
     }
 }
 
@@ -1763,6 +1776,51 @@ mod tests {
             .open(path)
             .map_err(Error::Io)?;
         Ok(())
+    }
+
+    #[test]
+    fn test_a_failed_restore_does_not_stop_the_restore_of_other_guards() {
+        let _serial = PAUSE_TESTS.lock();
+        EXIT_REQUESTS.store(0, Ordering::SeqCst);
+        let temp_dir = TempDir::new().unwrap();
+        let first = temp_dir.path().join("first.rs");
+        let second = temp_dir.path().join("second.rs");
+        fs::write(&first, b"first").unwrap();
+        fs::write(&second, b"second").unwrap();
+        let mut first_guard = MutationGuard::new(&first).unwrap();
+        let mut second_guard = MutationGuard::new(&second).unwrap();
+        first_guard.apply(b"mutated").unwrap();
+        second_guard.apply(b"mutated").unwrap();
+        fs::remove_file(&first).unwrap();
+        fs::create_dir(&first).unwrap();
+
+        drop(first_guard);
+
+        assert_eq!(EXIT_REQUESTS.load(Ordering::SeqCst), 0);
+        drop(second_guard);
+        assert_eq!(fs::read(&second).unwrap(), b"second");
+        RESTORE_FAILED.store(false, Ordering::SeqCst);
+        for entry in fs::read_dir(std::env::temp_dir()).unwrap().flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("omen-mutation-backup-")
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    #[test]
+    fn test_the_run_exits_after_a_failed_restore_when_it_concludes() {
+        let _serial = PAUSE_TESTS.lock();
+        EXIT_REQUESTS.store(0, Ordering::SeqCst);
+        exit_if_restore_failed();
+        assert_eq!(EXIT_REQUESTS.load(Ordering::SeqCst), 0);
+        RESTORE_FAILED.store(true, Ordering::SeqCst);
+        exit_if_restore_failed();
+        RESTORE_FAILED.store(false, Ordering::SeqCst);
+        assert_eq!(EXIT_REQUESTS.load(Ordering::SeqCst), 1);
     }
 
     #[test]
