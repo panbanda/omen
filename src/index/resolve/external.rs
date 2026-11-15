@@ -1319,6 +1319,20 @@ mod tests {
     }
 
     #[test]
+    fn test_assignment_to_a_local_named_like_the_global_object_is_not_a_rebinding() {
+        let parameter = "function install(globalThis) {\n  globalThis.fetch = localFetch;\n}\n\nfunction run() {\n  return fetch('/remote');\n}\n";
+        let variable = "function install() {\n  const window = {};\n  window.fetch = localFetch;\n}\n\nfunction run() {\n  return fetch('/remote');\n}\n";
+        let arrow = "const install = self => { self.fetch = localFetch; };\nfunction run() { return fetch('/remote'); }\n";
+        for (file, source) in [
+            ("a.js", parameter),
+            ("b.ts", variable),
+            ("c.js", arrow),
+        ] {
+            assert!(external(&[(file, source)], file, "fetch"), "{file}");
+        }
+    }
+
+    #[test]
     fn test_single_lambda_parameter_does_not_shadow_the_name_outside_its_body() {
         let javascript = "const callback = fetch => fetch('/local');\nfunction run() { return fetch('/remote'); }\n";
         let csharp = "using System;\nclass Program {\n    void Callback() {\n        Action<string> action = Console => Console.WriteLine(\"a\");\n    }\n    void Run() {\n        Console.WriteLine(\"b\");\n    }\n}\n";

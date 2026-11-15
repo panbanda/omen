@@ -982,6 +982,67 @@ pub fn link_files(files: &mut [FileSymbols]) {
 
 /// The names that a file binds again with a macro, an alias, an assignment to
 /// the global object, or a singleton class. These bindings are not symbols.
+/// Tells if a pattern of a parameter or a declaration binds `name`.
+fn pattern_binds(pattern: Node<'_>, name: &str, source: &[u8]) -> bool {
+    match pattern.kind() {
+        "identifier" | "shorthand_property_identifier_pattern" => {
+            source[pattern.byte_range()] == *name.as_bytes()
+        }
+        "assignment_pattern" | "object_assignment_pattern" => pattern
+            .child_by_field_name("left")
+            .is_some_and(|left| pattern_binds(left, name, source)),
+        "pair_pattern" => pattern
+            .child_by_field_name("value")
+            .is_some_and(|value| pattern_binds(value, name, source)),
+        "required_parameter" | "optional_parameter" => pattern
+            .child_by_field_name("pattern")
+            .is_some_and(|inner| pattern_binds(inner, name, source)),
+        "object_pattern" | "array_pattern" | "rest_pattern" | "formal_parameters" => {
+            let mut cursor = pattern.walk();
+            let found = pattern
+                .named_children(&mut cursor)
+                .any(|child| pattern_binds(child, name, source));
+            found
+        }
+        _ => false,
+    }
+}
+
+/// Tells if a parameter or a variable in scope at `node` has the name `name`.
+fn is_bound_at(node: Node<'_>, name: &str, source: &[u8]) -> bool {
+    let mut ancestor = node.parent();
+    while let Some(current) = ancestor {
+        let parameters = current
+            .child_by_field_name("parameters")
+            .or_else(|| current.child_by_field_name("parameter"));
+        if parameters.is_some_and(|parameters| pattern_binds(parameters, name, source)) {
+            return true;
+        }
+        if matches!(current.kind(), "statement_block" | "program") {
+            let mut cursor = current.walk();
+            let declared = current.named_children(&mut cursor).any(|statement| {
+                if !matches!(
+                    statement.kind(),
+                    "lexical_declaration" | "variable_declaration"
+                ) {
+                    return false;
+                }
+                let mut inner = statement.walk();
+                let found = statement
+                    .named_children(&mut inner)
+                    .filter_map(|declarator| declarator.child_by_field_name("name"))
+                    .any(|binding| pattern_binds(binding, name, source));
+                found
+            });
+            if declared {
+                return true;
+            }
+        }
+        ancestor = current.parent();
+    }
+    false
+}
+
 fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
     const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "global", "self"];
     let text =
@@ -1015,7 +1076,10 @@ fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
                 let object = target.and_then(|target| target.child_by_field_name("object"));
                 let property = target.and_then(|target| target.child_by_field_name("property"));
                 if let (Some(object), Some(property)) = (object, property) {
-                    if GLOBAL_OBJECTS.contains(&text(object).as_str()) {
+                    let object_name = text(object);
+                    if GLOBAL_OBJECTS.contains(&object_name.as_str())
+                        && !is_bound_at(node, &object_name, &parsed.source)
+                    {
                         names.insert(text(property));
                     }
                 }
