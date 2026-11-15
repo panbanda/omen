@@ -127,6 +127,10 @@ pub fn syntax_kinds(language: Language) -> Vec<(&'static str, Vec<&'static str>)
             ("member_declaration", syntax.declarations.to_vec()),
             ("member_access", syntax.accesses.to_vec()),
             ("member_implicit", syntax.implicit.to_vec()),
+            (
+                "member_type_parameter",
+                type_parameter_kinds(language).to_vec(),
+            ),
         ],
     }
 }
@@ -137,6 +141,174 @@ pub const DECLARATION: u8 = 4;
 pub const ACCESS: u8 = 8;
 pub const IMPLICIT: u8 = 16;
 pub const BOUNDARY: u8 = 32;
+pub const TYPE_PARAMETER: u8 = 64;
+
+/// The kinds of the nodes that declare a type parameter.
+fn type_parameter_kinds(language: Language) -> &'static [&'static str] {
+    match language {
+        Language::Go => &["type_parameter_declaration", "method_declaration"],
+        Language::Cpp => &[
+            "type_parameter_declaration",
+            "optional_type_parameter_declaration",
+            "variadic_type_parameter_declaration",
+        ],
+        Language::Python => &["type_parameter"],
+        Language::Java | Language::CSharp | Language::TypeScript | Language::Tsx => {
+            &["type_parameter"]
+        }
+        Language::Rust => &["type_parameter"],
+        _ => &[],
+    }
+}
+
+/// The ranges of the names that a type-parameter node declares.
+fn type_parameter_names(language: Language, node: Node<'_>) -> Vec<(usize, usize)> {
+    if node.kind() == "method_declaration" {
+        return receiver_type_parameters(node);
+    }
+    const NAMES: &[&str] = &["identifier", "type_identifier"];
+    if language == Language::Python {
+        // The node is the bracketed list. Each name is the first identifier of one entry.
+        let mut cursor = node.walk();
+        return node
+            .named_children(&mut cursor)
+            .filter_map(|entry| first_identifier(entry))
+            .map(range_of)
+            .collect();
+    }
+    for field in ["name", "left"] {
+        if let Some(name) = node.child_by_field_name(field) {
+            return vec![range_of(name)];
+        }
+    }
+    let mut cursor = node.walk();
+    let mut names = node
+        .named_children(&mut cursor)
+        .filter(|child| NAMES.contains(&child.kind()))
+        .map(range_of);
+    if language == Language::Go {
+        names.collect()
+    } else {
+        names.next().into_iter().collect()
+    }
+}
+
+fn first_identifier(node: Node<'_>) -> Option<Node<'_>> {
+    if node.kind() == "identifier" {
+        return Some(node);
+    }
+    let mut cursor = node.walk();
+    let found = node
+        .named_children(&mut cursor)
+        .find_map(|child| first_identifier(child));
+    found
+}
+
+/// The scopes of the type parameters of a file, by name. For the scopes of
+/// one name, sorted by start, a scope contains a range when its start is not
+/// after the range and its end is not before it. The largest end of the
+/// scopes that start before a position tells that, in one binary search.
+struct TypeParameterScopes<'a> {
+    by_name: HashMap<&'a [u8], Vec<ScopeEntry>>,
+}
+
+type ByteRange = (usize, usize);
+
+struct ScopeEntry {
+    start: usize,
+    /// The largest end of this scope and of the scopes before it.
+    farthest_end: usize,
+}
+
+impl<'a> TypeParameterScopes<'a> {
+    fn new(declared: &[(ByteRange, ByteRange)], source: &'a [u8]) -> Self {
+        let mut ranges: HashMap<&'a [u8], Vec<ByteRange>> = HashMap::new();
+        for ((from, to), scope) in declared {
+            ranges.entry(&source[*from..*to]).or_default().push(*scope);
+        }
+        let by_name = ranges
+            .into_iter()
+            .map(|(name, mut scopes)| {
+                scopes.sort_unstable();
+                let mut farthest_end = 0;
+                let entries = scopes
+                    .into_iter()
+                    .map(|(start, end)| {
+                        farthest_end = farthest_end.max(end);
+                        ScopeEntry {
+                            start,
+                            farthest_end,
+                        }
+                    })
+                    .collect();
+                (name, entries)
+            })
+            .collect();
+        Self { by_name }
+    }
+
+    /// Tells if a type parameter with the name is in scope over the bytes.
+    fn hides(&self, name: &[u8], start: usize, end: usize) -> bool {
+        let Some(entries) = self.by_name.get(name) else {
+            return false;
+        };
+        let before = entries.partition_point(|entry| entry.start <= start);
+        before > 0 && entries[before - 1].farthest_end >= end
+    }
+}
+
+/// The nodes that hold type parameters and are not the declaration in which they are in scope.
+const PARAMETER_LISTS: &[&str] = &[
+    "template_parameter_list",
+    "template_template_parameter_declaration",
+    "type_parameter_list",
+    "type_parameters",
+];
+
+/// The node in which a type parameter is in scope. The parameters of the
+/// inner list of a template template parameter are in scope in that list
+/// only, not in the name or the default argument of the parameter.
+fn declaration_scope<'tree>(ancestors: &[Node<'tree>]) -> Option<Node<'tree>> {
+    for (index, ancestor) in ancestors.iter().enumerate().rev() {
+        let inner_template_list = ancestor.kind() == "template_parameter_list"
+            && index > 0
+            && ancestors[index - 1].kind() == "template_template_parameter_declaration";
+        if inner_template_list || !PARAMETER_LISTS.contains(&ancestor.kind()) {
+            return Some(*ancestor);
+        }
+    }
+    None
+}
+
+/// The names that a Go receiver such as `(b *Box[T, U])` binds as type parameters.
+fn receiver_type_parameters(method: Node<'_>) -> Vec<(usize, usize)> {
+    let mut names = Vec::new();
+    let Some(receiver) = method.child_by_field_name("receiver") else {
+        return names;
+    };
+    let mut stack = vec![receiver];
+    while let Some(node) = stack.pop() {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "type_arguments" {
+                let mut inner = vec![child];
+                while let Some(argument) = inner.pop() {
+                    let mut walk = argument.walk();
+                    for part in argument.named_children(&mut walk) {
+                        if part.kind() == "type_identifier" {
+                            names.push(range_of(part));
+                        } else {
+                            inner.push(part);
+                        }
+                    }
+                }
+            } else {
+                stack.push(child);
+            }
+        }
+    }
+    names
+}
 
 /// The kinds of the expressions whose operator can add a decision point.
 const LOGICAL_KINDS: &[&str] = &["binary_expression", "logical_expression"];
@@ -161,6 +333,9 @@ pub fn kind_bits(language: Language, syntax: &ClassSyntax, kind: &str) -> u8 {
     }
     if syntax.implicit.contains(&kind) {
         bits |= IMPLICIT;
+    }
+    if type_parameter_kinds(language).contains(&kind) {
+        bits |= TYPE_PARAMETER;
     }
     bits
 }
@@ -231,6 +406,13 @@ pub struct Recorder {
     decisions: Vec<usize>,
     boundaries: Vec<(usize, usize)>,
     uses: Vec<RawUse>,
+    /// The range of each type-parameter name, and the range of the
+    /// declaration in which the parameter is in scope.
+    type_parameters: Vec<(ByteRange, ByteRange)>,
+    /// For the name of each type parameter read so far, the largest end of
+    /// the declarations that have it. The walk is in source order, thus a
+    /// declaration that ends after a node and was read before it contains it.
+    declared_ends: HashMap<Vec<u8>, usize>,
     pub blocks: Vec<PendingBlock>,
 }
 
@@ -263,9 +445,19 @@ impl Recorder {
                 decisions: Vec::new(),
                 boundaries: Vec::new(),
                 uses: Vec::new(),
+                type_parameters: Vec::new(),
+                declared_ends: HashMap::new(),
                 blocks: Vec::new(),
             }),
         }
+    }
+
+    /// Tells if a type parameter with the name was declared before the walk
+    /// reached a node that ends at `end`, in a declaration that contains it.
+    pub fn is_type_parameter_in_scope(&self, name: &str, end: usize) -> bool {
+        self.declared_ends
+            .get(name.as_bytes())
+            .is_some_and(|farthest| *farthest >= end)
     }
 
     /// Records the node. `bits` are the roles of the kind of the node.
@@ -282,6 +474,23 @@ impl Recorder {
         }
         if bits & BOUNDARY != 0 {
             self.boundaries.push(range_of(node));
+        }
+        if bits & TYPE_PARAMETER != 0 {
+            let declaration = match node.kind() {
+                "method_declaration" => Some(node),
+                _ => declaration_scope(ancestors),
+            };
+            if let Some(declaration) = declaration {
+                for name in type_parameter_names(self.language, node) {
+                    let (_, end) = range_of(declaration);
+                    let farthest = self
+                        .declared_ends
+                        .entry(source[name.0..name.1].to_vec())
+                        .or_insert(0);
+                    *farthest = (*farthest).max(end);
+                    self.type_parameters.push((name, range_of(declaration)));
+                }
+            }
         }
         let Some(scope) = scopes
             .iter()
@@ -428,6 +637,7 @@ impl Recorder {
             .map(|name| strip_sigil(language, name))
             .collect();
 
+        let type_parameters = TypeParameterScopes::new(&self.type_parameters, source);
         let mut pool: HashMap<&str, SharedStr> = HashMap::new();
         let mut seen: HashSet<(u8, u32, &str)> = HashSet::new();
         let mut facts = MemberFacts {
@@ -445,7 +655,8 @@ impl Recorder {
             let name = strip_sigil(language, name);
             let (slot, kind) = match raw.kind {
                 UseKind::Reference => {
-                    if !is_valid_class_reference(name, language) {
+                    let type_parameter = type_parameters.hides(name.as_bytes(), raw.start, raw.end);
+                    if type_parameter || !is_valid_class_reference(name, language) {
                         continue;
                     }
                     (0u8, UseKind::Reference)
@@ -820,12 +1031,7 @@ pub fn bases(language: Language, node: Node<'_>, source: &[u8]) -> Vec<String> {
             let mut cursor = bases.walk();
             let names = bases
                 .named_children(&mut cursor)
-                .filter(|base| {
-                    !matches!(
-                        base.kind(),
-                        "argument_list" | "primary_constructor_base_type"
-                    )
-                })
+                .filter(|base| base.kind() != "argument_list")
                 .map(|base| simple_type_name(text(base, source)))
                 .filter(|name| !name.is_empty())
                 .collect();
@@ -928,4 +1134,39 @@ fn is_primitive_type(name: &str) -> bool {
             | "this"
             | "super"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nested_scopes_of_one_name_are_looked_up_in_logarithmic_time_at(
+        size: usize,
+    ) -> std::time::Duration {
+        let depth = size;
+        let source = b"T";
+        let declared: Vec<(ByteRange, ByteRange)> = (0..depth)
+            .map(|level| ((0, 1), (level, 2 * depth - level)))
+            .collect();
+        let scopes = TypeParameterScopes::new(&declared, source);
+        let started = std::time::Instant::now();
+        for level in 0..depth - 1 {
+            let position = 2 * depth - level - 1;
+            assert!(scopes.hides(b"T", position, position + 1) || level == 0);
+        }
+        assert!(!scopes.hides(b"T", 2 * depth + 5, 2 * depth + 6));
+        started.elapsed()
+    }
+
+    #[test]
+    fn test_nested_scopes_of_one_name_are_looked_up_in_logarithmic_time() {
+        nested_scopes_of_one_name_are_looked_up_in_logarithmic_time_at(2_000);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_scopes_of_one_name_are_looked_up_in_logarithmic_time() {
+        let elapsed = nested_scopes_of_one_name_are_looked_up_in_logarithmic_time_at(400_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
 }

@@ -201,6 +201,9 @@ struct Resolver<'a> {
     rebound: std::collections::HashSet<(Family, &'a str)>,
     /// The lower case names of the PHP symbols. PHP names of functions and classes ignore case.
     php_names: std::collections::HashSet<String>,
+    /// For each file, the positions of the constructors, by the name of the
+    /// type that contains them.
+    constructors_by_container: Vec<HashMap<&'a str, Vec<usize>>>,
     by_name: HashMap<&'a str, Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
@@ -272,13 +275,34 @@ impl<'a> Resolver<'a> {
             .iter()
             .filter(|facts| facts.language == Language::Php)
             .flat_map(|facts| facts.symbols.iter())
+            .filter(|symbol| {
+                !matches!(
+                    symbol.kind,
+                    SymbolKind::Field | SymbolKind::Constant | SymbolKind::Variable
+                )
+            })
             .map(|symbol| symbol.name.to_ascii_lowercase())
+            .collect();
+        let constructors_by_container = files
+            .iter()
+            .map(|facts| {
+                let mut by_container: HashMap<&str, Vec<usize>> = HashMap::new();
+                for (position, symbol) in facts.symbols.iter().enumerate() {
+                    if let (SymbolKind::Constructor, Some(container)) =
+                        (symbol.kind, symbol.container.as_deref())
+                    {
+                        by_container.entry(container).or_default().push(position);
+                    }
+                }
+                by_container
+            })
             .collect();
         Self {
             files,
             manifests,
             rebound,
             php_names,
+            constructors_by_container,
             by_name,
             by_file,
             locals_by_name,
@@ -781,8 +805,12 @@ impl<'a> Resolver<'a> {
     fn own_constructors(&self, owner: Id, arity: usize) -> Vec<Id> {
         let type_symbol = self.symbol(owner);
         let owner_path = self.member_path(owner);
-        let found: Vec<Id> = (0..self.files[owner.0].symbols.len())
-            .map(|position| (owner.0, position))
+        let in_file = self.constructors_by_container[owner.0]
+            .get(type_symbol.name.as_str())
+            .map_or(&[][..], Vec::as_slice);
+        let found: Vec<Id> = in_file
+            .iter()
+            .map(|position| (owner.0, *position))
             .chain(
                 self.named(&type_symbol.name, owner.0)
                     .filter(|id| id.0 != owner.0 && self.symbol(*id).receiver_type.is_some()),
@@ -1963,6 +1991,14 @@ impl<'a> Resolver<'a> {
             } else {
                 self.types(name, reference.qualifier.as_deref(), file)
             };
+            let nullable = facts.reference_facts[position].nullable_target;
+            let only_classes = !types.is_empty()
+                && types
+                    .iter()
+                    .all(|owner| self.symbol(*owner).kind == SymbolKind::Class);
+            if nullable && !only_classes {
+                return Outcome::none(Status::Unresolved);
+            }
             let found: Vec<Id> = types
                 .iter()
                 .flat_map(|owner| self.constructors(*owner, arity))

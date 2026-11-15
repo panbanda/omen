@@ -786,3 +786,434 @@ fn test_analyzer_does_not_parse_source() {
         );
     }
 }
+
+#[test]
+fn test_csharp_record_primary_base_is_the_parent() {
+    let source = "record Root(int X);\nrecord Child(int X) : Root(X);\n";
+    let analysis = analyze(&[("Records.cs", source)]);
+    let child = class(&analysis, "Child");
+    assert_eq!(child.parent_class.as_deref(), Some("Root"));
+    assert_eq!(child.dit, 1);
+    assert_eq!(class(&analysis, "Root").noc, 1);
+}
+
+#[test]
+fn test_go_type_parameter_that_shadows_a_package_type_is_not_coupling() {
+    let source = "package p\n\ntype T struct{}\n\ntype Box[T any] struct {\n\tvalue T\n}\n";
+    let analysis = analyze(&[("box.go", source)]);
+    assert_eq!(class(&analysis, "Box").cbo, 0);
+}
+
+#[test]
+fn test_every_form_of_type_parameter_shadows_a_class() {
+    let cases = [
+        (
+            "default.cpp",
+            "class Item {};\ntemplate<class Item = int>\nclass Box {\n    Item value;\n};\n",
+        ),
+        (
+            "variadic.cpp",
+            "class Item {};\ntemplate<typename... Item>\nclass Box {\n    Item* value;\n};\n",
+        ),
+        (
+            "template.cpp",
+            "class Item {};\ntemplate<template<class> class Item>\nclass Box {\n    Item<int> value;\n};\n",
+        ),
+        (
+            "class.py",
+            "class Item:\n    pass\n\nclass Box[Item]:\n    def get(self, value: Item) -> Item:\n        return value\n",
+        ),
+        (
+            "method.py",
+            "class Item:\n    pass\n\nclass Box:\n    def get[Item](self, value: Item) -> Item:\n        return value\n",
+        ),
+    ];
+    let mut failed = Vec::new();
+    for (file, source) in cases {
+        let analysis = analyze(&[(file, source)]);
+        if class(&analysis, "Box").cbo != 0 {
+            failed.push(file);
+        }
+    }
+    assert!(failed.is_empty(), "coupled to a type parameter: {failed:?}");
+}
+
+#[test]
+fn test_inner_template_template_parameter_is_not_in_scope_in_the_class() {
+    let source = "class Item {};\n\ntemplate<template<class Item> class Holder>\nclass Box {\n    Item value;\n};\n";
+    let analysis = analyze(&[("box.cpp", source)]);
+    assert_eq!(class(&analysis, "Box").cbo, 1);
+}
+
+fn many_type_parameters_and_references_are_read_in_linear_time_at(
+    size: usize,
+) -> std::time::Duration {
+    let count = size;
+    let parameters: Vec<String> = (0..count).map(|index| format!("Param{index}")).collect();
+    let mut source = format!("class Item {{}}\nclass Big<{}> {{\n", parameters.join(", "));
+    for index in 0..count {
+        source.push_str(&format!("    Param{index} field{index};\n"));
+    }
+    source.push_str("    Item shared;\n}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Big.java", &source)]);
+    assert_eq!(class(&analysis, "Big").cbo, 1);
+    started.elapsed()
+}
+
+#[test]
+fn test_many_type_parameters_and_references_are_read_in_linear_time() {
+    many_type_parameters_and_references_are_read_in_linear_time_at(2_000);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_many_type_parameters_and_references_are_read_in_linear_time() {
+    let elapsed = many_type_parameters_and_references_are_read_in_linear_time_at(300_000);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
+#[test]
+fn test_inner_template_parameter_is_not_in_scope_in_the_default_argument() {
+    let source = "template<class> class Item {};\n\nclass Box {\n    template<template<class Item> class Holder = Item>\n    void make();\n};\n";
+    let analysis = analyze(&[("box.cpp", source)]);
+    assert_eq!(class(&analysis, "Box").cbo, 1);
+}
+
+#[test]
+fn test_go_receiver_type_parameters_are_in_scope_in_the_method() {
+    let source = "package p\n\ntype T struct{}\n\ntype Box[T any] struct {\n\tvalue T\n}\n\nfunc (b Box[T]) Get() T {\n\treturn b.value\n}\n\nfunc (b *Box[T]) Put(next T) {\n\tb.value = next\n}\n";
+    let analysis = analyze(&[("box.go", source)]);
+    assert_eq!(class(&analysis, "Box").cbo, 0);
+}
+
+#[test]
+fn test_type_parameter_that_shadows_a_class_is_not_coupling() {
+    let cases = [
+        (
+            "Box.java",
+            "class Item {}\nclass Box<Item> {\n    Item value;\n}\n",
+        ),
+        (
+            "Box.cs",
+            "class Item {}\nclass Box<Item> {\n    Item value;\n}\n",
+        ),
+        (
+            "box.ts",
+            "class Item {}\nclass Box<Item> {\n    value: Item;\n}\n",
+        ),
+        (
+            "box.rs",
+            "struct Item;\nstruct Box<Item> {\n    value: Item,\n}\n",
+        ),
+        (
+            "box.cpp",
+            "class Item {};\ntemplate <typename Item>\nclass Box {\n    Item value;\n};\n",
+        ),
+    ];
+    for (file, source) in cases {
+        let analysis = analyze(&[(file, source)]);
+        assert_eq!(class(&analysis, "Box").cbo, 0, "{file}");
+    }
+}
+
+#[test]
+fn test_csharp_target_typed_new_counts_as_construction() {
+    let source = "class Part {}\n\nclass Factory {\n    Part Make() { return new(); }\n}\n";
+    let analysis = analyze(&[("Factory.cs", source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+}
+
+#[test]
+fn test_csharp_target_typed_new_into_a_nullable_value_type_is_not_a_construction() {
+    let cases = [
+        (
+            "struct.cs",
+            "struct Part {\n    public Part() {}\n}\n\nclass Factory {\n    Part? Make() => new();\n}\n",
+            1,
+        ),
+        (
+            "unknown.cs",
+            "class Factory {\n    Part? Make() => new();\n}\n",
+            1,
+        ),
+        (
+            "class.cs",
+            "class Part {}\n\nclass Factory {\n    Part? Make() => new();\n}\n",
+            2,
+        ),
+    ];
+    let mut failed = Vec::new();
+    for (file, source, rfc) in cases {
+        let analysis = analyze(&[(file, source)]);
+        if class(&analysis, "Factory").rfc != rfc {
+            failed.push(file);
+        }
+    }
+    assert!(failed.is_empty(), "wrong rfc: {failed:?}");
+}
+
+#[test]
+fn test_csharp_target_typed_new_under_a_type_parameter_abstains() {
+    let cases = [
+        "class Part {}\n\nclass Factory<Part> where Part : struct {\n    Part? Make() => new();\n}\n",
+        "class Part {}\n\nclass Factory<Part> where Part : new() {\n    Part Make() => new();\n}\n",
+        "class Part {}\n\nclass Factory {\n    Part Make<Part>() where Part : new() => new();\n}\n",
+    ];
+    let mut failed = Vec::new();
+    for (position, source) in cases.iter().enumerate() {
+        let analysis = analyze(&[("Factory.cs", source)]);
+        if class(&analysis, "Factory").rfc != 1 {
+            failed.push(position);
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "constructed a type parameter: {failed:?}"
+    );
+}
+
+fn csharp_target_typed_new_in_a_class_with_many_methods_is_linear_at(
+    size: usize,
+) -> std::time::Duration {
+    let methods = size as u32;
+    let mut source = String::from("class Part {}\n\nclass Factory<T> {\n");
+    for index in 0..methods {
+        source.push_str(&format!(
+            "    void Make{index}() {{ Part part = new(); }}\n"
+        ));
+    }
+    source.push_str("}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Factory.cs", &source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, methods + 1);
+    started.elapsed()
+}
+
+#[test]
+fn test_csharp_target_typed_new_in_a_class_with_many_methods_is_linear() {
+    csharp_target_typed_new_in_a_class_with_many_methods_is_linear_at(2_000);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_target_typed_new_in_a_class_with_many_methods_is_linear() {
+    let elapsed = csharp_target_typed_new_in_a_class_with_many_methods_is_linear_at(30_000);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
+fn csharp_target_typed_new_in_a_class_with_many_members_at(
+    size: usize,
+    member: &str,
+) -> std::time::Duration {
+    let mut source = String::from("class Part {}\n\nclass Factory<T> {\n");
+    for index in 0..size {
+        source.push_str(&member.replace("{n}", &index.to_string()));
+        source.push('\n');
+    }
+    source.push_str("}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Factory.cs", &source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 1);
+    started.elapsed()
+}
+
+const FIELD_WITH_NEW: &str = "    Part part{n} = new();";
+const PROPERTY_WITH_NEW: &str = "    Part Part{n} { get; } = new();";
+
+#[test]
+fn test_csharp_target_typed_new_in_fields_and_properties_is_linear() {
+    csharp_target_typed_new_in_a_class_with_many_members_at(2_000, FIELD_WITH_NEW);
+    csharp_target_typed_new_in_a_class_with_many_members_at(2_000, PROPERTY_WITH_NEW);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_target_typed_new_in_fields_is_linear() {
+    let elapsed = csharp_target_typed_new_in_a_class_with_many_members_at(200_000, FIELD_WITH_NEW);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_target_typed_new_in_properties_is_linear() {
+    let elapsed =
+        csharp_target_typed_new_in_a_class_with_many_members_at(200_000, PROPERTY_WITH_NEW);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
+fn csharp_many_returned_new_in_one_method_at(size: usize, header: &str, rfc: u32) -> Duration {
+    let mut source = format!("class Part {{}}\n\nclass Factory {{\n    {header} {{\n");
+    for _ in 0..size {
+        source.push_str("        if (true) return new();\n");
+    }
+    source.push_str("        return null;\n    }\n}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Factory.cs", &source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, rfc, "{header}");
+    started.elapsed()
+}
+
+type Duration = std::time::Duration;
+
+#[test]
+fn test_csharp_returned_new_in_one_method_depends_on_async() {
+    csharp_many_returned_new_in_one_method_at(2_000, "Part Make()", 2);
+    csharp_many_returned_new_in_one_method_at(2_000, "async Task<Part> Make()", 1);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_returned_new_in_one_method_is_linear() {
+    let elapsed = csharp_many_returned_new_in_one_method_at(50_000, "Part Make()", 2);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
+fn csharp_returned_new_in_a_method_with_many_attributes_at(size: usize) -> Duration {
+    let mut source = String::from("class Part {}\n\nclass Factory {\n");
+    for _ in 0..size {
+        source.push_str("    [System.Obsolete]\n");
+    }
+    source.push_str("    Part Make() {\n");
+    for _ in 0..size {
+        source.push_str("        if (true) return new();\n");
+    }
+    source.push_str("        return null;\n    }\n}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Factory.cs", &source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+    started.elapsed()
+}
+
+#[test]
+fn test_csharp_returned_new_in_a_method_with_many_attributes() {
+    csharp_returned_new_in_a_method_with_many_attributes_at(2_000);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_returned_new_in_a_method_with_many_attributes_is_linear() {
+    let elapsed = csharp_returned_new_in_a_method_with_many_attributes_at(20_000);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
+fn csharp_target_typed_new_in_deeply_nested_blocks_is_linear_at(
+    size: usize,
+) -> std::time::Duration {
+    let depth = size;
+    let mut source = String::from("class Part {}\n\nclass Factory<T> {\n    void Make() {\n");
+    for _ in 0..depth {
+        source.push_str("{ Part part = new();\n");
+    }
+    source.push_str(&"}".repeat(depth));
+    source.push_str("\n    }\n}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Factory.cs", &source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+    started.elapsed()
+}
+
+#[test]
+fn test_csharp_target_typed_new_in_deeply_nested_blocks_is_linear() {
+    csharp_target_typed_new_in_deeply_nested_blocks_is_linear_at(2_000);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_target_typed_new_in_deeply_nested_blocks_is_linear() {
+    let elapsed = csharp_target_typed_new_in_deeply_nested_blocks_is_linear_at(5_000);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
+fn csharp_returned_new_in_deeply_nested_blocks_is_linear_at(size: usize) -> std::time::Duration {
+    let depth = size;
+    let mut source = String::from("class Part {}\n\nclass Factory {\n    Part Make() {\n");
+    for _ in 0..depth {
+        source.push_str("{ if (true) return new();\n");
+    }
+    source.push_str(&"}".repeat(depth));
+    source.push_str("\n    }\n}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Factory.cs", &source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+    started.elapsed()
+}
+
+#[test]
+fn test_csharp_returned_new_in_deeply_nested_blocks_is_linear() {
+    csharp_returned_new_in_deeply_nested_blocks_is_linear_at(2_000);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_returned_new_in_deeply_nested_blocks_is_linear() {
+    let elapsed = csharp_returned_new_in_deeply_nested_blocks_is_linear_at(5_000);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
+#[test]
+fn test_csharp_qualified_type_is_not_hidden_by_a_type_parameter() {
+    let source = "namespace Repo {\n    class Part {}\n}\n\nclass Factory<Part> where Part : struct {\n    Repo.Part? Make() => new();\n}\n";
+    let analysis = analyze(&[("Factory.cs", source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+}
+
+#[test]
+fn test_csharp_nullable_target_typed_new_is_decided_by_the_repository_kinds() {
+    let factory = "class Factory {\n    Part? Make() => new();\n}\n";
+    let cases = [
+        ("class Part {}\n", 2),
+        ("record Part(int X);\n", 2),
+        ("struct Part {}\n", 1),
+        ("record struct Part(int X);\n", 1),
+        ("class Part {}\nstruct Part2 {}\n", 2),
+    ];
+    let mut failed = Vec::new();
+    for (part, rfc) in cases {
+        let analysis = analyze(&[("Part.cs", part), ("Factory.cs", factory)]);
+        if class(&analysis, "Factory").rfc != rfc {
+            failed.push(part);
+        }
+    }
+    assert!(failed.is_empty(), "wrong rfc: {failed:?}");
+}
+
+#[test]
+fn test_csharp_target_typed_new_has_the_range_of_the_new_expression() {
+    let source = "class Part {}\n\nclass Factory {\n    Part Make()\n    {\n        return new();\n    }\n}\n";
+    let read = |_: &Path| Ok(source.as_bytes().to_vec());
+    let list = |_: &Path| -> Vec<PathBuf> { Vec::new() };
+    let files = vec![PathBuf::from("Factory.cs")];
+    let index = CodeIndex::build(Path::new("."), &files, &read, &list);
+    let constructions: Vec<_> = index.files[0]
+        .references
+        .iter()
+        .filter(|reference| reference.name == "Part")
+        .collect();
+    assert_eq!(constructions.len(), 1);
+    assert_eq!(constructions[0].name_range.start_line, 6);
+    assert_eq!(constructions[0].name_range.start_column, 15);
+}
+
+#[test]
+fn test_csharp_target_typed_new_reads_the_declared_type() {
+    let declared = [
+        "Part Make() => new();",
+        "void Make() { Part part = new(); }",
+        "Part? Make() { return new(); }",
+    ];
+    for member in declared {
+        let source = format!("class Part {{}}\n\nclass Factory {{\n    {member}\n}}\n");
+        let analysis = analyze(&[("Factory.cs", &source)]);
+        assert_eq!(class(&analysis, "Factory").rfc, 2, "{member}");
+    }
+    let abstained = [
+        "async Task<Part> Make() { return new(); }",
+        "Part Make(Part other) { return other ?? new(); }",
+    ];
+    for member in abstained {
+        let source = format!("class Part {{}}\n\nclass Factory {{\n    {member}\n}}\n");
+        let analysis = analyze(&[("Factory.cs", &source)]);
+        assert_eq!(class(&analysis, "Factory").rfc, 1, "{member}");
+    }
+}

@@ -39,6 +39,12 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
+      # The tests with a `timing_` prefix check that an analysis of a large input is
+      # linear. A slow runner can fail them in debug mode, thus they run in release mode.
+      - name: Run timing tests
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --release --all-features -- --ignored timing_
+
       - name: Build release
         run: cargo build --release
 

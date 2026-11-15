@@ -542,6 +542,7 @@ impl LanguageSpec for Cpp {
         };
         Some(Call {
             callee: Callee {
+                target: None,
                 name_node: type_node,
                 receiver: None,
                 qualifier: None,

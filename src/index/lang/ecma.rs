@@ -507,6 +507,10 @@ impl LanguageSpec for Ecma {
         }
     }
 
+    fn lambda_kinds(&self) -> &'static [&'static str] {
+        FUNCTION_VALUE_KINDS
+    }
+
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
         kinds.extend([FORMAL_PARAMETERS, FOR_IN_STATEMENT, ARROW_FUNCTION]);

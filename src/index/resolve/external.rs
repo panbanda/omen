@@ -704,7 +704,8 @@ impl<'a> Resolver<'a> {
             return false;
         }
         if self.files[scope.file].language == Language::Rust {
-            return !qualifier.contains('.')
+            return !self.is_rebound(scope.file, crate::index::extract::RUST_MACRO_IMPORT)
+                && !qualifier.contains('.')
                 && (RUST_ROOTS.contains(&head)
                     || RUST_RECEIVERS.contains(&head)
                     || self.is_declared_dependency(scope.file, head));
@@ -727,8 +728,10 @@ impl<'a> Resolver<'a> {
     /// The name is external only when the nearest `Cargo.toml` declares a
     /// dependency with the name. A macro can bind any other name.
     fn is_declared_dependency(&self, file: usize, head: &str) -> bool {
-        self.manifests
-            .declares_rust_dependency(&self.files[file].file, head)
+        !self.is_rebound(file, crate::index::extract::RUST_MACRO_IMPORT)
+            && self
+                .manifests
+                .declares_rust_dependency(&self.files[file].file, head)
             && !["crate", "self", "super"].contains(&head)
     }
 
@@ -1276,6 +1279,42 @@ mod tests {
     }
 
     #[test]
+    fn test_rust_dotted_path_dependency_is_not_external() {
+        let main = "fn run() {\n    local_alias::work();\n}\n";
+        let manifest = "[dependencies]\nlocal_alias.path = \"../local\"\nlocal_alias.package = \"local-pkg\"\n";
+        let files = [("src/main.rs", main), ("Cargo.toml", manifest)];
+        assert!(!external(&files, "src/main.rs", "work"));
+    }
+
+    #[test]
+    fn test_rust_macro_import_can_shadow_a_declared_dependency() {
+        let main = "mod local {\n    pub fn from_str(_: &str) {}\n}\n\nmacro_rules! bind_local {\n    () => { use crate::local as serde_json; }\n}\n\nbind_local!();\n\nfn run() {\n    serde_json::from_str(\"1\");\n}\n";
+        let manifest = "[dependencies]\nserde_json = \"1\"\n";
+        let files = [("src/main.rs", main), ("Cargo.toml", manifest)];
+        assert!(!external(&files, "src/main.rs", "from_str"));
+        let plain = "macro_rules! twice {\n    ($x:expr) => { $x + $x };\n}\n\nfn run() {\n    serde_json::from_str(\"1\");\n}\n";
+        let files = [("src/main.rs", plain), ("Cargo.toml", manifest)];
+        assert!(external(&files, "src/main.rs", "from_str"));
+    }
+
+    #[test]
+    fn test_rust_macro_arguments_and_std_heads_can_be_rebound() {
+        let manifest = "[dependencies]\nserde_json = \"1\"\n";
+        let invoked = "mod local {\n    pub fn from_str(_: &str) {}\n}\n\nmacro_rules! bind {\n    ($item:item) => { $item };\n}\n\nbind!(use crate::local as serde_json;);\n\nfn run() {\n    serde_json::from_str(\"1\");\n}\n";
+        let files = [("src/main.rs", invoked), ("Cargo.toml", manifest)];
+        assert!(!external(&files, "src/main.rs", "from_str"));
+        let std_head = "mod local {\n    pub fn swap() {}\n}\n\nmacro_rules! bind {\n    () => { use crate::local as std; }\n}\n\nbind!();\n\nfn run() {\n    std::swap();\n}\n";
+        assert!(!external(
+            &[("src/main.rs", std_head)],
+            "src/main.rs",
+            "swap"
+        ));
+        let quoted =
+            "fn run() {\n    println!(\"use this\");\n    std::mem::swap(&mut 1, &mut 2);\n}\n";
+        assert!(external(&[("src/main.rs", quoted)], "src/main.rs", "swap"));
+    }
+
+    #[test]
     fn test_rust_macro_can_bind_a_path_head() {
         let main = "mod local {\n    pub(crate) fn run() {}\n}\nmacro_rules! expose {\n    () => { use crate::local as generated; }\n}\nexpose!();\n\nfn main() {\n    generated::run();\n}\n";
         assert!(!external(&[("main.rs", main)], "main.rs", "run"));
@@ -1316,6 +1355,66 @@ mod tests {
             );
             assert!(!external(&[(file, app.as_str())], file, "fetch"), "{file}");
         }
+    }
+
+    #[test]
+    fn test_php_property_and_constant_names_are_case_sensitive() {
+        let app = "<?php\nclass Settings {\n    public string $STRLEN;\n    const STRPOS = 1;\n}\n\nfunction run(string $value): int {\n    return strlen($value) + strpos($value, 'a');\n}\n";
+        assert!(external(&[("app.php", app)], "app.php", "strlen"));
+        assert!(external(&[("app.php", app)], "app.php", "strpos"));
+    }
+
+    #[test]
+    fn test_parenthesized_arrow_parameter_does_not_shadow_the_name_after_the_arrow() {
+        for (file, source) in [
+            ("a.js", "const f = (Math) => Math.max(1);\nMath.max(2);\n"),
+            ("b.js", "consume((Math) => Math.max(1));\nMath.max(2);\n"),
+            (
+                "c.ts",
+                "const f = (Math: Maths) => Math.max(1);\nMath.max(2);\n",
+            ),
+        ] {
+            let found = statuses(&[(file, source)], file, "max");
+            assert_eq!(found.last().map(String::as_str), Some("External"), "{file}");
+        }
+    }
+
+    #[test]
+    fn test_assignment_to_a_local_named_like_the_global_object_is_not_a_rebinding() {
+        let parameter = "function install(globalThis) {\n  globalThis.fetch = localFetch;\n}\n\nfunction run() {\n  return fetch('/remote');\n}\n";
+        let variable = "function install() {\n  const window = {};\n  window.fetch = localFetch;\n}\n\nfunction run() {\n  return fetch('/remote');\n}\n";
+        let arrow = "const install = self => { self.fetch = localFetch; };\nfunction run() { return fetch('/remote'); }\n";
+        for (file, source) in [("a.js", parameter), ("b.ts", variable), ("c.js", arrow)] {
+            assert!(external(&[(file, source)], file, "fetch"), "{file}");
+        }
+    }
+
+    #[test]
+    fn test_single_lambda_parameter_does_not_shadow_the_name_outside_its_body() {
+        let javascript = "const callback = fetch => fetch('/local');\nfunction run() { return fetch('/remote'); }\n";
+        let csharp = "using System;\nclass Program {\n    void Callback() {\n        Action<string> action = Console => Console.WriteLine(\"a\");\n    }\n    void Run() {\n        Console.WriteLine(\"b\");\n    }\n}\n";
+        let java = "import java.util.function.Function;\nclass Main {\n    void callback() {\n        Function<String, Integer> parse = Integer -> Integer.length();\n    }\n    void run() {\n        Integer.parseInt(\"2\");\n    }\n}\n";
+        let mut failed = Vec::new();
+        let parenthesized =
+            "consume((fetch) => fetch('/local'));\nfunction run() { return fetch('/remote'); }\n";
+        let typescript = "consume((fetch: string) => fetch);\nconsume(function (fetch) { return fetch('/x'); });\nfunction run() { return fetch('/remote'); }\n";
+        let csharp_typed = "using System;\nclass Widget {}\nclass Program {\n    void Callback() {\n        Take((Widget Console) => Console.WriteLine(\"a\"));\n        Take(delegate (Widget Console) { Console.WriteLine(\"c\"); });\n        Console.WriteLine(\"b\");\n    }\n}\n";
+        let java_typed = "class Widget {}\nclass Main {\n    void callback() {\n        take((Widget Integer) -> Integer.length());\n        Integer.parseInt(\"2\");\n    }\n}\n";
+        for (file, source, name) in [
+            ("b.js", parenthesized, "fetch"),
+            ("c.ts", typescript, "fetch"),
+            ("Typed.cs", csharp_typed, "WriteLine"),
+            ("Typed.java", java_typed, "parseInt"),
+            ("a.js", javascript, "fetch"),
+            ("Program.cs", csharp, "WriteLine"),
+            ("Main.java", java, "parseInt"),
+        ] {
+            let found = statuses(&[(file, source)], file, name);
+            if found.last().map(String::as_str) != Some("External") {
+                failed.push(file);
+            }
+        }
+        assert!(failed.is_empty(), "shadowed outside the lambda: {failed:?}");
     }
 
     #[test]

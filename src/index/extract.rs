@@ -178,6 +178,9 @@ pub struct ReferenceFacts {
     /// `->` follows the receiver. In C and C++ this is a member of the
     /// object that a pointer names.
     pub arrow: bool,
+    /// A construction whose declared type is optional. The resolver gives it
+    /// a candidate only when each type of the repository with the name is a class.
+    pub nullable_target: bool,
 }
 
 /// The names of the value that an index expression reads: `c.items[i]`
@@ -288,11 +291,28 @@ pub struct Linked<'a> {
     pub facts: &'a LinkFacts,
 }
 
+/// A definition or a function value that a returned value belongs to. The
+/// walk reads its facts once, when it enters the node.
+#[derive(Debug, Clone, Copy)]
+pub struct ReturnOwner<'tree> {
+    pub node: Node<'tree>,
+    /// The owner is asynchronous, so that a returned value is not the result of the owner.
+    pub is_asynchronous: bool,
+    /// The node of the declared type of the result.
+    pub return_type: Option<Node<'tree>>,
+}
+
 pub struct Context<'a, 'tree> {
     /// The path of the file, as the keys have it.
     pub file: &'a str,
     pub source: &'a [u8],
     pub scopes: &'a [Scope<'tree>],
+    /// The ancestors of the node at which the walk is, the nearest last.
+    pub ancestors: &'a [Node<'tree>],
+    /// The nearest ancestor whose kind is one of `LanguageSpec::return_owner_kinds`.
+    pub return_owner: Option<ReturnOwner<'tree>>,
+    /// The members recorder of the file, which has the type parameters read so far.
+    pub members: Option<&'a Recorder>,
     /// The ID of the node at which the walk is, and the parent of that node.
     pub current: Option<(usize, Option<Node<'tree>>)>,
 }
@@ -447,6 +467,42 @@ pub trait LanguageSpec: Sync {
         Vec::new()
     }
 
+    /// The bytes in which the parameters that the node at `node` binds are
+    /// visible, when the node is a function value that opens no scope of its
+    /// own. Without a range, a parameter is visible in the whole owner.
+    fn parameter_block(
+        &self,
+        node: Node<'_>,
+        ancestors: &[Node<'_>],
+    ) -> Option<std::ops::Range<usize>> {
+        let nearest = std::iter::once(node).chain(ancestors.iter().rev().take(2).copied());
+        nearest
+            .filter(|candidate| self.lambda_kinds().contains(&candidate.kind()))
+            .map(|lambda| lambda.byte_range())
+            .next()
+    }
+
+    /// The node kinds of the definitions and function values that a returned
+    /// value belongs to. The walk keeps the nearest one for a construction
+    /// whose type the return type gives.
+    fn return_owner_kinds(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The facts of a return owner. The walk asks once for each owner.
+    fn return_owner<'tree>(&self, owner: Node<'tree>, _source: &[u8]) -> ReturnOwner<'tree> {
+        ReturnOwner {
+            node: owner,
+            is_asynchronous: false,
+            return_type: None,
+        }
+    }
+
+    /// The node kinds of the function values that have parameters of their own.
+    fn lambda_kinds(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Tells if the names that the declaration at `node` binds end with the
     /// nearest block.
     fn is_block_local(&self, _node: Node<'_>) -> bool {
@@ -592,6 +648,9 @@ struct Extractor<'a, 'tree> {
     facts_of_kinds: Vec<Option<KindFacts>>,
     /// The nodes that contain the current node, from the root.
     ancestors: Vec<Node<'tree>>,
+    return_owner_kinds: &'static [&'static str],
+    /// The ancestors that have a kind of `return_owner_kinds`, the nearest last.
+    return_owners: Vec<ReturnOwner<'tree>>,
     return_type_field: &'static str,
     /// Each call with its start byte, its owner, and its closure flag.
     calls: Vec<RawCall<'tree>>,
@@ -654,6 +713,9 @@ impl<'tree> Extractor<'_, 'tree> {
             file: self.file,
             source: self.source,
             scopes: &self.scopes,
+            ancestors: &self.ancestors,
+            return_owner: self.return_owners.last().copied(),
+            members: self.members.as_ref(),
             current: Some((node.id(), self.ancestors.last().copied())),
         };
         let name_node = match rule.name {
@@ -750,6 +812,9 @@ impl<'tree> Extractor<'_, 'tree> {
                 file: self.file,
                 source: self.source,
                 scopes: &self.scopes,
+                ancestors: &self.ancestors,
+                return_owner: self.return_owners.last().copied(),
+                members: self.members.as_ref(),
                 current: Some((node.id(), self.ancestors.last().copied())),
             };
             if imports {
@@ -766,6 +831,9 @@ impl<'tree> Extractor<'_, 'tree> {
                 file: self.file,
                 source: self.source,
                 scopes: &self.scopes,
+                ancestors: &self.ancestors,
+                return_owner: self.return_owners.last().copied(),
+                members: self.members.as_ref(),
                 current: Some((node.id(), self.ancestors.last().copied())),
             };
             let owner = self.owner();
@@ -779,10 +847,13 @@ impl<'tree> Extractor<'_, 'tree> {
                 let mut names = Vec::new();
                 self.spec.locals(node, &context, &mut names);
                 let block = self.block_of(node);
+                let parameter_block = self.spec.parameter_block(node, &self.ancestors);
                 self.locals.extend(names.into_iter().map(|name| {
-                    let block = (!name.is_parameter && name.visible.is_none())
-                        .then(|| block.clone())
-                        .flatten();
+                    let block = if name.is_parameter {
+                        parameter_block.clone()
+                    } else {
+                        (name.visible.is_none()).then(|| block.clone()).flatten()
+                    };
                     (name, owner, block)
                 }));
             }
@@ -823,6 +894,9 @@ impl<'tree> Extractor<'_, 'tree> {
                     file: self.file,
                     source: self.source,
                     scopes: &self.scopes,
+                    ancestors: &self.ancestors,
+                    return_owner: self.return_owners.last().copied(),
+                    members: self.members.as_ref(),
                     current: Some((node.id(), self.ancestors.last().copied())),
                 },
             ),
@@ -875,6 +949,10 @@ impl<'tree> Extractor<'_, 'tree> {
             let node = cursor.node();
             self.enter(node, depth);
             if cursor.goto_first_child() {
+                if self.return_owner_kinds.contains(&node.kind()) {
+                    let owner = self.spec.return_owner(node, self.source);
+                    self.return_owners.push(owner);
+                }
                 self.ancestors.push(node);
                 depth += 1;
                 continue;
@@ -887,7 +965,15 @@ impl<'tree> Extractor<'_, 'tree> {
                 if !cursor.goto_parent() {
                     return;
                 }
-                self.ancestors.pop();
+                if let Some(left) = self.ancestors.pop() {
+                    if self
+                        .return_owners
+                        .last()
+                        .is_some_and(|owner| owner.node.id() == left.id())
+                    {
+                        self.return_owners.pop();
+                    }
+                }
                 depth -= 1;
             }
         }
@@ -972,18 +1058,262 @@ pub fn link_files(files: &mut [FileSymbols]) {
 
 /// The names that a file binds again with a macro, an alias, an assignment to
 /// the global object, or a singleton class. These bindings are not symbols.
+/// Tells if a pattern of a parameter or a declaration binds `name`.
+fn pattern_binds(pattern: Node<'_>, name: &str, source: &[u8]) -> bool {
+    match pattern.kind() {
+        "identifier" | "shorthand_property_identifier_pattern" => {
+            source[pattern.byte_range()] == *name.as_bytes()
+        }
+        "assignment_pattern" | "object_assignment_pattern" => pattern
+            .child_by_field_name("left")
+            .is_some_and(|left| pattern_binds(left, name, source)),
+        "pair_pattern" => pattern
+            .child_by_field_name("value")
+            .is_some_and(|value| pattern_binds(value, name, source)),
+        "required_parameter" | "optional_parameter" => pattern
+            .child_by_field_name("pattern")
+            .is_some_and(|inner| pattern_binds(inner, name, source)),
+        "object_pattern" | "array_pattern" | "rest_pattern" | "formal_parameters" => {
+            let mut cursor = pattern.walk();
+            let found = pattern
+                .named_children(&mut cursor)
+                .any(|child| pattern_binds(child, name, source));
+            found
+        }
+        _ => false,
+    }
+}
+
+/// The names of the global objects of ECMAScript.
+const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "global", "self"];
+
+/// The node kinds whose body is the scope of a `var`, besides the program.
+/// The parameters of such a node are outside this scope.
+const VARIABLE_SCOPES: [&str; 7] = [
+    "function_declaration",
+    "function_expression",
+    "generator_function",
+    "generator_function_declaration",
+    "arrow_function",
+    "method_definition",
+    "class_static_block",
+];
+
+/// The node kinds that the global object name check reads.
+pub fn rebound_scope_kinds(language: Language) -> Vec<&'static str> {
+    match language {
+        Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx => {
+            let mut kinds = VARIABLE_SCOPES.to_vec();
+            kinds.extend([
+                "program",
+                "statement_block",
+                "for_in_statement",
+                "for_statement",
+                "lexical_declaration",
+                "variable_declaration",
+                "import_statement",
+                "import_clause",
+                "namespace_import",
+                "import_specifier",
+                "export_statement",
+                "assignment_expression",
+                "member_expression",
+            ]);
+            if matches!(language, Language::TypeScript | Language::Tsx) {
+                kinds.extend(["import_alias", "import_require_clause"]);
+            }
+            kinds
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Gives each local name that an `import` statement binds: the default
+/// import, the namespace, and each named import under its alias.
+fn import_bindings(statement: Node<'_>, mark: &mut dyn FnMut(Node<'_>)) {
+    let mut stack = vec![statement];
+    while let Some(current) = stack.pop() {
+        let mut cursor = current.walk();
+        for child in current.named_children(&mut cursor) {
+            match (current.kind(), child.kind()) {
+                ("import_clause" | "namespace_import" | "import_require_clause", "identifier") => {
+                    mark(child);
+                }
+                ("import_specifier", _) => {
+                    let local = current
+                        .child_by_field_name("alias")
+                        .or_else(|| current.child_by_field_name("name"));
+                    if let Some(local) = local {
+                        mark(local);
+                    }
+                    break;
+                }
+                _ => stack.push(child),
+            }
+        }
+    }
+}
+
+/// Gives the name that a TypeScript `import name = Entity;` binds.
+fn import_alias_binding(alias: Node<'_>, mark: &mut dyn FnMut(Node<'_>)) {
+    if let Some(name) = alias
+        .named_child(0)
+        .filter(|name| name.kind() == "identifier")
+    {
+        mark(name);
+    }
+}
+
+/// The global object names that a scope node binds, one bit for each name of
+/// `GLOBAL_OBJECTS`: its parameters, the `let` and `const` variables of its
+/// block, the variable of a loop, the parameter of a `catch` clause, and, for
+/// a function or the program, each `var` that its body declares. A nested
+/// function has its own `var` names.
+fn scope_bindings(scope: Node<'_>, parent: Option<Node<'_>>, source: &[u8]) -> u8 {
+    let mut mask = 0u8;
+    let mut mark = |pattern: Node<'_>| {
+        for (bit, name) in GLOBAL_OBJECTS.iter().enumerate() {
+            if pattern_binds(pattern, name, source) {
+                mask |= 1 << bit;
+            }
+        }
+    };
+    let declarators = |declaration: Node<'_>, mark: &mut dyn FnMut(Node<'_>)| {
+        let mut cursor = declaration.walk();
+        for declarator in declaration.named_children(&mut cursor) {
+            if let Some(binding) = declarator.child_by_field_name("name") {
+                mark(binding);
+            }
+        }
+    };
+    let parameters = scope
+        .child_by_field_name("parameters")
+        .or_else(|| scope.child_by_field_name("parameter"));
+    if let Some(parameters) = parameters {
+        mark(parameters);
+    }
+    match scope.kind() {
+        "statement_block" | "program" => {
+            let mut cursor = scope.walk();
+            for statement in scope.named_children(&mut cursor) {
+                if statement.kind() == "lexical_declaration" {
+                    declarators(statement, &mut mark);
+                } else if statement.kind() == "import_statement" {
+                    import_bindings(statement, &mut mark);
+                } else if statement.kind() == "import_alias" {
+                    import_alias_binding(statement, &mut mark);
+                } else if statement.kind() == "export_statement" {
+                    let mut inner = statement.walk();
+                    for exported in statement.named_children(&mut inner) {
+                        if exported.kind() == "import_alias" {
+                            import_alias_binding(exported, &mut mark);
+                        }
+                    }
+                }
+            }
+        }
+        "for_in_statement" => {
+            let declares_variable = scope
+                .child_by_field_name("kind")
+                .is_some_and(|kind| source[kind.byte_range()] != *b"var");
+            if declares_variable {
+                if let Some(left) = scope.child_by_field_name("left") {
+                    mark(left);
+                }
+            }
+        }
+        "for_statement" => {
+            let initializer = scope
+                .child_by_field_name("initializer")
+                .filter(|initializer| initializer.kind() == "lexical_declaration");
+            if let Some(initializer) = initializer {
+                declarators(initializer, &mut mark);
+            }
+        }
+        _ => {}
+    }
+    let is_body = scope.kind() == "statement_block"
+        && parent.is_some_and(|parent| VARIABLE_SCOPES.contains(&parent.kind()));
+    if is_body || scope.kind() == "program" {
+        let mut stack = vec![scope];
+        while let Some(current) = stack.pop() {
+            let mut cursor = current.walk();
+            for child in current.named_children(&mut cursor) {
+                if VARIABLE_SCOPES.contains(&child.kind()) {
+                    continue;
+                }
+                match child.kind() {
+                    "variable_declaration" => declarators(child, &mut mark),
+                    "for_in_statement" => {
+                        let is_var = child
+                            .child_by_field_name("kind")
+                            .is_some_and(|kind| source[kind.byte_range()] == *b"var");
+                        if let (true, Some(left)) = (is_var, child.child_by_field_name("left")) {
+                            mark(left);
+                        }
+                    }
+                    _ => {}
+                }
+                stack.push(child);
+            }
+        }
+    }
+    mask
+}
+
+/// The name that stands in the rebound names for a Rust `macro_rules!` whose
+/// body has a `use` or an `extern crate`. The macro can bind any crate name.
+pub const RUST_MACRO_IMPORT: &str = "<macro import>";
+
+/// Tells if the tokens of a macro, outside string and character literals,
+/// have `use` or `extern crate`.
+fn has_import_tokens(node: Node<'_>, source: &[u8]) -> bool {
+    let mut tokens: Vec<(usize, &[u8])> = Vec::new();
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        if current.kind().contains("literal") || current.kind() == "string_content" {
+            continue;
+        }
+        if current.child_count() == 0 {
+            tokens.push((current.start_byte(), &source[current.byte_range()]));
+            continue;
+        }
+        let mut cursor = current.walk();
+        stack.extend(current.children(&mut cursor));
+    }
+    tokens.sort_unstable_by_key(|(start, _)| *start);
+    tokens
+        .windows(2)
+        .any(|pair| pair[0].1 == b"use" || (pair[0].1 == b"extern" && pair[1].1 == b"crate"))
+        || tokens.last().is_some_and(|last| last.1 == b"use")
+}
+
 fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
-    const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "global", "self"];
+    // The walk is in source order. `path` holds the ancestors of the node, and
+    // `bound[level]` the global object names that `path[..=level]` bind. The
+    // tree-sitter parent of a node costs the depth of the node.
+    let mut path: Vec<Node<'_>> = Vec::new();
+    let mut bound: Vec<u8> = Vec::new();
     let text =
         |node: Node<'_>| String::from_utf8_lossy(&parsed.source[node.byte_range()]).to_string();
     let mut names = BTreeSet::new();
-    let mut stack = vec![parsed.root_node()];
-    while let Some(node) = stack.pop() {
+    let mut stack = vec![(parsed.root_node(), 0usize)];
+    while let Some((node, depth)) = stack.pop() {
+        path.truncate(depth);
+        bound.truncate(depth);
         let mut cursor = node.walk();
-        stack.extend(node.named_children(&mut cursor));
+        stack.extend(
+            node.named_children(&mut cursor)
+                .map(|child| (child, depth + 1)),
+        );
         match (parsed.language, node.kind()) {
             (Language::C | Language::Cpp, "preproc_def" | "preproc_function_def") => {
                 names.extend(node.child_by_field_name("name").map(text));
+            }
+            (Language::Rust, "macro_definition" | "macro_invocation") => {
+                if has_import_tokens(node, &parsed.source) {
+                    names.insert(RUST_MACRO_IMPORT.to_string());
+                }
             }
             (Language::Bash, "command") => {
                 let command = text(node);
@@ -1005,8 +1335,21 @@ fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
                 let object = target.and_then(|target| target.child_by_field_name("object"));
                 let property = target.and_then(|target| target.child_by_field_name("property"));
                 if let (Some(object), Some(property)) = (object, property) {
-                    if GLOBAL_OBJECTS.contains(&text(object).as_str()) {
-                        names.insert(text(property));
+                    let object_name = text(object);
+                    let global = GLOBAL_OBJECTS
+                        .iter()
+                        .position(|name| *name == object_name.as_str());
+                    if let Some(bit) = global {
+                        while bound.len() < path.len() {
+                            let scope = path[bound.len()];
+                            let inherited = bound.last().copied().unwrap_or(0);
+                            let parent = bound.len().checked_sub(1).map(|index| path[index]);
+                            bound.push(inherited | scope_bindings(scope, parent, &parsed.source));
+                        }
+                        let hidden = bound.last().is_some_and(|mask| mask & (1 << bit) != 0);
+                        if !hidden {
+                            names.insert(text(property));
+                        }
                     }
                 }
             }
@@ -1019,6 +1362,7 @@ fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
             }
             _ => {}
         }
+        path.push(node);
     }
     names
 }
@@ -1056,6 +1400,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         local_kinds: spec.local_kinds(),
         facts_of_kinds: Vec::new(),
         ancestors: Vec::new(),
+        return_owner_kinds: spec.return_owner_kinds(),
+        return_owners: Vec::new(),
         return_type_field: spec.call_syntax().return_type_field,
         calls: Vec::new(),
         locals: Vec::new(),
@@ -1185,9 +1531,18 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     for (call, range, owner, via_closure, receiver) in calls {
         let (start_byte, end_byte) = (range.start, range.end);
         let owner = position_of(owner);
+        let nullable_target = call
+            .callee
+            .target
+            .as_ref()
+            .is_some_and(|target| target.nullable);
         let text = String::from_utf8_lossy(&parsed.source[call.callee.name_node.byte_range()]);
         let name = match call.kind {
-            ReferenceKind::Construct => split_type(&text).1,
+            ReferenceKind::Construct => call
+                .callee
+                .target
+                .as_ref()
+                .map_or_else(|| split_type(&text).1, |target| target.name.clone()),
             ReferenceKind::Call => text.to_string(),
         };
         references.push(Reference {
@@ -1227,6 +1582,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                     .get(end..)
                     .is_some_and(|rest| rest.trim_ascii_start().starts_with(b"->"))
             }),
+            nullable_target,
         });
     }
     FileSymbols {
@@ -1250,6 +1606,165 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
 mod tests {
     use super::testing::rows;
     use crate::core::Language;
+
+    fn rebound_in(source: &str) -> Vec<String> {
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::JavaScript,
+                std::path::Path::new("a.js"),
+            )
+            .unwrap();
+        super::rebound_names(&parsed).into_iter().collect()
+    }
+
+    fn rebound_in_typescript(source: &str) -> Vec<String> {
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::TypeScript,
+                std::path::Path::new("a.ts"),
+            )
+            .unwrap();
+        super::rebound_names(&parsed).into_iter().collect()
+    }
+
+    #[test]
+    fn test_typescript_import_alias_is_a_local_binding_of_a_global_object_name() {
+        for source in [
+            "import window = Objects.window; window.fetch = r;",
+            "import self = require('objects'); self.fetch = r;",
+            "export import global = Objects.Inner.global; global.fetch = r;",
+        ] {
+            assert!(rebound_in_typescript(source).is_empty(), "{source}");
+        }
+        let unrelated = "import other = window.objects; window.fetch = r;";
+        assert_eq!(rebound_in_typescript(unrelated), ["fetch"]);
+    }
+
+    fn global_assignments_in_a_large_block_are_linear_at(size: usize) -> std::time::Duration {
+        let mut source = String::from("function install() {\n  const local = 1;\n");
+        for line in 0..size {
+            source.push_str(&format!("  window.x{line} = 1;\n"));
+        }
+        source.push_str("}\n");
+        let started = std::time::Instant::now();
+        let rebound = rebound_in(&source);
+        assert_eq!(rebound.len(), size);
+        let elapsed = started.elapsed();
+        let shadowed = source.replace("const local = 1;", "const window = {};");
+        assert!(rebound_in(&shadowed).is_empty());
+        elapsed
+    }
+
+    #[test]
+    fn test_global_assignments_in_a_large_block_are_linear() {
+        global_assignments_in_a_large_block_are_linear_at(2_000);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_global_assignments_in_a_large_block_are_linear() {
+        let elapsed = global_assignments_in_a_large_block_are_linear_at(100_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    fn global_assignments_in_deeply_nested_blocks_are_linear_at(
+        size: usize,
+    ) -> std::time::Duration {
+        let depth = size;
+        let mut source = String::from("function install() {\n");
+        for level in 0..depth {
+            source.push_str(&format!("{{ window.x{level} = 1;\n"));
+        }
+        source.push_str(&"}".repeat(depth));
+        source.push_str("\n}\n");
+        let started = std::time::Instant::now();
+        let rebound = rebound_in(&source);
+        assert_eq!(rebound.len(), depth);
+        started.elapsed()
+    }
+
+    #[test]
+    fn test_global_assignments_in_deeply_nested_blocks_are_linear() {
+        global_assignments_in_deeply_nested_blocks_are_linear_at(2_000);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_global_assignments_in_deeply_nested_blocks_are_linear() {
+        let elapsed = global_assignments_in_deeply_nested_blocks_are_linear_at(50_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    #[test]
+    fn test_var_loop_binding_belongs_to_the_function() {
+        for source in [
+            "function f(xs) { for (var window of xs) { } window.fetch = r; }",
+            "function f(xs) { for (var window in xs) { } window.fetch = r; }",
+            "function f() { for (var window = {}; ; ) { break; } window.fetch = r; }",
+            "function f() { if (true) { var window = {}; } window.fetch = r; }",
+        ] {
+            assert!(rebound_in(source).is_empty(), "{source}");
+        }
+        let block = "function f(xs) { for (let window of xs) { } window.fetch = r; }";
+        assert_eq!(rebound_in(block), ["fetch"]);
+        let nested = "function f() { function g() { var window = {}; } window.fetch = r; }";
+        assert_eq!(rebound_in(nested), ["fetch"]);
+    }
+
+    #[test]
+    fn test_top_level_declarations_static_blocks_and_default_parameters() {
+        for source in [
+            "const window = {}; window.fetch = r;",
+            "let self; self.fetch = r;",
+            "function f() { var window; window.fetch = r; }",
+            "function* f() { var window; window.fetch = r; }",
+            "const f = () => { var window; window.fetch = r; };",
+            "class C { m() { var window; window.fetch = r; } }",
+            "class C { static { var window = {}; window.fetch = r; } }",
+        ] {
+            assert!(rebound_in(source).is_empty(), "{source}");
+        }
+        for source in [
+            "class C { static { var window = {}; } } window.fetch = r;",
+            "function f(x = (window.fetch = r)) { var window; }",
+            "const f = (x = (window.fetch = r)) => { var window; };",
+            "class C { m(x = (window.fetch = r)) { var window; } }",
+        ] {
+            assert_eq!(rebound_in(source), ["fetch"], "{source}");
+        }
+    }
+
+    #[test]
+    fn test_import_bindings_are_local_bindings_of_a_global_object_name() {
+        for source in [
+            "import window from './objects.js'; window.fetch = r;",
+            "import { window } from './objects.js'; window.fetch = r;",
+            "import { objects as window } from './objects.js'; window.fetch = r;",
+            "import * as window from './objects.js'; window.fetch = r;",
+            "import self, { other } from './objects.js'; self.fetch = r;",
+            "import other, * as globalThis from './objects.js'; globalThis.fetch = r;",
+        ] {
+            assert!(rebound_in(source).is_empty(), "{source}");
+        }
+        let unrelated = "import { window as other } from './objects.js'; window.fetch = r;";
+        assert_eq!(rebound_in(unrelated), ["fetch"]);
+    }
+
+    #[test]
+    fn test_loop_and_catch_bindings_are_local_bindings_of_a_global_object_name() {
+        for source in [
+            "function f(objects) { for (const window of objects) { window.fetch = r; } }",
+            "function f(objects) { for (let window in objects) { window.fetch = r; } }",
+            "function f() { for (let window = {}; ; ) { window.fetch = r; } }",
+            "function f() { try { g(); } catch (window) { window.fetch = r; } }",
+        ] {
+            assert!(rebound_in(source).is_empty(), "{source}");
+        }
+        let assigned = "function f(objects) { for (window of objects) { } window.fetch = r; }";
+        assert_eq!(rebound_in(assigned), ["fetch"]);
+    }
 
     /// The start line of a symbol is the line of its declaration. The lines
     /// of annotations, attributes, decorators, and comments before the

@@ -173,6 +173,10 @@ impl LanguageSpec for Java {
         CALL_SYNTAX
     }
 
+    fn lambda_kinds(&self) -> &'static [&'static str] {
+        &[LAMBDA_EXPRESSION]
+    }
+
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
         kinds.extend([
