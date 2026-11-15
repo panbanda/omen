@@ -1040,9 +1040,23 @@ fn pattern_binds(pattern: Node<'_>, name: &str, source: &[u8]) -> bool {
 /// The names of the global objects of ECMAScript.
 const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "global", "self"];
 
+/// The node kinds that open the scope of a `var`.
+const VARIABLE_SCOPES: [&str; 8] = [
+    "program",
+    "function_declaration",
+    "function_expression",
+    "function",
+    "generator_function",
+    "generator_function_declaration",
+    "arrow_function",
+    "method_definition",
+];
+
 /// The global object names that a scope node binds, one bit for each name of
-/// `GLOBAL_OBJECTS`: its parameters, the variables declared in its block, the
-/// variable of a loop, and the parameter of a `catch` clause.
+/// `GLOBAL_OBJECTS`: its parameters, the `let` and `const` variables of its
+/// block, the variable of a loop, the parameter of a `catch` clause, and, for
+/// a function or the program, each `var` that its body declares. A nested
+/// function has its own `var` names.
 fn scope_bindings(scope: Node<'_>, source: &[u8]) -> u8 {
     let mut mask = 0u8;
     let mut mark = |pattern: Node<'_>| {
@@ -1053,12 +1067,6 @@ fn scope_bindings(scope: Node<'_>, source: &[u8]) -> u8 {
         }
     };
     let declarators = |declaration: Node<'_>, mark: &mut dyn FnMut(Node<'_>)| {
-        if !matches!(
-            declaration.kind(),
-            "lexical_declaration" | "variable_declaration"
-        ) {
-            return;
-        }
         let mut cursor = declaration.walk();
         for declarator in declaration.named_children(&mut cursor) {
             if let Some(binding) = declarator.child_by_field_name("name") {
@@ -1073,44 +1081,59 @@ fn scope_bindings(scope: Node<'_>, source: &[u8]) -> u8 {
         mark(parameters);
     }
     match scope.kind() {
-        "statement_block" | "program" => {
+        "statement_block" => {
             let mut cursor = scope.walk();
             for statement in scope.named_children(&mut cursor) {
-                declarators(statement, &mut mark);
+                if statement.kind() == "lexical_declaration" {
+                    declarators(statement, &mut mark);
+                }
             }
         }
         "for_in_statement" => {
-            if scope.child_by_field_name("kind").is_some() {
+            let declares_variable = scope
+                .child_by_field_name("kind")
+                .is_some_and(|kind| source[kind.byte_range()] != *b"var");
+            if declares_variable {
                 if let Some(left) = scope.child_by_field_name("left") {
                     mark(left);
                 }
             }
         }
         "for_statement" => {
-            if let Some(initializer) = scope.child_by_field_name("initializer") {
+            let initializer = scope
+                .child_by_field_name("initializer")
+                .filter(|initializer| initializer.kind() == "lexical_declaration");
+            if let Some(initializer) = initializer {
                 declarators(initializer, &mut mark);
             }
         }
         _ => {}
     }
-    mask
-}
-
-/// Tells if a parameter or a variable in scope at `node` is the global
-/// object name `GLOBAL_OBJECTS[bit]`. The cache holds the bindings of each
-/// scope node, so that each scope is read once.
-fn is_bound_at(node: Node<'_>, bit: usize, source: &[u8], cache: &mut HashMap<usize, u8>) -> bool {
-    let mut ancestor = node.parent();
-    while let Some(current) = ancestor {
-        let mask = *cache
-            .entry(current.id())
-            .or_insert_with(|| scope_bindings(current, source));
-        if mask & (1 << bit) != 0 {
-            return true;
+    if VARIABLE_SCOPES.contains(&scope.kind()) {
+        let mut stack = vec![scope];
+        while let Some(current) = stack.pop() {
+            let mut cursor = current.walk();
+            for child in current.named_children(&mut cursor) {
+                if VARIABLE_SCOPES.contains(&child.kind()) {
+                    continue;
+                }
+                match child.kind() {
+                    "variable_declaration" => declarators(child, &mut mark),
+                    "for_in_statement" => {
+                        let is_var = child
+                            .child_by_field_name("kind")
+                            .is_some_and(|kind| source[kind.byte_range()] == *b"var");
+                        if let (true, Some(left)) = (is_var, child.child_by_field_name("left")) {
+                            mark(left);
+                        }
+                    }
+                    _ => {}
+                }
+                stack.push(child);
+            }
         }
-        ancestor = current.parent();
     }
-    false
+    mask
 }
 
 /// The name that stands in the rebound names for a Rust `macro_rules!` whose
@@ -1141,14 +1164,23 @@ fn has_import_tokens(node: Node<'_>, source: &[u8]) -> bool {
 }
 
 fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
-    let mut bindings: HashMap<usize, u8> = HashMap::new();
+    // The walk is in source order. `path` holds the ancestors of the node, and
+    // `bound[level]` the global object names that `path[..=level]` bind. The
+    // tree-sitter parent of a node costs the depth of the node.
+    let mut path: Vec<Node<'_>> = Vec::new();
+    let mut bound: Vec<u8> = Vec::new();
     let text =
         |node: Node<'_>| String::from_utf8_lossy(&parsed.source[node.byte_range()]).to_string();
     let mut names = BTreeSet::new();
-    let mut stack = vec![parsed.root_node()];
-    while let Some(node) = stack.pop() {
+    let mut stack = vec![(parsed.root_node(), 0usize)];
+    while let Some((node, depth)) = stack.pop() {
+        path.truncate(depth);
+        bound.truncate(depth);
         let mut cursor = node.walk();
-        stack.extend(node.named_children(&mut cursor));
+        stack.extend(
+            node.named_children(&mut cursor)
+                .map(|child| (child, depth + 1)),
+        );
         match (parsed.language, node.kind()) {
             (Language::C | Language::Cpp, "preproc_def" | "preproc_function_def") => {
                 names.extend(node.child_by_field_name("name").map(text));
@@ -1182,10 +1214,16 @@ fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
                     let global = GLOBAL_OBJECTS
                         .iter()
                         .position(|name| *name == object_name.as_str());
-                    if global
-                        .is_some_and(|bit| !is_bound_at(node, bit, &parsed.source, &mut bindings))
-                    {
-                        names.insert(text(property));
+                    if let Some(bit) = global {
+                        while bound.len() < path.len() {
+                            let scope = path[bound.len()];
+                            let inherited = bound.last().copied().unwrap_or(0);
+                            bound.push(inherited | scope_bindings(scope, &parsed.source));
+                        }
+                        let hidden = bound.last().is_some_and(|mask| mask & (1 << bit) != 0);
+                        if !hidden {
+                            names.insert(text(property));
+                        }
                     }
                 }
             }
@@ -1198,6 +1236,7 @@ fn rebound_names(parsed: &ParseResult) -> BTreeSet<String> {
             }
             _ => {}
         }
+        path.push(node);
     }
     names
 }
@@ -1462,6 +1501,37 @@ mod tests {
         assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
         let shadowed = source.replace("const local = 1;", "const window = {};");
         assert!(rebound_in(&shadowed).is_empty());
+    }
+
+    #[test]
+    fn test_global_assignments_in_deeply_nested_blocks_are_linear() {
+        let depth = 20_000;
+        let mut source = String::from("function install() {\n");
+        for level in 0..depth {
+            source.push_str(&format!("{{ window.x{level} = 1;\n"));
+        }
+        source.push_str(&"}".repeat(depth));
+        source.push_str("\n}\n");
+        let started = std::time::Instant::now();
+        let rebound = rebound_in(&source);
+        assert_eq!(rebound.len(), depth);
+        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn test_var_loop_binding_belongs_to_the_function() {
+        for source in [
+            "function f(xs) { for (var window of xs) { } window.fetch = r; }",
+            "function f(xs) { for (var window in xs) { } window.fetch = r; }",
+            "function f() { for (var window = {}; ; ) { break; } window.fetch = r; }",
+            "function f() { if (true) { var window = {}; } window.fetch = r; }",
+        ] {
+            assert!(rebound_in(source).is_empty(), "{source}");
+        }
+        let block = "function f(xs) { for (let window of xs) { } window.fetch = r; }";
+        assert_eq!(rebound_in(block), ["fetch"]);
+        let nested = "function f() { function g() { var window = {}; } window.fetch = r; }";
+        assert_eq!(rebound_in(nested), ["fetch"]);
     }
 
     #[test]
