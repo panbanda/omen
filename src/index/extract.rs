@@ -291,6 +291,17 @@ pub struct Linked<'a> {
     pub facts: &'a LinkFacts,
 }
 
+/// A definition or a function value that a returned value belongs to. The
+/// walk reads its facts once, when it enters the node.
+#[derive(Debug, Clone, Copy)]
+pub struct ReturnOwner<'tree> {
+    pub node: Node<'tree>,
+    /// The owner is asynchronous, so that a returned value is not the result of the owner.
+    pub is_asynchronous: bool,
+    /// The node of the declared type of the result.
+    pub return_type: Option<Node<'tree>>,
+}
+
 pub struct Context<'a, 'tree> {
     /// The path of the file, as the keys have it.
     pub file: &'a str,
@@ -298,9 +309,8 @@ pub struct Context<'a, 'tree> {
     pub scopes: &'a [Scope<'tree>],
     /// The ancestors of the node at which the walk is, the nearest last.
     pub ancestors: &'a [Node<'tree>],
-    /// The nearest ancestor whose kind is one of `LanguageSpec::return_owner_kinds`,
-    /// and whether `LanguageSpec::is_asynchronous` tells that it is asynchronous.
-    pub return_owner: Option<(Node<'tree>, bool)>,
+    /// The nearest ancestor whose kind is one of `LanguageSpec::return_owner_kinds`.
+    pub return_owner: Option<ReturnOwner<'tree>>,
     /// The members recorder of the file, which has the type parameters read so far.
     pub members: Option<&'a Recorder>,
     /// The ID of the node at which the walk is, and the parent of that node.
@@ -479,10 +489,13 @@ pub trait LanguageSpec: Sync {
         &[]
     }
 
-    /// Tells if a return owner is asynchronous, so that a returned value is
-    /// not the result of the owner. The walk asks once for each owner.
-    fn is_asynchronous(&self, _owner: Node<'_>, _source: &[u8]) -> bool {
-        false
+    /// The facts of a return owner. The walk asks once for each owner.
+    fn return_owner<'tree>(&self, owner: Node<'tree>, _source: &[u8]) -> ReturnOwner<'tree> {
+        ReturnOwner {
+            node: owner,
+            is_asynchronous: false,
+            return_type: None,
+        }
     }
 
     /// The node kinds of the function values that have parameters of their own.
@@ -637,7 +650,7 @@ struct Extractor<'a, 'tree> {
     ancestors: Vec<Node<'tree>>,
     return_owner_kinds: &'static [&'static str],
     /// The ancestors that have a kind of `return_owner_kinds`, the nearest last.
-    return_owners: Vec<(Node<'tree>, bool)>,
+    return_owners: Vec<ReturnOwner<'tree>>,
     return_type_field: &'static str,
     /// Each call with its start byte, its owner, and its closure flag.
     calls: Vec<RawCall<'tree>>,
@@ -937,8 +950,8 @@ impl<'tree> Extractor<'_, 'tree> {
             self.enter(node, depth);
             if cursor.goto_first_child() {
                 if self.return_owner_kinds.contains(&node.kind()) {
-                    let asynchronous = self.spec.is_asynchronous(node, self.source);
-                    self.return_owners.push((node, asynchronous));
+                    let owner = self.spec.return_owner(node, self.source);
+                    self.return_owners.push(owner);
                 }
                 self.ancestors.push(node);
                 depth += 1;
@@ -956,7 +969,7 @@ impl<'tree> Extractor<'_, 'tree> {
                     if self
                         .return_owners
                         .last()
-                        .is_some_and(|(owner, _)| owner.id() == left.id())
+                        .is_some_and(|owner| owner.node.id() == left.id())
                     {
                         self.return_owners.pop();
                     }

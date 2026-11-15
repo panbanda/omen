@@ -3,7 +3,7 @@
 use tree_sitter::Node;
 
 use crate::index::extract::{
-    Context, DefinitionRule, Draft, LanguageSpec, NameRule, Scope, ScopeRole,
+    Context, DefinitionRule, Draft, LanguageSpec, NameRule, ReturnOwner, Scope, ScopeRole,
 };
 use crate::index::model::{Exported, Span, SymbolKind};
 
@@ -163,13 +163,11 @@ fn implicit_target<'tree>(
             }
         }
         "arrow_expression_clause" | "return_statement" => {
-            let (owner, is_async) = context.return_owner?;
-            if is_async {
+            let owner = context.return_owner?;
+            if owner.is_asynchronous {
                 return None;
             }
-            owner
-                .child_by_field_name("returns")
-                .or_else(|| owner.child_by_field_name("type"))?
+            owner.return_type?
         }
         PROPERTY_DECLARATION => parent.child_by_field_name("type")?,
         _ => return None,
@@ -218,12 +216,18 @@ fn implicit_construction<'tree>(
 }
 
 impl LanguageSpec for CSharp {
-    fn is_asynchronous(&self, owner: Node<'_>, source: &[u8]) -> bool {
+    fn return_owner<'tree>(&self, owner: Node<'tree>, source: &[u8]) -> ReturnOwner<'tree> {
         let mut cursor = owner.walk();
-        let found = owner
+        let is_asynchronous = owner
             .children(&mut cursor)
             .any(|child| child.kind() == MODIFIER && source[child.byte_range()] == *b"async");
-        found
+        ReturnOwner {
+            node: owner,
+            is_asynchronous,
+            return_type: owner
+                .child_by_field_name("returns")
+                .or_else(|| owner.child_by_field_name("type")),
+        }
     }
 
     fn return_owner_kinds(&self) -> &'static [&'static str] {

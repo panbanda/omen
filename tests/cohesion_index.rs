@@ -1069,6 +1069,34 @@ fn timing_csharp_returned_new_in_one_method_is_linear() {
     assert!(elapsed.as_secs() < 30, "{elapsed:?}");
 }
 
+fn csharp_returned_new_in_a_method_with_many_attributes_at(size: usize) -> Duration {
+    let mut source = String::from("class Part {}\n\nclass Factory {\n");
+    for _ in 0..size {
+        source.push_str("    [System.Obsolete]\n");
+    }
+    source.push_str("    Part Make() {\n");
+    for _ in 0..size {
+        source.push_str("        if (true) return new();\n");
+    }
+    source.push_str("        return null;\n    }\n}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Factory.cs", &source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 2);
+    started.elapsed()
+}
+
+#[test]
+fn test_csharp_returned_new_in_a_method_with_many_attributes() {
+    csharp_returned_new_in_a_method_with_many_attributes_at(2_000);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_returned_new_in_a_method_with_many_attributes_is_linear() {
+    let elapsed = csharp_returned_new_in_a_method_with_many_attributes_at(20_000);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
 fn csharp_target_typed_new_in_deeply_nested_blocks_is_linear_at(
     size: usize,
 ) -> std::time::Duration {
