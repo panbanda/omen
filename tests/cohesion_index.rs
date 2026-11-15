@@ -1002,6 +1002,46 @@ fn timing_csharp_target_typed_new_in_a_class_with_many_methods_is_linear() {
     assert!(elapsed.as_secs() < 30, "{elapsed:?}");
 }
 
+fn csharp_target_typed_new_in_a_class_with_many_members_at(
+    size: usize,
+    member: &str,
+) -> std::time::Duration {
+    let mut source = String::from("class Part {}\n\nclass Factory<T> {\n");
+    for index in 0..size {
+        source.push_str(&member.replace("{n}", &index.to_string()));
+        source.push('\n');
+    }
+    source.push_str("}\n");
+    let started = std::time::Instant::now();
+    let analysis = analyze(&[("Factory.cs", &source)]);
+    assert_eq!(class(&analysis, "Factory").rfc, 1);
+    started.elapsed()
+}
+
+const FIELD_WITH_NEW: &str = "    Part part{n} = new();";
+const PROPERTY_WITH_NEW: &str = "    Part Part{n} { get; } = new();";
+
+#[test]
+fn test_csharp_target_typed_new_in_fields_and_properties_is_linear() {
+    csharp_target_typed_new_in_a_class_with_many_members_at(2_000, FIELD_WITH_NEW);
+    csharp_target_typed_new_in_a_class_with_many_members_at(2_000, PROPERTY_WITH_NEW);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_target_typed_new_in_fields_is_linear() {
+    let elapsed = csharp_target_typed_new_in_a_class_with_many_members_at(200_000, FIELD_WITH_NEW);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_target_typed_new_in_properties_is_linear() {
+    let elapsed =
+        csharp_target_typed_new_in_a_class_with_many_members_at(200_000, PROPERTY_WITH_NEW);
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
+
 fn csharp_target_typed_new_in_deeply_nested_blocks_is_linear_at(
     size: usize,
 ) -> std::time::Duration {
