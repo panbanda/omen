@@ -82,27 +82,64 @@ struct RestoreRecord {
     original: Vec<u8>,
     /// The permissions of the file before the first write.
     permissions: fs::Permissions,
+    /// The target of the symbolic link at `path` before the first write, if it was a link.
+    link: Option<PathBuf>,
+    /// The file that a link at `path` points to.
+    real_path: PathBuf,
     backup: Option<PathBuf>,
 }
 
+/// Writes the original bytes into the staged file of a restore. A test replaces
+/// it to inject a fault or a pause.
+type StageWriter = fn(&mut fs::File, &[u8]) -> std::io::Result<()>;
+
+fn write_all_bytes(file: &mut fs::File, content: &[u8]) -> std::io::Result<()> {
+    file.write_all(content)
+}
+
 impl RestoreRecord {
-    /// Write the original bytes into the file, set the recorded permissions,
-    /// and read the file again to compare the bytes and the permissions.
     fn restore(&self) -> std::io::Result<()> {
-        self.restore_with(|path, content| write_in_place(path, content))
+        self.restore_with(write_all_bytes)
     }
 
-    /// `write` is a seam: a test replaces it to pause inside the write.
-    fn restore_with(&self, write: fn(&Path, &[u8]) -> Result<()>) -> std::io::Result<()> {
-        make_writable(&self.path)?;
-        write(&self.path, &self.original).map_err(into_io_error)?;
-        fs::set_permissions(&self.path, self.permissions.clone())?;
-        if fs::read(&self.path)? != self.original {
+    /// Replace the file with a new file that has the original bytes and the
+    /// recorded permissions, then read it again to check bytes and permissions.
+    ///
+    /// The new file is complete before the rename, and the rename replaces the
+    /// path itself and never follows a link. Thus a failed restore never leaves
+    /// an empty or partial source, and a link that a test command put at the
+    /// path does not redirect the write to another file.
+    fn restore_with(&self, stage: StageWriter) -> std::io::Result<()> {
+        let target = match &self.link {
+            Some(link) => {
+                ensure_link(&self.path, link)?;
+                self.real_path.clone()
+            }
+            None => self.path.clone(),
+        };
+        let directory = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut staged = tempfile::NamedTempFile::new_in(directory)?;
+        stage(staged.as_file_mut(), &self.original)?;
+        staged.as_file().set_permissions(self.permissions.clone())?;
+        staged.as_file().sync_all()?;
+        staged.persist(&target).map_err(|error| error.error)?;
+        #[cfg(unix)]
+        fs::File::open(directory)?.sync_all()?;
+
+        if !fs::symlink_metadata(&target)?.is_file() {
+            return Err(std::io::Error::other(
+                "the restored path is not a regular file",
+            ));
+        }
+        if fs::read(&target)? != self.original {
             return Err(std::io::Error::other(
                 "the restored file differs from the original",
             ));
         }
-        if fs::metadata(&self.path)?.permissions() != self.permissions {
+        if fs::metadata(&target)?.permissions() != self.permissions {
             return Err(std::io::Error::other(
                 "the restored permissions differ from the original",
             ));
@@ -111,34 +148,30 @@ impl RestoreRecord {
     }
 }
 
-fn into_io_error(error: Error) -> std::io::Error {
-    match error {
-        Error::Io(error) => error,
-        other => std::io::Error::other(other.to_string()),
+/// Make `path` a symbolic link to `link` again if a test command changed it.
+#[cfg(unix)]
+fn ensure_link(path: &Path, link: &Path) -> std::io::Result<()> {
+    if fs::read_link(path).is_ok_and(|current| current == link) {
+        return Ok(());
     }
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    for attempt in 0..100u32 {
+        let candidate = directory.join(format!(".omen-link-{}-{attempt}", std::process::id()));
+        match std::os::unix::fs::symlink(link, &candidate) {
+            Ok(()) => return fs::rename(&candidate, path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::other("no free name for a temporary link"))
 }
 
-/// Give the owner the right to write to the file.
-fn make_writable(path: &Path) -> std::io::Result<()> {
-    let mut permissions = fs::metadata(path)?.permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = permissions.mode();
-        if mode & 0o200 != 0 {
-            return Ok(());
-        }
-        permissions.set_mode(mode | 0o200);
-    }
-    #[cfg(not(unix))]
-    {
-        if !permissions.readonly() {
-            return Ok(());
-        }
-        #[allow(clippy::permissions_set_readonly_false)]
-        permissions.set_readonly(false);
-    }
-    fs::set_permissions(path, permissions)
+#[cfg(not(unix))]
+fn ensure_link(_: &Path, _: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// The path of a backup file that exists and has the original bytes. If the
@@ -253,7 +286,9 @@ pub struct MutationGuard {
     /// Writes the mutated content. Tests replace it to inject a write fault.
     writer: fn(&Path, &[u8]) -> Result<()>,
     /// Writes the original content in a restore of the guard. Tests replace it.
-    restore_writer: fn(&Path, &[u8]) -> Result<()>,
+    restore_writer: StageWriter,
+    link: Option<PathBuf>,
+    real_path: PathBuf,
 }
 
 impl MutationGuard {
@@ -272,8 +307,17 @@ impl MutationGuard {
         let path = path.as_ref().to_path_buf();
         let original = fs::read(&path).map_err(Error::Io)?;
         let permissions = fs::metadata(&path).map_err(Error::Io)?.permissions();
+        let link = fs::symlink_metadata(&path)
+            .map_err(Error::Io)?
+            .is_symlink()
+            .then(|| fs::read_link(&path))
+            .transpose()
+            .map_err(Error::Io)?;
+        let real_path = fs::canonicalize(&path).map_err(Error::Io)?;
 
         Ok(Self {
+            link,
+            real_path,
             path,
             original,
             permissions,
@@ -282,7 +326,7 @@ impl MutationGuard {
             active_mutations,
             interrupted,
             writer: |path, content| write_in_place(path, content),
-            restore_writer: |path, content| write_in_place(path, content),
+            restore_writer: write_all_bytes,
         })
     }
 
@@ -298,6 +342,8 @@ impl MutationGuard {
             path: self.path.clone(),
             original: self.original.clone(),
             permissions: self.permissions.clone(),
+            link: self.link.clone(),
+            real_path: self.real_path.clone(),
             backup: self
                 .backup
                 .as_ref()
@@ -310,6 +356,11 @@ impl MutationGuard {
     /// This writes the mutated content into the existing file, so the inode, the
     /// owner, the permissions, and a symlink stay as they are. Before the first
     /// write, it saves the original content in a backup file.
+    ///
+    /// The mutant write is in place for that reason (#549): a replacement of the file
+    /// would change the inode and the owner of a source file of the user. A restore does
+    /// not need this, and it replaces the file, so a failed restore never leaves a
+    /// partial source.
     pub fn apply(&mut self, content: &[u8]) -> Result<()> {
         let active_mutations = Arc::clone(&self.active_mutations);
         let mut active = active_mutations.lock();
@@ -1717,12 +1768,12 @@ mod tests {
     /// A write that waits before it truncates the file. A signal restore that
     /// runs in the wait can finish before the truncate, and the process can
     /// then exit with an empty file.
-    fn write_after_a_pause(path: &Path, content: &[u8]) -> Result<()> {
+    fn write_after_a_pause(file: &mut fs::File, content: &[u8]) -> std::io::Result<()> {
         PAUSE_ENTERED.store(true, Ordering::SeqCst);
         while !PAUSE_RELEASED.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(1));
         }
-        write_in_place(path, content)
+        file.write_all(content)
     }
 
     #[test]
@@ -1769,13 +1820,13 @@ mod tests {
         assert_eq!(fs::read(&file_path).unwrap(), b"original");
     }
 
-    fn truncate_only(path: &Path, _: &[u8]) -> Result<()> {
-        fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(path)
-            .map_err(Error::Io)?;
+    fn truncate_only(_: &mut fs::File, _: &[u8]) -> std::io::Result<()> {
         Ok(())
+    }
+
+    fn stage_half_then_fail(file: &mut fs::File, content: &[u8]) -> std::io::Result<()> {
+        file.write_all(&content[..content.len() / 2])?;
+        Err(std::io::Error::other("disk full"))
     }
 
     #[test]
@@ -1809,6 +1860,48 @@ mod tests {
                 let _ = fs::remove_file(entry.path());
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_restore_replaces_a_symlink_and_does_not_write_the_victim() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        let victim = temp_dir.path().join("victim.txt");
+        fs::write(&file_path, b"original").unwrap();
+        fs::write(&victim, b"victim").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        fs::remove_file(&file_path).unwrap();
+        std::os::unix::fs::symlink(&victim, &file_path).unwrap();
+
+        drop(guard);
+
+        assert_eq!(fs::read(&victim).unwrap(), b"victim");
+        assert!(fs::symlink_metadata(&file_path).unwrap().is_file());
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    #[test]
+    fn test_a_failed_restore_write_never_leaves_a_partial_source() {
+        let _serial = PAUSE_TESTS.lock();
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original content").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        guard.restore_writer = stage_half_then_fail;
+
+        assert!(guard.restore().is_err());
+
+        let content = fs::read(&file_path).unwrap();
+        assert!(
+            content == b"mutated" || content == b"original content",
+            "{content:?}"
+        );
+        guard.restore_writer = write_all_bytes;
+        guard.restore().unwrap();
+        assert_eq!(fs::read(&file_path).unwrap(), b"original content");
     }
 
     #[test]
@@ -2085,7 +2178,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_mutation_and_restore_keep_the_inode_of_the_file() {
+    fn test_mutation_keeps_the_inode_of_the_file() {
         use std::os::unix::fs::MetadataExt;
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.rs");
@@ -2096,7 +2189,6 @@ mod tests {
         guard.apply(b"mutated").unwrap();
         assert_eq!(fs::metadata(&file_path).unwrap().ino(), inode);
         guard.restore().unwrap();
-        assert_eq!(fs::metadata(&file_path).unwrap().ino(), inode);
         assert_eq!(fs::read(&file_path).unwrap(), b"original");
     }
 
