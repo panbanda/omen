@@ -40,7 +40,7 @@ use tree_sitter::Node;
 use super::{route_parameters, Context, Draft, EntryBasis, EntryKind, Route, TreeSource};
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
-use crate::index::model::{ImportKind, Reference, Span, Symbol};
+use crate::index::model::{ImportKind, ImportTarget, Reference, Span, Symbol};
 
 /// The methods that `Any` registers. gin v1.11.0 `anyMethods`.
 const GIN_ANY: [&str; 9] = [
@@ -364,6 +364,8 @@ struct Router {
     external: bool,
     /// The prefixes of the router in the function that made it, from a summary.
     base: Vec<String>,
+    /// The routers that have a link to this router.
+    kids: Vec<usize>,
 }
 
 #[derive(Clone)]
@@ -643,6 +645,172 @@ impl<'a> Context<'a> {
     }
 }
 
+/// The directory of a file. The files of one directory are the files of one Go package.
+fn directory_of(file: &str) -> &str {
+    file.rsplit_once('/').map_or("", |(directory, _)| directory)
+}
+
+/// The functions and the methods of the Go files, by package directory and name. The
+/// value has the position of the file and the position of the symbol.
+#[derive(Default)]
+pub(super) struct PackageCallables {
+    by_name: HashMap<(String, String), Vec<(usize, usize)>>,
+}
+
+impl PackageCallables {
+    pub(super) fn build(files: &[FileSymbols]) -> Self {
+        let mut by_name: HashMap<(String, String), Vec<(usize, usize)>> = HashMap::new();
+        for (file, symbols) in files.iter().enumerate() {
+            if symbols.language != Language::Go {
+                continue;
+            }
+            let directory = directory_of(&symbols.file);
+            for (position, symbol) in symbols.symbols.iter().enumerate() {
+                if symbol.is_callable() {
+                    by_name
+                        .entry((directory.to_string(), symbol.name.clone()))
+                        .or_default()
+                        .push((file, position));
+                }
+            }
+        }
+        Self { by_name }
+    }
+
+    fn find(&self, directory: &str, name: &str) -> &[(usize, usize)] {
+        self.by_name
+            .get(&(directory.to_string(), name.to_string()))
+            .map_or(&[], Vec::as_slice)
+    }
+}
+
+impl<'a> Context<'a> {
+    /// The function that a handler of a Go file names. A name with a qualifier names a
+    /// function of the package of the import. A name without a qualifier names a function
+    /// of the package of the file. A definition in the file wins. A package that the index
+    /// does not resolve gives no function.
+    pub(super) fn go_handler_symbol(&self, node: Node<'_>) -> Option<String> {
+        let own = directory_of(&self.file.file);
+        let (directory, name) = match node.kind() {
+            "identifier" => (own, self.text(node)),
+            "selector_expression" => {
+                let operand = node.child_by_field_name("operand")?;
+                let name = self.text(node.child_by_field_name("field")?);
+                let import = (operand.kind() == "identifier")
+                    .then(|| {
+                        self.file.imports.iter().find(|binding| {
+                            binding.kind == ImportKind::Module
+                                && binding.local_name.as_deref() == Some(self.text(operand))
+                        })
+                    })
+                    .flatten();
+                match import {
+                    Some(binding) => {
+                        let file = match &binding.target_file {
+                            ImportTarget::Resolved(file) => file.as_str(),
+                            ImportTarget::Package(files) => files.first()?.as_str(),
+                            _ => return None,
+                        };
+                        (directory_of(file), name)
+                    }
+                    None => (own, name),
+                }
+            }
+            _ => return None,
+        };
+        if directory == own {
+            if let [position] = self
+                .callables_here
+                .get(name)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+            {
+                return Some(self.file.symbols[*position].key.to_string());
+            }
+        }
+        let found = match self.all_parsed.shared() {
+            Some(shared) => self.package_lookup(
+                shared
+                    .go_callables
+                    .get_or_init(|| PackageCallables::build(self.all)),
+                directory,
+                name,
+            ),
+            None => self.package_lookup(&PackageCallables::build(self.all), directory, name),
+        };
+        found
+    }
+
+    fn package_lookup(
+        &self,
+        callables: &PackageCallables,
+        directory: &str,
+        name: &str,
+    ) -> Option<String> {
+        match callables.find(directory, name) {
+            [(file, position)] => Some(self.all[*file].symbols[*position].key.to_string()),
+            _ => None,
+        }
+    }
+}
+
+/// The methods of a router that register a route, make a group, or serve. A method that adds
+/// middleware, as `Use` and `Pre`, is not in the list.
+const ROUTER_METHODS: [&str; 52] = [
+    "Get",
+    "Post",
+    "Put",
+    "Patch",
+    "Delete",
+    "Head",
+    "Options",
+    "Connect",
+    "Trace",
+    "Query",
+    "Method",
+    "MethodFunc",
+    "Handle",
+    "HandleFunc",
+    "Route",
+    "Group",
+    "Mount",
+    "With",
+    "GET",
+    "POST",
+    "PUT",
+    "DELETE",
+    "PATCH",
+    "HEAD",
+    "OPTIONS",
+    "CONNECT",
+    "TRACE",
+    "Any",
+    "Match",
+    "Add",
+    "PathPrefix",
+    "Path",
+    "Methods",
+    "Name",
+    "Subrouter",
+    "NewRoute",
+    "Handler",
+    "HandlerFunc",
+    "Run",
+    "RunTLS",
+    "Start",
+    "StartTLS",
+    "ServeHTTP",
+    "Routes",
+    "Walk",
+    "Static",
+    "StaticFile",
+    "StaticFS",
+    "StaticFileFS",
+    "Host",
+    "Headers",
+    "Queries",
+];
+
 /// The factories of the repository with a call that attaches the result, or that the
 /// walk cannot classify. A factory is a function or a method that returns a router. A call
 /// serves the result as the root, or it attaches it to a parent. One pass over the files
@@ -827,6 +995,19 @@ impl<'t> FileUses<'t> {
         ) && self.http.iter().any(|name| name == self.text(operand))
     }
 
+    /// Tells if a selector is a call of a method that registers a route, or that serves the
+    /// router, on the node. A call that adds middleware changes the guards of the routes.
+    fn is_router_call(&self, selector: Node<'t>, operand: Node<'t>) -> bool {
+        selector.child_by_field_name("operand") == Some(operand)
+            && selector.parent().is_some_and(|call| {
+                call.kind() == "call_expression"
+                    && call.child_by_field_name("function") == Some(selector)
+            })
+            && selector
+                .child_by_field_name("field")
+                .is_some_and(|field| ROUTER_METHODS.contains(&self.text(field)))
+    }
+
     /// Tells if a literal is an `http.Server`, which serves its handler as the root.
     fn is_server_literal(&self, literal: Node<'t>) -> bool {
         literal
@@ -851,7 +1032,7 @@ impl<'t> FileUses<'t> {
             return false;
         };
         match parent.kind() {
-            "selector_expression" => parent.child_by_field_name("operand") != Some(child),
+            "selector_expression" => !self.is_router_call(parent, child),
             "argument_list" => !self.is_sink(parent.parent()),
             "var_spec" => parent.child_by_field_name("value") == Some(child),
             "expression_list" => {
@@ -908,7 +1089,7 @@ impl<'t> FileUses<'t> {
         };
         match parent.kind() {
             "expression_statement" => false,
-            "selector_expression" => parent.child_by_field_name("operand") != Some(value),
+            "selector_expression" => !self.is_router_call(parent, value),
             "argument_list" => !self.is_sink(parent.parent()),
             "literal_element" | "keyed_element" => {
                 let mut up = parent.parent();
@@ -1028,6 +1209,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             attached: HashSet::new(),
             owners: 0,
             frames: Vec::new(),
+            mounts: HashSet::new(),
             dry,
             factory_keys: Vec::new(),
         })
@@ -1061,6 +1243,8 @@ struct Routes<'c, 'a, 't> {
     attached: HashSet<String>,
     owners: usize,
     frames: Vec<Frame>,
+    /// The mounts that the walk made: the child, the parent, and the prefix.
+    mounts: HashSet<(usize, usize, String)>,
     /// The walk only finds the factories. It does not read the calls of the repository.
     dry: bool,
     factory_keys: Vec<String>,
@@ -1234,12 +1418,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             .filter(|router| self.made_by(*router, owner))
             .collect();
         let comp = (!made.is_empty()).then(|| {
-            let mut all: Vec<usize> = made
-                .iter()
-                .flat_map(|router| self.component(*router, &frame.created))
-                .collect();
+            let mut all = self.component(&made, &frame.created);
             all.sort_unstable();
-            all.dedup();
             all
         });
         let id = declared.map(str::to_string).or_else(|| key.clone());
@@ -1390,7 +1570,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     /// The routers that a function body made, and that join to the returned router.
-    fn component(&self, returned: usize, created: &[usize]) -> Vec<usize> {
+    fn component(&self, returned: &[usize], created: &[usize]) -> Vec<usize> {
         let mut neighbors: HashMap<usize, Vec<usize>> = HashMap::new();
         let made: HashSet<usize> = created.iter().copied().collect();
         for router in created {
@@ -1401,8 +1581,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 }
             }
         }
-        let mut seen: HashSet<usize> = HashSet::from([returned]);
-        let mut pending = vec![returned];
+        let mut seen: HashSet<usize> = returned.iter().copied().collect();
+        let mut pending: Vec<usize> = returned.to_vec();
         while let Some(router) = pending.pop() {
             for next in neighbors.get(&router).into_iter().flatten() {
                 if seen.insert(*next) {
@@ -1583,6 +1763,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             owner: self.current_owner(),
             external: false,
             base: Vec::new(),
+            kids: Vec::new(),
         });
         let id = self.routers.len() - 1;
         if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
@@ -1609,8 +1790,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             owner: self.current_owner(),
             external: false,
             base: Vec::new(),
+            kids: Vec::new(),
         });
         let id = self.routers.len() - 1;
+        self.routers[parent].kids.push(id);
         if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
             frame.created.push(id);
         }
@@ -2179,13 +2362,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let Some(child) = self.eval(mounted) else {
             return;
         };
-        let known = self.routers[child]
-            .links
-            .iter()
-            .any(|link| link.parent == parent && link.prefix == prefix);
-        if !self.routers[child].mountable || known || self.reaches(parent, child) {
+        if !self.routers[child].mountable
+            || self.mounts.contains(&(child, parent, prefix.to_string()))
+            || self.would_cycle(parent, child)
+        {
             return;
         }
+        self.mounts.insert((child, parent, prefix.to_string()));
         let link = Link {
             parent,
             parent_len: self.routers[parent].guards.len(),
@@ -2194,14 +2377,40 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         self.touch(parent);
         self.touch(child);
         self.routers[child].links.push(link);
+        self.routers[parent].kids.push(child);
     }
 
-    fn reaches(&self, from: usize, target: usize) -> bool {
-        from == target
-            || self.routers[from]
-                .links
-                .iter()
-                .any(|link| self.reaches(link.parent, target))
+    /// Tells if a mount of `child` in `parent` makes a cycle: `child` is `parent`, or an
+    /// ancestor of `parent`. The search goes up from `parent` and down from `child` in
+    /// turn, and it stops when one side has no more routers. The cost has the size of
+    /// the smaller side.
+    fn would_cycle(&self, parent: usize, child: usize) -> bool {
+        if parent == child {
+            return true;
+        }
+        let mut up = vec![parent];
+        let mut up_seen = HashSet::from([parent]);
+        let mut down = vec![child];
+        let mut down_seen = HashSet::from([child]);
+        while let (Some(above), Some(below)) = (up.pop(), down.pop()) {
+            for link in &self.routers[above].links {
+                if link.parent == child {
+                    return true;
+                }
+                if up_seen.insert(link.parent) {
+                    up.push(link.parent);
+                }
+            }
+            for kid in &self.routers[below].kids {
+                if *kid == parent {
+                    return true;
+                }
+                if down_seen.insert(*kid) {
+                    down.push(*kid);
+                }
+            }
+        }
+        false
     }
 
     fn register(

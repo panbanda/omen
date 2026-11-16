@@ -189,6 +189,7 @@ pub struct EntryShared {
     rails: std::sync::OnceLock<rails::RailsShared>,
     go_call_sites: std::sync::OnceLock<go_routes::CallSites>,
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
+    go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
 }
 
 /// The syntax trees that the entry point rules ask for in other files. The source
@@ -692,6 +693,9 @@ impl<'a> Context<'a> {
     }
 
     fn handler_symbol(&self, handler: Node<'_>) -> Option<String> {
+        if self.file.language == Language::Go {
+            return self.go_handler_symbol(handler);
+        }
         let name = match handler.kind() {
             "identifier" => self.text(handler),
             "attribute" | "member_expression" | "selector_expression" | "field_expression" => {
@@ -3024,6 +3028,165 @@ func routes() {
         assert!(found.iter().all(|entry| entry.symbol.is_some()));
         assert!(
             started.elapsed() < std::time::Duration::from_secs(30),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    fn symbols_of(files: &[(&str, &str)]) -> Vec<Option<String>> {
+        entries(Language::Go, files)
+            .into_iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .map(|entry| entry.symbol)
+            .collect()
+    }
+
+    #[test]
+    fn a_qualified_handler_resolves_through_the_import_to_the_package_of_the_import() {
+        let main = go_file(
+            &["\"net/http\"", CHI, "\"example.com/app/dep\"", "\"other.com/x\""],
+            "func Show(w http.ResponseWriter, r *http.Request) {}\n\nfunc routes() {\n\tr := chi.NewRouter()\n\tr.Get(\"/a\", dep.Show)\n\tr.Get(\"/b\", Show)\n\tr.Get(\"/c\", x.Show)\n}\n",
+        );
+        let dep = "package dep\n\nimport \"net/http\"\n\nfunc Show(w http.ResponseWriter, r *http.Request) {}\n";
+        assert_eq!(
+            symbols_of(&[("main.go", &main), ("dep/show.go", dep)]),
+            [
+                Some("dep/show.go#Show".to_string()),
+                Some("main.go#Show".to_string()),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_without_a_qualifier_resolves_in_the_same_package_only() {
+        let main = go_file(
+            &["\"net/http\"", CHI],
+            "func routes() {\n\tr := chi.NewRouter()\n\tr.Get(\"/a\", Show)\n}\n",
+        );
+        let dep = "package dep\n\nimport \"net/http\"\n\nfunc Show(w http.ResponseWriter, r *http.Request) {}\n";
+        assert_eq!(
+            symbols_of(&[("main.go", &main), ("dep/show.go", dep)]),
+            [None]
+        );
+    }
+
+    #[test]
+    fn a_caller_that_adds_middleware_to_the_result_of_a_factory_blocks_its_routes() {
+        let source = go_source(
+            &[CHI, ECHO, GIN, MUX],
+            r#"func NewEcho() *echo.Echo {
+	e := echo.New()
+	e.GET("/e", show)
+	return e
+}
+
+func NewGin() *gin.Engine {
+	g := gin.New()
+	g.GET("/g", show)
+	return g
+}
+
+func NewChi() *chi.Mux {
+	c := chi.NewRouter()
+	c.Get("/c", show)
+	return c
+}
+
+func NewMux() *mux.Router {
+	m := mux.NewRouter()
+	m.HandleFunc("/m", show)
+	return m
+}
+
+func serve() {
+	e := NewEcho()
+	e.Use(auth)
+	g := NewGin()
+	g.Use(auth)
+	c := NewChi()
+	c.Use(auth)
+	m := NewMux()
+	m.Use(auth)
+}
+"#,
+        );
+        assert_eq!(go_routes(&[("main.go", &source)]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn timing_a_function_with_many_returned_routers_is_read_in_linear_time() {
+        let mut body = String::from("func pick(n int) *chi.Mux {\n");
+        for index in 0..5_000 {
+            body.push_str(&format!(
+                "\tif n == {index} {{\n\t\tr{index} := chi.NewRouter()\n\t\treturn r{index}\n\t}}\n"
+            ));
+        }
+        body.push_str("\treturn nil\n}\n");
+        let source = go_source(&[CHI], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert!(found.is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn timing_a_chain_of_ten_thousand_mounts_is_read_in_linear_time() {
+        let mut body = String::from("func chain() {\n");
+        for index in 0..=10_000 {
+            body.push_str(&format!("\tr{index} := chi.NewRouter()\n"));
+        }
+        for index in 0..10_000 {
+            body.push_str(&format!("\tr{index}.Mount(\"/x\", r{})\n", index + 1));
+        }
+        body.push_str("}\n");
+        let source = go_source(&[CHI], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert!(found.is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn timing_many_packages_with_one_handler_name_are_read_in_linear_time() {
+        let count = 2_000;
+        let mut imports = vec!["\"net/http\"".to_string(), CHI.to_string()];
+        let mut body = String::from("func routes() {\n\tr := chi.NewRouter()\n");
+        let mut files: Vec<(String, String)> = Vec::new();
+        for index in 0..count {
+            imports.push(format!("\"example.com/app/p{index:05}\""));
+            body.push_str(&format!("\tr.Get(\"/{index}\", p{index:05}.Show)\n"));
+            files.push((
+                format!("p{index:05}/show.go"),
+                format!(
+                    "package p{index:05}\n\nimport \"net/http\"\n\nfunc Show(w http.ResponseWriter, r *http.Request) {{}}\n"
+                ),
+            ));
+        }
+        body.push_str("}\n");
+        let import_refs: Vec<&str> = imports.iter().map(String::as_str).collect();
+        files.push(("main.go".to_string(), go_file(&import_refs, &body)));
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(name, text)| (name.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &borrowed);
+        assert_eq!(found.len(), count);
+        assert!(found.iter().all(|entry| entry
+            .symbol
+            .as_deref()
+            .is_some_and(|symbol| symbol.ends_with("/show.go#Show"))));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
             "took {:?}",
             started.elapsed()
         );

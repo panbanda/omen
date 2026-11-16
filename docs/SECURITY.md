@@ -258,6 +258,13 @@ files call `clear`, omen does not know the class names. Then no route has a symb
 - The second kind attaches the result. The call passes the result as an argument, returns
   it, or stores it in a field, a package variable, or a literal. The third kind is a use
   that omen cannot classify.
+- A caller can add middleware to the result of a factory with `Use` or `Pre`. This
+  changes the guards of the routes of the factory. Such a call is a use of the second
+  kind. Only a method that registers a route, makes a group, or serves the router is not.
+- A handler name in a Go file has a package. A name with a qualifier, as `dep.Show`,
+  names a function of the package of the import. The index must resolve that import.
+  If it does not, the entry has no handler. A name without a qualifier names a function
+  of the package of the file. A package is the files of one directory.
 - Any mention of the name of a factory that is not a call is a use of the third kind. A
   function value, a method value, and an argument that is a function are examples. A
   mention of another function with the same name also counts.
