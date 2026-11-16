@@ -247,8 +247,8 @@ reverts the code, and this file keeps the full tables and the rejection.
 
 ### Result of experiment C
 
-The result of experiment C is on the base `2d9bb49`. The code is the commit
-that this section is in. A later commit reverts it.
+The result of experiment C is on the base `2d9bb49`. The code is in the
+commit `6896825`. The commit that follows it reverts it.
 
 Experiment C fails the first and the third condition of the adoption rule.
 `cargo test --test retrieval` fails, and four queries have a worse rank. Thus
@@ -352,5 +352,4 @@ Each cell has hit@1, hit@5, hit@10, and MRR (all results), in this order.
 | typescript | identifier | 8 | 1.000 / 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 / 1.000 |
 | typescript | natural_language | 7 | 0.143 / 0.571 / 0.571 / 0.310 | 0.143 / 0.571 / 0.571 / 0.333 |
 
-To reproduce, run `git cherry-pick <commit>` for the code commit of experiment
-C, and then run `cargo test --test retrieval -- --nocapture`.
+To reproduce, run `git cherry-pick 6896825`, and then run `cargo test --test retrieval -- --nocapture`.
