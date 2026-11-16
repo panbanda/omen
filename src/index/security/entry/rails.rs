@@ -24,6 +24,7 @@
 //!   with such a place removes the guard.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -58,11 +59,11 @@ const SINGULAR_ACTIONS: [(&str, &str, &str); 7] = [
 ];
 
 /// Options of `resources` that do not change the paths or the controller.
-const HARMLESS_OPTIONS: [&str; 5] = ["as", "constraints", "defaults", "format", "concerns"];
+const HARMLESS_OPTIONS: [&str; 3] = ["constraints", "defaults", "concerns"];
 
 /// The scope that the blocks around a route give.
 #[derive(Clone, Default)]
-struct Scope {
+pub(super) struct Scope {
     /// The path of the blocks, as `@scope[:path]` of Rails. `None` means that the path is not
     /// known.
     prefix: Option<String>,
@@ -73,6 +74,8 @@ struct Scope {
     /// The route is in a `member` or `collection` block, or `on:` puts it there. A canonical action
     /// name then adds no path segment.
     method_scope: bool,
+    /// The route is in a `draw` block of the routes of the application or of an engine.
+    draw: bool,
 }
 
 impl Scope {
@@ -88,7 +91,7 @@ impl Scope {
 
 /// The paths of a resource after the path of the blocks around it, without a leading `/`.
 #[derive(Clone)]
-struct ResourceContext {
+pub(super) struct ResourceContext {
     singular: bool,
     collection: String,
     member: String,
@@ -292,9 +295,8 @@ fn pluralize(word: &str) -> String {
 
 /// The path that `Journey::Router::Utils.normalize_path` and `Mapper.normalize_path` of Rails 7.2.2
 /// give: one leading `/`, no repeated `/`, no trailing `/` except for the root path, the
-/// percent codes in upper case, and the optional segments in front of the `/`. Rails escapes a
-/// character that a path cannot hold. Omen gives no path for such a character.
-fn normalize_path(path: &str) -> Option<String> {
+/// percent codes in upper case, and the optional segments in front of the `/`.
+fn normalize_path(path: &str) -> String {
     static ENCODED: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new("(%[a-f0-9]{2})").expect("a fixed pattern"));
     static OPEN: std::sync::LazyLock<regex::Regex> =
@@ -304,12 +306,6 @@ fn normalize_path(path: &str) -> Option<String> {
     });
     static LEADING: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"^(\(+)/").expect("a fixed pattern"));
-    if !path
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "-._~:@!$&'()*+,;=/%".contains(c))
-    {
-        return None;
-    }
     let mut text = String::from("/");
     for character in path.chars() {
         if character == '/' && text.ends_with('/') {
@@ -331,7 +327,28 @@ fn normalize_path(path: &str) -> Option<String> {
     if ALL_OPTIONAL.is_match(&text) {
         text = LEADING.replace(&text, "/${1}").into_owned();
     }
-    Some(text)
+    text
+}
+
+/// The escape of `URI::RFC2396_Parser#escape` that the mapper applies to the path of a route: each
+/// byte that is not a letter, a digit, or one of `-_.!~*'();/?:@&=+$,[]` becomes `%` and two
+/// upper case hexadecimal digits. Thus `%` becomes `%25`.
+fn escape_route_path(path: &str) -> String {
+    let mut escaped = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.!~*'();/?:@&=+$,[]".contains(&byte) {
+            escaped.push(char::from(byte));
+        } else {
+            escaped.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    escaped
+}
+
+/// The path of a route, as `add_route` of the mapper gives it: the path of the blocks, a `/`, and
+/// the path of the route, escaped and then normalized.
+fn route_path(base: &str, part: &str) -> String {
+    normalize_path(&escape_route_path(&format!("{base}/{part}")))
 }
 
 /// The path of a part of a path after a prefix, as `merge_path_scope` of Rails does. A prefix that
@@ -341,7 +358,7 @@ fn join(prefix: &Option<String>, part: &str) -> Option<String> {
 }
 
 fn join_str(prefix: &str, part: &str) -> Option<String> {
-    normalize_path(&format!("{prefix}/{part}"))
+    Some(normalize_path(&format!("{prefix}/{part}")))
 }
 
 impl<'a> Context<'a> {
@@ -450,37 +467,74 @@ impl<'a> Context<'a> {
     }
 
     /// The scope that the blocks around the node give. `None` means that a block is not readable.
+    /// The scope inside each block is kept, so a route reads the scope of its nearest block, and
+    /// the search does not walk to the `draw` call again.
     fn rails_scope(&self, node: Node<'_>) -> Option<Scope> {
-        let mut frames = Vec::new();
-        let mut child = node;
+        let mut pending: Vec<Node<'_>> = Vec::new();
+        let mut current = node;
+        let mut scope: Option<Rc<Scope>> = loop {
+            match Self::next_frame(current) {
+                Frame::Invalid => break None,
+                Frame::Root => {
+                    break Some(Rc::new(Scope {
+                        prefix: Some(String::from("/")),
+                        ..Scope::default()
+                    }))
+                }
+                Frame::Call(frame) => {
+                    if let Some(known) = self.rails_scopes.borrow().get(&frame.id()) {
+                        break known.clone();
+                    }
+                    pending.push(frame);
+                    current = frame;
+                }
+            }
+        };
+        for frame in pending.into_iter().rev() {
+            scope = scope.and_then(|outer| {
+                if matches!(
+                    frame
+                        .child_by_field_name("method")
+                        .map(|method| self.text(method)),
+                    Some("constraints" | "defaults")
+                ) && frame.child_by_field_name("receiver").is_none()
+                {
+                    return Some(outer);
+                }
+                self.rails_enter(frame, (*outer).clone()).map(Rc::new)
+            });
+            self.rails_scopes
+                .borrow_mut()
+                .insert(frame.id(), scope.clone());
+        }
+        scope
+            .filter(|scope| scope.draw)
+            .map(|scope| (*scope).clone())
+    }
+
+    /// The nearest block call above the node. A method, a lambda, a loop, a class, and a dead
+    /// branch between them make the scope not readable.
+    fn next_frame(start: Node<'_>) -> Frame<'_> {
+        let mut child = start;
         while let Some(parent) = child.parent() {
             match parent.kind() {
-                "call" if parent.child_by_field_name("block") == Some(child) => frames.push(parent),
+                "call" if parent.child_by_field_name("block") == Some(child) => {
+                    return Frame::Call(parent)
+                }
                 "for" | "while" | "until" | "while_modifier" | "until_modifier" | "method"
                 | "singleton_method" | "lambda" | "class" | "module" | "singleton_class" => {
-                    return None
+                    return Frame::Invalid
                 }
                 "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional"
                     if Self::is_dead_branch(parent, child) =>
                 {
-                    return None
+                    return Frame::Invalid
                 }
                 _ => {}
             }
             child = parent;
         }
-        let mut scope = Scope {
-            prefix: Some(String::from("/")),
-            ..Scope::default()
-        };
-        let draws = |frame: &Node<'_>| self.is_draw_block(*frame);
-        if !frames.iter().any(draws) {
-            return None;
-        }
-        for frame in frames.into_iter().rev() {
-            scope = self.rails_enter(frame, scope)?;
-        }
-        Some(scope)
+        Frame::Root
     }
 
     /// Tells if a literal condition makes the branch of `child` dead: `if false`, `if nil`,
@@ -520,6 +574,7 @@ impl<'a> Context<'a> {
         let method = self.text(call.child_by_field_name("method")?);
         let receiver = call.child_by_field_name("receiver").is_some();
         if self.is_draw_block(call) {
+            scope.draw = true;
             return Some(scope);
         }
         if receiver {
@@ -615,11 +670,15 @@ impl<'a> Context<'a> {
             "resources" | "resource" => {
                 let singular = method == "resource";
                 let definition = self.rails_resource_definition(&positional, &options, &scope)?;
-                if definition.names.len() != 1 || scope.method_scope {
+                if definition.names.len() != 1
+                    || scope.method_scope
+                    || matches!(self.rails_api_only(), ApiOnly::Unknown)
+                {
                     return None;
                 }
                 let name = &definition.names[0];
-                let context = definition.context(singular, name, self.rails_singular(name));
+                let naming = definition.as_name.as_deref().unwrap_or(name);
+                let context = definition.context(singular, name, self.rails_singular(naming));
                 scope.prefix = scope.nested_prefix();
                 scope.controller =
                     Some(definition.controller_for(singular, name, self.rails_plural(name))?);
@@ -650,6 +709,7 @@ impl<'a> Context<'a> {
         let mut except = Vec::new();
         let mut path = None;
         let mut controller = None;
+        let mut as_name = None;
         let mut modules = scope.modules.clone();
         for option in &options.0 {
             if option.string_key {
@@ -660,6 +720,8 @@ impl<'a> Context<'a> {
                 "except" => except = self.rails_names(option.value)?,
                 "path" => path = Some(self.rails_literal(option.value)?),
                 "controller" => controller = Some(self.rails_literal(option.value)?),
+                "as" => as_name = Some(self.rails_literal(option.value)?),
+                "format" if option.value.kind() == "false" => {}
                 "module" => modules.extend(split_segments(&self.rails_literal(option.value)?)),
                 key if HARMLESS_OPTIONS.contains(&key) => {}
                 _ => return None,
@@ -671,6 +733,7 @@ impl<'a> Context<'a> {
             except,
             path,
             controller,
+            as_name,
             modules,
         })
     }
@@ -687,6 +750,11 @@ impl<'a> Context<'a> {
         if scope.method_scope {
             return;
         }
+        let api_only = match self.rails_api_only() {
+            ApiOnly::On => true,
+            ApiOnly::Off => false,
+            ApiOnly::Unknown => return,
+        };
         let Some(base) = scope.nested_prefix() else {
             return;
         };
@@ -699,13 +767,11 @@ impl<'a> Context<'a> {
             let context = definition.context(singular, name, None);
             let controller = definition.controller_for(singular, name, self.rails_plural(name));
             for (action, verb, suffix) in table {
-                if !definition.allows(action) {
+                if !definition.allows(action, api_only) {
                     continue;
                 }
-                let Some(path) = join_str(&base, &format!("{}{suffix}", context.collection)) else {
-                    continue;
-                };
-                let route_path = path.clone();
+                let path = route_path(&base, &format!("{}{suffix}", context.collection));
+                let variant_path = path.clone();
                 let (symbol, guards) = match &controller {
                     Some(controller) => self.rails_handler(&definition.modules, controller, action),
                     None => (None, Vec::new()),
@@ -718,7 +784,7 @@ impl<'a> Context<'a> {
                     route: Some(route(verb, path)),
                     guards,
                     basis: EntryBasis::Registered,
-                    variant: Some(format!("{action}@{name}@{route_path}")),
+                    variant: Some(format!("{action}@{name}@{variant_path}")),
                 });
             }
         }
@@ -820,12 +886,9 @@ impl<'a> Context<'a> {
             && ["index", "create", "new", "show", "update", "destroy"]
                 .contains(&path_text.as_str());
         let full_path = if root || canonical {
-            join_str(&base, "")
+            route_path(&base, "")
         } else {
-            join_str(&base, &path_text)
-        };
-        let Some(full_path) = full_path else {
-            return;
+            route_path(&base, &path_text)
         };
 
         let target = match target_text {
@@ -929,7 +992,7 @@ impl<'a> Context<'a> {
                 continue;
             }
             if let Some(parsed) = self.all_parsed.tree(position) {
-                read_inflection_calls(parsed.root_node(), &parsed.source, false, &mut found);
+                read_inflection_calls(parsed.root_node(), &parsed.source, false, &[], &mut found);
             }
         }
         found
@@ -945,6 +1008,33 @@ impl<'a> Context<'a> {
     /// can change the name.
     fn rails_plural(&self, name: &str) -> Option<String> {
         (!self.rails_inflections().changes_singulars).then(|| pluralize(name))
+    }
+
+    /// Whether the application sets `config.api_only`. Omen reads the files in `config`. A value
+    /// that is not `true` or `false`, and an assignment in a branch that omen cannot evaluate,
+    /// make the value unknown.
+    fn rails_api_only(&self) -> ApiOnly {
+        *self.rails_shared().api_only.get_or_init(|| {
+            let mut values: Vec<Option<bool>> = Vec::new();
+            for (position, file) in self.all.iter().enumerate() {
+                let in_config = file.file.starts_with("config/") || file.file.contains("/config/");
+                if file.language != Language::Ruby || !in_config {
+                    continue;
+                }
+                if let Some(parsed) = self.all_parsed.tree(position) {
+                    read_api_only(parsed.root_node(), &parsed.source, false, &mut values);
+                }
+            }
+            if values.iter().any(Option::is_none)
+                || (values.contains(&Some(true)) && values.contains(&Some(false)))
+            {
+                ApiOnly::Unknown
+            } else if values.contains(&Some(true)) {
+                ApiOnly::On
+            } else {
+                ApiOnly::Off
+            }
+        })
     }
 
     /// Tells if the text names the routes of the application or of an engine, and the repository
@@ -1040,49 +1130,75 @@ impl<'a> Context<'a> {
         (symbol, guards)
     }
 
-    /// Finds the nearest class in the chain of superclasses that defines an instance method with
-    /// the name of the action. Rails runs an action only when the method is public. If the method
-    /// is not public, or omen cannot read the visibility, the action is hidden: it has no symbol
-    /// and no guard. A class that defines no such method can still have an action, because a view
-    /// can give it.
+    /// Finds the nearest class in the chain of superclasses that decides if the action runs. A class
+    /// decides when it defines an instance method with the name of the action, or when it calls
+    /// `private`, `protected`, or `public` for that name. Rails runs an action only when the method
+    /// is public. If the method is not public, or omen cannot read the visibility, the action is
+    /// hidden: it has no symbol and no guard. If no class decides, a view can give the action.
+    /// The index keeps the decision for each class that the search passes.
     fn rails_action(&self, shared: &RailsShared, identity: &str, action: &str) -> Action {
+        let mut passed: Vec<String> = Vec::new();
         let mut current = identity.to_string();
-        let mut own = true;
-        loop {
+        let reach = loop {
+            if let Some(found) = shared
+                .actions
+                .lock()
+                .get(&(current.clone(), action.to_string()))
+            {
+                break *found;
+            }
+            passed.push(current.clone());
             let visibility = self.rails_visibility(shared, &current);
             if visibility.unreadable {
-                return Action::Hidden;
+                break Reach::Hidden;
             }
             if visibility.defines.contains(action) {
-                if !visibility.public_names.contains(action) {
-                    return Action::Hidden;
-                }
-                let symbol = own
-                    .then(|| {
-                        let candidates = shared.methods.get(&current)?.get(action)?;
-                        let mut public = candidates.iter().filter(|(position, index)| {
-                            let symbol = &self.all[*position].symbols[*index];
-                            visibility
-                                .public
-                                .contains(&(*position, symbol.name_range.start_byte))
-                        });
-                        let found = public.next()?;
-                        public
-                            .next()
-                            .is_none()
-                            .then(|| self.all[found.0].symbols[found.1].key.to_string())
-                    })
-                    .flatten();
-                return Action::Public(symbol);
+                break if visibility.public_names.contains(action) {
+                    Reach::Public
+                } else {
+                    Reach::Hidden
+                };
+            }
+            if let Some(public) = visibility.overrides.get(action) {
+                break if *public {
+                    Reach::Public
+                } else {
+                    Reach::Hidden
+                };
             }
             match shared.parents.get(&current) {
-                Some(Some(parent)) => {
-                    current = parent.clone();
-                    own = false;
-                }
-                _ => return Action::Public(None),
+                Some(Some(parent)) => current = parent.clone(),
+                _ => break Reach::Public,
+            }
+        };
+        {
+            let mut memo = shared.actions.lock();
+            for name in passed {
+                memo.insert((name, action.to_string()), reach);
             }
         }
+        if matches!(reach, Reach::Hidden) {
+            return Action::Hidden;
+        }
+        let visibility = self.rails_visibility(shared, identity);
+        let symbol = (|| {
+            if !visibility.defines.contains(action) {
+                return None;
+            }
+            let candidates = shared.methods.get(identity)?.get(action)?;
+            let mut public = candidates.iter().filter(|(position, index)| {
+                let symbol = &self.all[*position].symbols[*index];
+                visibility
+                    .public
+                    .contains(&(*position, symbol.name_range.start_byte))
+            });
+            let found = public.next()?;
+            public
+                .next()
+                .is_none()
+                .then(|| self.all[found.0].symbols[found.1].key.to_string())
+        })();
+        Action::Public(symbol)
     }
 
     /// The callbacks of the chain of a class, in the order of Rails. A class with no callback of
@@ -1648,6 +1764,13 @@ type ActionKey = (String, String);
 /// The symbol and the guards of an action.
 type Handler = (Option<String>, Vec<String>);
 
+/// The nearest block call above a node.
+enum Frame<'t> {
+    Invalid,
+    Root,
+    Call(Node<'t>),
+}
+
 /// A symbol of the index: the position of the file, and the position in the symbols of the file.
 type Placed = (usize, usize);
 
@@ -1655,6 +1778,13 @@ type Placed = (usize, usize);
 enum UniqueClass {
     One(String),
     Many,
+}
+
+/// Whether the nearest class that decides lets Rails run the action.
+#[derive(Clone, Copy)]
+enum Reach {
+    Public,
+    Hidden,
 }
 
 /// Whether Rails runs an action.
@@ -1697,6 +1827,9 @@ struct Visibility {
     defines: HashSet<String>,
     public_names: HashSet<String>,
     public: HashSet<(usize, usize)>,
+    /// A `private`, `protected`, or `public` call for a name that no opening defines: it changes the
+    /// visibility of a method that the class inherits. The value tells if the method is public.
+    overrides: HashMap<String, bool>,
     unreadable: bool,
 }
 
@@ -1715,7 +1848,7 @@ impl Visibility {
             files.entry(opening.position).or_default().push(opening);
         }
         let mut definers: HashMap<&str, HashSet<usize>> = HashMap::new();
-        let mut foreign: Vec<(usize, &str)> = Vec::new();
+        let mut foreign: Vec<(usize, &str, bool)> = Vec::new();
         for (file, group) in &files {
             enum Event<'e> {
                 Def(&'e DefEvent),
@@ -1740,7 +1873,7 @@ impl Visibility {
                         if state.contains_key(op.name.as_str()) {
                             state.insert(op.name.as_str(), op.public);
                         } else {
-                            foreign.push((*file, op.name.as_str()));
+                            foreign.push((*file, op.name.as_str(), op.public));
                         }
                     }
                 }
@@ -1754,13 +1887,23 @@ impl Visibility {
             }
         }
         if definers.values().any(|files| files.len() > 1)
-            || foreign.iter().any(|(file, name)| {
+            || foreign.iter().any(|(file, name, _)| {
                 definers
                     .get(name)
                     .is_some_and(|files| files.iter().any(|other| other != file))
             })
         {
             found.unreadable = true;
+        }
+        let mut override_files: HashMap<&str, usize> = HashMap::new();
+        for (file, name, public) in foreign {
+            if override_files
+                .insert(name, file)
+                .is_some_and(|other| other != file)
+            {
+                found.unreadable = true;
+            }
+            found.overrides.insert(name.to_string(), public);
         }
         found
     }
@@ -1778,11 +1921,19 @@ pub(super) struct Inflections {
     changes_singulars: bool,
 }
 
-/// Reads the inflection calls in the code: `acronym` with a string, and the calls that change
-/// a singular or a plural form. A call in a dead branch has no effect. A call in a conditional,
-/// a loop, a method, or a block other than the block of `inflections` is not known: the
-/// inflections are then unreadable.
-fn read_inflection_calls(node: Node<'_>, source: &[u8], conditional: bool, out: &mut Inflections) {
+/// The value of `config.api_only` of the application.
+#[derive(Clone, Copy)]
+enum ApiOnly {
+    On,
+    Off,
+    Unknown,
+}
+
+/// Reads the assignments `x.api_only = value` in the code. A literal `true` or `false` gives the
+/// value. Any other value, and an assignment in a branch that omen cannot evaluate, give `None`.
+/// A dead branch has no effect. A block is a branch that omen cannot evaluate, except the block of
+/// `configure`.
+fn read_api_only(node: Node<'_>, source: &[u8], conditional: bool, out: &mut Vec<Option<bool>>) {
     let mut cursor = node.walk();
     let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
     match node.kind() {
@@ -1794,30 +1945,151 @@ fn read_inflection_calls(node: Node<'_>, source: &[u8], conditional: bool, out: 
                 if Some(part) == condition || Context::is_dead_branch(node, part) {
                     continue;
                 }
-                read_inflection_calls(part, source, conditional || !literal, out);
+                read_api_only(part, source, conditional || !literal, out);
             }
             return;
         }
         "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
         | "until" | "while_modifier" | "until_modifier" => {
             for child in children {
-                read_inflection_calls(child, source, true, out);
+                read_api_only(child, source, true, out);
+            }
+            return;
+        }
+        "assignment" => {
+            let assigns_api_only = node.child_by_field_name("left").is_some_and(|left| {
+                left.kind() == "call"
+                    && left
+                        .child_by_field_name("method")
+                        .is_some_and(|method| super::syntax::text(method, source) == "api_only")
+            });
+            if assigns_api_only {
+                let value = match node.child_by_field_name("right").map(|right| right.kind()) {
+                    Some("true") => Some(true),
+                    Some("false") => Some(false),
+                    _ => None,
+                };
+                out.push(if conditional { None } else { value });
+            }
+        }
+        _ => {}
+    }
+    let block_conditional = conditional
+        || node.kind() != "call"
+        || node
+            .child_by_field_name("method")
+            .is_none_or(|method| super::syntax::text(method, source) != "configure");
+    for child in children {
+        let is_block = matches!(child.kind(), "do_block" | "block");
+        read_api_only(
+            child,
+            source,
+            if is_block {
+                block_conditional
+            } else {
+                conditional
+            },
+            out,
+        );
+    }
+}
+
+/// Tells if the node is the object of the inflections: a block parameter of
+/// `ActiveSupport::Inflector.inflections`, or the call `ActiveSupport::Inflector.inflections`.
+fn is_inflection_object(node: Node<'_>, source: &[u8], params: &[String]) -> bool {
+    if node.kind() == "identifier" {
+        let name = super::syntax::text(node, source);
+        return params.iter().any(|param| param == name);
+    }
+    node.kind() == "call"
+        && node
+            .child_by_field_name("method")
+            .is_some_and(|method| super::syntax::text(method, source) == "inflections")
+        && node
+            .child_by_field_name("receiver")
+            .is_some_and(|receiver| {
+                super::syntax::text(receiver, source)
+                    .trim_start_matches("::")
+                    .ends_with("Inflector")
+            })
+}
+
+/// The names of the parameters of a block of the call.
+fn block_parameter_names(call: Node<'_>, source: &[u8]) -> Vec<String> {
+    let Some(block) = call.child_by_field_name("block") else {
+        return Vec::new();
+    };
+    let Some(parameters) = block.child_by_field_name("parameters") else {
+        return Vec::new();
+    };
+    let mut cursor = parameters.walk();
+    parameters
+        .named_children(&mut cursor)
+        .filter(|parameter| parameter.kind() == "identifier")
+        .map(|parameter| super::syntax::text(parameter, source).to_string())
+        .collect()
+}
+
+/// Reads the inflection calls in the code: `acronym` with a string, and the calls that change
+/// a singular or a plural form. Only a call on the object of the inflections counts: the
+/// parameter of the block of `ActiveSupport::Inflector.inflections`, or the result of that call.
+/// A call in a dead branch has no effect. A call in a conditional, a loop, a method, or a block
+/// other than the block of `inflections` is not known: the inflections are then unreadable.
+fn read_inflection_calls(
+    node: Node<'_>,
+    source: &[u8],
+    conditional: bool,
+    params: &[String],
+    out: &mut Inflections,
+) {
+    let mut cursor = node.walk();
+    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+    match node.kind() {
+        "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
+            let condition = node.child_by_field_name("condition");
+            let literal = condition
+                .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"));
+            for part in children {
+                if Some(part) == condition || Context::is_dead_branch(node, part) {
+                    continue;
+                }
+                read_inflection_calls(part, source, conditional || !literal, params, out);
+            }
+            return;
+        }
+        "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
+        | "until" | "while_modifier" | "until_modifier" => {
+            for child in children {
+                read_inflection_calls(child, source, true, params, out);
             }
             return;
         }
         _ => {}
     }
     let mut block_conditional = conditional;
+    let mut block_params: Vec<String> = params.to_vec();
     if node.kind() == "call" {
         let method = node
             .child_by_field_name("method")
             .map_or("", |method| super::syntax::text(method, source));
-        let has_receiver = node.child_by_field_name("receiver").is_some();
-        block_conditional = conditional || method != "inflections";
-        let affects = matches!(
-            method,
-            "acronym" | "irregular" | "uncountable" | "human" | "clear"
-        ) || (has_receiver && matches!(method, "singular" | "plural"));
+        let receiver = node.child_by_field_name("receiver");
+        let opens_inflections = method == "inflections"
+            && receiver.is_some_and(|receiver| {
+                super::syntax::text(receiver, source)
+                    .trim_start_matches("::")
+                    .ends_with("Inflector")
+            });
+        block_conditional = conditional || !opens_inflections;
+        if opens_inflections {
+            block_params.extend(block_parameter_names(node, source));
+        }
+        let on_object =
+            receiver.is_some_and(|receiver| is_inflection_object(receiver, source, params));
+        let affects = on_object
+            && matches!(
+                method,
+                "acronym" | "irregular" | "uncountable" | "human" | "clear" | "singular" | "plural"
+            );
         if affects && conditional {
             out.unreadable_acronym = true;
             out.changes_singulars = true;
@@ -1859,16 +2131,11 @@ fn read_inflection_calls(node: Node<'_>, source: &[u8], conditional: bool, out: 
     }
     for child in children {
         let is_block = matches!(child.kind(), "do_block" | "block");
-        read_inflection_calls(
-            child,
-            source,
-            if is_block {
-                block_conditional
-            } else {
-                conditional
-            },
-            out,
-        );
+        if is_block {
+            read_inflection_calls(child, source, block_conditional, &block_params, out);
+        } else {
+            read_inflection_calls(child, source, conditional, params, out);
+        }
     }
 }
 
@@ -1883,10 +2150,12 @@ pub(super) struct RailsShared {
     parents: HashMap<String, Option<String>>,
     child_counts: HashMap<String, usize>,
     inflections: std::sync::OnceLock<Inflections>,
+    api_only: std::sync::OnceLock<ApiOnly>,
     callbacks: Mutex<HashMap<Placed, Arc<Vec<Callback>>>>,
     visibility: Mutex<HashMap<String, Arc<Visibility>>>,
     programs: Mutex<HashMap<String, Arc<Program>>>,
     handled: Mutex<HashMap<ActionKey, Handler>>,
+    actions: Mutex<HashMap<ActionKey, Reach>>,
 }
 
 impl RailsShared {
@@ -1935,10 +2204,12 @@ impl RailsShared {
             parents,
             child_counts,
             inflections: std::sync::OnceLock::new(),
+            api_only: std::sync::OnceLock::new(),
             callbacks: Mutex::new(HashMap::new()),
             visibility: Mutex::new(HashMap::new()),
             programs: Mutex::new(HashMap::new()),
             handled: Mutex::new(HashMap::new()),
+            actions: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -2026,15 +2297,21 @@ struct ResourceDefinition {
     except: Vec<String>,
     path: Option<String>,
     controller: Option<String>,
+    /// The `as:` option. It replaces the name of the resource where Rails builds the nested
+    /// parameter.
+    as_name: Option<String>,
     modules: Vec<String>,
 }
 
 impl ResourceDefinition {
-    fn allows(&self, action: &str) -> bool {
-        self.only
-            .as_ref()
-            .is_none_or(|only| only.iter().any(|name| name == action))
-            && !self.except.iter().any(|name| name == action)
+    /// Tells if `actions` of Rails has the action: the `only:` list, or the default actions, and
+    /// then without the `except:` list. An API application has no `new` and no `edit` by default.
+    fn allows(&self, action: &str, api_only: bool) -> bool {
+        let available = match &self.only {
+            Some(only) => only.iter().any(|name| name == action),
+            None => !(api_only && matches!(action, "new" | "edit")),
+        };
+        available && !self.except.iter().any(|name| name == action)
     }
 
     /// The paths of the resource, as `Resource` and `SingletonResource` of Rails give them.

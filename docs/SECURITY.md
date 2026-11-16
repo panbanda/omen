@@ -125,15 +125,18 @@ each form against the source of Rails 7.2.2.
 | `get`, `post`, `put`, `patch`, `delete` with a string path or a symbol path | Read, with the options `to`, `controller`, `action`, `on`, `as`, `constraints`, `defaults`, `anchor`, `format: false`, and a constraint with a regular expression. Any other option skips the route. |
 | `match` with `via:` | Read. A call without `via:` is skipped. |
 | `root` | Read. In a `resources` block the path is the collection path. In a `resource` block it is skipped. |
-| `resources` and `resource` with `only:`, `except:`, `path:`, `controller:`, `module:`, `as:`, `constraints:`, `defaults:`, `concerns:`, `format: false` | Read. Any other option, such as `param:` or `shallow:`, skips the call. |
+| `resources` and `resource` with `only:`, `except:`, `path:`, `controller:`, `module:`, `as:`, `constraints:`, `defaults:`, `concerns:`, `format: false` | Read. The option `as:` gives the name for the nested parameter: `as: :articles` gives `:article_id`. Any other option, such as `param:` or `shallow:`, skips the call. |
+| `config.api_only = true` in a file in `config` | The `resources` and `resource` calls have no `new` and no `edit` route, unless `only:` lists them. A value that is not `true` or `false`, or an assignment in a branch that omen cannot evaluate, skips each `resources` and `resource` call. |
 | `member do`, `collection do`, `on: :member`, `on: :collection` | Read. A canonical action name, such as `get :show`, adds no path segment. `on: :new` is skipped. |
 | A route in a `scope` in a `resources` block | Read. The nested path follows the path of the scope: `/x/users/:user_id/y`. |
 | `concerns`, `draw(:file)`, `mount`, `devise_for`, `direct`, `resolve` | No route. |
-| A path with a character that Rails escapes | The route is skipped. |
 
-Omen gives the path as `Journey::Router::Utils.normalize_path` and `Mapper.normalize_path` of
-Rails give it. The path has one leading `/`, no repeated `/`, no trailing `/` except the root
-path, and upper case percent codes. Omen does not report the optional `(.:format)` segment.
+Omen gives the path as the mapper of Rails gives it. The mapper escapes the path as
+`URI::RFC2396_Parser#escape` does: each byte that is not a letter, a digit, or one of
+`-_.!~*'();/?:@&=+$,[]` becomes `%` and two upper case hexadecimal digits. Thus `%` becomes `%25`
+and a space becomes `%20`. Then `Journey::Router::Utils.normalize_path` and `Mapper.normalize_path`
+act: one leading `/`, no repeated `/`, and no trailing `/` except the root path. Omen does not
+report the optional `(.:format)` segment.
 
 Omen resolves the action to a symbol. The class must be in the same chain of modules as the
 route. For a route in `namespace :admin`, omen matches `Admin::UsersController`. It does not
@@ -146,7 +149,9 @@ the route has no symbol and no guard. A `def self.x` method, a method in `class 
 after `private` or `protected`, and a method that `private :x` or `private def x` hides are not
 public. In one file, the visibility calls run in the order of the source. If two files define
 one method, or a `private :x` call in one file names a method of another file, the order of the
-files is not known, and the route has no symbol and no guard. The same holds for a class with a
+files is not known, and the route has no symbol and no guard. A `private`, `protected`, or
+`public` call for a method that the class inherits changes the action of the class. If a class
+calls `private :show`, the inherited `show` has no symbol and no guard. The same holds for a class with a
 definition in a block, or a visibility call that omen cannot read. If no class defines the
 method, a view can give the action, so the guards stay.
 
@@ -199,7 +204,9 @@ and the files with `inflect` in the name. If one of them calls `irregular`, `unc
 controller for a `resource` call. The `member` routes and the `collection` routes stay. Comments
 do not change the inflections. Omen does not find a change in a different file.
 
-Omen reads a literal `inflect.acronym "API"` call in the same files. It builds the class name as
+Omen reads a literal `inflect.acronym "API"` call in the same files. The receiver must be the
+parameter of the block of `ActiveSupport::Inflector.inflections`, or the result of that call. A
+call on another receiver has no effect. It builds the class name as
 `camelize` of ActiveSupport does, so `api/users` gives `API::UsersController`. A call in a dead
 branch has no effect. A call in any other `if`, `case`, loop, method, or block, except the block of
 `inflections`, makes the inflections unreadable. If an `acronym` argument is not a string, or the
