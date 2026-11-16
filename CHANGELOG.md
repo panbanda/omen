@@ -5,6 +5,15 @@
 
 ### ⚠ BREAKING CHANGES
 
+Read [docs/MIGRATING-5.0.md](https://github.com/panbanda/omen/blob/main/docs/MIGRATING-5.0.md) before you upgrade. It lists each change and the action for it. Omen 5.0 has no alias and no shim for a removed item.
+
+* **CLI:** `--check` is now `--gate off|warn|error`. A gated command writes the report to stdout and the violations to stderr. `all` obeys `-f` and writes Markdown by default. `search query -k`/`--top-k` is now `-n`/`--top`. `--days N` is now `--since Nd` on `churn`, `defect`, `hotspot`, `temporal` and `report generate`. `-p`, `-f`, `-c`, `-v`, `-j`, `--compact`, `--ref` and `--shallow` are global flags. `--ref` is not accepted by history commands. `symbol` returns choices and exits non-zero on an ambiguous name; `impact` refuses an ambiguous seed.
+* **Configuration:** only TOML. Each command has its own table; `[gate]` is removed and each gated command has a `gate` key in its table. Each history window is a `since` duration. An unknown or removed key is an error that names the new key.
+* **Output:** `path` and `file_path` are now `file`. The analyzer `duplicates` is now `clones`, and the report files `duplicates.json` and `hotspots.json` are now `clones.json` and `hotspot.json`. Symbol identifiers have the form `path#Container.name`; give them back as they are and do not parse them.
+* **MCP:** `semantic_search` is now `search`, and `semantic_search_hyde` is removed. Each call is validated: a missing, invalid or unknown argument is an error (`missing_argument`, `invalid_argument`, `unknown_argument`) and is never replaced with a default. A failure is a tool result with `isError: true` and `error.code`; do not read `result.found` or `result.ambiguous`. Each tool gives the envelope `total_items`, `returned`, `offset`, `has_more`, `next_offset` and `truncated`. The `days` argument is now `since`.
+* **Defaults:** some MCP defaults changed (for example `churn` history and the `clones` threshold). Send the argument to keep the old value.
+
+
 * remove --days; since is the one history window ([#555](https://github.com/panbanda/omen/issues/555))
 * omen 5.0 part 2: analyzers on the shared index, configuration, handlers ([#543](https://github.com/panbanda/omen/issues/543))
 * omen 5.0 part 1: PR comment, sink table, agent surface ([#542](https://github.com/panbanda/omen/issues/542))
