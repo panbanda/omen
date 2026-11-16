@@ -1,2 +1,4 @@
 [tools]
 rust = "latest"
+# bun.lock uses lock format 2, which needs Bun 1.4 or later.
+bun = "1.4.4"
