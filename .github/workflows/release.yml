@@ -343,15 +343,14 @@ jobs:
           TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
           VERSION="${TAG#omen-v}"
-          docker manifest create ghcr.io/panbanda/omen:${VERSION} \
-            ghcr.io/panbanda/omen:${VERSION}-amd64 \
-            ghcr.io/panbanda/omen:${VERSION}-arm64
-          docker manifest push ghcr.io/panbanda/omen:${VERSION}
-
-          docker manifest create ghcr.io/panbanda/omen:latest \
-            ghcr.io/panbanda/omen:${VERSION}-amd64 \
-            ghcr.io/panbanda/omen:${VERSION}-arm64
-          docker manifest push ghcr.io/panbanda/omen:latest
+          # `docker push` of a current engine gives an image index with an
+          # attestation, and `docker manifest create` does not accept an index.
+          docker buildx imagetools create \
+            --tag "ghcr.io/panbanda/omen:${VERSION}" \
+            --tag ghcr.io/panbanda/omen:latest \
+            "ghcr.io/panbanda/omen:${VERSION}-amd64" \
+            "ghcr.io/panbanda/omen:${VERSION}-arm64"
+          docker buildx imagetools inspect "ghcr.io/panbanda/omen:${VERSION}"
 
   mcp-registry:
     name: Publish MCP Manifest
