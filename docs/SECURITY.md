@@ -270,8 +270,26 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   If it does not, the entry has no handler. A name without a qualifier names a function
   of the package of the file. A package is the files of one directory.
 - A local binding can hide a name. A parameter, a short variable declaration, a
-  variable, a range variable, and a type switch variable are local bindings. A handler
-  name that has a local binding before it has no handler.
+  variable, a range variable, and a type switch variable are local bindings. The scope
+  of a parameter is its function. The scope of another binding starts after its
+  declaration and ends with its block, its statement, or its case clause. A handler name
+  that has a local binding in scope has no handler.
+- A value of a type that is not a type of the framework is not a router. This holds for a
+  struct that embeds or holds a router or a multiplexer. A wrapper type can define a
+  method with the name of a method of the framework, or the method `ServeHTTP`. Then its
+  values are not routers, and the routes of its factory give no entry, also when a call
+  serves the result as the root. A multiplexer of `net/http` is a variable that has one
+  binding in the file, and the binding is a call of `http.NewServeMux()`.
+- Omen reads a string literal as Go does. An interpreted literal has the escapes `\a`,
+  `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\\`, `\"`, octal, `\x`, `\u`, and `\U`. A raw
+  literal has no escape. A bad escape, or a value that is not UTF-8, gives no entry.
+- A gorilla/mux route can have an error that stops it from matching. A template with
+  unbalanced braces, an empty name or pattern, a pattern that has a capture group or
+  that is not a regular expression, an odd number of arguments in `Headers`, and a
+  second `Name` set this error. Omen accepts these calls in a chain: `Methods`, `Path`,
+  `PathPrefix`, `Headers`, `Name`, `Schemes`, `MatcherFunc`, and `BuildVarsFunc`. It
+  checks the templates of the paths. A route with `Host`, `Queries`, `HeadersRegexp`,
+  or another call gives no entry.
 - Any mention of the name of a factory that is not a call is a use of the third kind. A
   function value, a method value, and an argument that is a function are examples. A
   mention of another function with the same name also counts.
@@ -297,9 +315,10 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   one such function gives no handler. A wrapper is a guard only when the repository
   defines it as a function that takes a handler and gives a handler. A conversion such
   as `http.HandlerFunc` or `gin.WrapF` is not a guard.
-- One registration can give more than one entry with the same method. A router that two
-  paths mount does this. Then the key of each entry has the path at its end. If the keys
-  are still equal, each key has the number of its entry in the walk.
+- Two entries can have the same place and the same method. Then the key of each entry
+  has the path at its end. If the keys are still equal, each key has the number of its
+  entry in the walk. A router that two mounts attach does not give such entries,
+  because it gives no entry.
 - For chi, a prefix comes from `Route`, which also gives the new router. A guard comes
   from `Use` and `With`. `Use` guards each route of its router and of its sub-routers,
   in any source order. `Mount` joins a router of the same file. A router that two mounts

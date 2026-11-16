@@ -489,11 +489,8 @@ struct Context<'a> {
     /// The local bindings of a Go file, by name: the starts of the bindings in order, and
     /// for each the highest end of a function that has a binding up to it.
     go_locals: std::sync::OnceLock<GoLocals>,
-    /// The package-level variables of a Go file, by name. The value is the number of specs.
-    go_globals: std::sync::OnceLock<std::collections::HashMap<String, usize>>,
-    /// The names of the variables that hold a `net/http` multiplexer, for the names that the
-    /// walk asked about.
-    go_servemux_names: parking_lot::Mutex<std::collections::HashMap<String, bool>>,
+    /// The names of the variables that hold a `net/http` multiplexer, in a Go file.
+    go_servemuxes: std::sync::OnceLock<std::collections::HashSet<String>>,
 }
 
 struct Draft {
@@ -551,8 +548,7 @@ impl<'a> Context<'a> {
             symbol_starts,
             callables_here,
             go_locals: std::sync::OnceLock::new(),
-            go_globals: std::sync::OnceLock::new(),
-            go_servemux_names: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            go_servemuxes: std::sync::OnceLock::new(),
         }
     }
 
@@ -1508,7 +1504,10 @@ impl<'a> Context<'a> {
         {
             return;
         }
-        let Some((method, path)) = go_routes::servemux_pattern(&self.string_of(*first)) else {
+        let Some((method, path)) = self
+            .go_string(*first)
+            .and_then(|pattern| go_routes::servemux_pattern(&pattern))
+        else {
             return;
         };
         let wrapped = self.go_handler(*handler, go_routes::HandlerKind::Http);
@@ -1620,23 +1619,7 @@ impl<'a> Context<'a> {
         if names.iter().any(|name| name == text) {
             return !self.is_go_local(receiver);
         }
-        let markers: Vec<String> = names
-            .iter()
-            .map(|name| format!("{name}.NewServeMux("))
-            .collect();
-        let markers: Vec<&str> = markers.iter().map(String::as_str).collect();
-        if receiver.kind() != "identifier" {
-            return false;
-        }
-        if let Some(known) = self.go_servemux_names.lock().get(text) {
-            return *known;
-        }
-        let holds = self.go_binding_count(receiver) == 1
-            && bound_to_marker(self.parsed.root_node(), self.source, text, &markers);
-        self.go_servemux_names
-            .lock()
-            .insert(text.to_string(), holds);
-        holds
+        receiver.kind() == "identifier" && self.is_go_servemux(text)
     }
 
     fn rust_axum(&self, node: Node<'_>, out: &mut Vec<Draft>) {
@@ -3471,6 +3454,241 @@ func outside() {
         assert_eq!(
             go_routes(&[("main.go", &source)]),
             ["gin GET /a [<function literal>] list"]
+        );
+    }
+
+    #[test]
+    fn a_value_of_a_type_that_wraps_a_servemux_is_not_a_multiplexer() {
+        let source = go_source(
+            &[],
+            r#"type wrapped struct{ *http.ServeMux }
+
+func (*wrapped) HandleFunc(string, http.HandlerFunc) {}
+
+func routes() {
+	m := &wrapped{ServeMux: http.NewServeMux()}
+	m.HandleFunc("/ghost", list)
+	s := http.NewServeMux()
+	s.HandleFunc("/real", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["net/http ANY /real [] list"]
+        );
+    }
+
+    #[test]
+    fn a_wrapper_type_with_a_method_of_the_framework_gives_no_entry_for_its_factory() {
+        let source = go_source(
+            &[CHI],
+            r#"type Server struct{ *chi.Mux }
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	http.NotFound(w, r)
+}
+
+func NewServer() *Server {
+	r := chi.NewRouter()
+	r.Get("/ghost", list)
+	return &Server{Mux: r}
+}
+
+type Plain struct{ *chi.Mux }
+
+func NewPlain() *Plain {
+	r := chi.NewRouter()
+	r.Get("/real", list)
+	return &Plain{Mux: r}
+}
+
+type Hider struct{ *chi.Mux }
+
+func (h *Hider) Get(path string, handler http.HandlerFunc) {}
+
+func NewHider() *Hider {
+	r := chi.NewRouter()
+	r.Get("/hidden", list)
+	return &Hider{Mux: r}
+}
+
+func serve() {
+	http.ListenAndServe(":80", NewServer())
+	http.ListenAndServe(":81", NewPlain())
+	http.ListenAndServe(":82", NewHider())
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /real [] list"]
+        );
+    }
+
+    #[test]
+    fn a_path_that_a_go_string_literal_spells_is_decoded() {
+        let source = go_source(
+            &[GIN],
+            r#"func routes() {
+	r := gin.New()
+	r.GET("/a/\x62", list)
+	r.GET("/é", list)
+	r.GET("/t\101", list)
+	r.GET(`/raw\x62`, list)
+	r.GET("/bad\q", list)
+	r.GET("/\xff", list)
+	r.GET("/q\"uote", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gin GET /a/b [] list",
+                "gin GET /é [] list",
+                "gin GET /tA [] list",
+                "gin GET /raw\\x62 [] list",
+                "gin GET /q\"uote [] list",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gorilla_route_with_a_matcher_that_can_set_an_error_gives_no_entry() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.HandleFunc("/a", list).Headers("X")
+	r.HandleFunc("/b", list).Headers("X", "y")
+	r.HandleFunc("/c/{id:[}", list)
+	r.HandleFunc("/d/{a}/{a}", list)
+	r.HandleFunc("/e/{id", list)
+	r.HandleFunc("/f/{}", list)
+	r.HandleFunc("/g", list).Name("x").Name("y")
+	r.HandleFunc("/h", list).Queries("a", "{b}")
+	r.HandleFunc("/i", list).Host("example.com")
+	r.HandleFunc("/j/{id:[0-9]+}", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux ANY /b [] list",
+                "gorilla/mux ANY /d/{a}/{a} [] list",
+                "gorilla/mux ANY /j/{id:[0-9]+} [] list"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_binding_hides_a_name_only_in_its_block_after_its_declaration() {
+        let source = go_source(
+            &[CHI],
+            r#"func Show(w http.ResponseWriter, r *http.Request) {}
+
+func real(w http.ResponseWriter, r *http.Request) {}
+
+func routes() {
+	{
+		Show := real
+		_ = Show
+	}
+	r := chi.NewRouter()
+	r.Get("/x", Show)
+	if Show := real; Show != nil {
+		r.Get("/y", Show)
+	}
+	r.Get("/z", Show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /x [] Show",
+                "chi GET /y [] -",
+                "chi GET /z [] Show"
+            ]
+        );
+    }
+
+    #[test]
+    fn timing_ten_thousand_servemux_variables_are_read_in_linear_time() {
+        let mut body = String::from("func routes() {\n");
+        for index in 0..10_000 {
+            body.push_str(&format!(
+                "\tm{index} := http.NewServeMux()\n\tm{index}.HandleFunc(\"/{index}\", list)\n"
+            ));
+        }
+        body.push_str("}\n");
+        let source = go_source(&[], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), 10_000);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn timing_a_chain_of_twenty_thousand_groups_is_read_in_linear_time() {
+        let mut body = String::from("func routes() {\n\tr0 := gin.New()\n\tr0.GET(\"/0\", list)\n");
+        for index in 1..20_000 {
+            body.push_str(&format!(
+                "\tr{index} := r{previous}.Group(\"\")\n\tr{index}.GET(\"/{index}\", list)\n",
+                previous = index - 1
+            ));
+        }
+        body.push_str("}\n");
+        let source = go_source(&[GIN], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), 20_000);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn timing_a_pattern_with_a_hundred_thousand_wildcards_is_read_in_linear_time() {
+        let mut pattern = String::new();
+        for index in 0..100_000 {
+            pattern.push_str(&format!("/{{p{index}}}"));
+        }
+        let started = std::time::Instant::now();
+        assert!(go_routes::servemux_pattern(&pattern).is_some());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn timing_many_conditional_returns_of_nested_groups_are_read_in_linear_time() {
+        let mut body = String::from("func pick(n int) *gin.RouterGroup {\n\tr0 := gin.New()\n");
+        for index in 1..30_000 {
+            body.push_str(&format!(
+                "\tr{index} := r{previous}.Group(\"\")\n\tif n == {index} {{\n\t\treturn r{index}\n\t}}\n",
+                previous = index - 1
+            ));
+        }
+        body.push_str("\treturn nil\n}\n");
+        let source = go_source(&[GIN], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert!(found.is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
         );
     }
 

@@ -34,6 +34,7 @@
 //! builds, and the gin methods `Static`, `StaticFile`, `StaticFileFS`, and `StaticFS`.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use tree_sitter::Node;
 
@@ -402,6 +403,8 @@ struct Frame {
     results: Vec<String>,
     /// A return statement gave a literal that holds the router, not the router.
     wrapped: bool,
+    /// The type of the first literal that held a router in a return statement.
+    wrapper_type: Option<String>,
     owner: usize,
     pure: bool,
     /// The routers that the function body made.
@@ -720,7 +723,7 @@ pub(super) fn servemux_pattern(pattern: &str) -> Option<(String, String)> {
         return None;
     }
     let segments: Vec<&str> = path[1..].split('/').collect();
-    let mut seen: Vec<&str> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
     for (position, segment) in segments.iter().enumerate() {
         let last = position + 1 == segments.len();
         if !segment.contains('{') {
@@ -742,10 +745,9 @@ pub(super) fn servemux_pattern(pattern: &str) -> Option<(String, String)> {
             .next()
             .is_some_and(|c| c.is_alphabetic() || c == '_')
             && name.chars().all(|c| c.is_alphanumeric() || c == '_');
-        if (multi && !last) || !valid || seen.contains(&name) {
+        if (multi && !last) || !valid || !seen.insert(name) {
             return None;
         }
-        seen.push(name);
     }
     let method = if method.is_empty() { "ANY" } else { method };
     Some((method.to_string(), path.to_string()))
@@ -763,6 +765,103 @@ pub(super) fn servemux_parameters(path: &str) -> Vec<String> {
 /// The names that the imports of a file give to `net/http`.
 pub(super) fn net_http_names(file: &FileSymbols) -> Vec<String> {
     package_names(file, |module| module == "net/http", "http")
+}
+
+/// Tells if a gorilla/mux template for a path has balanced braces, and each variable has a
+/// name and a pattern that is a regular expression without a capture group. The library
+/// rejects the other templates, and the route then never matches.
+fn mux_template_valid(template: &str) -> bool {
+    let mut depth = 0_usize;
+    let mut start = 0;
+    for (index, byte) in template.bytes().enumerate() {
+        match byte {
+            b'{' => {
+                if depth == 0 {
+                    start = index + 1;
+                }
+                depth += 1;
+            }
+            b'}' => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    let inner = &template[start..index];
+                    let (name, pattern) = inner.split_once(':').unwrap_or((inner, "[^/]+"));
+                    let compiled = regex::Regex::new(&format!("^{pattern}$"));
+                    let groups = regex::Regex::new(pattern).map(|found| found.captures_len());
+                    if name.is_empty()
+                        || pattern.is_empty()
+                        || compiled.is_err()
+                        || !groups.is_ok_and(|count| count == 1)
+                    {
+                        return false;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+/// The value of a Go string literal. An interpreted literal has escapes, and a raw literal has
+/// none. A bad escape, or a value that is not UTF-8, gives none.
+fn decode_go_string(literal: &str) -> Option<String> {
+    if let Some(raw) = literal.strip_prefix('`') {
+        return Some(raw.strip_suffix('`')?.replace('\r', ""));
+    }
+    let inner = literal.strip_prefix('"')?.strip_suffix('"')?;
+    let bytes = inner.as_bytes();
+    let mut out: Vec<u8> = Vec::new();
+    let mut index = 0;
+    let digits = |from: usize, count: usize, radix: u32| -> Option<u32> {
+        let text = inner.get(from..from + count)?;
+        if text.len() != count || !text.chars().all(|c| c.is_digit(radix)) {
+            return None;
+        }
+        u32::from_str_radix(text, radix).ok()
+    };
+    while index < bytes.len() {
+        let byte = bytes[index];
+        index += 1;
+        if byte != b'\\' {
+            out.push(byte);
+            continue;
+        }
+        let escape = *bytes.get(index)?;
+        index += 1;
+        match escape {
+            b'a' => out.push(7),
+            b'b' => out.push(8),
+            b'f' => out.push(12),
+            b'n' => out.push(10),
+            b'r' => out.push(13),
+            b't' => out.push(9),
+            b'v' => out.push(11),
+            b'\\' => out.push(b'\\'),
+            b'"' => out.push(b'"'),
+            b'0'..=b'7' => {
+                let value = digits(index - 1, 3, 8)?;
+                index += 2;
+                out.push(u8::try_from(value).ok()?);
+            }
+            b'x' => {
+                out.push(u8::try_from(digits(index, 2, 16)?).ok()?);
+                index += 2;
+            }
+            b'u' | b'U' => {
+                let count = if escape == b'u' { 4 } else { 8 };
+                let character = char::from_u32(digits(index, count, 16)?)?;
+                index += count;
+                let mut buffer = [0_u8; 4];
+                out.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
+            }
+            _ => return None,
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// The directory of a file. The files of one directory are the files of one Go package.
@@ -893,40 +992,118 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// The number of bindings of the name of this node in the file: the local bindings, and
-    /// the package-level variables. A name with more than one binding is not sure.
-    pub(super) fn go_binding_count(&self, node: Node<'_>) -> usize {
-        let _ = self.is_go_local(node);
-        let name = self.text(node);
-        let locals = self
-            .go_locals
-            .get()
-            .and_then(|table| table.get(name))
-            .map_or(0, |(starts, _)| starts.len());
-        let globals = self.go_globals.get_or_init(|| {
-            let mut counts: HashMap<String, usize> = HashMap::new();
-            let root = self.parsed.root_node();
-            let mut cursor = root.walk();
-            for declaration in root
-                .named_children(&mut cursor)
-                .filter(|child| child.kind() == "var_declaration")
-            {
-                let mut inner = declaration.walk();
-                for spec in declaration.named_children(&mut inner) {
-                    let mut names = spec.walk();
-                    for binder in spec.children_by_field_name("name", &mut names) {
-                        *counts.entry(self.text(binder).to_string()).or_default() += 1;
-                    }
-                }
-            }
-            counts
-        });
-        locals + globals.get(name).copied().unwrap_or(0)
+    /// The value of a Go string literal, as the language reads it. An escape that the
+    /// language does not allow, or a value that is not UTF-8, gives none.
+    pub(super) fn go_string(&self, node: Node<'_>) -> Option<String> {
+        if !self.is_string(node) {
+            return None;
+        }
+        decode_go_string(self.text(node))
     }
 
-    /// Tells if a name at this node has a binding in a function that comes before it: a
-    /// parameter, a short variable declaration, a variable, a range variable, or a type
-    /// switch variable. A binding in a closure does not reach the code after the closure.
+    /// The names of the variables that hold a `net/http` multiplexer. A name is in the set
+    /// when the file has one binding of the name, and the binding is a call of
+    /// `http.NewServeMux()`. The walk builds the set one time for the file.
+    pub(super) fn is_go_servemux(&self, name: &str) -> bool {
+        self.go_servemuxes
+            .get_or_init(|| {
+                let http = net_http_names(self.file);
+                let is_call = |value: Node<'_>| {
+                    value.kind() == "call_expression"
+                        && Self::arguments_of(value).is_empty()
+                        && value
+                            .child_by_field_name("function")
+                            .filter(|function| function.kind() == "selector_expression")
+                            .is_some_and(|function| {
+                                let operand = function.child_by_field_name("operand");
+                                let field = function.child_by_field_name("field");
+                                operand.is_some_and(|operand| {
+                                    http.iter().any(|name| name == self.text(operand))
+                                }) && field.is_some_and(|field| self.text(field) == "NewServeMux")
+                            })
+                };
+                let mut counts: HashMap<String, (usize, bool)> = HashMap::new();
+                let mut note = |binder: Node<'_>, makes_one: bool| {
+                    if binder.kind() == "identifier" {
+                        let entry = counts.entry(self.text(binder).to_string()).or_default();
+                        entry.0 += 1;
+                        entry.1 |= makes_one;
+                    }
+                };
+                let mut pending = vec![self.parsed.root_node()];
+                while let Some(node) = pending.pop() {
+                    let mut cursor = node.walk();
+                    match node.kind() {
+                        "short_var_declaration" | "assignment_statement" => {
+                            let left = node.child_by_field_name("left");
+                            let right = node.child_by_field_name("right");
+                            let names: Vec<Node<'_>> = left
+                                .map(|list| list.named_children(&mut cursor).collect())
+                                .unwrap_or_default();
+                            let mut inner = node.walk();
+                            let values: Vec<Node<'_>> = right
+                                .map(|list| list.named_children(&mut inner).collect())
+                                .unwrap_or_default();
+                            let define = node.kind() == "short_var_declaration";
+                            for (position, binder) in names.iter().enumerate() {
+                                let makes_one = define
+                                    && names.len() == values.len()
+                                    && is_call(values[position]);
+                                note(*binder, makes_one);
+                            }
+                        }
+                        "var_spec" => {
+                            let names: Vec<Node<'_>> =
+                                node.children_by_field_name("name", &mut cursor).collect();
+                            let mut inner = node.walk();
+                            let values: Vec<Node<'_>> = node
+                                .child_by_field_name("value")
+                                .map(|list| list.named_children(&mut inner).collect())
+                                .unwrap_or_default();
+                            for (position, binder) in names.iter().enumerate() {
+                                let makes_one =
+                                    names.len() == values.len() && is_call(values[position]);
+                                note(*binder, makes_one);
+                            }
+                        }
+                        "parameter_declaration" | "variadic_parameter_declaration" => {
+                            for binder in node.children_by_field_name("name", &mut cursor) {
+                                note(binder, false);
+                            }
+                        }
+                        "range_clause" => {
+                            if let Some(left) = node.child_by_field_name("left") {
+                                for binder in left.named_children(&mut cursor) {
+                                    note(binder, false);
+                                }
+                            }
+                        }
+                        "type_switch_statement" => {
+                            if let Some(alias) = node.child_by_field_name("alias") {
+                                for binder in alias.named_children(&mut cursor) {
+                                    note(binder, false);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    let mut cursor = node.walk();
+                    pending.extend(node.named_children(&mut cursor));
+                }
+                counts
+                    .into_iter()
+                    .filter(|(_, (count, makes_one))| *count == 1 && *makes_one)
+                    .map(|(name, _)| name)
+                    .collect()
+            })
+            .contains(name)
+    }
+
+    /// Tells if a name at this node has a binding that is in scope at the node. A binding is
+    /// a parameter, a short variable declaration, a variable, a range variable, or a type
+    /// switch variable. The scope of a parameter is the function. The scope of another
+    /// binding starts after its declaration, and ends with its block, its statement, or its
+    /// case clause.
     pub(super) fn is_go_local(&self, node: Node<'_>) -> bool {
         let locals = self.go_locals.get_or_init(|| {
             let mut sites: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
@@ -938,33 +1115,60 @@ impl<'a> Context<'a> {
                     }
                     _ => function_end,
                 };
-                let mut binders: Vec<Node<'_>> = Vec::new();
+                // (binder, first byte of the scope, end of the scope)
+                let mut binders: Vec<(Node<'_>, usize, usize)> = Vec::new();
                 let mut cursor = node.walk();
-                match node.kind() {
-                    "short_var_declaration" | "range_clause" => {
-                        if let Some(left) = node.child_by_field_name("left") {
-                            binders.extend(left.named_children(&mut cursor));
-                        }
-                    }
-                    "parameter_declaration" | "variadic_parameter_declaration" => {
-                        binders.extend(node.children_by_field_name("name", &mut cursor));
-                    }
-                    "var_spec" if function_end.is_some() => {
-                        binders.extend(node.children_by_field_name("name", &mut cursor));
-                    }
-                    "type_switch_statement" => {
-                        if let Some(alias) = node.child_by_field_name("alias") {
-                            binders.extend(alias.named_children(&mut cursor));
-                        }
-                    }
-                    _ => {}
-                }
                 if let Some(end) = function_end {
-                    for binder in binders.into_iter().filter(|b| b.kind() == "identifier") {
+                    match node.kind() {
+                        "short_var_declaration" => {
+                            if let Some(left) = node.child_by_field_name("left") {
+                                let scope = Self::scope_end(node).unwrap_or(end);
+                                binders.extend(
+                                    left.named_children(&mut cursor)
+                                        .map(|binder| (binder, node.end_byte(), scope)),
+                                );
+                            }
+                        }
+                        "range_clause" => {
+                            if let Some(left) = node.child_by_field_name("left") {
+                                let scope = Self::scope_end(node).unwrap_or(end);
+                                binders.extend(
+                                    left.named_children(&mut cursor)
+                                        .map(|binder| (binder, node.end_byte(), scope)),
+                                );
+                            }
+                        }
+                        "parameter_declaration" | "variadic_parameter_declaration" => {
+                            binders.extend(
+                                node.children_by_field_name("name", &mut cursor)
+                                    .map(|binder| (binder, binder.start_byte(), end)),
+                            );
+                        }
+                        "var_spec" => {
+                            let scope = Self::scope_end(node).unwrap_or(end);
+                            binders.extend(
+                                node.children_by_field_name("name", &mut cursor)
+                                    .map(|binder| (binder, node.end_byte(), scope)),
+                            );
+                        }
+                        "type_switch_statement" => {
+                            if let Some(alias) = node.child_by_field_name("alias") {
+                                binders.extend(
+                                    alias
+                                        .named_children(&mut cursor)
+                                        .map(|binder| (binder, alias.end_byte(), node.end_byte())),
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                for (binder, from, to) in binders {
+                    if binder.kind() == "identifier" {
                         sites
                             .entry(self.text(binder).to_string())
                             .or_default()
-                            .push((binder.start_byte(), end));
+                            .push((from, to));
                     }
                 }
                 let mut cursor = node.walk();
@@ -993,8 +1197,33 @@ impl<'a> Context<'a> {
         let Some((starts, ends)) = locals.get(self.text(node)) else {
             return false;
         };
-        let before = starts.partition_point(|start| *start < node.start_byte());
+        let before = starts.partition_point(|start| *start <= node.start_byte());
         before > 0 && ends[before - 1] > node.start_byte()
+    }
+
+    /// The end of the scope of a declaration: its block, its `if`, `for`, or `switch`
+    /// statement, or its case clause.
+    fn scope_end(node: Node<'_>) -> Option<usize> {
+        let mut current = node.parent();
+        while let Some(parent) = current {
+            if matches!(
+                parent.kind(),
+                "block"
+                    | "if_statement"
+                    | "for_statement"
+                    | "expression_switch_statement"
+                    | "type_switch_statement"
+                    | "select_statement"
+                    | "expression_case"
+                    | "default_case"
+                    | "type_case"
+                    | "communication_case"
+            ) {
+                return Some(parent.end_byte());
+            }
+            current = parent.parent();
+        }
+        None
     }
 }
 
@@ -1076,6 +1305,7 @@ impl CallSites {
     pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> Self {
         let mut factories: HashSet<String> = HashSet::new();
         let mut wrappers: HashSet<String> = HashSet::new();
+        let mut wrapper_types: Vec<(String, String)> = Vec::new();
         for (position, file) in files.iter().enumerate() {
             if file.language != Language::Go {
                 continue;
@@ -1085,8 +1315,10 @@ impl CallSites {
             };
             let context = Context::new(&tree, file, files, trees, &[]);
             for (key, wrapper) in factory_keys(&context, tree.root_node()) {
-                if wrapper {
+                if let Some(kind) = wrapper {
                     wrappers.insert(key.clone());
+                    let name = kind.rsplit('.').next().unwrap_or(&kind);
+                    wrapper_types.push((key.clone(), name.trim_start_matches('*').to_string()));
                 }
                 factories.insert(key);
             }
@@ -1094,6 +1326,30 @@ impl CallSites {
         let mut blocked = HashSet::new();
         if factories.is_empty() {
             return Self { blocked };
+        }
+        // A wrapper type can define a method that hides a method of the router, or that
+        // serves the requests in another way. Then its values are not routers.
+        let hiding: HashSet<String> = files
+            .iter()
+            .filter(|file| file.language == Language::Go)
+            .flat_map(|file| &file.symbols)
+            .filter(|symbol| {
+                symbol.is_callable()
+                    && (ROUTER_METHODS.contains(&symbol.name.as_str())
+                        || matches!(symbol.name.as_str(), "Use" | "Pre" | "ServeHTTP"))
+            })
+            .filter_map(|symbol| {
+                let kind = symbol
+                    .receiver_type
+                    .as_deref()
+                    .or(symbol.container.as_deref())?;
+                Some(kind.trim_start_matches('*').rsplit('.').next()?.to_string())
+            })
+            .collect();
+        for (key, name) in &wrapper_types {
+            if hiding.contains(name) {
+                blocked.insert(key.clone());
+            }
         }
         let mut by_name: HashMap<&str, Vec<&str>> = HashMap::new();
         for symbol in files
@@ -1436,7 +1692,7 @@ impl<'t> FileUses<'t> {
 
 /// The keys of the functions and the methods of a file that return a router that they made.
 /// The walk does not read the calls of the repository for this result.
-pub(super) fn factory_keys(context: &Context<'_>, root: Node<'_>) -> Vec<(String, bool)> {
+pub(super) fn factory_keys(context: &Context<'_>, root: Node<'_>) -> Vec<(String, Option<String>)> {
     match Routes::new(context, true) {
         Some(mut routes) => {
             routes.run(root);
@@ -1488,6 +1744,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             mounts: HashSet::new(),
             mounted: HashSet::new(),
             tree: Vec::new(),
+            made_cache: HashMap::new(),
             dry,
             factory_keys: Vec::new(),
         })
@@ -1526,9 +1783,11 @@ struct Routes<'c, 'a, 't> {
     /// The routers that a mount attached. Each router is in a tree of the forest.
     mounted: HashSet<usize>,
     tree: Vec<usize>,
+    /// Whether the router and each router above it came from the function that made it.
+    made_cache: HashMap<usize, bool>,
     /// The walk only finds the factories. It does not read the calls of the repository.
     dry: bool,
-    factory_keys: Vec<(String, bool)>,
+    factory_keys: Vec<(String, Option<String>)>,
 }
 
 impl<'c, 'a, 't> Routes<'c, 'a, 't> {
@@ -1663,6 +1922,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             router_returns: 0,
             results: Vec::new(),
             wrapped: false,
+            wrapper_type: None,
             owner,
             pure: true,
             created: Vec::new(),
@@ -1699,10 +1959,12 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     && declared.is_some_and(|name| !self.cyclic.contains(name))
             })
             .and_then(|router| self.summarize(router, owner));
-        let made: Vec<usize> = returned
-            .into_iter()
-            .filter(|router| self.made_by(*router, owner))
-            .collect();
+        let mut made: Vec<usize> = Vec::new();
+        for router in returned {
+            if self.made_by(router, owner) {
+                made.push(router);
+            }
+        }
         let comp = (!made.is_empty()).then(|| {
             let mut all = self.component(&made, &frame.created);
             all.sort_unstable();
@@ -1716,7 +1978,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     .as_ref()
                     .is_none_or(|summary| !summary.prefixes.is_empty());
             if let Some(key) = &key {
-                self.factory_keys.push((key.clone(), frame.wrapped));
+                self.factory_keys
+                    .push((key.clone(), frame.wrapper_type.clone()));
             }
             let attached_in_the_repository = !self.dry
                 && key
@@ -1881,22 +2144,44 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     /// Tells if a function body made the router, and each router that it joins to.
-    fn made_by(&self, router: usize, owner: usize) -> bool {
-        let router = &self.routers[router];
-        router.owner == owner
-            && !router.external
-            && router
-                .links
-                .iter()
-                .all(|link| self.made_by(link.parent, owner))
+    fn made_by(&mut self, router: usize, owner: usize) -> bool {
+        self.routers[router].owner == owner && self.self_made(router)
     }
 
-    fn summarize(&self, router: usize, owner: usize) -> Option<Summary> {
+    /// Tells if the router is not from a parameter, and each router above it has the owner of
+    /// the router. The walk goes up one time for each router, and keeps the result.
+    fn self_made(&mut self, router: usize) -> bool {
+        let mut path = Vec::new();
+        let mut current = router;
+        let result = loop {
+            if let Some(known) = self.made_cache.get(&current) {
+                break *known;
+            }
+            let node = &self.routers[current];
+            if node.external {
+                break false;
+            }
+            match node.links.as_slice() {
+                [] => break true,
+                [link] if self.routers[link.parent].owner == node.owner => {
+                    path.push(current);
+                    current = link.parent;
+                }
+                _ => break false,
+            }
+        };
+        self.made_cache.insert(current, result);
+        for node in path {
+            self.made_cache.insert(node, result);
+        }
+        result
+    }
+
+    fn summarize(&mut self, router: usize, owner: usize) -> Option<Summary> {
         if !self.made_by(router, owner) {
             return None;
         }
-        let mut places = self.lineage(router, None);
-        let place = places.pop().filter(|_| places.is_empty())?;
+        let place = self.place_now(router, None)?;
         Some(Summary {
             framework: self.routers[router].framework,
             prefixes: place.prefixes,
@@ -1934,6 +2219,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             router_returns: 0,
             results: Vec::new(),
             wrapped: false,
+            wrapper_type: None,
             owner,
             pure: true,
             created: Vec::new(),
@@ -2152,20 +2438,24 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 }
             }
         }
-        let mut wrapped = false;
+        let mut wrapper_type: Option<String> = None;
         for value in values {
             self.escape(value);
             match self.eval(value) {
                 Some(router) => routers.push(router),
                 None => {
-                    let inside = self.wrapped_router(value);
-                    wrapped |= inside.is_some();
-                    routers.extend(inside);
+                    if let Some((router, kind)) = self.wrapped_router(value) {
+                        routers.push(router);
+                        wrapper_type.get_or_insert(kind);
+                    }
                 }
             }
         }
         if let Some(frame) = self.frames.last_mut().filter(|frame| frame.function) {
-            frame.wrapped |= wrapped;
+            frame.wrapped |= wrapper_type.is_some();
+            if frame.wrapper_type.is_none() {
+                frame.wrapper_type = wrapper_type;
+            }
             frame.returns += 1;
             frame.router_returns += usize::from(!routers.is_empty());
             frame.returned.extend(routers);
@@ -2193,7 +2483,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     /// The router inside a literal that a function returns, as `&Server{Mux: router}` has.
-    fn wrapped_router(&mut self, value: Node<'t>) -> Option<usize> {
+    fn wrapped_router(&mut self, value: Node<'t>) -> Option<(usize, String)> {
         let literal = if value.kind() == "unary_expression" {
             value.named_child(0)?
         } else {
@@ -2202,9 +2492,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         if literal.kind() != "composite_literal" {
             return None;
         }
+        let kind = self.text(literal.child_by_field_name("type")?).to_string();
         let mut values = Vec::new();
         Self::literal_values(literal.child_by_field_name("body")?, &mut values);
-        values.into_iter().find_map(|inner| self.eval(inner))
+        values
+            .into_iter()
+            .find_map(|inner| self.eval(inner))
+            .map(|router| (router, kind))
     }
 
     /// The router that an expression gives, when the syntax proves it.
@@ -2326,9 +2620,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn string_argument(&self, node: Node<'t>) -> Option<String> {
-        self.context
-            .is_string(node)
-            .then(|| self.context.string_of(node))
+        self.context.go_string(node)
     }
 
     /// The strings of `[]string{"GET", "POST"}`. Another expression gives none, because
@@ -2495,7 +2787,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return None;
         }
         let prefix = self.string_argument(*Context::arguments_of(operand).first()?)?;
-        Some(self.make_child(parent, prefix, Vec::new()))
+        let valid = mux_template_valid(&prefix);
+        let child = self.make_child(parent, prefix, Vec::new());
+        self.routers[child].partial |= !valid;
+        Some(child)
     }
 
     fn is_mux_matcher_call(&self, call: Node<'t>) -> bool {
@@ -2536,6 +2831,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let mut handler: Option<Node<'t>> = None;
         let mut current = outer;
         let mut unknown = false;
+        let mut names = 0_usize;
         let base = loop {
             let Some(function) = current
                 .child_by_field_name("function")
@@ -2553,11 +2849,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             chain.push(current.id());
             match self.text(field) {
                 "HandleFunc" | "Handle" if handler.is_none() => {
-                    paths.push(
-                        arguments
-                            .first()
-                            .and_then(|path| self.string_argument(*path)),
-                    );
+                    let template = arguments
+                        .first()
+                        .and_then(|path| self.string_argument(*path));
+                    unknown |= template
+                        .as_deref()
+                        .is_some_and(|text| !mux_template_valid(text));
+                    paths.push(template);
                     handler = arguments.get(1).copied();
                     break operand;
                 }
@@ -2574,14 +2872,31 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                             .then(|| names.iter().map(|name| name.to_uppercase()).collect()),
                     );
                 }
-                "Path" | "PathPrefix" => paths.push(
-                    arguments
+                "Path" | "PathPrefix" => {
+                    let template = arguments
                         .first()
-                        .and_then(|path| self.string_argument(*path)),
-                ),
-                "Name" | "Queries" | "Headers" | "HeadersRegexp" | "Schemes" | "Host"
-                | "MatcherFunc" | "BuildVarsFunc" => {}
-                // `BuildOnly` makes a route that never matches, and another call is not known.
+                        .and_then(|path| self.string_argument(*path));
+                    unknown |= template
+                        .as_deref()
+                        .is_some_and(|text| !mux_template_valid(text));
+                    paths.push(template);
+                }
+                // gorilla/mux v1.8.1 sets `Route.err` when the pairs are not even, and the
+                // route never matches.
+                "Headers" => {
+                    unknown |= !arguments.len().is_multiple_of(2)
+                        || arguments
+                            .iter()
+                            .any(|argument| self.string_argument(*argument).is_none());
+                }
+                "Name" => {
+                    names += 1;
+                    unknown |= names > 1;
+                }
+                "Schemes" | "MatcherFunc" | "BuildVarsFunc" => {}
+                // `BuildOnly` makes a route that never matches. A matcher with a template or
+                // a regular expression can set an error that omen does not check, and another
+                // call is not known.
                 _ => unknown = true,
             }
             if operand.kind() == "call_expression" && (unknown || self.is_mux_matcher_call(operand))
@@ -2783,37 +3098,105 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         }
     }
 
-    /// The prefixes and the guards of each place of a router, up to `limit` guards of the
-    /// router itself. A router that has no place that the file proves gives none.
-    fn lineage(&self, id: usize, limit: Option<usize>) -> Vec<Lineage> {
-        let router = &self.routers[id];
-        if router.partial {
-            return Vec::new();
-        }
-        let count = match limit {
+    /// The number of guards of a router that a route can have. `limit` is the number of
+    /// guards that the router had at the time of the route. A router with retroactive
+    /// guards has all of them.
+    fn visible_guards(router: &Router, limit: Option<usize>) -> usize {
+        match limit {
             Some(count) if !router.retroactive => count.min(router.guards.len()),
             _ => router.guards.len(),
-        };
-        let mut own = router.pre.clone();
-        own.extend(router.guards[..count].iter().cloned());
-        if router.links.is_empty() {
-            return vec![Lineage {
-                prefixes: router.base.clone(),
-                guards: own,
-            }];
         }
-        let mut places = Vec::new();
-        for link in &router.links {
-            let parent_limit = (!self.routers[link.parent].retroactive).then_some(link.parent_len);
-            for mut place in self.lineage(link.parent, parent_limit) {
-                if !link.prefix.is_empty() {
-                    place.prefixes.push(link.prefix.clone());
+    }
+
+    /// The prefixes and the guards of a router at this time. The walk goes up from the
+    /// router one time. A router that has no place that the file proves gives none.
+    fn place_now(&self, id: usize, limit: Option<usize>) -> Option<Lineage> {
+        let mut chain = vec![id];
+        let mut current = id;
+        loop {
+            let router = &self.routers[current];
+            if router.partial {
+                return None;
+            }
+            match router.links.as_slice() {
+                [] => break,
+                [link] => {
+                    current = link.parent;
+                    chain.push(current);
                 }
-                place.guards.extend(own.iter().cloned());
-                places.push(place);
+                _ => return None,
             }
         }
-        places
+        let root = *chain.last()?;
+        let mut prefixes = self.routers[root].base.clone();
+        let mut guards: Vec<String> = Vec::new();
+        for pair in chain.windows(2).rev() {
+            let (child, parent) = (pair[0], pair[1]);
+            let link = &self.routers[child].links[0];
+            let above = &self.routers[parent];
+            let above_limit = (!above.retroactive).then_some(link.parent_len);
+            guards.extend(above.pre.iter().cloned());
+            let count = Self::visible_guards(above, above_limit);
+            guards.extend(above.guards[..count].iter().cloned());
+            if !link.prefix.is_empty() {
+                prefixes.push(link.prefix.clone());
+            }
+        }
+        let router = &self.routers[id];
+        guards.extend(router.pre.iter().cloned());
+        let count = Self::visible_guards(router, limit);
+        guards.extend(router.guards[..count].iter().cloned());
+        Some(Lineage { prefixes, guards })
+    }
+
+    /// The prefixes and the guards that the routers above a router give. Each router has
+    /// one result, which shares its list with the result of its parent.
+    fn up_of(&self, id: usize, memo: &mut [Option<Up>]) {
+        let mut path = Vec::new();
+        let mut current = id;
+        while memo[current].is_none() {
+            path.push(current);
+            match self.routers[current].links.as_slice() {
+                [link] => current = link.parent,
+                _ => break,
+            }
+        }
+        for node in path.into_iter().rev() {
+            let up = self.compute_up(node, memo);
+            memo[node] = Some(up);
+        }
+    }
+
+    fn compute_up(&self, node: usize, memo: &[Option<Up>]) -> Up {
+        let router = &self.routers[node];
+        match router.links.as_slice() {
+            [] => Up {
+                prefixes: push_chain(&None, router.base.clone()),
+                guards: None,
+                dead: false,
+            },
+            [link] => {
+                let above = &self.routers[link.parent];
+                let Some(parent) = memo[link.parent].as_ref() else {
+                    return Up::dead();
+                };
+                let prefix = if link.prefix.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![link.prefix.clone()]
+                };
+                let above_limit = (!above.retroactive).then_some(link.parent_len);
+                let count = Self::visible_guards(above, above_limit);
+                let mut own = above.pre.clone();
+                own.extend(above.guards[..count].iter().cloned());
+                Up {
+                    prefixes: push_chain(&parent.prefixes, prefix),
+                    guards: push_chain(&parent.guards, own),
+                    dead: parent.dead || above.partial,
+                }
+            }
+            _ => Up::dead(),
+        }
     }
 
     fn finish(self, out: &mut Vec<Draft>) {
@@ -2824,32 +3207,88 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             .flatten()
             .copied()
             .collect();
+        let mut memo: Vec<Option<Up>> = (0..self.routers.len()).map(|_| None).collect();
         for record in self
             .records
             .iter()
             .filter(|record| !blocked.contains(&record.router))
         {
-            let framework = self.routers[record.router].framework;
-            for place in self.lineage(record.router, Some(record.limit)) {
-                let Some(path) = framework.compose(&place.prefixes, &record.path) else {
-                    continue;
-                };
-                let mut guards = place.guards;
-                guards.extend(record.guards.iter().cloned());
-                out.push(Draft {
-                    range: record.range,
-                    kind: EntryKind::HttpHandler,
-                    symbol: record.symbol.clone(),
-                    framework: framework.name(),
-                    route: Some(Route {
-                        method: record.method.clone(),
-                        parameters: path_parameters(framework, &path),
-                        path,
-                    }),
-                    guards,
-                    basis: EntryBasis::Registered,
-                });
+            let router = &self.routers[record.router];
+            self.up_of(record.router, &mut memo);
+            let Some(up) = memo[record.router].as_ref() else {
+                continue;
+            };
+            if router.partial || up.dead {
+                continue;
             }
+            let framework = router.framework;
+            let prefixes = flatten_chain(&up.prefixes);
+            let Some(path) = framework.compose(&prefixes, &record.path) else {
+                continue;
+            };
+            let mut guards = flatten_chain(&up.guards);
+            guards.extend(router.pre.iter().cloned());
+            let count = Self::visible_guards(router, Some(record.limit));
+            guards.extend(router.guards[..count].iter().cloned());
+            guards.extend(record.guards.iter().cloned());
+            out.push(Draft {
+                range: record.range,
+                kind: EntryKind::HttpHandler,
+                symbol: record.symbol.clone(),
+                framework: framework.name(),
+                route: Some(Route {
+                    method: record.method.clone(),
+                    parameters: path_parameters(framework, &path),
+                    path,
+                }),
+                guards,
+                basis: EntryBasis::Registered,
+            });
         }
     }
+}
+
+/// A list of strings that shares its start with the list of the router above.
+struct Chain {
+    items: Vec<String>,
+    parent: Option<Rc<Chain>>,
+}
+
+/// The prefixes and the guards that the routers above a router give.
+struct Up {
+    prefixes: Option<Rc<Chain>>,
+    guards: Option<Rc<Chain>>,
+    /// A router above is not known, or a router has more than one place.
+    dead: bool,
+}
+
+impl Up {
+    fn dead() -> Self {
+        Self {
+            prefixes: None,
+            guards: None,
+            dead: true,
+        }
+    }
+}
+
+fn push_chain(parent: &Option<Rc<Chain>>, items: Vec<String>) -> Option<Rc<Chain>> {
+    if items.is_empty() {
+        parent.clone()
+    } else {
+        Some(Rc::new(Chain {
+            items,
+            parent: parent.clone(),
+        }))
+    }
+}
+
+fn flatten_chain(chain: &Option<Rc<Chain>>) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = chain.as_ref();
+    while let Some(node) = current {
+        segments.push(&node.items);
+        current = node.parent.as_ref();
+    }
+    segments.into_iter().rev().flatten().cloned().collect()
 }
