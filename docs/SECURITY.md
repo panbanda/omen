@@ -325,6 +325,28 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   common methods of the lists. A route without `Methods` has the method `ANY`. `Use`
   applies to each route of its router and of the sub-routers, as the library does.
   A `Methods` argument that is not a string literal gives no entry.
+  A chain that ends in `BuildOnly()`, or that has another call that omen does not know,
+  gives no entry. A `BuildOnly` route never matches a request.
+- chi v5.3.2 reads a method before a space or a tab in the pattern of `Handle`. It
+  accepts only the methods `CONNECT`, `DELETE`, `GET`, `HEAD`, `OPTIONS`, `PATCH`,
+  `POST`, `PUT`, `QUERY`, and `TRACE`. Another method needs `RegisterMethod`, so it
+  gives no entry.
+- Each framework has its own syntax for the parameters of a path. chi and gorilla/mux
+  read `{name}` and `{name:expression}`, and chi also reads `*`. echo reads `:name` and
+  `*`, and gin reads `:name` and `*name`. A backslash before `:` makes it a letter in
+  echo and gin. A colon is a letter in chi and gorilla/mux. A brace is a letter in
+  echo and gin.
+- net/http follows the syntax of Go 1.24 for `[METHOD ][HOST]/[PATH]`. A method that is
+  not a valid token, a missing slash, a bad wildcard, or a path that the library
+  changes when it cleans the path gives no entry. A method keeps its case, so `get`
+  does not match a request. A host does not change the path. A multiplexer is a
+  variable that has one binding in the file, and the binding is a call of
+  `http.NewServeMux()`.
+- A list with `...` in `Use`, `Pre`, `With`, or `Group`, or in the middleware of a route,
+  is not known. The routes that it changes give no entry. A function literal or another
+  expression in these lists has the label `<function literal>` or `<expression>`.
+- gin `Default()` adds the middleware `Logger` and `Recovery`. The source does not name
+  them, so omen does not list them as guards.
 - A function is a factory if any return statement can return a router that the function
   made. A bare `return` gives the value of each named result. Each return statement
   counts, so the walk takes the union of the routers.

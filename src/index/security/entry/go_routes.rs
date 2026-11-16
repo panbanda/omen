@@ -37,7 +37,7 @@ use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
 
-use super::{route_parameters, Context, Draft, EntryBasis, EntryKind, Route, TreeSource};
+use super::{Context, Draft, EntryBasis, EntryKind, Route, TreeSource};
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ImportKind, ImportTarget, Reference, Span, Symbol};
@@ -639,6 +639,132 @@ impl<'a> Context<'a> {
     }
 }
 
+/// The methods that chi v5.3.2 knows before a call of `RegisterMethod`.
+const CHI_METHODS: [&str; 10] = [
+    "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY", "TRACE",
+];
+
+/// The names of the parameters in the path of a route, by the syntax of the framework.
+fn path_parameters(framework: Framework, path: &str) -> Vec<String> {
+    let bytes = path.as_bytes();
+    let mut names = Vec::new();
+    match framework {
+        Framework::Chi | Framework::Mux => {
+            let (mut depth, mut start) = (0_usize, 0_usize);
+            for (index, byte) in bytes.iter().enumerate() {
+                match byte {
+                    b'{' => {
+                        if depth == 0 {
+                            start = index + 1;
+                        }
+                        depth += 1;
+                    }
+                    b'}' if depth > 0 => {
+                        depth -= 1;
+                        if depth == 0 {
+                            let name = path[start..index].split(':').next().unwrap_or("").trim();
+                            if !name.is_empty() {
+                                names.push(name.to_string());
+                            }
+                        }
+                    }
+                    b'*' if depth == 0 && framework == Framework::Chi => {
+                        names.push("*".to_string())
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Framework::Echo | Framework::Gin => {
+            let mut index = 0;
+            while index < bytes.len() {
+                let byte = bytes[index];
+                let escaped = index > 0 && bytes[index - 1] == b'\\';
+                if (byte == b':' && !escaped) || byte == b'*' {
+                    let end = path[index + 1..]
+                        .find('/')
+                        .map_or(bytes.len(), |slash| index + 1 + slash);
+                    let name = &path[index + 1..end];
+                    if byte == b'*' && framework == Framework::Echo {
+                        names.push("*".to_string());
+                    } else if !name.is_empty() {
+                        names.push(name.to_string());
+                    }
+                    index = end;
+                } else {
+                    index += 1;
+                }
+            }
+        }
+    }
+    names
+}
+
+/// The method and the path of a `net/http` pattern, as the standard library of Go 1.24
+/// reads it. A pattern that the library rejects or that never matches gives none.
+pub(super) fn servemux_pattern(pattern: &str) -> Option<(String, String)> {
+    let (method, rest) = match pattern.find([' ', '\t']) {
+        Some(space) => (
+            &pattern[..space],
+            pattern[space + 1..].trim_start_matches([' ', '\t']),
+        ),
+        None => ("", pattern),
+    };
+    let token = |byte: u8| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte);
+    if !method.is_empty() && !method.bytes().all(token) {
+        return None;
+    }
+    let slash = rest.find('/')?;
+    let (host, path) = rest.split_at(slash);
+    if host.contains('{') || path != gin_join("/", path) && path != "/" {
+        return None;
+    }
+    let segments: Vec<&str> = path[1..].split('/').collect();
+    let mut seen: Vec<&str> = Vec::new();
+    for (position, segment) in segments.iter().enumerate() {
+        let last = position + 1 == segments.len();
+        if !segment.contains('{') {
+            continue;
+        }
+        let inner = segment.strip_prefix('{')?.strip_suffix('}')?;
+        if inner == "$" {
+            if !last {
+                return None;
+            }
+            continue;
+        }
+        let (name, multi) = match inner.strip_suffix("...") {
+            Some(name) => (name, true),
+            None => (inner, false),
+        };
+        let valid = name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_alphanumeric() || c == '_');
+        if (multi && !last) || !valid || seen.contains(&name) {
+            return None;
+        }
+        seen.push(name);
+    }
+    let method = if method.is_empty() { "ANY" } else { method };
+    Some((method.to_string(), path.to_string()))
+}
+
+/// The names of the wildcards of a `net/http` path.
+pub(super) fn servemux_parameters(path: &str) -> Vec<String> {
+    path.split('/')
+        .filter_map(|segment| segment.strip_prefix('{')?.strip_suffix('}'))
+        .filter(|inner| *inner != "$")
+        .map(|inner| inner.strip_suffix("...").unwrap_or(inner).to_string())
+        .collect()
+}
+
+/// The names that the imports of a file give to `net/http`.
+pub(super) fn net_http_names(file: &FileSymbols) -> Vec<String> {
+    package_names(file, |module| module == "net/http", "http")
+}
+
 /// The directory of a file. The files of one directory are the files of one Go package.
 fn directory_of(file: &str) -> &str {
     file.rsplit_once('/').map_or("", |(directory, _)| directory)
@@ -767,10 +893,41 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// The number of bindings of the name of this node in the file: the local bindings, and
+    /// the package-level variables. A name with more than one binding is not sure.
+    pub(super) fn go_binding_count(&self, node: Node<'_>) -> usize {
+        let _ = self.is_go_local(node);
+        let name = self.text(node);
+        let locals = self
+            .go_locals
+            .get()
+            .and_then(|table| table.get(name))
+            .map_or(0, |(starts, _)| starts.len());
+        let globals = self.go_globals.get_or_init(|| {
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            let root = self.parsed.root_node();
+            let mut cursor = root.walk();
+            for declaration in root
+                .named_children(&mut cursor)
+                .filter(|child| child.kind() == "var_declaration")
+            {
+                let mut inner = declaration.walk();
+                for spec in declaration.named_children(&mut inner) {
+                    let mut names = spec.walk();
+                    for binder in spec.children_by_field_name("name", &mut names) {
+                        *counts.entry(self.text(binder).to_string()).or_default() += 1;
+                    }
+                }
+            }
+            counts
+        });
+        locals + globals.get(name).copied().unwrap_or(0)
+    }
+
     /// Tells if a name at this node has a binding in a function that comes before it: a
     /// parameter, a short variable declaration, a variable, a range variable, or a type
     /// switch variable. A binding in a closure does not reach the code after the closure.
-    fn is_go_local(&self, node: Node<'_>) -> bool {
+    pub(super) fn is_go_local(&self, node: Node<'_>) -> bool {
         let locals = self.go_locals.get_or_init(|| {
             let mut sites: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
             let mut pending = vec![(self.parsed.root_node(), None::<usize>)];
@@ -2087,14 +2244,18 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         match (self.routers[parent].framework, name) {
             (Framework::Chi, "With") => {
                 let guards = self.guard_names(&arguments);
-                Some(self.make_child(parent, String::new(), guards))
+                let child = self.make_child(parent, String::new(), guards);
+                self.routers[child].partial |= self.has_spread(&arguments);
+                Some(child)
             }
             (Framework::Chi, "Route") => self.chi_route(parent, call, &arguments),
             (Framework::Chi, "Group") => self.chi_group(parent, call, &arguments),
             (Framework::Echo | Framework::Gin, "Group") => {
                 let prefix = self.string_argument(*arguments.first()?)?;
                 let guards = self.guard_names(&arguments[1..]);
-                Some(self.make_child(parent, prefix, guards))
+                let child = self.make_child(parent, prefix, guards);
+                self.routers[child].partial |= self.has_spread(&arguments[1..]);
+                Some(child)
             }
             // The methods of gin that add a route or a guard return the router, as the
             // interface `IRoutes` says.
@@ -2122,11 +2283,46 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         makes.then(|| self.make_root(framework))
     }
 
+    /// The names of the middleware in a list of arguments. A function literal or another
+    /// expression has a label, so the list does not lose a middleware.
     fn guard_names(&self, arguments: &[Node<'t>]) -> Vec<String> {
         arguments
             .iter()
-            .filter_map(|argument| self.context.go_guard_name(*argument))
+            .map(|argument| {
+                self.context.go_guard_name(*argument).unwrap_or_else(|| {
+                    match argument.kind() {
+                        "func_literal" => "<function literal>",
+                        _ => "<expression>",
+                    }
+                    .to_string()
+                })
+            })
             .collect()
+    }
+
+    /// Adds the middleware of a call of `Use` or `Pre`. A list with `...` is not known, so
+    /// the routes of the router give no entry.
+    fn add_guards(&mut self, router: usize, arguments: &[Node<'t>], before_routing: bool) {
+        if self.has_spread(arguments) {
+            self.touch(router);
+            self.routers[router].partial = true;
+            return;
+        }
+        let guards = self.guard_names(arguments);
+        self.touch(router);
+        if before_routing {
+            self.routers[router].pre.extend(guards);
+        } else {
+            self.routers[router].guards.extend(guards);
+        }
+    }
+
+    /// Tells if an argument is a list with `...`. The walk cannot read its middleware.
+    fn has_spread(&self, arguments: &[Node<'t>]) -> bool {
+        arguments.iter().any(|argument| {
+            argument.kind().contains("variadic")
+                || (!self.context.is_string(*argument) && self.text(*argument).ends_with("..."))
+        })
     }
 
     fn string_argument(&self, node: Node<'t>) -> Option<String> {
@@ -2185,16 +2381,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let framework = self.routers[router].framework;
         match (framework, name) {
             (Framework::Gin, _) => self.gin_call(router, node, name, &arguments),
-            (_, "Use") => {
-                let guards = self.guard_names(&arguments);
-                self.touch(router);
-                self.routers[router].guards.extend(guards);
-            }
-            (Framework::Echo, "Pre") => {
-                let guards = self.guard_names(&arguments);
-                self.touch(router);
-                self.routers[router].pre.extend(guards);
-            }
+            (_, "Use") => self.add_guards(router, &arguments, false),
+            (Framework::Echo, "Pre") => self.add_guards(router, &arguments, true),
             (Framework::Chi, _) => self.chi_call(router, node, name, &arguments),
             (Framework::Echo, _) => self.echo_call(router, node, name, &arguments),
             (Framework::Mux, _) => {}
@@ -2256,18 +2444,32 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 let method = name.to_uppercase();
                 self.register(router, &[method.as_str()], path, Some(*handler), &[], range)
             }
+            // chi v5.3.2 `Handle` reads a method before a space or a tab in the pattern.
             ("HandleFunc" | "Handle", [_, handler], [Some(path), _]) => {
-                self.register(router, &["ANY"], path, Some(*handler), &[], range)
+                match path.find([' ', '\t']) {
+                    Some(space) => {
+                        let method = path[..space].to_uppercase();
+                        let rest = path[space + 1..].trim_start_matches([' ', '\t']);
+                        if CHI_METHODS.contains(&method.as_str()) {
+                            self.register(
+                                router,
+                                &[method.as_str()],
+                                rest,
+                                Some(*handler),
+                                &[],
+                                range,
+                            );
+                        }
+                    }
+                    None => self.register(router, &["ANY"], path, Some(*handler), &[], range),
+                }
             }
-            ("Method" | "MethodFunc", [_, _, handler], [Some(method), Some(path), _]) => self
-                .register(
-                    router,
-                    &[method.to_uppercase().as_str()],
-                    path,
-                    Some(*handler),
-                    &[],
-                    range,
-                ),
+            ("Method" | "MethodFunc", [_, _, handler], [Some(method), Some(path), _]) => {
+                let method = method.to_uppercase();
+                if CHI_METHODS.contains(&method.as_str()) {
+                    self.register(router, &[method.as_str()], path, Some(*handler), &[], range);
+                }
+            }
             ("Route", _, _) => {
                 self.chi_route(router, node, arguments);
             }
@@ -2333,6 +2535,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let mut paths: Vec<Option<String>> = Vec::new();
         let mut handler: Option<Node<'t>> = None;
         let mut current = outer;
+        let mut unknown = false;
         let base = loop {
             let Some(function) = current
                 .child_by_field_name("function")
@@ -2376,10 +2579,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                         .first()
                         .and_then(|path| self.string_argument(*path)),
                 ),
-                "Name" | "Queries" | "Headers" | "Schemes" | "Host" | "MatcherFunc" => {}
-                _ => return false,
+                "Name" | "Queries" | "Headers" | "HeadersRegexp" | "Schemes" | "Host"
+                | "MatcherFunc" | "BuildVarsFunc" => {}
+                // `BuildOnly` makes a route that never matches, and another call is not known.
+                _ => unknown = true,
             }
-            if operand.kind() == "call_expression" && self.is_mux_matcher_call(operand) {
+            if operand.kind() == "call_expression" && (unknown || self.is_mux_matcher_call(operand))
+            {
                 current = operand;
             } else {
                 break operand;
@@ -2395,6 +2601,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return false;
         }
         self.consumed.extend(chain);
+        if unknown {
+            return true;
+        }
         paths.reverse();
         let Some(paths) = paths.into_iter().collect::<Option<Vec<String>>>() else {
             return true;
@@ -2436,9 +2645,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     fn gin_call(&mut self, router: usize, node: Node<'t>, name: &str, arguments: &[Node<'t>]) {
         let (methods, rest): (Vec<String>, &[Node<'t>]) = match (name, arguments) {
             ("Use", _) => {
-                let guards = self.guard_names(arguments);
-                self.touch(router);
-                self.routers[router].guards.extend(guards);
+                self.add_guards(router, arguments, false);
                 return;
             }
             ("GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS", _) => {
@@ -2550,6 +2757,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         guard_arguments: &[Node<'t>],
         range: Span,
     ) {
+        if self.has_spread(guard_arguments) || handler.is_some_and(|node| self.has_spread(&[node]))
+        {
+            return;
+        }
         self.touch(router);
         let kind = self.routers[router].framework.handler_kind();
         let handler = handler.map(|node| self.context.go_handler(node, kind));
@@ -2632,7 +2843,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     framework: framework.name(),
                     route: Some(Route {
                         method: record.method.clone(),
-                        parameters: route_parameters(&path),
+                        parameters: path_parameters(framework, &path),
                         path,
                     }),
                     guards,

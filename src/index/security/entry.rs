@@ -489,6 +489,11 @@ struct Context<'a> {
     /// The local bindings of a Go file, by name: the starts of the bindings in order, and
     /// for each the highest end of a function that has a binding up to it.
     go_locals: std::sync::OnceLock<GoLocals>,
+    /// The package-level variables of a Go file, by name. The value is the number of specs.
+    go_globals: std::sync::OnceLock<std::collections::HashMap<String, usize>>,
+    /// The names of the variables that hold a `net/http` multiplexer, for the names that the
+    /// walk asked about.
+    go_servemux_names: parking_lot::Mutex<std::collections::HashMap<String, bool>>,
 }
 
 struct Draft {
@@ -546,6 +551,8 @@ impl<'a> Context<'a> {
             symbol_starts,
             callables_here,
             go_locals: std::sync::OnceLock::new(),
+            go_globals: std::sync::OnceLock::new(),
+            go_servemux_names: parking_lot::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -1501,23 +1508,20 @@ impl<'a> Context<'a> {
         {
             return;
         }
-        let path = self.string_of(*first);
-        let method = match path.split_once(' ') {
-            Some((method, _)) if method.chars().all(|c| c.is_ascii_uppercase()) => {
-                method.to_string()
-            }
-            _ => "ANY".to_string(),
+        let Some((method, path)) = go_routes::servemux_pattern(&self.string_of(*first)) else {
+            return;
         };
-        let path = path
-            .split_once(' ')
-            .map_or(path.clone(), |(_, rest)| rest.to_string());
         let wrapped = self.go_handler(*handler, go_routes::HandlerKind::Http);
         out.push(Draft {
             range: Span::of(&node),
             kind: EntryKind::HttpHandler,
             symbol: wrapped.symbol,
             framework: "net/http",
-            route: Some(route(&method, path)),
+            route: Some(Route {
+                method,
+                parameters: go_routes::servemux_parameters(&path),
+                path,
+            }),
             guards: wrapped.guards,
             basis: EntryBasis::Registered,
             variant: None,
@@ -1608,21 +1612,31 @@ impl<'a> Context<'a> {
 
     /// `.route("/path", get(handler))` of axum. The method router can chain more methods.
     /// The `net/http` package itself, or a value of `http.NewServeMux()`.
+    /// The `net/http` package itself, or a variable that has one binding in the file: a call of
+    /// `http.NewServeMux()`. A name that a local variable hides is not the package.
     fn is_go_http_receiver(&self, receiver: Node<'_>) -> bool {
         let text = self.text(receiver);
-        self.file.imports.iter().any(|binding| {
-            binding.module_path == "net/http"
-                && binding
-                    .local_name
-                    .as_deref()
-                    .map_or(text == "http", |local| local == text)
-        }) || (receiver.kind() == "identifier"
-            && bound_to_marker(
-                self.parsed.root_node(),
-                self.source,
-                text,
-                &["NewServeMux("],
-            ))
+        let names = go_routes::net_http_names(self.file);
+        if names.iter().any(|name| name == text) {
+            return !self.is_go_local(receiver);
+        }
+        let markers: Vec<String> = names
+            .iter()
+            .map(|name| format!("{name}.NewServeMux("))
+            .collect();
+        let markers: Vec<&str> = markers.iter().map(String::as_str).collect();
+        if receiver.kind() != "identifier" {
+            return false;
+        }
+        if let Some(known) = self.go_servemux_names.lock().get(text) {
+            return *known;
+        }
+        let holds = self.go_binding_count(receiver) == 1
+            && bound_to_marker(self.parsed.root_node(), self.source, text, &markers);
+        self.go_servemux_names
+            .lock()
+            .insert(text.to_string(), holds);
+        holds
     }
 
     fn rust_axum(&self, node: Node<'_>, out: &mut Vec<Draft>) {
@@ -3322,6 +3336,141 @@ func outside() {
             started.elapsed() < std::time::Duration::from_secs(20),
             "took {:?}",
             started.elapsed()
+        );
+    }
+    fn go_parameters(files: &[(&str, &str)]) -> Vec<String> {
+        entries(Language::Go, files)
+            .into_iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .map(|entry| {
+                let route = entry.route.unwrap();
+                format!("{} {} {:?}", route.method, route.path, route.parameters)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn audit_chi_handle_splits_a_method_and_method_must_be_known() {
+        let source = go_source(
+            &[CHI],
+            "func routes() {\n\tr := chi.NewRouter()\n\tr.Handle(\"get /a\", list)\n\tr.HandleFunc(\"POST\t /b\", list)\n\tr.Handle(\"/c\", list)\n\tr.Method(\"PURGE\", \"/d\", list)\n\tr.Method(\"get\", \"/e\", list)\n\tr.Handle(\"PURGE /f\", list)\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /a [] list",
+                "chi POST /b [] list",
+                "chi ANY /c [] list",
+                "chi GET /e [] list",
+            ]
+        );
+    }
+
+    #[test]
+    fn audit_each_framework_reads_the_parameters_of_its_own_syntax() {
+        let source = go_source(
+            &[CHI, ECHO, GIN, MUX],
+            r#"func routes() {
+	c := chi.NewRouter()
+	c.Get("/users/:id", list)
+	c.Get("/files/{name}.{ext:[a-z]{2}}/*", list)
+	e := echo.New()
+	e.GET("/a:id/b/{no}", list)
+	e.GET(`/x/\:lit/*`, list)
+	g := gin.New()
+	g.GET("/u/:id/*rest", list)
+	g.GET("/b/{no}", list)
+	m := mux.NewRouter()
+	m.HandleFunc("/m/{id:[0-9]{3}}/{slug}", list)
+	m.HandleFunc("/n/:no", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_parameters(&[("main.go", &source)]),
+            [
+                "GET /users/:id []",
+                "GET /files/{name}.{ext:[a-z]{2}}/* [\"name\", \"ext\", \"*\"]",
+                "GET /a:id/b/{no} [\"id\"]",
+                "GET /x/\\:lit/* [\"*\"]",
+                "GET /u/:id/*rest [\"id\", \"rest\"]",
+                "GET /b/{no} []",
+                "ANY /m/{id:[0-9]{3}}/{slug} [\"id\", \"slug\"]",
+                "ANY /n/:no []",
+            ]
+        );
+    }
+
+    #[test]
+    fn audit_a_gorilla_route_that_is_build_only_never_matches() {
+        let source = go_source(
+            &[MUX],
+            "func routes() {\n\tr := mux.NewRouter()\n\tr.HandleFunc(\"/a\", list).BuildOnly()\n\tr.HandleFunc(\"/b\", list).Name(\"b\")\n\tr.Methods(\"GET\").Path(\"/c\").HandlerFunc(list).BuildOnly()\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gorilla/mux ANY /b [] list"]
+        );
+    }
+
+    #[test]
+    fn audit_net_http_patterns_follow_the_servemux_syntax() {
+        let source = go_source(
+            &["\"example.com/custom\""],
+            r#"func routes() {
+	http.HandleFunc("GET example.com/x/{id}", list)
+	http.HandleFunc("get /y", list)
+	http.HandleFunc("/a/{rest...}", list)
+	http.HandleFunc("GET  /w", list)
+	http.HandleFunc("GET /../c", list)
+	http.HandleFunc("/a/../b", list)
+	http.HandleFunc("GET example.com", list)
+	http.HandleFunc("FOO /q", list)
+	http.HandleFunc("GET	/t", list)
+	http.HandleFunc("/u/{$}", list)
+	m := custom.NewServeMux()
+	m.HandleFunc("/no", list)
+	s := http.NewServeMux()
+	s.HandleFunc("/yes", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_parameters(&[("main.go", &source)]),
+            [
+                "GET /x/{id} [\"id\"]",
+                "get /y []",
+                "ANY /a/{rest...} [\"rest\"]",
+                "GET /w []",
+                "FOO /q []",
+                "GET /t []",
+                "ANY /u/{$} []",
+                "ANY /yes []",
+            ]
+        );
+    }
+
+    #[test]
+    fn audit_middleware_that_the_walk_cannot_name_is_not_dropped() {
+        let source = go_source(
+            &[GIN],
+            r#"func routes() {
+	g := gin.New()
+	g.Use(func(c *gin.Context) {})
+	g.GET("/a", list)
+	mws := []gin.HandlerFunc{}
+	h := g.Group("/h", mws...)
+	h.GET("/b", list)
+	g.GET("/c", mws...)
+	n := gin.New()
+	n.Use(mws...)
+	n.GET("/d", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gin GET /a [<function literal>] list"]
         );
     }
 
