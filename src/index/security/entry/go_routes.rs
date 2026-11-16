@@ -4,26 +4,33 @@
 //! framework panic. A program that panics at start, as a chi `Use` after a route
 //! does in some versions, is out of scope.
 //!
-//! A router is a value that a framework constructor makes, or a value that a
-//! group, a sub-router, or a typed parameter gives. The walk keeps each router
-//! in a scope, in source order. A prefix and a guard come from the router that
-//! the receiver of a registration names, never from the name of a variable.
+//! The walk reads the body of each function one time, at its declaration. A route
+//! call gives its entry at its own place, with the guards that the function knows.
+//! A router is a value that a framework constructor makes, or a value that a group,
+//! a sub-router, or a typed parameter gives. The walk keeps each router in a scope,
+//! in source order. A prefix and a guard come from the router that the receiver of a
+//! registration names, never from the name of a variable.
 //!
-//! When the syntax does not prove a fact, the walk gives no entry. A router
-//! that a function receives as a parameter has an unknown prefix, unless a call
-//! of the file gives the router to the function. Thus its routes give no entry.
+//! A function that makes a router and returns it has a summary when it is pure. A pure
+//! function writes no package-level variable, no parameter, and no router that it did
+//! not make. The summary has the prefixes and the guards of the returned router. A call
+//! of the function gives a new router with these prefixes and guards. The routes that
+//! the function registers on its own routers give their entries in the function, with
+//! the paths of the function. A mount of the returned router does not add its prefix to
+//! them.
+//!
+//! When the syntax does not prove a fact, the walk gives no entry. These values have
+//! no proof: the result of a function without a summary, a package-level router that a
+//! function assigns, and a router that a function receives as a parameter. Thus the
+//! routes on these values give no entry.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
 
-use super::{route, Context, Draft, EntryBasis, EntryKind};
+use super::{route_parameters, Context, Draft, EntryBasis, EntryKind, Route};
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ImportKind, Span, Symbol};
-
-/// The most function bodies that the walk reads for calls. A function that a template
-/// cannot describe needs a new read for each call, so this limit stops a long chain of calls.
-const WALK_LIMIT: usize = 5_000;
 
 /// The methods that `Any` registers. gin v1.11.0 `anyMethods`.
 const GIN_ANY: [&str; 9] = [
@@ -341,8 +348,12 @@ struct Router {
     /// The walk does not know the prefix of the router.
     partial: bool,
     mountable: bool,
-    /// The function whose declaration made the router. A call of the file does not make it.
-    origin: Option<String>,
+    /// The function body that made the router. Zero is the package.
+    owner: usize,
+    /// A parameter gave the router. The function that changes it is not pure.
+    external: bool,
+    /// The prefixes of the router in the function that made it, from a summary.
+    base: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -357,12 +368,12 @@ struct Record {
     guards: Vec<String>,
 }
 
-/// The routers and the routes that one read of a function makes. A call of the
-/// function copies them.
-struct Template {
-    routers: Vec<Router>,
-    records: Vec<Record>,
-    returned: Option<usize>,
+/// The router that a pure function returns.
+#[derive(Clone)]
+struct Summary {
+    framework: Framework,
+    prefixes: Vec<String>,
+    guards: Vec<String>,
 }
 
 struct Lineage {
@@ -373,6 +384,8 @@ struct Lineage {
 struct Frame {
     function: bool,
     returned: Option<usize>,
+    owner: usize,
+    pure: bool,
 }
 
 #[derive(Default)]
@@ -623,12 +636,11 @@ pub(super) fn collect(context: &Context<'_>, root: Node<'_>, out: &mut Vec<Draft
         consumed: HashSet::new(),
         route_calls: HashMap::new(),
         functions: HashMap::new(),
-        active: HashSet::new(),
-        instantiated: HashSet::new(),
-        templates: HashMap::new(),
-        touched: Vec::new(),
-        walks: 0,
-        origin: None,
+        walked: HashSet::new(),
+        in_progress: HashSet::new(),
+        cyclic: HashSet::new(),
+        summaries: HashMap::new(),
+        owners: 0,
         frames: Vec::new(),
     };
     routes.run(root);
@@ -645,16 +657,15 @@ struct Routes<'c, 'a, 't> {
     /// The router that a call of `Route` made, by the node of the call.
     route_calls: HashMap<usize, usize>,
     functions: HashMap<String, Node<'t>>,
-    /// The functions that the walk reads at this time. A recursive call gives no router.
-    active: HashSet<String>,
-    /// The functions that a call of the file read. Their own declaration gives no root router.
-    instantiated: HashSet<String>,
-    templates: HashMap<String, Template>,
-    /// The routers that a read changed. A read of a function that changes a router
-    /// outside of its own routers has no template.
-    touched: Vec<usize>,
-    walks: usize,
-    origin: Option<String>,
+    /// The functions that the walk read. A call can read a function before its declaration.
+    walked: HashSet<String>,
+    /// The functions that the walk reads at this time. A recursive call has no summary.
+    in_progress: HashSet<String>,
+    /// The functions that a call of themselves reaches. They have no summary.
+    cyclic: HashSet<String>,
+    /// The summary of each function that the walk read, or none.
+    summaries: HashMap<String, Option<Summary>>,
+    owners: usize,
     frames: Vec<Frame>,
 }
 
@@ -683,12 +694,53 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         {
             self.visit(*child);
         }
+        for name in self.assigned_globals(root) {
+            if self.scopes[0].contains_key(&name) {
+                self.scopes[0].insert(name, None);
+            }
+        }
         for child in children
             .iter()
             .filter(|child| child.kind() != "var_declaration")
         {
             self.visit(*child);
         }
+    }
+
+    /// The package-level variables that an assignment inside a function writes. The walk
+    /// does not know when the function runs, so it does not trust their value.
+    fn assigned_globals(&self, root: Node<'t>) -> HashSet<String> {
+        let mut globals = HashSet::new();
+        for declaration in Self::named_children(root)
+            .into_iter()
+            .filter(|child| child.kind() == "var_declaration")
+        {
+            for spec in Self::named_children(declaration) {
+                let mut cursor = spec.walk();
+                for name in spec.children_by_field_name("name", &mut cursor) {
+                    globals.insert(self.text(name).to_string());
+                }
+            }
+        }
+        let mut written = HashSet::new();
+        let mut pending: Vec<Node<'t>> = Self::named_children(root)
+            .into_iter()
+            .filter(|child| child.kind() != "var_declaration")
+            .collect();
+        while let Some(node) = pending.pop() {
+            if node.kind() == "assignment_statement" {
+                if let Some(left) = node.child_by_field_name("left") {
+                    for target in Self::named_children(left) {
+                        let name = self.text(target);
+                        if target.kind() == "identifier" && globals.contains(name) {
+                            written.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+            pending.extend(Self::named_children(node));
+        }
+        written
     }
 
     fn visit(&mut self, node: Node<'t>) {
@@ -698,7 +750,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     .child_by_field_name("name")
                     .filter(|_| node.kind() == "function_declaration")
                     .map(|name| self.text(name));
-                self.walk_function(node, name, None);
+                self.walk_declared(node, name);
                 return;
             }
             "func_literal" => {
@@ -728,160 +780,117 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         }
     }
 
-    /// Reads the body of a function in a scope of its own. `declared` is the name of the
-    /// function when the walk is the walk of its declaration. The result is the router that
-    /// the function returns.
-    fn walk_function(
-        &mut self,
-        node: Node<'t>,
-        declared: Option<&str>,
-        bound: Option<usize>,
-    ) -> Option<usize> {
+    /// Reads the body of a function in a scope of its own, one time. `declared` is the name
+    /// of the function. A pure function that returns a router it made gets a summary.
+    fn walk_declared(&mut self, node: Node<'t>, declared: Option<&str>) {
+        if let Some(name) = declared {
+            if !self.walked.insert(name.to_string()) {
+                return;
+            }
+            self.in_progress.insert(name.to_string());
+        }
         let globals = self.scopes[0].clone();
         let saved = std::mem::replace(&mut self.scopes, vec![globals, HashMap::new()]);
-        let origin = declared.map(str::to_string).or_else(|| self.origin.clone());
-        let saved_origin = std::mem::replace(&mut self.origin, origin);
+        self.owners += 1;
+        let owner = self.owners;
         self.frames.push(Frame {
             function: true,
             returned: None,
+            owner,
+            pure: true,
         });
-        self.bind_parameters(node.child_by_field_name("parameters"), bound);
+        self.bind_parameters(node.child_by_field_name("parameters"), None);
         if let Some(body) = node.child_by_field_name("body") {
             self.visit(body);
         }
-        let returned = self.frames.pop().and_then(|frame| frame.returned);
-        self.origin = saved_origin;
+        let frame = self.frames.pop();
+        if let Some(name) = declared {
+            self.in_progress.remove(name);
+        }
         let globals = self.scopes.swap_remove(0);
         self.scopes = saved;
         self.scopes[0] = globals;
-        returned
+        if let (Some(name), Some(frame)) = (declared, frame) {
+            let summary = frame
+                .returned
+                .filter(|_| frame.pure && !declared.is_some_and(|name| self.cyclic.contains(name)))
+                .and_then(|router| self.summarize(router, owner));
+            self.summaries.insert(name.to_string(), summary);
+        }
     }
 
-    /// Reads a function of the file for a call. Each call gives new routers. The first read
-    /// makes a template, and each next call copies it.
-    fn instantiate(&mut self, name: &str, bound: Option<usize>) -> Option<usize> {
-        let node = *self.functions.get(name)?;
-        if bound.is_none() {
-            node.child_by_field_name("result")?;
-            if let Some(template) = self.templates.remove(name) {
-                let router = self.copy_template(&template);
-                self.templates.insert(name.to_string(), template);
-                return router;
-            }
-        }
-        if self.walks >= WALK_LIMIT || !self.active.insert(name.to_string()) {
-            return None;
-        }
-        self.walks += 1;
-        self.instantiated.insert(name.to_string());
-        let (routers_start, records_start, touched_start) =
-            (self.routers.len(), self.records.len(), self.touched.len());
-        let router = self.walk_function(node, None, bound);
-        self.active.remove(name);
-        if bound.is_none() {
-            if let Some(template) =
-                self.make_template(routers_start, records_start, touched_start, router)
-            {
-                self.templates.insert(name.to_string(), template);
-            }
-        }
-        router
+    /// The owner of the function body that the walk reads at this time.
+    fn current_owner(&self) -> usize {
+        self.frames.last().map_or(0, |frame| frame.owner)
     }
 
-    /// The template of a read, when the read changed only the routers that it made. The
-    /// template has the returned router, and each router that joins to it.
-    fn make_template(
-        &self,
-        routers_start: usize,
-        records_start: usize,
-        touched_start: usize,
-        returned: Option<usize>,
-    ) -> Option<Template> {
-        let end = self.routers.len();
-        let inside = |id: usize| (routers_start..end).contains(&id);
-        let pure = self.touched[touched_start..].iter().all(|id| inside(*id))
-            && self.records[records_start..]
+    /// The function that the walk reads at this time changes a value that it did not make.
+    fn mark_impure(&mut self) {
+        if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
+            frame.pure = false;
+        }
+    }
+
+    /// Notes that the walk changes a router. A function that changes a router that it did
+    /// not make has no summary.
+    fn touch(&mut self, router: usize) {
+        let router = &self.routers[router];
+        if router.external || router.owner != self.current_owner() {
+            self.mark_impure();
+        }
+    }
+
+    /// Tells if a function body made the router, and each router that it joins to.
+    fn made_by(&self, router: usize, owner: usize) -> bool {
+        let router = &self.routers[router];
+        router.owner == owner
+            && !router.external
+            && router
+                .links
                 .iter()
-                .all(|record| inside(record.router))
-            && self.routers[routers_start..]
-                .iter()
-                .all(|router| router.links.iter().all(|link| inside(link.parent)));
-        if !pure {
+                .all(|link| self.made_by(link.parent, owner))
+    }
+
+    fn summarize(&self, router: usize, owner: usize) -> Option<Summary> {
+        if !self.made_by(router, owner) {
             return None;
         }
-        let mut members: BTreeSet<usize> = returned.into_iter().collect();
-        loop {
-            let before = members.len();
-            for id in routers_start..end {
-                let router = &self.routers[id];
-                let joined_to_member = router
-                    .links
-                    .iter()
-                    .any(|link| members.contains(&link.parent));
-                if joined_to_member && returned.is_some() {
-                    members.insert(id);
-                }
-            }
-            let parents: Vec<usize> = members
-                .iter()
-                .flat_map(|id| self.routers[*id].links.iter().map(|link| link.parent))
-                .collect();
-            members.extend(parents);
-            if members.len() == before {
-                break;
-            }
-        }
-        let order: Vec<usize> = members.into_iter().collect();
-        let position = |id: usize| order.iter().position(|member| *member == id);
-        let routers = order
-            .iter()
-            .map(|id| {
-                let mut router = self.routers[*id].clone();
-                router.origin = None;
-                for link in &mut router.links {
-                    link.parent = position(link.parent).unwrap_or(0);
-                }
-                router
-            })
-            .collect();
-        let records = self.records[records_start..]
-            .iter()
-            .filter_map(|record| {
-                let mut record = record.clone();
-                record.router = position(record.router)?;
-                Some(record)
-            })
-            .collect();
-        Some(Template {
-            routers,
-            records,
-            returned: returned.and_then(position),
+        let mut places = self.lineage(router, None);
+        let place = places.pop().filter(|_| places.is_empty())?;
+        Some(Summary {
+            framework: self.routers[router].framework,
+            prefixes: place.prefixes,
+            guards: place.guards,
         })
     }
 
-    fn copy_template(&mut self, template: &Template) -> Option<usize> {
-        let base = self.routers.len();
-        for router in &template.routers {
-            let mut router = router.clone();
-            router.origin = self.origin.clone();
-            for link in &mut router.links {
-                link.parent += base;
-            }
-            self.routers.push(router);
+    /// The router that a call of a function of the file gives. A function with a summary
+    /// gives a new router. Another function gives no router, because the walk has no proof.
+    fn call_function(&mut self, name: &str) -> Option<usize> {
+        let node = *self.functions.get(name)?;
+        node.child_by_field_name("result")?;
+        if self.in_progress.contains(name) {
+            self.cyclic.insert(name.to_string());
+            return None;
         }
-        for record in &template.records {
-            let mut record = record.clone();
-            record.router += base;
-            self.records.push(record);
-        }
-        template.returned.map(|returned| returned + base)
+        self.walk_declared(node, Some(name));
+        let summary = self.summaries.get(name)?.clone()?;
+        let id = self.make_root(summary.framework);
+        let router = &mut self.routers[id];
+        router.guards = summary.guards;
+        router.mountable = summary.prefixes.is_empty();
+        router.base = summary.prefixes;
+        Some(id)
     }
 
     fn closure(&mut self, literal: Node<'t>, bound: Option<usize>) {
         self.scopes.push(HashMap::new());
+        let owner = self.current_owner();
         self.frames.push(Frame {
             function: false,
             returned: None,
+            owner,
+            pure: true,
         });
         self.bind_parameters(literal.child_by_field_name("parameters"), bound);
         if let Some(body) = literal.child_by_field_name("body") {
@@ -891,18 +900,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         self.scopes.pop();
     }
 
-    /// The function that a framework calls with a new router: a literal, or a name that the
-    /// file defines. Another function gives no route, because the walk does not know its prefix.
+    /// The function that a framework calls with a new router. Only a literal gives routes.
+    /// A function that a name gives has an unknown prefix, because the walk reads each
+    /// function one time.
     fn callback(&mut self, function: Node<'t>, router: usize) {
-        match function.kind() {
-            "func_literal" => {
-                self.consumed.insert(function.id());
-                self.closure(function, Some(router));
-            }
-            "identifier" if self.lookup(self.text(function)).is_none() => {
-                self.instantiate(self.text(function), Some(router));
-            }
-            _ => {}
+        if function.kind() == "func_literal" {
+            self.consumed.insert(function.id());
+            self.closure(function, Some(router));
         }
     }
 
@@ -942,6 +946,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return None;
         }
         let router = self.make_root(framework);
+        self.routers[router].external = true;
         if !framework.is_root_type(name) {
             self.routers[router].partial = true;
             self.routers[router].mountable = false;
@@ -978,6 +983,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 .rposition(|scope| scope.contains_key(name))
                 .unwrap_or(self.scopes.len() - 1)
         };
+        if index == 0 && !self.frames.is_empty() {
+            self.mark_impure();
+            return;
+        }
         self.scopes[index].insert(name.to_string(), router);
     }
 
@@ -990,7 +999,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             retroactive: matches!(framework, Framework::Chi | Framework::Mux | Framework::Echo),
             partial: false,
             mountable: true,
-            origin: self.origin.clone(),
+            owner: self.current_owner(),
+            external: false,
+            base: Vec::new(),
         });
         self.routers.len() - 1
     }
@@ -1010,15 +1021,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             retroactive: matches!(framework, Framework::Chi | Framework::Mux),
             partial: self.routers[parent].partial,
             mountable: false,
-            origin: None,
+            owner: self.current_owner(),
+            external: false,
+            base: Vec::new(),
         });
         self.routers.len() - 1
-    }
-
-    /// Gives a mutable router, and notes the change for the template of a function.
-    fn change(&mut self, router: usize) -> &mut Router {
-        self.touched.push(router);
-        &mut self.routers[router]
     }
 
     fn assignment(&mut self, node: Node<'t>) {
@@ -1096,7 +1103,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             let name = self.text(function);
             return match self.lookup(name) {
                 Some(_) => None,
-                None => self.instantiate(name, None),
+                None => self.call_function(name),
             };
         }
         if function.kind() != "selector_expression" {
@@ -1211,11 +1218,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             (Framework::Gin, _) => self.gin_call(router, node, name, &arguments),
             (_, "Use") => {
                 let guards = self.guard_names(&arguments);
-                self.change(router).guards.extend(guards);
+                self.touch(router);
+                self.routers[router].guards.extend(guards);
             }
             (Framework::Echo, "Pre") => {
                 let guards = self.guard_names(&arguments);
-                self.change(router).pre.extend(guards);
+                self.touch(router);
+                self.routers[router].pre.extend(guards);
             }
             (Framework::Chi, _) => self.chi_call(router, node, name, &arguments),
             (Framework::Echo, _) => self.echo_call(router, node, name, &arguments),
@@ -1274,13 +1283,22 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 | "Trace" | "Query",
                 [_, handler],
                 [Some(path), _],
-            ) => self.register(router, &[name], path, Some(*handler), &[], range),
+            ) => {
+                let method = name.to_uppercase();
+                self.register(router, &[method.as_str()], path, Some(*handler), &[], range)
+            }
             ("HandleFunc" | "Handle", [_, handler], [Some(path), _]) => {
                 self.register(router, &["ANY"], path, Some(*handler), &[], range)
             }
-            ("Method" | "MethodFunc", [_, _, handler], [Some(method), Some(path), _]) => {
-                self.register(router, &[method.as_str()], path, Some(*handler), &[], range)
-            }
+            ("Method" | "MethodFunc", [_, _, handler], [Some(method), Some(path), _]) => self
+                .register(
+                    router,
+                    &[method.to_uppercase().as_str()],
+                    path,
+                    Some(*handler),
+                    &[],
+                    range,
+                ),
             ("Route", _, _) => {
                 self.chi_route(router, node, arguments);
             }
@@ -1450,7 +1468,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let (methods, rest): (Vec<String>, &[Node<'t>]) = match (name, arguments) {
             ("Use", _) => {
                 let guards = self.guard_names(arguments);
-                self.change(router).guards.extend(guards);
+                self.touch(router);
+                self.routers[router].guards.extend(guards);
                 return;
             }
             ("GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS", _) => {
@@ -1525,7 +1544,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             parent_len: self.routers[parent].guards.len(),
             prefix: prefix.to_string(),
         };
-        self.change(child).links.push(link);
+        self.touch(parent);
+        self.touch(child);
+        self.routers[child].links.push(link);
     }
 
     fn reaches(&self, from: usize, target: usize) -> bool {
@@ -1545,6 +1566,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         guard_arguments: &[Node<'t>],
         range: Span,
     ) {
+        self.touch(router);
         let kind = self.routers[router].framework.handler_kind();
         let handler = handler.map(|node| self.context.go_handler(node, kind));
         let mut guards = self.guard_names(guard_arguments);
@@ -1559,7 +1581,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 limit,
                 range,
                 symbol: symbol.clone().flatten(),
-                method: method.to_uppercase(),
+                method: method.to_string(),
                 path: path.to_string(),
                 guards: guards.clone(),
             });
@@ -1580,18 +1602,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let mut own = router.pre.clone();
         own.extend(router.guards[..count].iter().cloned());
         if router.links.is_empty() {
-            let read_by_a_call = router
-                .origin
-                .as_ref()
-                .is_some_and(|origin| self.instantiated.contains(origin));
-            return if read_by_a_call {
-                Vec::new()
-            } else {
-                vec![Lineage {
-                    prefixes: Vec::new(),
-                    guards: own,
-                }]
-            };
+            return vec![Lineage {
+                prefixes: router.base.clone(),
+                guards: own,
+            }];
         }
         let mut places = Vec::new();
         for link in &router.links {
@@ -1621,7 +1635,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     kind: EntryKind::HttpHandler,
                     symbol: record.symbol.clone(),
                     framework: framework.name(),
-                    route: Some(route(&record.method, path)),
+                    route: Some(Route {
+                        method: record.method.clone(),
+                        parameters: route_parameters(&path),
+                        path,
+                    }),
                     guards,
                     basis: EntryBasis::Registered,
                 });

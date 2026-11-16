@@ -238,12 +238,21 @@ files call `clear`, omen does not know the class names. Then no route has a symb
 - A router is a value that the import of the framework proves. It is a constructor
   call, a group or sub-router of a router, or a parameter that has a router type. A
   variable name alone does not prove a router.
-- A function that returns a router gives a new router for each call. Omen reads the
-  function one time and copies the result for each call. A function that receives a
-  router of a type that can be a group or a sub-router, such as `chi.Router`, has an
-  unknown prefix. Omen gives no entry for its routes, unless a call in the same file
-  gives the router to it, as in `r.Route("/api", api)`. A function that receives a
-  root router, such as `*gin.Engine`, gives entries.
+- Omen reads the body of each function one time. A route call gives its entry at its
+  own place, with the guards that the function knows.
+- A function that makes a router and returns it has a summary when it is pure. A pure
+  function writes no package-level variable, no parameter, and no router that it did
+  not make. The summary has the prefixes and the guards of the returned router. A call
+  of the function gives a new router with these prefixes and guards. The routes that
+  the function registers on its own routers keep the paths of the function. A mount of
+  the returned router does not add its prefix to them.
+- These values have no proof, and the routes on them give no entry: the result of a
+  function without a summary, the result of a recursive function, a package-level router
+  that a function assigns, and a router that a function receives as a parameter of a
+  type that can be a group or a sub-router, such as `chi.Router`. A function that
+  receives a root router, such as `*gin.Engine`, gives entries. A route callback that a
+  name gives, as in `r.Route("/api", api)`, gives no entry. A function literal gives
+  entries.
 - A handler that a call wraps, as in `http.Handle("/p", auth(http.HandlerFunc(show)))`,
   has the function `show` as its handler when a conversion proves it, or when the
   parameter list of `show` is the parameter list of a handler of the framework. For
@@ -272,6 +281,8 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   a route or a guard returns the router, so calls can chain. Paths join as `path.Join`
   does. `Any` gives one entry for each method in the list of gin v1.11.0. `Handle` gives
   one entry. `Match` gives entries only for a literal list of strings.
+  gin and echo keep a custom method of `Handle`, `Match`, and `Add` as the source
+  writes it.
 - For gorilla/mux, `PathPrefix(...).Subrouter()` gives a prefix. A chain of matchers
   that ends in `HandlerFunc` or `Handler` gives a route. The path matchers join in the
   order of the calls. Each `Methods` list limits the methods, so the result is the

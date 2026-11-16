@@ -83,7 +83,7 @@ impl EntryBasis {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Route {
-    /// The method in upper case, or `ANY`.
+    /// The method that the framework registers, or `ANY`. gin and echo keep a custom method as the source writes it.
     pub method: String,
     /// The path as the source writes it, with a leading `/`.
     pub path: String,
@@ -2308,10 +2308,7 @@ func subRouter() chi.Router {
         );
         assert_eq!(
             go_routes(&[("main.go", &source)]),
-            [
-                "chi GET /inline/ [logger] show",
-                "chi GET /sub/ [logger] list",
-            ]
+            ["chi GET /inline/ [logger] show", "chi GET / [] list",]
         );
     }
 
@@ -2345,7 +2342,7 @@ func subRouter() chi.Router {
     }
 
     #[test]
-    fn a_named_chi_route_callback_gets_the_prefix_and_an_unpassed_one_gives_no_entry() {
+    fn a_named_chi_route_callback_has_an_unknown_prefix_so_it_gives_no_entry() {
         let source = go_source(
             &[CHI],
             r#"func api(r chi.Router) {
@@ -2364,10 +2361,7 @@ func routes() {
 }
 "#,
         );
-        assert_eq!(
-            go_routes(&[("main.go", &source)]),
-            ["chi GET /api/users [] show", "chi GET /v2/users [] show"]
-        );
+        assert_eq!(go_routes(&[("main.go", &source)]), Vec::<String>::new());
     }
 
     #[test]
@@ -2854,37 +2848,221 @@ func routes() {
     #[test]
     fn two_drafts_of_one_registration_do_not_share_a_key() {
         let source = go_source(
-            &[ECHO, CHI],
-            r#"func newRouter() *echo.Echo {
-	e := echo.New()
-	e.GET("/x", show)
-	return e
-}
-
-func routes() {
-	a := newRouter()
-	a.Use(auth)
-	b := newRouter()
-	b.Use(audit)
-	root := chi.NewRouter()
+            &[CHI],
+            r#"func routes() {
 	sub := chi.NewRouter()
 	sub.Get("/x", show)
-	root.Mount("/a", sub)
-	root.Mount("/a", sub)
-	root.Mount("/b", sub)
+	first := chi.NewRouter()
+	first.Use(auth)
+	first.Mount("/a", sub)
+	first.Mount("/a", sub)
+	second := chi.NewRouter()
+	second.Use(audit)
+	second.Mount("/a", sub)
+	second.Mount("/b", sub)
 }
 "#,
         );
         let routes = go_routes(&[("main.go", &source)]);
-        assert!(routes.contains(&"echo GET /x [auth] show".to_string()));
-        assert!(routes.contains(&"echo GET /x [audit] show".to_string()));
         assert_eq!(
-            routes.iter().filter(|line| line.contains("/a/x")).count(),
-            1
+            routes,
+            [
+                "chi GET /a/x [auth] show",
+                "chi GET /a/x [audit] show",
+                "chi GET /b/x [audit] show",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_function_gives_its_routes_one_time_at_their_own_place() {
+        let source = go_source(
+            &[MUX],
+            r#"func makeRouter() *mux.Router {
+	r := mux.NewRouter()
+	r.HandleFunc("/x", show)
+	return r
+}
+
+func main() {
+	_ = makeRouter()
+}
+"#,
         );
         assert_eq!(
-            routes.iter().filter(|line| line.contains("/b/x")).count(),
-            1
+            go_routes(&[("main.go", &source)]),
+            ["gorilla/mux ANY /x [] show"]
+        );
+    }
+
+    #[test]
+    fn a_call_of_a_pure_factory_gives_a_new_router_with_the_summary() {
+        let source = go_source(
+            &[CHI],
+            r#"func api() chi.Router {
+	root := chi.NewRouter()
+	root.Use(logger)
+	sub := root.With(audit)
+	return sub
+}
+
+func routes() {
+	a := api()
+	a.Get("/a", show)
+	b := api()
+	b.Use(auth)
+	b.Get("/b", show)
+	c := api()
+	c.Get("/c", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /a [logger,audit] show",
+                "chi GET /b [logger,audit,auth] show",
+                "chi GET /c [logger,audit] show",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_function_that_writes_a_package_variable_gives_no_proof() {
+        let source = go_source(
+            &[GIN],
+            r#"var current *gin.Engine
+
+func makeRouter() *gin.Engine {
+	current = gin.New()
+	return current
+}
+
+func main() {
+	first := makeRouter()
+	first.Use(auth)
+	_ = makeRouter()
+	current.GET("/public", show)
+	first.GET("/other", show)
+}
+"#,
+        );
+        assert!(go_routes(&[("main.go", &source)]).is_empty());
+    }
+
+    #[test]
+    fn a_package_router_that_a_function_assigns_has_no_proof() {
+        let source = go_source(
+            &[GIN],
+            r#"var shared = gin.New()
+var stable = gin.New()
+
+func reset() {
+	shared = gin.New()
+}
+
+func main() {
+	shared.GET("/a", show)
+	stable.GET("/b", show)
+}
+"#,
+        );
+        assert_eq!(go_routes(&[("main.go", &source)]), ["gin GET /b [] show"]);
+    }
+
+    #[test]
+    fn a_function_that_changes_a_router_it_did_not_make_has_no_summary() {
+        let source = go_source(
+            &[MUX],
+            r#"var shared = mux.NewRouter()
+
+func factory() *mux.Router {
+	shared.Use(auth)
+	return mux.NewRouter()
+}
+
+func receive(r *mux.Router) *mux.Router {
+	r.Use(audit)
+	return r
+}
+
+func main() {
+	r := factory()
+	r.HandleFunc("/a", show)
+	shared.HandleFunc("/b", show)
+	p := receive(shared)
+	p.HandleFunc("/c", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gorilla/mux ANY /b [auth] show"]
+        );
+    }
+
+    #[test]
+    fn a_recursive_function_has_no_summary() {
+        let source = go_source(
+            &[GIN],
+            r#"func loop(depth int) *gin.Engine {
+	if depth > 0 {
+		return loop(depth - 1)
+	}
+	return gin.New()
+}
+
+func main() {
+	r := loop(2)
+	r.GET("/a", show)
+}
+"#,
+        );
+        assert!(go_routes(&[("main.go", &source)]).is_empty());
+    }
+
+    #[test]
+    fn gin_and_echo_keep_a_custom_method_as_the_source_writes_it() {
+        let source = go_source(
+            &[GIN, ECHO],
+            r#"func routes() {
+	g := gin.New()
+	g.Match([]string{"get"}, "/g", show)
+	g.Handle("Purge", "/h", show)
+	e := echo.New()
+	e.Add("get", "/e", show)
+	e.Match([]string{"Link"}, "/m", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gin get /g [] show",
+                "gin Purge /h [] show",
+                "echo get /e [] show",
+                "echo Link /m [] show",
+            ]
+        );
+    }
+
+    #[test]
+    fn timing_ten_thousand_calls_of_one_factory_are_read_in_linear_time() {
+        let mut body = String::from("func newRouter() *gin.Engine { return gin.New() }\n\n");
+        body.push_str("func routes() {\n");
+        for _ in 0..10_000 {
+            body.push_str("\t{ r := newRouter(); r.GET(\"/x\", show) }\n");
+        }
+        body.push_str("}\n");
+        let source = go_source(&[GIN], &body);
+        let started = std::time::Instant::now();
+        let found = go_routes(&[("main.go", &source)]);
+        assert_eq!(found.len(), 10_000);
+        assert!(found.iter().all(|line| line == "gin GET /x [] show"));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "took {:?}",
+            started.elapsed()
         );
     }
 

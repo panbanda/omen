@@ -24,12 +24,8 @@ func routes() http.Handler {
 	})
 	r.With(audit).Delete("/items/{id:[0-9]+}", show)
 	r.Method("PATCH", "/m", list)
-	r.Mount("/sub", subRouter())
+	sub := chi.NewRouter()
+	sub.Get("/", list)
+	r.Mount("/sub", sub)
 	return r
-}
-
-func subRouter() chi.Router {
-	s := chi.NewRouter()
-	s.Get("/", list)
-	return s
 }
