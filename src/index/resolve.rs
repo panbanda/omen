@@ -658,29 +658,88 @@ impl<'a> Resolver<'a> {
     }
 
     /// The callable members `name` of a type. The search goes to the parent
-    /// types when the type has no such member.
+    /// types when the type has no such member. The search keeps its own stack, so a long chain of
+    /// parent types does not overflow the stack of the thread.
     fn members(&self, owner: Id, name: &str, arity: usize, seen: &mut BTreeSet<Id>) -> Vec<Id> {
-        if !seen.insert(owner) {
-            return Vec::new();
+        struct Frame {
+            owner: Id,
+            children: Vec<Id>,
+            next: usize,
+            collected: Vec<Id>,
+            in_prepends: bool,
         }
-        // A Ruby `prepend` puts a module before the class in the search.
-        let prepended: Vec<Id> = self
-            .facts(owner)
+        let mut stack: Vec<Frame> = Vec::new();
+        let mut entering = Some(owner);
+        let mut returned: Option<Vec<Id>> = None;
+        loop {
+            if let Some(next_owner) = entering.take() {
+                if seen.insert(next_owner) {
+                    stack.push(Frame {
+                        owner: next_owner,
+                        children: self.prepended_types(next_owner),
+                        next: 0,
+                        collected: Vec::new(),
+                        in_prepends: true,
+                    });
+                } else {
+                    returned = Some(Vec::new());
+                }
+            }
+            if let Some(value) = returned.take() {
+                match stack.last_mut() {
+                    Some(frame) => frame.collected.extend(value),
+                    None => return value,
+                }
+            }
+            let Some(frame) = stack.last_mut() else {
+                return Vec::new();
+            };
+            if frame.next < frame.children.len() {
+                entering = Some(frame.children[frame.next]);
+                frame.next += 1;
+                continue;
+            }
+            if frame.in_prepends {
+                // A Ruby `prepend` puts a module before the class in the search.
+                if !frame.collected.is_empty() {
+                    returned = Some(std::mem::take(&mut frame.collected));
+                    stack.pop();
+                    continue;
+                }
+                let own = self.own_members(frame.owner, name, arity);
+                if !own.is_empty() {
+                    returned = Some(own);
+                    stack.pop();
+                    continue;
+                }
+                frame.in_prepends = false;
+                frame.children = self.parents(frame.owner);
+                frame.next = 0;
+                continue;
+            }
+            returned = Some(std::mem::take(&mut frame.collected));
+            stack.pop();
+        }
+    }
+
+    /// The Ruby modules that a type prepends.
+    fn prepended_types(&self, owner: Id) -> Vec<Id> {
+        self.facts(owner)
             .prepends
             .iter()
             .flat_map(|module| {
                 let (qualifier, name) = split_type(module);
                 self.types(&name, qualifier.as_deref(), owner.0)
             })
-            .flat_map(|module| self.members(module, name, arity, seen))
-            .collect();
-        if !prepended.is_empty() {
-            return prepended;
-        }
+            .collect()
+    }
+
+    /// The callable members `name` that a type has itself.
+    fn own_members(&self, owner: Id, name: &str, arity: usize) -> Vec<Id> {
         let type_symbol = self.symbol(owner);
         let namespace = type_symbol.kind == SymbolKind::Module;
         let owner_path = self.member_path(owner);
-        let mut found: Vec<Id> = self
+        let found: Vec<Id> = self
             .named(name, owner.0)
             .filter(|id| {
                 let member = self.symbol(*id);
@@ -698,14 +757,7 @@ impl<'a> Resolver<'a> {
                             && self.types(&type_symbol.name, None, id.0) == [owner]))
             })
             .collect();
-        found = self.preferred(found, arity);
-        if !found.is_empty() {
-            return found;
-        }
-        self.parents(owner)
-            .into_iter()
-            .flat_map(|parent| self.members(parent, name, arity, seen))
-            .collect()
+        self.preferred(found, arity)
     }
 
     /// Removes the candidates that a more specific candidate replaces:

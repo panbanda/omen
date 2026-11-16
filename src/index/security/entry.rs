@@ -1723,6 +1723,14 @@ mod tests {
     }
 
     fn entries(language: Language, files: &[(&str, &str)]) -> Vec<EntryPoint> {
+        entries_timed(language, files).0
+    }
+
+    /// The entry points, and the time of the search for entry points alone.
+    fn entries_timed(
+        language: Language,
+        files: &[(&str, &str)],
+    ) -> (Vec<EntryPoint>, std::time::Duration) {
         let mut files = files.to_vec();
         files.sort_by_key(|(name, _)| *name);
         let files = files.as_slice();
@@ -1742,7 +1750,9 @@ mod tests {
         link_files(&mut index);
         resolve_imports(&mut index, &Manifests::default());
         resolve_references(&mut index);
-        find_entry_points(&parsed, &index)
+        let started = std::time::Instant::now();
+        let found = find_entry_points(&parsed, &index);
+        (found, started.elapsed())
     }
 
     fn route(method: &str, path: &str, parameters: &[&str]) -> Option<Route> {
@@ -2727,6 +2737,137 @@ mod tests {
         let many_openings = many_openings_of_a_superclass_resolve_in_linear_time_at(10, 10_000);
         assert!(many_routes.as_secs() < 30, "{many_routes:?}");
         assert!(many_openings.as_secs() < 30, "{many_openings:?}");
+    }
+
+    #[test]
+    fn a_callback_in_a_block_is_conditional_and_one_in_a_method_is_ignored() {
+        let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
+        let base = "class ApplicationController\n  before_action :a\n  before_action :b\nend\n";
+        let users = "class UsersController < ApplicationController\n  0.times do\n    before_action :ghost\n  end\n  [1].each { before_action :ghost_two }\n  handler = -> { before_action :ghost_three }\n  3.times do\n    skip_before_action :a\n  end\n\n  def self.configure\n    skip_before_action :b\n    before_action :in_method\n  end\n\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/application_controller.rb", base),
+                ("controllers/users_controller.rb", users),
+            ],
+        );
+        assert_eq!(found[0].guards, ["b"]);
+    }
+
+    #[test]
+    fn prepend_puts_a_callback_at_the_front_of_the_chain() {
+        let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\n  get \"/p\", to: \"posts#show\"\nend\n";
+        let base = "class ApplicationController\n  before_action :base\n  before_action :x\nend\n";
+        let users = "class UsersController < ApplicationController\n  before_action :child, prepend: true\n  prepend_before_action :first\n  before_action :x, prepend: true\n  def show; end\nend\n";
+        let posts = "class PostsController < ApplicationController\n  before_action :late, prepend: LATE\n  before_action :plain, prepend: false\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/application_controller.rb", base),
+                ("controllers/posts_controller.rb", posts),
+                ("controllers/users_controller.rb", users),
+            ],
+        );
+        assert_eq!(
+            guards_by_path(&found),
+            [
+                ("GET /p".to_string(), strings(&["base", "x", "plain"])),
+                (
+                    "GET /u".to_string(),
+                    strings(&["x", "first", "child", "base"])
+                ),
+            ]
+        );
+    }
+
+    fn many_actions_with_many_empty_openings_resolve_in_linear_time_at(
+        count: usize,
+    ) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut methods = String::from("class UsersController\n");
+        let mut openings = Vec::new();
+        for number in 0..count {
+            routes.push_str(&format!("  get \"/r{number}\", to: \"users#a{number}\"\n"));
+            methods.push_str(&format!("  def a{number}; end\n"));
+            openings.push((
+                format!("controllers/o{number:06}.rb"),
+                String::from("class UsersController\nend\n"),
+            ));
+        }
+        routes.push_str("end\n");
+        methods.push_str("end\n");
+        let mut files: Vec<(&str, &str)> = vec![
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/methods.rb", methods.as_str()),
+        ];
+        files.extend(
+            openings
+                .iter()
+                .map(|(name, text)| (name.as_str(), text.as_str())),
+        );
+        let started = std::time::Instant::now();
+        let found = entries(Language::Ruby, &files);
+        let elapsed = started.elapsed();
+        assert_eq!(found.len(), count);
+        assert!(found.iter().all(|entry| entry.symbol.is_some()));
+        elapsed
+    }
+
+    #[test]
+    fn many_actions_with_many_empty_openings_resolve_each_action() {
+        many_actions_with_many_empty_openings_resolve_in_linear_time_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_actions_with_many_empty_openings_resolve_in_linear_time() {
+        let elapsed = many_actions_with_many_empty_openings_resolve_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    fn a_deep_chain_of_superclasses_resolves_in_linear_time_at(
+        depth: usize,
+    ) -> std::time::Duration {
+        let routes = format!(
+            "Rails.application.routes.draw do\n  get \"/deep\", to: \"k{}#show\"\nend\n",
+            depth - 1
+        );
+        let mut classes = String::new();
+        for number in 0..depth {
+            let parent = if number == 0 {
+                String::new()
+            } else {
+                format!(" < K{}Controller", number - 1)
+            };
+            classes.push_str(&format!(
+                "class K{number}Controller{parent}\n  before_action :g{number}\n  def show; end\nend\n"
+            ));
+        }
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_timed(Language::Ruby, &files);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].guards.len(), depth);
+        elapsed
+    }
+
+    #[test]
+    fn a_long_chain_of_superclasses_does_not_overflow_the_stack() {
+        a_deep_chain_of_superclasses_resolves_in_linear_time_at(4_000);
+    }
+
+    #[test]
+    fn a_chain_of_superclasses_gives_each_guard() {
+        a_deep_chain_of_superclasses_resolves_in_linear_time_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_deep_chain_of_superclasses_resolves_in_linear_time() {
+        let elapsed = a_deep_chain_of_superclasses_resolves_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
     #[test]

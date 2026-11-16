@@ -64,8 +64,14 @@
 //! A `before_action` call replaces an earlier callback with the same name, as Rails does. The
 //! replaced callback is gone for each action. This holds across the superclasses and the
 //! openings of a class. A callback in a class body follows the same rule for dead branches as a
-//! route does. A callback in any other `if`, `unless`, or `case` is conditional. It adds no
-//! guard, and a `skip_before_action` call in it removes the guard for the actions that it names.
+//! route does. A callback in any other `if`, `unless`, or `case` is conditional. A callback in a
+//! block, such as `each do` or a lambda, is also conditional. It adds no guard, and a
+//! `skip_before_action` call in it removes the guard for the actions that it names. Omen ignores
+//! a callback in a method.
+//!
+//! A `before_action` call with `prepend: true`, and a `prepend_before_action` call, put the
+//! callback at the front of the chain. If the `prepend:` value is not a literal, the callback adds
+//! no guard.
 //!
 //! A controller path with a leading `/` ignores the module of the `namespace`. The controller
 //! class must have the same chain of modules as the route. A route without a module matches
@@ -849,32 +855,25 @@ impl<'a> Context<'a> {
         identity: &str,
         action: &str,
     ) -> (Option<String>, Vec<String>) {
-        let Some(classes) = index.classes.get(identity) else {
+        if !index.classes.contains_key(identity) {
             return (None, Vec::new());
-        };
-        let mut actions: Vec<&Symbol> = Vec::new();
-        let mut seen_files = std::collections::HashSet::new();
-        for (position, _) in classes {
-            if !seen_files.insert(*position) {
-                continue;
-            }
-            if let Some(methods) = index
-                .methods
-                .get(&(*position, identity.to_string()))
-                .and_then(|by_action| by_action.get(action))
-            {
-                actions.extend(methods.iter().copied());
-            }
         }
-        let symbol = (actions.len() == 1).then(|| actions[0].key.to_string());
+        let symbol = index
+            .methods
+            .get(identity)
+            .and_then(|by_action| by_action.get(action))
+            .filter(|found| found.len() == 1)
+            .map(|found| found[0].key.to_string());
         let guards = self.rails_identity_guards(index, identity, action);
         (symbol, guards.as_ref().clone())
     }
 
-    /// The guards of an action for a class identity: the guards of the superclass, then the
+    /// The guards of an action for a class identity: the callbacks of the superclasses, then the
     /// callbacks of each opening of the class in the order of the files and then of the positions.
-    /// A callback replaces an earlier callback with the same name, as Rails does. The index keeps
-    /// the result for each identity and action.
+    /// A callback replaces an earlier callback with the same name, as Rails does. Omen walks up
+    /// to the nearest superclass that has a result, and it applies the callbacks of the classes
+    /// below it. The index keeps the result for the class and for each superclass with two or
+    /// more subclasses.
     fn rails_identity_guards(
         &self,
         index: &RailsIndex<'a>,
@@ -885,62 +884,47 @@ impl<'a> Context<'a> {
         if let Some(found) = index.guards.borrow().get(&key) {
             return Rc::clone(found);
         }
-        let inherited = match self.rails_parent_identity(index, identity) {
-            Some(parent) => self.rails_identity_guards(index, &parent, action),
-            None => Rc::new(Vec::new()),
-        };
-        let mut own: Vec<Rc<Vec<Callback>>> = Vec::new();
-        for (position, symbol) in index.classes.get(identity).into_iter().flatten() {
-            own.push(self.rails_callbacks(index, *position, symbol));
-        }
-        let result = if own.iter().all(|callbacks| callbacks.is_empty()) {
-            inherited
-        } else {
-            let mut active = ActiveGuards::new(&inherited);
-            for callback in own.iter().flat_map(|callbacks| callbacks.iter()) {
-                active.apply(callback, action);
-            }
-            Rc::new(active.into_vec())
-        };
-        index.guards.borrow_mut().insert(key, Rc::clone(&result));
-        result
-    }
-
-    /// The identity of the superclass, when the repository has exactly one class for its name.
-    /// A qualified name, a name of two classes, and a loop of superclasses give `None`.
-    fn rails_parent_identity(&self, index: &RailsIndex<'a>, identity: &str) -> Option<String> {
-        if let Some(found) = index.parents.borrow().get(identity) {
-            return found.clone();
-        }
-        let raw = |from: &str| -> Option<String> {
-            let parent = index
-                .classes
-                .get(from)?
-                .iter()
-                .find_map(|(_, symbol)| symbol.supertypes.first())?;
-            if parent.contains("::") {
-                return None;
-            }
-            match index.superclasses.get(parent.as_str())? {
-                UniqueClass::One(found) => Some(found.clone()),
-                UniqueClass::Many => None,
-            }
-        };
-        let mut result = raw(identity);
-        let mut walker = result.clone();
-        let mut steps = 0;
-        while let Some(current) = walker {
-            if current == identity || steps > index.classes.len() {
-                result = None;
+        let mut chain = vec![identity.to_string()];
+        let mut base: Rc<Vec<String>> = Rc::new(Vec::new());
+        let mut current = identity.to_string();
+        while let Some(Some(parent)) = index.parents.get(&current) {
+            if let Some(found) = index
+                .guards
+                .borrow()
+                .get(&(parent.clone(), action.to_string()))
+            {
+                base = Rc::clone(found);
                 break;
             }
-            walker = raw(&current);
-            steps += 1;
+            chain.push(parent.clone());
+            current = parent.clone();
         }
-        index
-            .parents
-            .borrow_mut()
-            .insert(identity.to_string(), result.clone());
+        let mut active = ActiveGuards::new(&base);
+        let mut changed = false;
+        for (depth, class) in chain.iter().enumerate().rev() {
+            for (position, symbol) in index.classes.get(class).into_iter().flatten() {
+                for callback in self.rails_callbacks(index, *position, symbol).iter() {
+                    active.apply(callback, action);
+                    changed = true;
+                }
+            }
+            let shared = index
+                .child_counts
+                .get(class)
+                .is_some_and(|count| *count >= 2);
+            if depth > 0 && shared {
+                index.guards.borrow_mut().insert(
+                    (class.clone(), action.to_string()),
+                    Rc::new(active.to_vec()),
+                );
+            }
+        }
+        let result = if changed {
+            Rc::new(active.into_vec())
+        } else {
+            base
+        };
+        index.guards.borrow_mut().insert(key, Rc::clone(&result));
         result
     }
 
@@ -1018,7 +1002,9 @@ impl<'a> Context<'a> {
                     self.collect_callback_node(part, conditional || !literal, out);
                 }
             }
-            "case" | "case_match" => self.collect_callbacks(node, true, out),
+            "case" | "case_match" | "do_block" | "block" | "lambda" => {
+                self.collect_callbacks(node, true, out)
+            }
             "call" if node.child_by_field_name("receiver").is_none() => {
                 match self.rails_callback(node) {
                     Some(mut callback) => {
@@ -1035,9 +1021,10 @@ impl<'a> Context<'a> {
     /// The names, the `only:` and `except:` lists, and the conditions of a callback call.
     /// A list that is not a literal makes the callback unreadable. See `Callback::applies_to`.
     fn rails_callback(&self, call: Node<'_>) -> Option<Callback> {
-        let skip = match self.text(call.child_by_field_name("method")?) {
-            "before_action" | "before_filter" => false,
-            "skip_before_action" | "skip_before_filter" => true,
+        let (skip, mut prepend) = match self.text(call.child_by_field_name("method")?) {
+            "before_action" | "before_filter" => (false, false),
+            "prepend_before_action" | "prepend_before_filter" => (false, true),
+            "skip_before_action" | "skip_before_filter" => (true, false),
             _ => return None,
         };
         let arguments = Self::arguments_of(call);
@@ -1053,8 +1040,20 @@ impl<'a> Context<'a> {
                 .map(|value| self.rails_names(value))
         };
         let (only, except) = (list("only"), list("except"));
-        let unreadable =
-            options.is_none() || matches!(only, Some(None)) || matches!(except, Some(None));
+        let mut prepend_unreadable = false;
+        if !skip {
+            if let Some(value) = options.as_ref().and_then(|options| options.get("prepend")) {
+                match value.kind() {
+                    "true" => prepend = true,
+                    "false" => {}
+                    _ => prepend_unreadable = true,
+                }
+            }
+        }
+        let unreadable = options.is_none()
+            || prepend_unreadable
+            || matches!(only, Some(None))
+            || matches!(except, Some(None));
         let conditional = options
             .as_ref()
             .is_some_and(|options| options.get("if").is_some() || options.get("unless").is_some());
@@ -1065,6 +1064,7 @@ impl<'a> Context<'a> {
             except: except.flatten(),
             unreadable,
             conditional,
+            prepend,
         })
     }
 }
@@ -1076,8 +1076,11 @@ struct Callback {
     except: Option<Vec<String>>,
     /// An `only:` or `except:` value that is not a literal list.
     unreadable: bool,
-    /// An `if:` or `unless:` option. A condition does not decide the action.
+    /// An `if:` or `unless:` option, or a branch that omen cannot evaluate. A condition does not
+    /// decide the action.
     conditional: bool,
+    /// A `prepend: true` option, or a `prepend_before_action` call. The callback goes to the front.
+    prepend: bool,
 }
 
 impl Callback {
@@ -1117,14 +1120,16 @@ enum UniqueClass {
 }
 
 /// The controller classes by their chain of modules, and their methods by the class that holds
-/// them. The key of a method has the chain of its class. The index also keeps each result that it
-/// computes. Omen builds the index one time for each routes file.
+/// them. The key of a method has the chain of its class. The index also keeps the superclass of
+/// each class, and each result that it computes. Omen builds the index one time for each routes
+/// file.
 pub(super) struct RailsIndex<'a> {
     classes: HashMap<String, Vec<Placed<'a>>>,
-    superclasses: HashMap<&'a str, UniqueClass>,
-    methods: HashMap<(usize, String), HashMap<&'a str, Vec<&'a Symbol>>>,
+    methods: HashMap<String, HashMap<&'a str, Vec<&'a Symbol>>>,
+    /// The superclass of each class identity. A class in a loop of superclasses has none.
+    parents: HashMap<String, Option<String>>,
+    child_counts: HashMap<String, usize>,
     callbacks: RefCell<HashMap<String, Rc<Vec<Callback>>>>,
-    parents: RefCell<HashMap<String, Option<String>>>,
     guards: RefCell<HashMap<ActionKey, Rc<Vec<String>>>>,
     handled: RefCell<HashMap<ActionKey, Handler>>,
     custom_inflections: std::cell::OnceCell<bool>,
@@ -1132,16 +1137,9 @@ pub(super) struct RailsIndex<'a> {
 
 impl<'a> RailsIndex<'a> {
     pub(super) fn build(all: &'a [FileSymbols]) -> Self {
-        let mut index = Self {
-            classes: HashMap::new(),
-            superclasses: HashMap::new(),
-            methods: HashMap::new(),
-            callbacks: RefCell::new(HashMap::new()),
-            parents: RefCell::new(HashMap::new()),
-            guards: RefCell::new(HashMap::new()),
-            handled: RefCell::new(HashMap::new()),
-            custom_inflections: std::cell::OnceCell::new(),
-        };
+        let mut classes: HashMap<String, Vec<Placed<'a>>> = HashMap::new();
+        let mut superclasses: HashMap<&'a str, UniqueClass> = HashMap::new();
+        let mut methods: HashMap<String, HashMap<&'a str, Vec<&'a Symbol>>> = HashMap::new();
         for (position, file) in all.iter().enumerate() {
             if file.language != Language::Ruby {
                 continue;
@@ -1149,25 +1147,23 @@ impl<'a> RailsIndex<'a> {
             for symbol in &file.symbols {
                 if symbol.kind.is_type() {
                     let identity = qualified_name(file, symbol);
-                    let unique = match index.superclasses.get(symbol.name.as_str()) {
+                    let unique = match superclasses.get(symbol.name.as_str()) {
                         None => UniqueClass::One(identity.clone()),
                         Some(UniqueClass::One(existing)) if *existing == identity => {
                             UniqueClass::One(identity.clone())
                         }
                         Some(_) => UniqueClass::Many,
                     };
-                    index.superclasses.insert(symbol.name.as_str(), unique);
-                    index
-                        .classes
+                    superclasses.insert(symbol.name.as_str(), unique);
+                    classes
                         .entry(identity)
                         .or_default()
                         .push((position, symbol));
                 } else if symbol.is_callable() {
                     let qualified = qualified_name(file, symbol);
                     if let Some(owner) = qualified.strip_suffix(&format!(".{}", symbol.name)) {
-                        index
-                            .methods
-                            .entry((position, owner.to_string()))
+                        methods
+                            .entry(owner.to_string())
                             .or_default()
                             .entry(symbol.name.as_str())
                             .or_default()
@@ -1176,42 +1172,124 @@ impl<'a> RailsIndex<'a> {
                 }
             }
         }
-        for group in index.classes.values_mut() {
+        for group in classes.values_mut() {
             group.sort_by_key(|(position, symbol)| (*position, symbol.range.start_byte));
         }
-        index
+        let (parents, child_counts) = resolve_parents(&classes, &superclasses);
+        Self {
+            classes,
+            methods,
+            parents,
+            child_counts,
+            callbacks: RefCell::new(HashMap::new()),
+            guards: RefCell::new(HashMap::new()),
+            handled: RefCell::new(HashMap::new()),
+            custom_inflections: std::cell::OnceCell::new(),
+        }
     }
 }
 
+/// The superclass identity of each class, and the number of subclasses of each class. A
+/// qualified superclass name, a name of two classes, and a class in a loop of superclasses give
+/// no superclass. A class that leads into a loop keeps its superclass. Omen visits each class one
+/// time.
+fn resolve_parents(
+    classes: &HashMap<String, Vec<Placed<'_>>>,
+    superclasses: &HashMap<&str, UniqueClass>,
+) -> (HashMap<String, Option<String>>, HashMap<String, usize>) {
+    let raw: HashMap<&str, Option<&str>> = classes
+        .iter()
+        .map(|(identity, group)| {
+            let parent = group
+                .iter()
+                .find_map(|(_, symbol)| symbol.supertypes.first())
+                .filter(|parent| !parent.contains("::"))
+                .and_then(|parent| match superclasses.get(parent.as_str()) {
+                    Some(UniqueClass::One(found)) => Some(found.as_str()),
+                    _ => None,
+                });
+            (identity.as_str(), parent)
+        })
+        .collect();
+    let mut parents: HashMap<String, Option<String>> = HashMap::new();
+    for start in classes.keys() {
+        if parents.contains_key(start) {
+            continue;
+        }
+        let mut path: Vec<&str> = Vec::new();
+        let mut position: HashMap<&str, usize> = HashMap::new();
+        let mut cycle_start = None;
+        let mut current = Some(start.as_str());
+        while let Some(identity) = current {
+            if parents.contains_key(identity) {
+                break;
+            }
+            if let Some(found) = position.get(identity) {
+                cycle_start = Some(*found);
+                break;
+            }
+            position.insert(identity, path.len());
+            path.push(identity);
+            current = raw.get(identity).copied().flatten();
+        }
+        for (step, identity) in path.iter().enumerate() {
+            let in_cycle = cycle_start.is_some_and(|first| step >= first);
+            let parent = if in_cycle {
+                None
+            } else {
+                raw.get(identity).copied().flatten().map(str::to_string)
+            };
+            parents.insert((*identity).to_string(), parent);
+        }
+    }
+    let mut child_counts: HashMap<String, usize> = HashMap::new();
+    for parent in parents.values().flatten() {
+        *child_counts.entry(parent.clone()).or_default() += 1;
+    }
+    (parents, child_counts)
+}
+
 /// The names of the active guards in the order of Rails. A new callback replaces the callback
-/// with the same name, so the new callback comes last.
+/// with the same name. A callback goes to the back, or to the front when it has `prepend`.
 struct ActiveGuards {
-    slots: Vec<Option<String>>,
-    at: HashMap<String, usize>,
+    ordered: std::collections::BTreeMap<i64, String>,
+    at: HashMap<String, i64>,
+    front: i64,
+    back: i64,
 }
 
 impl ActiveGuards {
     fn new(names: &[String]) -> Self {
         let mut active = Self {
-            slots: Vec::with_capacity(names.len()),
+            ordered: std::collections::BTreeMap::new(),
             at: HashMap::with_capacity(names.len()),
+            front: 0,
+            back: 0,
         };
         for name in names {
-            active.push(name);
+            active.push_back(name);
         }
         active
     }
 
     fn remove(&mut self, name: &str) {
         if let Some(slot) = self.at.remove(name) {
-            self.slots[slot] = None;
+            self.ordered.remove(&slot);
         }
     }
 
-    fn push(&mut self, name: &str) {
+    fn push_back(&mut self, name: &str) {
         self.remove(name);
-        self.at.insert(name.to_string(), self.slots.len());
-        self.slots.push(Some(name.to_string()));
+        self.at.insert(name.to_string(), self.back);
+        self.ordered.insert(self.back, name.to_string());
+        self.back += 1;
+    }
+
+    fn push_front(&mut self, name: &str) {
+        self.remove(name);
+        self.front -= 1;
+        self.at.insert(name.to_string(), self.front);
+        self.ordered.insert(self.front, name.to_string());
     }
 
     /// A `before_action` call replaces the earlier callbacks with its names, and it adds a guard
@@ -1227,14 +1305,22 @@ impl ActiveGuards {
             } else {
                 self.remove(name);
                 if applies {
-                    self.push(name);
+                    if callback.prepend {
+                        self.push_front(name);
+                    } else {
+                        self.push_back(name);
+                    }
                 }
             }
         }
     }
 
+    fn to_vec(&self) -> Vec<String> {
+        self.ordered.values().cloned().collect()
+    }
+
     fn into_vec(self) -> Vec<String> {
-        self.slots.into_iter().flatten().collect()
+        self.ordered.into_values().collect()
     }
 }
 

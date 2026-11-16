@@ -134,8 +134,12 @@ replaced callback is gone for each action. If `ApplicationController` has `befor
 and a child has `before_action :auth, only: :index`, then `auth` guards only `index`.
 
 A callback in a class body follows the same rule for dead branches as a route does. A callback in
-any other `if`, `unless`, or `case` is conditional. It adds no guard. A `skip_before_action` call
-in it removes the guard for the actions that it names.
+any other `if`, `unless`, or `case` is conditional. A callback in a block, such as `each do` or a
+lambda, is also conditional. It adds no guard. A `skip_before_action` call in it removes the guard
+for the actions that it names. Omen ignores a callback in a method.
+
+A `before_action` call with `prepend: true`, and a `prepend_before_action` call, put the callback
+at the front of the chain. If the `prepend:` value is not a literal, the callback adds no guard.
 
 A controller path with a leading `/`, such as `to: "/users#show"`, ignores the module of the
 `namespace`.
