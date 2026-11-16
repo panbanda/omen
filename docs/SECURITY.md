@@ -231,13 +231,16 @@ files call `clear`, omen does not know the class names. Then no route has a symb
 - A route is an entry point only when its receiver is a framework object. The receiver
   is a framework call, a value that the file binds to one, or an import of a
   constructor of the framework, or of a repository file that binds the name to one.
-- Omen reads the routes of these Go frameworks: `net/http`, gin, and chi. A router
+- Omen reads the routes of these Go frameworks: `net/http`, gin, chi, and echo. A router
   is a value that the import of the framework proves. It is a constructor call, a
   group or sub-router of a router, or a parameter that has a router type. A variable
   name alone does not prove a router.
 - For chi, a prefix comes from `Route`. A guard comes from `Use` and `With`, and
   applies to the routes that follow it. `Mount` joins a router of the same file. It
   skips a router of another file.
+- For echo, a prefix and the guards of `Group` apply to the routes of the group. A
+  group copies the guards of its parent when the group is made. `Use` on the echo
+  value applies to each route. `Any`, `Match`, and `Add` give one entry for each method.
 - Deadcode treats an entry point and the entry points of `[[security.entry_points]]`
   as alive, with their callees.
 - Deadcode reads the path in a Rust `#[serde(...)]` string through the module tree of

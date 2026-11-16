@@ -15,14 +15,16 @@ use crate::index::model::{ImportKind, Span};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Framework {
     Chi,
+    Echo,
 }
 
 impl Framework {
-    const ALL: [Self; 1] = [Self::Chi];
+    const ALL: [Self; 2] = [Self::Chi, Self::Echo];
 
     fn name(self) -> &'static str {
         match self {
             Self::Chi => "chi",
+            Self::Echo => "echo",
         }
     }
 
@@ -30,12 +32,14 @@ impl Framework {
     fn package(self) -> &'static str {
         match self {
             Self::Chi => "chi",
+            Self::Echo => "echo",
         }
     }
 
     fn owns(self, module: &str) -> bool {
         let base = match self {
             Self::Chi => "github.com/go-chi/chi",
+            Self::Echo => "github.com/labstack/echo",
         };
         module == base
             || module
@@ -49,6 +53,7 @@ impl Framework {
     fn router_types(self) -> &'static [&'static str] {
         match self {
             Self::Chi => &["Router", "Mux"],
+            Self::Echo => &["Echo", "Group"],
         }
     }
 }
@@ -416,7 +421,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             parent_len,
             prefix,
             guards,
-            retroactive: false,
+            retroactive: framework == Framework::Echo && parent.is_none(),
         });
         self.routers.len() - 1
     }
@@ -512,6 +517,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 let guards = self.guard_names(&arguments);
                 Some(self.new_router(Framework::Chi, Some(parent), String::new(), guards))
             }
+            (Framework::Echo, "Group") => {
+                let prefix = self.string_argument(*arguments.first()?)?;
+                let guards = self.guard_names(&arguments[1..]);
+                Some(self.new_router(Framework::Echo, Some(parent), prefix, guards))
+            }
             _ => None,
         }
     }
@@ -519,6 +529,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     fn construct(&mut self, framework: Framework, name: &str) -> Option<usize> {
         let makes = match framework {
             Framework::Chi => matches!(name, "NewRouter" | "NewMux"),
+            Framework::Echo => name == "New",
         };
         makes.then(|| self.new_router(framework, None, String::new(), Vec::new()))
     }
@@ -570,6 +581,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         }
         match self.routers[router].framework {
             Framework::Chi => self.chi_call(router, node, name, &arguments),
+            Framework::Echo => self.echo_call(router, node, name, &arguments),
         }
     }
 
@@ -607,6 +619,43 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             ("Mount", [_, mounted], [Some(prefix), _]) => self.mount(router, prefix, *mounted),
             _ => {}
         }
+    }
+
+    /// The string literals in an expression, as the methods of `[]string{"GET", "POST"}`.
+    fn strings_in(&self, node: Node<'t>) -> Vec<String> {
+        if self.context.is_string(node) {
+            return vec![self.context.string_of(node)];
+        }
+        Self::named_children(node)
+            .into_iter()
+            .flat_map(|child| self.strings_in(child))
+            .collect()
+    }
+
+    fn echo_call(&mut self, router: usize, node: Node<'t>, name: &str, arguments: &[Node<'t>]) {
+        let range = Span::of(&node);
+        let verb = matches!(
+            name,
+            "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS" | "CONNECT" | "TRACE"
+        );
+        let (methods, rest): (Vec<String>, &[Node<'t>]) = match (name, arguments) {
+            (_, [_, ..]) if verb => (vec![name.to_string()], arguments),
+            ("Any", [_, ..]) => (vec!["ANY".to_string()], arguments),
+            ("Match", [methods, rest @ ..]) => (self.strings_in(*methods), rest),
+            ("Add", [method, rest @ ..]) => match self.string_argument(*method) {
+                Some(method) => (vec![method], rest),
+                None => return,
+            },
+            _ => return,
+        };
+        let (Some(path), Some(handler)) = (rest.first(), rest.get(1)) else {
+            return;
+        };
+        let Some(path) = self.string_argument(*path) else {
+            return;
+        };
+        let methods: Vec<&str> = methods.iter().map(String::as_str).collect();
+        self.register(router, &methods, &path, Some(*handler), &rest[2..], range);
     }
 
     /// Joins a router that the file makes to the router that mounts it. A router of

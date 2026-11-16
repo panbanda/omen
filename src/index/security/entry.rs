@@ -2173,6 +2173,43 @@ mod tests {
     }
 
     #[test]
+    fn echo_routes_join_group_prefixes_and_guards() {
+        let source = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/labstack/echo/v4\"\n\t\"github.com/labstack/echo/v4/middleware\"\n)\n\n{GO_HANDLERS}func routes() *echo.Echo {{\n\te := echo.New()\n\te.GET(\"/health\", list)\n\te.Use(middleware.Logger())\n\tapi := e.Group(\"/api\", auth)\n\tapi.GET(\"/users/:id\", show, audit)\n\tadmin := api.Group(\"/admin\", root)\n\tadmin.Use(extra)\n\tadmin.POST(\"/users\", list)\n\tapi.PUT(\"/late\", list)\n\te.Any(\"/any\", list)\n\te.Match([]string{{\"GET\", \"POST\"}}, \"/multi\", list)\n\te.Add(\"TRACE\", \"/add\", list)\n\treturn e\n}}\n"
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "echo GET /health [middleware.Logger] list",
+                "echo GET /api/users/:id [middleware.Logger,auth,audit] show",
+                "echo POST /api/admin/users [middleware.Logger,auth,root,extra] list",
+                "echo PUT /api/late [middleware.Logger,auth] list",
+                "echo ANY /any [middleware.Logger] list",
+                "echo GET /multi [middleware.Logger] list",
+                "echo POST /multi [middleware.Logger] list",
+                "echo TRACE /add [middleware.Logger] list",
+            ]
+        );
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found[1].route.as_ref().unwrap().parameters, ["id"]);
+    }
+
+    #[test]
+    fn an_echo_receiver_must_be_proven_through_the_import() {
+        let aliased = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\tframework \"github.com/labstack/echo/v4\"\n)\n\n{GO_HANDLERS}func routes() {{\n\te := framework.New()\n\te.GET(\"/a\", list)\n}}\n\nfunc typed(g *framework.Group) {{\n\tg.POST(\"/b\", show)\n}}\n"
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &aliased)]),
+            ["echo GET /a [] list", "echo POST /b [] show"]
+        );
+        let unproven = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/labstack/echo/v4\"\n)\n\n{GO_HANDLERS}type store struct{{}}\n\nfunc (store) GET(path string, handler http.HandlerFunc) {{}}\n\nfunc routes(e store) {{\n\te.GET(\"/a\", list)\n\tg := e.Group(\"/x\")\n\tg.GET(\"/b\", list)\n\tx := echo.Echo{{}}\n\tx.GET(\"/c\", list)\n}}\n"
+        );
+        assert!(go_routes(&[("main.go", &unproven)]).is_empty());
+    }
+
+    #[test]
     fn go_registration_calls_and_main_are_entries() {
         let source = "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc health(w http.ResponseWriter, r *http.Request) {}\n\nfunc show(c *gin.Context) {}\n\nfunc main() {\n\thttp.HandleFunc(\"/health\", health)\n\trouter := gin.Default()\n\trouter.GET(\"/users/:id\", auth, show)\n}\n";
         let found = entries(Language::Go, &[("main.go", source)]);
