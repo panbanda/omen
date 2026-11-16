@@ -306,6 +306,9 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   after it, and the routes of the other routers of the tree, give no entry. A route that
   never matches, as a route with an error or `BuildOnly`, hides nothing. This check can
   drop a route that a request reaches.
+- chi `Mount` registers the pattern, the pattern and a slash, and the pattern and `/*` for
+  all methods. A route of the same tree that has one of these keys replaces the mount. Then
+  the routers below the mount give no entry.
 - A name that the package declares hides a predeclared name or a qualifier. The package is
   the files of one directory that have the same package clause, so a declaration in
   another file of the package counts.
@@ -389,7 +392,10 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   writes it.
 - For gorilla/mux, `PathPrefix(...).Subrouter()` gives a prefix. A chain of matchers
   that ends in `HandlerFunc` or `Handler` gives a route, as `r.Methods("GET").Path("/x")
-  .HandlerFunc(show)` does. A chain without `Path` or `PathPrefix` gives no entry. The
+  .HandlerFunc(show)` does. A chain without `Path` or `PathPrefix` gives no entry. A chain with more than one
+  `Path` or `PathPrefix` call gives no entry, because gorilla/mux needs each matcher to match.
+  A `Schemes` or `Methods` call without a value gives no entry. `PathPrefix("")` matches
+  every path, so it hides the routes after it. The
   path matchers join in the
   order of the calls. Each `Methods` list limits the methods, so the result is the
   common methods of the lists. A route without `Methods` has the method `ANY`. `Use`

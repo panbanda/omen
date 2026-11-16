@@ -2680,7 +2680,6 @@ func routes(e store) {
 	r.Methods("GET").Path("/x").HandlerFunc(show)
 	r.Path("/y/{id}").Methods("POST", "PUT").Handler(http.HandlerFunc(list))
 	r.PathPrefix("/static/").HandlerFunc(list)
-	r.PathPrefix("/a").Path("/b").HandlerFunc(list)
 	r.Methods("GET", "POST").Methods("POST", "PUT").Path("/i").HandlerFunc(list)
 	r.Methods("GET").Methods("PUT").Path("/n").HandlerFunc(list)
 	sub := r.PathPrefix("/api/").Subrouter()
@@ -2700,7 +2699,6 @@ func routes(e store) {
                 "gorilla/mux POST /y/{id} [auth] list",
                 "gorilla/mux PUT /y/{id} [auth] list",
                 "gorilla/mux ANY /static/ [auth] list",
-                "gorilla/mux ANY /a/b [auth] list",
                 "gorilla/mux POST /i [auth] list",
                 "gorilla/mux GET /api/z [auth] show",
             ]
@@ -4292,6 +4290,104 @@ func routes() {
         );
     }
 
+    #[test]
+    fn a_gorilla_chain_with_two_path_matchers_gives_no_entry() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.Path("/ok").HandlerFunc(list)
+	r.Path("/a").Path("/b").HandlerFunc(show)
+	r.PathPrefix("/c").PathPrefix("/d").HandlerFunc(show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gorilla/mux ANY /ok [] list"]
+        );
+    }
+
+    #[test]
+    fn an_empty_gorilla_prefix_matches_every_path() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.PathPrefix("").HandlerFunc(list)
+	r.Path("/x").HandlerFunc(show)
+	s := mux.NewRouter()
+	api := s.PathPrefix("/api").Subrouter()
+	api.PathPrefix("").HandlerFunc(list)
+	api.Path("/x").HandlerFunc(show)
+	s.Path("/other").HandlerFunc(show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux ANY /api [] list",
+                "gorilla/mux ANY /other [] show"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gorilla_matcher_without_values_gives_no_entry() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.Path("/c").Schemes("https").HandlerFunc(list)
+	r.Path("/a").Schemes().HandlerFunc(show)
+	r.Path("/b").Methods().HandlerFunc(show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gorilla/mux ANY /c [] list"]
+        );
+    }
+
+    #[test]
+    fn a_chi_route_on_a_mount_key_replaces_the_mounted_routes() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	sub := chi.NewRouter()
+	sub.Get("/a", list)
+	root := chi.NewRouter()
+	root.Mount("/x", sub)
+	root.Get("/x/*", show)
+
+	other := chi.NewRouter()
+	other.Get("/b", list)
+	root.Mount("/y", other)
+	root.Get("/y/z", show)
+
+	root.Route("/w", func(r chi.Router) { r.Get("/d", list) })
+	root.Get("/w/", show)
+
+	fourth := chi.NewRouter()
+	fourth.Get("/e", list)
+	root.Mount("/v/", fourth)
+	root.Get("/v/*", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /x/* [] show",
+                "chi GET /y/b [] list",
+                "chi GET /y/z [] show",
+                "chi GET /w/ [] show",
+                "chi GET /v/* [] show",
+            ]
+        );
+    }
     #[test]
     fn documented_gap_a_caller_in_another_file_that_registers_on_a_factory_result_gives_no_entry() {
         let router = factory_file("NewRouter", "/x");

@@ -3344,6 +3344,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     handler = arguments.first().copied();
                 }
                 "Methods" => {
+                    unreadable |= arguments.is_empty();
                     let names: Vec<String> = arguments
                         .iter()
                         .filter_map(|argument| self.string_argument(*argument))
@@ -3380,7 +3381,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                         .first()
                         .and_then(|name| self.string_argument(*name)),
                 ),
-                "Schemes" | "MatcherFunc" => {}
+                // A matcher of schemes or methods that has no value rejects each request.
+                "Schemes" => unreadable |= arguments.is_empty(),
+                "MatcherFunc" => {}
                 "BuildVarsFunc" => {}
                 // `BuildOnly` makes a route that never matches.
                 "BuildOnly" => broken = true,
@@ -3443,11 +3446,21 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let Some(paths) = paths.into_iter().collect::<Option<Vec<String>>>() else {
             return self.opaque_registration(router, outer);
         };
-        let Some((last, earlier)) = paths.split_last() else {
+        // Each matcher of a route must match, so a second path matcher is not read.
+        let [last] = paths.as_slice() else {
             return self.opaque_registration(router, outer);
         };
-        let Some(path) = Framework::Mux.compose(earlier, last) else {
-            return true;
+        let path = if last.is_empty() {
+            // The empty prefix matches each path.
+            if terminal_prefix != Some(true) {
+                return self.opaque_registration(router, outer);
+            }
+            String::new()
+        } else {
+            let Some(path) = Framework::Mux.compose(&[], last) else {
+                return true;
+            };
+            path
         };
         let mut methods: Option<Vec<String>> = None;
         for list in method_lists {
@@ -3775,11 +3788,67 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 _ => id,
             });
         }
+        // chi's `Mount` registers the pattern, the pattern and a slash, and the pattern and `/*`
+        // for all methods. A route that has one of these keys on the same tree replaces the
+        // mount, or the mount panics. Then the routers below the mount give no entry.
+        let mut chi_keys: HashMap<usize, HashSet<String>> = HashMap::new();
+        for record in &self.records {
+            if self.routers[record.router].framework == Framework::Chi {
+                chi_keys
+                    .entry(tree_of[record.router])
+                    .or_default()
+                    .insert(chi_tree_key(&record.path));
+            }
+        }
+        let own_replaced: Vec<bool> = self
+            .routers
+            .iter()
+            .map(|router| match router.links.as_slice() {
+                [link] => {
+                    router.framework == Framework::Chi
+                        && !router.inline
+                        && tree_of.get(link.parent).is_some_and(|tree| {
+                            chi_keys.get(tree).is_some_and(|keys| {
+                                chi_mount_keys(&link.prefix)
+                                    .iter()
+                                    .any(|key| keys.contains(key))
+                            })
+                        })
+                }
+                _ => false,
+            })
+            .collect();
+        // The mounts form a forest, so each router has one walk up to a router that is known.
+        let mut mount_replaced: Vec<Option<bool>> = vec![None; self.routers.len()];
+        for start in 0..self.routers.len() {
+            let mut path = Vec::new();
+            let mut current = start;
+            let result = loop {
+                if let Some(known) = mount_replaced[current] {
+                    break known;
+                }
+                path.push(current);
+                if own_replaced[current] {
+                    break true;
+                }
+                match self.routers[current].links.as_slice() {
+                    [link] => current = link.parent,
+                    _ => break false,
+                }
+            };
+            for node in path {
+                mount_replaced[node] = Some(result);
+            }
+        }
+        let mount_replaced: Vec<bool> = mount_replaced
+            .into_iter()
+            .map(|known| known == Some(true))
+            .collect();
         // The draft of each record, and the key that decides which records replace each other.
         let mut drafts: Vec<Option<(Draft, Duplicate)>> = Vec::new();
         for record in &self.records {
             drafts.push(None);
-            if record.opaque || blocked.contains(&record.router) {
+            if record.opaque || blocked.contains(&record.router) || mount_replaced[record.router] {
                 continue;
             }
             let router = &self.routers[record.router];
@@ -3897,6 +3966,18 @@ enum Duplicate {
     Chi(usize, String),
     /// The router of echo, and the path with the names of the parameters removed.
     Echo(usize, String),
+}
+
+/// The keys of the nodes that `Mount` of chi v5.3.2 registers for a pattern.
+fn chi_mount_keys(pattern: &str) -> Vec<String> {
+    if pattern.ends_with('/') {
+        return vec![chi_tree_key(&format!("{pattern}*"))];
+    }
+    vec![
+        chi_tree_key(pattern),
+        chi_tree_key(&format!("{pattern}/")),
+        chi_tree_key(&format!("{pattern}/*")),
+    ]
 }
 
 /// The key that the tree of chi gives to a pattern. Two patterns that differ only by the names
