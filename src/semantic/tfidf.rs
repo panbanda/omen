@@ -1,11 +1,11 @@
 //! Pure-Rust TF-IDF engine for semantic code search.
 //!
-//! Uses sublinear TF (1 + ln(tf)), smooth IDF (sklearn-compatible), unigram + bigram
-//! tokenization, and L2-normalized sparse vectors for cosine similarity via dot product.
+//! Uses sublinear TF (1 + ln(tf)), smooth IDF (sklearn-compatible), identifier
+//! tokens from `tokenize` with bigrams of adjacent tokens, and L2-normalized sparse vectors for cosine similarity via dot product.
 
 use std::collections::HashMap;
 
-use regex::Regex;
+use super::tokenize::tokenize as identifier_tokens;
 
 /// Metadata for an indexed document.
 #[derive(Debug, Clone)]
@@ -212,18 +212,10 @@ impl TfidfEngine {
     }
 }
 
-/// Tokenize text into lowercase unigrams + bigrams using word characters.
+/// Tokenize text into identifier tokens and bigrams of adjacent tokens.
 fn tokenize(text: &str) -> Vec<String> {
-    // \w+ matches word characters (letters, digits, underscore)
-    let re = Regex::new(r"\w+").expect("valid regex");
-    let words: Vec<String> = re
-        .find_iter(text)
-        .map(|m| m.as_str().to_lowercase())
-        .collect();
-
+    let words = identifier_tokens(text);
     let mut tokens = words.clone();
-
-    // Add bigrams
     for pair in words.windows(2) {
         tokens.push(format!("{} {}", pair[0], pair[1]));
     }
@@ -304,6 +296,39 @@ mod tests {
     fn test_tokenize_handles_underscores() {
         let tokens = tokenize("parse_file_content");
         assert!(tokens.contains(&"parse_file_content".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_divides_identifiers_and_adds_bigrams_of_tokens() {
+        let tokens = tokenize("parseFile now");
+        for expected in [
+            "parse",
+            "file",
+            "parsefile",
+            "now",
+            "parse file",
+            "file parsefile",
+            "parsefile now",
+        ] {
+            assert!(tokens.contains(&expected.to_string()), "missing {expected}");
+        }
+    }
+
+    #[test]
+    fn test_search_finds_a_snake_case_name_from_a_camel_case_query() {
+        let docs = vec![
+            (
+                "parse_file_content".to_string(),
+                make_meta("parse_file_content"),
+            ),
+            ("render_page".to_string(), make_meta("render_page")),
+        ];
+        let engine = TfidfEngine::fit(&docs);
+        let hits = engine.search("parseFileContent", 5);
+        assert_eq!(
+            hits.first().map(|hit| hit.0.symbol_name.as_str()),
+            Some("parse_file_content")
+        );
     }
 
     #[test]
