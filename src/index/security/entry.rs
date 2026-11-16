@@ -3563,6 +3563,145 @@ mod tests {
     }
 
     #[test]
+    fn api_only_with_a_constant_receiver_belongs_to_that_route_set() {
+        let app_routes =
+            "Rails.application.routes.draw do\n  resources :users, except: [:index, :create, :show, :update, :destroy]\nend\n";
+        let engine_routes = "Blog::Engine.routes.draw do\n  resources :posts, except: [:index, :create, :show, :update, :destroy]\nend\n";
+        let classes = "module Blog\n  class Engine < Rails::Engine\n  end\nend\n";
+        let paths = |files: &[(&str, &str)]| {
+            let mut paths = verbs_and_paths(
+                &entries(Language::Ruby, files)
+                    .into_iter()
+                    .filter(|entry| entry.framework == "rails")
+                    .collect::<Vec<_>>(),
+            );
+            paths.sort();
+            paths
+        };
+        let top = "Blog::Engine.config.api_only = true\n";
+        let found = paths(&[
+            ("config/routes.rb", app_routes),
+            ("blog/config/routes.rb", engine_routes),
+            ("config/application.rb", classes),
+            ("config/engine.rb", top),
+        ]);
+        assert_eq!(found, ["GET /users/:id/edit", "GET /users/new"]);
+        let application = "Rails.application.config.api_only = true\n";
+        let found = paths(&[
+            ("config/routes.rb", app_routes),
+            ("blog/config/routes.rb", engine_routes),
+            ("config/application.rb", classes),
+            ("config/app.rb", application),
+        ]);
+        assert_eq!(found, ["GET /posts/:id/edit", "GET /posts/new"]);
+        let unknown = "something.config.api_only = true\n";
+        let found = paths(&[
+            ("config/routes.rb", app_routes),
+            ("blog/config/routes.rb", engine_routes),
+            ("config/application.rb", classes),
+            ("config/other.rb", unknown),
+        ]);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn a_literal_case_keeps_only_the_branch_that_runs() {
+        let routes = "Rails.application.routes.draw do\n  case false\n  when true\n    get \"/ghost\", to: \"a#b\"\n  when false\n    get \"/live\", to: \"a#b\"\n  else\n    get \"/else\", to: \"a#b\"\n  end\n  case nil\n  when true, false\n    get \"/ghost_two\", to: \"a#b\"\n  else\n    get \"/else_two\", to: \"a#b\"\n  end\n  case name\n  when :x\n    get \"/unknown\", to: \"a#b\"\n  end\n  case true\n  when name\n    get \"/pattern\", to: \"a#b\"\n  end\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut paths = verbs_and_paths(&found);
+        paths.sort();
+        assert_eq!(paths, ["GET /else_two", "GET /live"]);
+    }
+
+    #[test]
+    fn the_last_value_of_a_repeated_option_wins() {
+        let routes = "Rails.application.routes.draw do\n  get \"/x\", to: \"users#show\", to: \"posts#show\"\n  resources :a, only: [:show], only: [:index]\n  namespace :n, path: \"p1\", path: \"p2\" do\n    get \"/in\", to: \"a#b\"\n  end\nend\n";
+        let users = "class UsersController\n  before_action :users\n  def show; end\nend\n";
+        let posts = "class PostsController\n  before_action :posts\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[("controllers/u.rb", users), ("controllers/p.rb", posts)],
+        );
+        let by_path = |path: &str| {
+            found
+                .iter()
+                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .map(|entry| entry.guards.clone())
+        };
+        assert_eq!(by_path("/x"), Some(strings(&["posts"])));
+        assert!(by_path("/a").is_some());
+        assert!(by_path("/a/:id").is_none());
+        assert!(by_path("/p2/in").is_some());
+        assert!(by_path("/p1/in").is_none());
+    }
+
+    #[test]
+    fn an_acronym_string_is_evaluated_as_ruby_does() {
+        let routes =
+            "Rails.application.routes.draw do\n  get \"/u\", to: \"api/users#show\"\nend\n";
+        let upper = "module API\n  class UsersController\n    before_action :upper\n    def show; end\n  end\nend\n";
+        let lower = "module Api\n  class UsersController\n    before_action :lower\n    def show; end\n  end\nend\n";
+        let escaped = "ActiveSupport::Inflector.inflections do |inflect|\n  inflect.acronym \"\\x41PI\"\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/upper.rb", upper),
+                ("controllers/lower.rb", lower),
+                ("config/initializers/inflections.rb", escaped),
+            ],
+        );
+        assert_eq!(found[0].guards, ["upper"]);
+        let unknown = "ActiveSupport::Inflector.inflections do |inflect|\n  inflect.acronym \"\\M-aPI\"\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/upper.rb", upper),
+                ("controllers/lower.rb", lower),
+                ("config/initializers/inflections.rb", unknown),
+            ],
+        );
+        assert_eq!(found[0].symbol, None);
+    }
+
+    fn routes_from_the_deepest_class_resolve_in_linear_time_at(
+        depth: usize,
+    ) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut classes = String::new();
+        for number in (0..depth).rev() {
+            routes.push_str(&format!("  get \"/r{number}\", to: \"c{number}#show\"\n"));
+        }
+        for number in 0..depth {
+            let parent = if number == 0 {
+                String::new()
+            } else {
+                format!(" < C{}Controller", number - 1)
+            };
+            classes.push_str(&format!("class C{number}Controller{parent}\nend\n"));
+        }
+        routes.push_str("end\n");
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), depth);
+        elapsed
+    }
+
+    #[test]
+    fn routes_from_the_deepest_class_give_each_route() {
+        routes_from_the_deepest_class_resolve_in_linear_time_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_routes_from_the_deepest_class_resolve_in_linear_time() {
+        let elapsed = routes_from_the_deepest_class_resolve_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    #[test]
     fn a_superclass_name_with_two_identities_is_ambiguous() {
         let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
         let top = "class ApplicationController\n  before_action :top\nend\n";

@@ -114,7 +114,7 @@ impl<'t> Options<'t> {
     fn get(&self, key: &str) -> Option<Node<'t>> {
         self.0
             .iter()
-            .find(|option| !option.string_key && option.key == key)
+            .rfind(|option| !option.string_key && option.key == key)
             .map(|option| option.value)
     }
 }
@@ -187,6 +187,92 @@ fn decode_escape(escape: &str, out: &mut Vec<u8>) -> Option<()> {
         }
     }
     Some(())
+}
+
+/// The value of a Ruby string literal in double quotes or single quotes. An interpolation, a form
+/// such as `%q(...)`, and an escape that omen does not model give `None`.
+fn evaluate_string(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let text = super::syntax::text(node, source);
+    let mut bytes: Vec<u8> = Vec::new();
+    match text.as_bytes().first()? {
+        b'\'' => {
+            let body = text.strip_prefix('\'')?.strip_suffix('\'')?;
+            let mut characters = body.chars().peekable();
+            while let Some(character) = characters.next() {
+                if character == '\\' && matches!(characters.peek(), Some('\\' | '\'')) {
+                    let escaped = characters.next()?;
+                    bytes.extend_from_slice(escaped.to_string().as_bytes());
+                } else {
+                    bytes.extend_from_slice(character.to_string().as_bytes());
+                }
+            }
+        }
+        b'"' => {
+            let mut cursor = node.walk();
+            for part in node.named_children(&mut cursor) {
+                match part.kind() {
+                    "string_content" => {
+                        let content = super::syntax::text(part, source);
+                        if content.contains("#$") || content.contains("#@") {
+                            return None;
+                        }
+                        bytes.extend_from_slice(content.as_bytes());
+                    }
+                    "escape_sequence" => {
+                        decode_escape(super::syntax::text(part, source), &mut bytes)?
+                    }
+                    _ => return None,
+                }
+            }
+        }
+        _ => return None,
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// The kind of a literal `true`, `false`, or `nil`, also in the pattern of a `when`.
+fn literal_kind(node: Node<'_>) -> Option<&'static str> {
+    match node.kind() {
+        "true" => Some("true"),
+        "false" => Some("false"),
+        "nil" => Some("nil"),
+        "pattern" => node.named_child(0).and_then(literal_kind),
+        _ => None,
+    }
+}
+
+/// The children of a `case` that can run, when the subject and each pattern of each `when` are the
+/// literals `true`, `false`, or `nil`: the subject, the first `when` with a pattern equal to the
+/// subject, and the `else` when no `when` matches. For any other `case`, the result is `None`, as
+/// omen cannot tell which branch runs.
+fn literal_case_children(case: Node<'_>) -> Option<Vec<Node<'_>>> {
+    if case.kind() != "case" {
+        return None;
+    }
+    let subject = literal_kind(case.child_by_field_name("value")?)?;
+    let mut cursor = case.walk();
+    let children: Vec<Node<'_>> = case.named_children(&mut cursor).collect();
+    let mut winner: Option<Node<'_>> = None;
+    for child in children.iter().filter(|child| child.kind() == "when") {
+        let mut pattern_cursor = child.walk();
+        let patterns: Vec<Node<'_>> = child
+            .children_by_field_name("pattern", &mut pattern_cursor)
+            .collect();
+        let kinds: Option<Vec<&str>> = patterns.into_iter().map(literal_kind).collect();
+        if kinds?.contains(&subject) && winner.is_none() {
+            winner = Some(*child);
+        }
+    }
+    Some(
+        children
+            .into_iter()
+            .filter(|child| match child.kind() {
+                "when" => Some(*child) == winner,
+                "else" => winner.is_none(),
+                _ => true,
+            })
+            .collect(),
+    )
 }
 
 /// The class name of a name with `_`, as `camelize` of ActiveSupport gives it. A registered acronym
@@ -473,43 +559,8 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// The value of a Ruby string literal in double quotes or single quotes. An interpolation, a
-    /// form such as `%q(...)`, and an escape that omen does not model give `None`.
     fn ruby_string_value(&self, node: Node<'_>) -> Option<String> {
-        let text = self.text(node);
-        let mut bytes: Vec<u8> = Vec::new();
-        match text.as_bytes().first()? {
-            b'\'' => {
-                let body = text.strip_prefix('\'')?.strip_suffix('\'')?;
-                let mut characters = body.chars().peekable();
-                while let Some(character) = characters.next() {
-                    if character == '\\' && matches!(characters.peek(), Some('\\' | '\'')) {
-                        let escaped = characters.next()?;
-                        bytes.extend_from_slice(escaped.to_string().as_bytes());
-                    } else {
-                        bytes.extend_from_slice(character.to_string().as_bytes());
-                    }
-                }
-            }
-            b'"' => {
-                let mut cursor = node.walk();
-                for part in node.named_children(&mut cursor) {
-                    match part.kind() {
-                        "string_content" => {
-                            let content = self.text(part);
-                            if content.contains("#$") || content.contains("#@") {
-                                return None;
-                            }
-                            bytes.extend_from_slice(content.as_bytes());
-                        }
-                        "escape_sequence" => decode_escape(self.text(part), &mut bytes)?,
-                        _ => return None,
-                    }
-                }
-            }
-            _ => return None,
-        }
-        String::from_utf8(bytes).ok()
+        evaluate_string(node, self.source)
     }
 
     /// One literal, or a list of literals.
@@ -626,6 +677,12 @@ impl<'a> Context<'a> {
         ) && Self::is_dead_branch(parent, node)
         {
             return None;
+        }
+        if matches!(parent.kind(), "case" | "case_match") {
+            match literal_case_children(parent) {
+                Some(alive) if alive.contains(&node) => {}
+                _ => return None,
+            }
         }
         if parent.kind() == "call" && parent.child_by_field_name("block") == Some(node) {
             if matches!(
@@ -820,6 +877,7 @@ impl<'a> Context<'a> {
         let mut path = None;
         let mut controller = None;
         let mut as_name = None;
+        let mut module: Option<String> = None;
         let mut modules = scope.modules.clone();
         for option in &options.0 {
             if option.string_key {
@@ -832,10 +890,13 @@ impl<'a> Context<'a> {
                 "controller" => controller = Some(self.rails_literal(option.value)?),
                 "as" => as_name = Some(self.rails_literal(option.value)?),
                 "format" if option.value.kind() == "false" => {}
-                "module" => modules.extend(split_segments(&self.rails_literal(option.value)?)),
+                "module" => module = Some(self.rails_literal(option.value)?),
                 key if HARMLESS_OPTIONS.contains(&key) => {}
                 _ => return None,
             }
+        }
+        if let Some(module) = module {
+            modules.extend(split_segments(&module));
         }
         Some(ResourceDefinition {
             names,
@@ -1236,6 +1297,12 @@ impl<'a> Context<'a> {
                 }
                 return;
             }
+            "case" if literal_case_children(node).is_some() => {
+                for child in literal_case_children(node).unwrap_or_default() {
+                    self.collect_api_only(child, scan, depth + 1, conditional, names, out);
+                }
+                return;
+            }
             "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
             | "until" | "while_modifier" | "until_modifier" => {
                 for child in children {
@@ -1268,23 +1335,59 @@ impl<'a> Context<'a> {
                         Some("false") if !conditional => Some(false),
                         _ => None,
                     };
-                    match names.iter().rposition(|(is_class, _)| *is_class) {
-                        Some(class_depth) => {
-                            let identity = names[..=class_depth]
-                                .iter()
-                                .map(|(_, name)| name.as_str())
-                                .collect::<Vec<_>>()
-                                .join(".");
-                            match self.rails_class_kind(&identity) {
-                                ClassKind::Application => out.application.push(value),
-                                ClassKind::Engine => {
-                                    out.engines.entry(identity).or_default().push(value)
-                                }
-                                ClassKind::Other => out.unattributed = true,
+                    let receiver = node
+                        .child_by_field_name("left")
+                        .and_then(|left| left.child_by_field_name("receiver"));
+                    let receiver_text =
+                        receiver.map(|receiver| super::syntax::text(receiver, scan.source));
+                    let constant = receiver
+                        .filter(|receiver| {
+                            receiver.kind() == "call"
+                                && receiver
+                                    .child_by_field_name("method")
+                                    .is_some_and(|method| {
+                                        super::syntax::text(method, scan.source) == "config"
+                                    })
+                        })
+                        .and_then(|receiver| receiver.child_by_field_name("receiver"))
+                        .map(|constant| {
+                            super::syntax::text(constant, scan.source)
+                                .trim_start_matches("::")
+                                .to_string()
+                        })
+                        .filter(|path| is_constant_path(path));
+                    if receiver_text == Some("Rails.application.config") {
+                        out.application.push(value);
+                    } else if let Some(path) = constant {
+                        let identity = path.replace("::", ".");
+                        match self.rails_class_kind(&identity) {
+                            ClassKind::Application => out.application.push(value),
+                            ClassKind::Engine => {
+                                out.engines.entry(identity).or_default().push(value)
                             }
+                            ClassKind::Other => out.unattributed = true,
                         }
-                        None if scan.in_config => out.application.push(value),
-                        None => out.unattributed = true,
+                    } else if receiver_text == Some("config") {
+                        match names.iter().rposition(|(is_class, _)| *is_class) {
+                            Some(class_depth) => {
+                                let identity = names[..=class_depth]
+                                    .iter()
+                                    .map(|(_, name)| name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(".");
+                                match self.rails_class_kind(&identity) {
+                                    ClassKind::Application => out.application.push(value),
+                                    ClassKind::Engine => {
+                                        out.engines.entry(identity).or_default().push(value)
+                                    }
+                                    ClassKind::Other => out.unattributed = true,
+                                }
+                            }
+                            None if scan.in_config => out.application.push(value),
+                            None => out.unattributed = true,
+                        }
+                    } else {
+                        out.unattributed = true;
                     }
                 }
             }
@@ -1486,17 +1589,18 @@ impl<'a> Context<'a> {
             return Arc::clone(found);
         }
         let mut chain = vec![identity.to_string()];
-        let mut current = Some(identity.to_string());
+        let mut current = identity.to_string();
         let mut program: Option<Arc<Program>> = None;
-        while let Some(Some(parent)) = current.as_ref().and_then(|name| shared.parents.get(name)) {
+        while let Some(Some(parent)) = shared.parents.get(&current) {
             if let Some(found) = shared.programs.lock().get(parent) {
                 program = Some(Arc::clone(found));
                 break;
             }
             chain.push(parent.clone());
-            current = Some(parent.clone());
+            current = parent.clone();
         }
-        for (depth, class) in chain.iter().enumerate().rev() {
+        let mut program = program.unwrap_or_else(|| Arc::new(Program::layer(None, Vec::new())));
+        for class in chain.iter().rev() {
             let mut own: Vec<Callback> = Vec::new();
             for (position, index) in shared.classes.get(class).into_iter().flatten() {
                 own.extend(
@@ -1506,26 +1610,13 @@ impl<'a> Context<'a> {
                 );
             }
             if !own.is_empty() {
-                program = Some(Arc::new(Program::layer(program.take(), own)));
+                program = Arc::new(Program::layer(Some(program), own));
             }
-            let branching = shared
-                .child_counts
-                .get(class)
-                .is_some_and(|count| *count >= 2);
-            if depth > 0 && branching {
-                if let Some(program) = &program {
-                    shared
-                        .programs
-                        .lock()
-                        .insert(class.clone(), Arc::clone(program));
-                }
-            }
+            shared
+                .programs
+                .lock()
+                .insert(class.clone(), Arc::clone(&program));
         }
-        let program = program.unwrap_or_else(|| Arc::new(Program::layer(None, Vec::new())));
-        shared
-            .programs
-            .lock()
-            .insert(identity.to_string(), Arc::clone(&program));
         program
     }
 
@@ -1747,6 +1838,11 @@ impl<'a> Context<'a> {
                         continue;
                     }
                     self.collect_callback_node(part, conditional || !literal, out);
+                }
+            }
+            "case" if literal_case_children(node).is_some() => {
+                for child in literal_case_children(node).unwrap_or_default() {
+                    self.collect_callback_node(child, conditional, out);
                 }
             }
             "case" | "case_match" | "do_block" | "block" | "lambda" => {
@@ -2251,6 +2347,16 @@ impl ApiOnlySets {
     }
 }
 
+/// Tells if the text is a constant path, such as `Blog::Engine`.
+fn is_constant_path(text: &str) -> bool {
+    text.split("::").all(|part| {
+        part.chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_uppercase())
+            && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
 /// Tells if the text is the constant `ActiveSupport::Inflector`, with or without a leading `::`.
 fn is_inflector_constant(text: &str) -> bool {
     text.trim().trim_start_matches("::") == "ActiveSupport::Inflector"
@@ -2328,6 +2434,12 @@ fn read_inflection_calls(
             }
             return;
         }
+        "case" if literal_case_children(node).is_some() => {
+            for child in literal_case_children(node).unwrap_or_default() {
+                read_inflection_calls(child, source, depth + 1, conditional, params, out);
+            }
+            return;
+        }
         "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
         | "until" | "while_modifier" | "until_modifier" => {
             for child in children {
@@ -2373,14 +2485,9 @@ fn read_inflection_calls(
                     let words: Vec<String> = arguments
                         .iter()
                         .filter_map(|argument| {
-                            let mut inner = argument.walk();
-                            let interpolated = argument
-                                .named_children(&mut inner)
-                                .any(|child| child.kind() == "interpolation");
-                            (argument.kind() == "string" && !interpolated).then(|| {
-                                super::syntax::unquote(super::syntax::text(*argument, source))
-                                    .to_string()
-                            })
+                            (argument.kind() == "string")
+                                .then(|| evaluate_string(*argument, source))
+                                .flatten()
                         })
                         .collect();
                     if words.is_empty() || words.len() != arguments.len() {
@@ -2424,7 +2531,6 @@ pub(super) struct RailsShared {
     methods: HashMap<String, HashMap<String, Vec<Placed>>>,
     /// The superclass of each class identity. A class in a loop of superclasses has none.
     parents: HashMap<String, Option<String>>,
-    child_counts: HashMap<String, usize>,
     inflections: std::sync::OnceLock<Inflections>,
     api_only: std::sync::OnceLock<ApiOnlySets>,
     callbacks: Mutex<HashMap<Placed, Arc<Vec<Callback>>>>,
@@ -2473,12 +2579,11 @@ impl RailsShared {
                 (*position, all[*position].symbols[*index].range.start_byte)
             });
         }
-        let (parents, child_counts) = resolve_parents(all, &classes, &superclasses);
+        let parents = resolve_parents(all, &classes, &superclasses);
         Self {
             classes,
             methods,
             parents,
-            child_counts,
             inflections: std::sync::OnceLock::new(),
             api_only: std::sync::OnceLock::new(),
             callbacks: Mutex::new(HashMap::new()),
@@ -2490,7 +2595,7 @@ impl RailsShared {
     }
 }
 
-/// The superclass identity of each class, and the number of subclasses of each class. A
+/// The superclass identity of each class. A
 /// qualified superclass name, a name of two classes, and a class in a loop of superclasses give
 /// no superclass. A class that leads into a loop keeps its superclass. Omen visits each class one
 /// time.
@@ -2498,7 +2603,7 @@ fn resolve_parents(
     all: &[FileSymbols],
     classes: &HashMap<String, Vec<Placed>>,
     superclasses: &HashMap<&str, UniqueClass>,
-) -> (HashMap<String, Option<String>>, HashMap<String, usize>) {
+) -> HashMap<String, Option<String>> {
     let raw: HashMap<&str, Option<&str>> = classes
         .iter()
         .map(|(identity, group)| {
@@ -2544,11 +2649,7 @@ fn resolve_parents(
             parents.insert((*identity).to_string(), parent);
         }
     }
-    let mut child_counts: HashMap<String, usize> = HashMap::new();
-    for parent in parents.values().flatten() {
-        *child_counts.entry(parent.clone()).or_default() += 1;
-    }
-    (parents, child_counts)
+    parents
 }
 
 /// The chain of containers and the name of a class, joined with `.`. The key of the symbol has
