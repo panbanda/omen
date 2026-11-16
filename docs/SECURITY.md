@@ -260,11 +260,18 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   that omen cannot classify.
 - A caller can add middleware to the result of a factory with `Use` or `Pre`. This
   changes the guards of the routes of the factory. Such a call is a use of the second
-  kind. Only a method that registers a route, makes a group, or serves the router is not.
+  kind. A call of a method that registers a route, makes a group, or serves the router
+  is not. This rule holds only when the factory returns the router of the framework.
+- A factory can return a literal that holds a router, as `&Server{Mux: router}`. The
+  type of the literal can define a method that hides a method of the router. Thus each
+  use of the result that is not serving is a use of the second kind.
 - A handler name in a Go file has a package. A name with a qualifier, as `dep.Show`,
   names a function of the package of the import. The index must resolve that import.
   If it does not, the entry has no handler. A name without a qualifier names a function
   of the package of the file. A package is the files of one directory.
+- A local binding can hide a name. A parameter, a short variable declaration, a
+  variable, a range variable, and a type switch variable are local bindings. A handler
+  name that has a local binding before it has no handler.
 - Any mention of the name of a factory that is not a call is a use of the third kind. A
   function value, a method value, and an argument that is a function are examples. A
   mention of another function with the same name also counts.
@@ -295,8 +302,9 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   are still equal, each key has the number of its entry in the walk.
 - For chi, a prefix comes from `Route`, which also gives the new router. A guard comes
   from `Use` and `With`. `Use` guards each route of its router and of its sub-routers,
-  in any source order. `Mount` joins a router of the same file, at each of its mounts.
-  It skips a router of another file. A pattern without a leading slash gives no entry.
+  in any source order. `Mount` joins a router of the same file. A router that two mounts
+  attach gives no entry. A router of another file is not joined. A pattern without a
+  leading slash gives no entry.
   `Query` gives the method `QUERY`.
 - For echo, a prefix and the guards of `Group` apply to the routes of the group. A
   group copies the guards of its parent when the group is made. `Use` and `Pre` on the

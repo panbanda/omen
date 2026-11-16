@@ -465,6 +465,9 @@ fn bound_to_marker(node: Node<'_>, source: &[u8], name: &str, markers: &[&str]) 
         .any(|child| bound_to_marker(child, source, name, markers))
 }
 
+/// The local bindings of a Go file, by name.
+type GoLocals = std::collections::HashMap<String, (Vec<usize>, Vec<usize>)>;
+
 struct Context<'a> {
     parsed: &'a ParseResult,
     file: &'a FileSymbols,
@@ -483,6 +486,9 @@ struct Context<'a> {
     symbol_starts: std::collections::HashMap<usize, usize>,
     /// The positions of the functions, the methods, and the constructors of the file, by name.
     callables_here: std::collections::HashMap<String, Vec<usize>>,
+    /// The local bindings of a Go file, by name: the starts of the bindings in order, and
+    /// for each the highest end of a function that has a binding up to it.
+    go_locals: std::sync::OnceLock<GoLocals>,
 }
 
 struct Draft {
@@ -539,6 +545,7 @@ impl<'a> Context<'a> {
             rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
             symbol_starts,
             callables_here,
+            go_locals: std::sync::OnceLock::new(),
         }
     }
 
@@ -2391,7 +2398,7 @@ func subRouter() chi.Router {
     }
 
     #[test]
-    fn a_chi_router_mounted_at_two_paths_gives_an_entry_for_each_path() {
+    fn a_chi_router_mounted_at_two_paths_gives_no_entry() {
         let source = go_source(
             &[CHI],
             r#"func routes() {
@@ -2405,18 +2412,7 @@ func subRouter() chi.Router {
 }
 "#,
         );
-        assert_eq!(
-            go_routes(&[("main.go", &source)]),
-            [
-                "chi GET /a/x [] show",
-                "chi GET /b/x [] show",
-                "chi GET /y [] show"
-            ]
-        );
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert!(found[0].key.ends_with(":http_handler:GET:/a/x"));
-        assert!(found[1].key.ends_with(":http_handler:GET:/b/x"));
-        assert!(found[2].key.ends_with(":http_handler:GET"));
+        assert_eq!(go_routes(&[("main.go", &source)]), ["chi GET /y [] show"]);
     }
 
     #[test]
@@ -2924,7 +2920,7 @@ func routes() {
     }
 
     #[test]
-    fn two_drafts_of_one_registration_do_not_share_a_key() {
+    fn a_router_that_two_parents_mount_gives_no_entry() {
         let source = go_source(
             &[CHI],
             r#"func routes() {
@@ -2934,21 +2930,18 @@ func routes() {
 	first.Use(auth)
 	first.Mount("/a", sub)
 	first.Mount("/a", sub)
+	once := chi.NewRouter()
+	once.Get("/y", show)
 	second := chi.NewRouter()
 	second.Use(audit)
 	second.Mount("/a", sub)
-	second.Mount("/b", sub)
+	second.Mount("/b", once)
 }
 "#,
         );
-        let routes = go_routes(&[("main.go", &source)]);
         assert_eq!(
-            routes,
-            [
-                "chi GET /a/x [auth] show",
-                "chi GET /a/x [audit] show",
-                "chi GET /b/x [audit] show",
-            ]
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /b/y [audit] show"]
         );
     }
 
@@ -3187,6 +3180,146 @@ func serve() {
             .is_some_and(|symbol| symbol.ends_with("/show.go#Show"))));
         assert!(
             started.elapsed() < std::time::Duration::from_secs(60),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+    #[test]
+    fn a_handler_name_that_a_local_binding_shadows_gives_no_symbol() {
+        let source = go_source(
+            &[CHI],
+            r#"func Show(w http.ResponseWriter, r *http.Request) {}
+
+func real(w http.ResponseWriter, r *http.Request) {}
+
+func byparameter(Show http.HandlerFunc) {
+	r := chi.NewRouter()
+	r.Get("/p", Show)
+}
+
+func routes() {
+	Show := real
+	r := chi.NewRouter()
+	r.Get("/x", Show)
+	http.HandleFunc("/n", Show)
+	for _, Show := range []http.HandlerFunc{real} {
+		r.Get("/y", Show)
+	}
+	func(Show http.HandlerFunc) {
+		r.Get("/z", Show)
+	}(real)
+}
+
+func outside() {
+	r := chi.NewRouter()
+	r.Get("/ok", Show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /p [] -",
+                "chi GET /x [] -",
+                "net/http ANY /n [] -",
+                "chi GET /y [] -",
+                "chi GET /z [] -",
+                "chi GET /ok [] Show",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_wrapper_type_blocks_each_use_of_the_result_that_is_not_serving() {
+        let server = go_source(
+            &[CHI],
+            "var held *Server\n\ntype Server struct{ *chi.Mux }\n\nfunc NewServer() *Server {\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", list)\n\treturn &Server{Mux: r}\n}\n\nfunc (s *Server) Group() { held = s }\n",
+        );
+        let main = go_file(
+            &[CHI],
+            "func serve() {\n\ts := NewServer()\n\ts.Group()\n\troot := chi.NewRouter()\n\troot.Mount(\"/api\", held)\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[("a_main.go", &main), ("b_server.go", &server)]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn timing_ten_thousand_wrapped_handlers_are_read_in_linear_time() {
+        let mut body =
+            String::from("func wrap(next http.HandlerFunc) http.HandlerFunc { return next }\n\n");
+        for index in 0..10_000 {
+            body.push_str(&format!(
+                "func h{index}(w http.ResponseWriter, r *http.Request) {{}}\n\n"
+            ));
+        }
+        body.push_str("func routes() {\n");
+        for index in 0..10_000 {
+            body.push_str(&format!(
+                "\thttp.HandleFunc(\"/{index}\", wrap(h{index}))\n"
+            ));
+        }
+        body.push_str("}\n");
+        let source = go_source(&[], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), 10_000);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn timing_many_factories_with_one_name_that_are_mentioned_are_read_in_linear_time() {
+        let count = 5_000;
+        let files: Vec<(String, String)> = (0..count)
+            .map(|index| {
+                (
+                    format!("p{index:05}/router.go"),
+                    format!(
+                        "package p{index:05}\n\nimport \"github.com/go-chi/chi/v5\"\n\nfunc New() *chi.Mux {{\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", nil)\n\treturn r\n}}\n\nvar Keep = New\n"
+                    ),
+                )
+            })
+            .collect();
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(name, text)| (name.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &borrowed);
+        assert!(found.is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn timing_one_router_that_many_parents_mount_is_read_in_linear_time() {
+        let count = 5_000;
+        let mut body = String::from("func routes() {\n\tchild := chi.NewRouter()\n");
+        for index in 0..count {
+            body.push_str(&format!(
+                "\tchild.Route(\"/c{index}\", func(chi.Router) {{}})\n"
+            ));
+        }
+        for index in 0..count {
+            body.push_str(&format!(
+                "\tp{index} := chi.NewRouter()\n\tp{index}.Mount(\"/x\", child)\n"
+            ));
+        }
+        body.push_str("}\n");
+        let source = go_source(&[CHI], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert!(found.is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
             "took {:?}",
             started.elapsed()
         );

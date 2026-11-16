@@ -364,8 +364,6 @@ struct Router {
     external: bool,
     /// The prefixes of the router in the function that made it, from a summary.
     base: Vec<String>,
-    /// The routers that have a link to this router.
-    kids: Vec<usize>,
 }
 
 #[derive(Clone)]
@@ -402,6 +400,8 @@ struct Frame {
     router_returns: usize,
     /// The names of the named results. A bare return gives their values.
     results: Vec<String>,
+    /// A return statement gave a literal that holds the router, not the router.
+    wrapped: bool,
     owner: usize,
     pure: bool,
     /// The routers that the function body made.
@@ -447,13 +447,7 @@ impl<'a> Context<'a> {
 
     /// The function of the repository that a node names, and the file of the function.
     fn go_symbol(&self, node: Node<'_>) -> Option<(&Symbol, &FileSymbols)> {
-        let key = self.handler_symbol(node)?;
-        self.all.iter().find_map(|file| {
-            file.symbols
-                .iter()
-                .find(|symbol| *symbol.key == *key)
-                .map(|symbol| (symbol, file))
-        })
+        self.go_handler_target(node)
     }
 
     /// The innermost function of a call such as `auth(cfg)(next)`.
@@ -690,12 +684,30 @@ impl<'a> Context<'a> {
     /// of the package of the file. A definition in the file wins. A package that the index
     /// does not resolve gives no function.
     pub(super) fn go_handler_symbol(&self, node: Node<'_>) -> Option<String> {
+        self.go_handler_target(node)
+            .map(|(symbol, _)| symbol.key.to_string())
+    }
+
+    /// The function and its file, as `go_handler_symbol` finds them. A name that a local
+    /// binding gives, as a parameter or `Show := real`, has no function.
+    pub(super) fn go_handler_target(
+        &self,
+        node: Node<'_>,
+    ) -> Option<(&'a Symbol, &'a FileSymbols)> {
         let own = directory_of(&self.file.file);
         let (directory, name) = match node.kind() {
-            "identifier" => (own, self.text(node)),
+            "identifier" => {
+                if self.is_go_local(node) {
+                    return None;
+                }
+                (own, self.text(node))
+            }
             "selector_expression" => {
                 let operand = node.child_by_field_name("operand")?;
                 let name = self.text(node.child_by_field_name("field")?);
+                if operand.kind() == "identifier" && self.is_go_local(operand) {
+                    return None;
+                }
                 let import = (operand.kind() == "identifier")
                     .then(|| {
                         self.file.imports.iter().find(|binding| {
@@ -725,10 +737,10 @@ impl<'a> Context<'a> {
                 .map(Vec::as_slice)
                 .unwrap_or(&[])
             {
-                return Some(self.file.symbols[*position].key.to_string());
+                return Some((&self.file.symbols[*position], self.file));
             }
         }
-        let found = match self.all_parsed.shared() {
+        match self.all_parsed.shared() {
             Some(shared) => self.package_lookup(
                 shared
                     .go_callables
@@ -737,8 +749,7 @@ impl<'a> Context<'a> {
                 name,
             ),
             None => self.package_lookup(&PackageCallables::build(self.all), directory, name),
-        };
-        found
+        }
     }
 
     fn package_lookup(
@@ -746,11 +757,87 @@ impl<'a> Context<'a> {
         callables: &PackageCallables,
         directory: &str,
         name: &str,
-    ) -> Option<String> {
+    ) -> Option<(&'a Symbol, &'a FileSymbols)> {
         match callables.find(directory, name) {
-            [(file, position)] => Some(self.all[*file].symbols[*position].key.to_string()),
+            [(file, position)] => {
+                let file = &self.all[*file];
+                Some((&file.symbols[*position], file))
+            }
             _ => None,
         }
+    }
+
+    /// Tells if a name at this node has a binding in a function that comes before it: a
+    /// parameter, a short variable declaration, a variable, a range variable, or a type
+    /// switch variable. A binding in a closure does not reach the code after the closure.
+    fn is_go_local(&self, node: Node<'_>) -> bool {
+        let locals = self.go_locals.get_or_init(|| {
+            let mut sites: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+            let mut pending = vec![(self.parsed.root_node(), None::<usize>)];
+            while let Some((node, function_end)) = pending.pop() {
+                let function_end = match node.kind() {
+                    "function_declaration" | "method_declaration" | "func_literal" => {
+                        Some(node.end_byte())
+                    }
+                    _ => function_end,
+                };
+                let mut binders: Vec<Node<'_>> = Vec::new();
+                let mut cursor = node.walk();
+                match node.kind() {
+                    "short_var_declaration" | "range_clause" => {
+                        if let Some(left) = node.child_by_field_name("left") {
+                            binders.extend(left.named_children(&mut cursor));
+                        }
+                    }
+                    "parameter_declaration" | "variadic_parameter_declaration" => {
+                        binders.extend(node.children_by_field_name("name", &mut cursor));
+                    }
+                    "var_spec" if function_end.is_some() => {
+                        binders.extend(node.children_by_field_name("name", &mut cursor));
+                    }
+                    "type_switch_statement" => {
+                        if let Some(alias) = node.child_by_field_name("alias") {
+                            binders.extend(alias.named_children(&mut cursor));
+                        }
+                    }
+                    _ => {}
+                }
+                if let Some(end) = function_end {
+                    for binder in binders.into_iter().filter(|b| b.kind() == "identifier") {
+                        sites
+                            .entry(self.text(binder).to_string())
+                            .or_default()
+                            .push((binder.start_byte(), end));
+                    }
+                }
+                let mut cursor = node.walk();
+                pending.extend(
+                    node.named_children(&mut cursor)
+                        .map(|child| (child, function_end)),
+                );
+            }
+            sites
+                .into_iter()
+                .map(|(name, mut list)| {
+                    list.sort_unstable();
+                    let starts = list.iter().map(|(start, _)| *start).collect();
+                    let mut highest = 0;
+                    let ends = list
+                        .iter()
+                        .map(|(_, end)| {
+                            highest = highest.max(*end);
+                            highest
+                        })
+                        .collect();
+                    (name, (starts, ends))
+                })
+                .collect()
+        });
+        let Some((starts, ends)) = locals.get(self.text(node)) else {
+            return false;
+        };
+        let before = starts.partition_point(|start| *start < node.start_byte());
+        before > 0 && ends[before - 1] > node.start_byte()
     }
 }
 
@@ -831,6 +918,7 @@ impl CallSites {
     /// classify each use of a factory.
     pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> Self {
         let mut factories: HashSet<String> = HashSet::new();
+        let mut wrappers: HashSet<String> = HashSet::new();
         for (position, file) in files.iter().enumerate() {
             if file.language != Language::Go {
                 continue;
@@ -839,7 +927,12 @@ impl CallSites {
                 continue;
             };
             let context = Context::new(&tree, file, files, trees, &[]);
-            factories.extend(factory_keys(&context, tree.root_node()));
+            for (key, wrapper) in factory_keys(&context, tree.root_node()) {
+                if wrapper {
+                    wrappers.insert(key.clone());
+                }
+                factories.insert(key);
+            }
         }
         let mut blocked = HashSet::new();
         if factories.is_empty() {
@@ -854,6 +947,7 @@ impl CallSites {
         {
             by_name.entry(&symbol.name).or_default().push(&symbol.key);
         }
+        let mut blocked_names: HashSet<&str> = HashSet::new();
         for (position, file) in files.iter().enumerate() {
             if file.language != Language::Go {
                 continue;
@@ -881,18 +975,25 @@ impl CallSites {
                 );
                 continue;
             };
-            blocked.extend(Self::mentions(tree.root_node(), &tree.source, &by_name));
+            blocked_names.extend(Self::mentions(tree.root_node(), &tree.source, &by_name));
             if sites.is_empty() {
                 continue;
             }
             let index = FileUses::new(tree.root_node(), &tree.source, file);
             for (reference, keys) in sites {
+                let strict = keys.iter().any(|key| wrappers.contains(*key));
                 if index.is_blocked(
                     reference.name_range.start_byte,
                     reference.name_range.end_byte,
+                    strict,
                 ) {
                     blocked.extend(keys.into_iter().map(str::to_string));
                 }
+            }
+        }
+        for name in blocked_names {
+            if let Some(keys) = by_name.get(name) {
+                blocked.extend(keys.iter().map(|key| key.to_string()));
             }
         }
         Self { blocked }
@@ -901,15 +1002,19 @@ impl CallSites {
     /// The keys of the factories that a name in the file mentions without a call. A function
     /// value, a method value, and an argument that is a function are such mentions. A
     /// mention can name another function of the same name, and the result stays safe.
-    fn mentions(root: Node<'_>, source: &[u8], by_name: &HashMap<&str, Vec<&str>>) -> Vec<String> {
-        let mut found = Vec::new();
+    fn mentions<'m>(
+        root: Node<'_>,
+        source: &[u8],
+        by_name: &HashMap<&'m str, Vec<&'m str>>,
+    ) -> HashSet<&'m str> {
+        let mut found = HashSet::new();
         let mut pending = vec![root];
         while let Some(node) = pending.pop() {
             if matches!(node.kind(), "identifier" | "field_identifier") {
                 let name = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
-                if let Some(keys) = by_name.get(name) {
+                if let Some((known, _)) = by_name.get_key_value(name) {
                     if !Self::is_declaration_or_callee(node) {
-                        found.extend(keys.iter().map(|key| key.to_string()));
+                        found.insert(*known);
                     }
                 }
             }
@@ -947,6 +1052,9 @@ struct FileUses<'t> {
     http: Vec<String>,
     /// The start of each use of a name that is not a use as a router, by name, in order.
     bad: HashMap<String, Vec<usize>>,
+    /// The same, when any method of the router counts as a bad use. A wrapper type can
+    /// shadow a method of the router.
+    bad_strict: HashMap<String, Vec<usize>>,
 }
 
 impl<'t> FileUses<'t> {
@@ -956,12 +1064,22 @@ impl<'t> FileUses<'t> {
             source,
             http: package_names(file, |module| module == "net/http", "http"),
             bad: HashMap::new(),
+            bad_strict: HashMap::new(),
         };
         let mut pending = vec![root];
         while let Some(node) = pending.pop() {
-            if node.kind() == "identifier" && uses.is_bad_use(node) {
+            if node.kind() == "identifier" && uses.is_bad_use(node, true) {
                 let name = uses.text(node).to_string();
-                uses.bad.entry(name).or_default().push(node.start_byte());
+                if uses.is_bad_use(node, false) {
+                    uses.bad
+                        .entry(name.clone())
+                        .or_default()
+                        .push(node.start_byte());
+                }
+                uses.bad_strict
+                    .entry(name)
+                    .or_default()
+                    .push(node.start_byte());
             }
             let mut cursor = node.walk();
             let children: Vec<Node<'t>> = node.named_children(&mut cursor).collect();
@@ -1021,7 +1139,7 @@ impl<'t> FileUses<'t> {
 
     /// Tells if a use of a name is not a use as a router that the walk understands. A router
     /// that a variable holds is only a receiver of a call, or the root handler of a server.
-    fn is_bad_use(&self, node: Node<'t>) -> bool {
+    fn is_bad_use(&self, node: Node<'t>, strict: bool) -> bool {
         let mut child = node;
         let mut parent = child.parent();
         while let Some(found) = parent.filter(|found| found.kind() == "parenthesized_expression") {
@@ -1032,7 +1150,7 @@ impl<'t> FileUses<'t> {
             return false;
         };
         match parent.kind() {
-            "selector_expression" => !self.is_router_call(parent, child),
+            "selector_expression" => strict || !self.is_router_call(parent, child),
             "argument_list" => !self.is_sink(parent.parent()),
             "var_spec" => parent.child_by_field_name("value") == Some(child),
             "expression_list" => {
@@ -1061,7 +1179,7 @@ impl<'t> FileUses<'t> {
 
     /// Tells if the call site that has the name at these bytes attaches the result, or has
     /// a use that the walk cannot classify.
-    fn is_blocked(&self, start: usize, end: usize) -> bool {
+    fn is_blocked(&self, start: usize, end: usize, strict: bool) -> bool {
         let Some(mut node) = self.root.descendant_for_byte_range(start, end) else {
             return true;
         };
@@ -1089,7 +1207,7 @@ impl<'t> FileUses<'t> {
         };
         match parent.kind() {
             "expression_statement" => false,
-            "selector_expression" => !self.is_router_call(parent, value),
+            "selector_expression" => strict || !self.is_router_call(parent, value),
             "argument_list" => !self.is_sink(parent.parent()),
             "literal_element" | "keyed_element" => {
                 let mut up = parent.parent();
@@ -1098,14 +1216,14 @@ impl<'t> FileUses<'t> {
                 }
                 !up.is_some_and(|literal| self.is_server_literal(literal))
             }
-            "expression_list" => self.is_blocked_assignment(value, parent),
+            "expression_list" => self.is_blocked_assignment(value, parent, strict),
             "var_spec" => true,
             _ => true,
         }
     }
 
     /// A call in a list of values: a local variable that only receives calls, or the blank name.
-    fn is_blocked_assignment(&self, value: Node<'t>, list: Node<'t>) -> bool {
+    fn is_blocked_assignment(&self, value: Node<'t>, list: Node<'t>, strict: bool) -> bool {
         let Some(declaration) = list.parent() else {
             return true;
         };
@@ -1151,7 +1269,8 @@ impl<'t> FileUses<'t> {
             return true;
         };
         let (from, to) = (declaration.end_byte(), block.end_byte());
-        self.bad.get(name).is_some_and(|starts| {
+        let bad = if strict { &self.bad_strict } else { &self.bad };
+        bad.get(name).is_some_and(|starts| {
             let first = starts.partition_point(|start| *start <= from);
             starts.get(first).is_some_and(|start| *start < to)
         })
@@ -1160,7 +1279,7 @@ impl<'t> FileUses<'t> {
 
 /// The keys of the functions and the methods of a file that return a router that they made.
 /// The walk does not read the calls of the repository for this result.
-pub(super) fn factory_keys(context: &Context<'_>, root: Node<'_>) -> Vec<String> {
+pub(super) fn factory_keys(context: &Context<'_>, root: Node<'_>) -> Vec<(String, bool)> {
     match Routes::new(context, true) {
         Some(mut routes) => {
             routes.run(root);
@@ -1210,6 +1329,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             owners: 0,
             frames: Vec::new(),
             mounts: HashSet::new(),
+            mounted: HashSet::new(),
+            tree: Vec::new(),
             dry,
             factory_keys: Vec::new(),
         })
@@ -1245,9 +1366,12 @@ struct Routes<'c, 'a, 't> {
     frames: Vec<Frame>,
     /// The mounts that the walk made: the child, the parent, and the prefix.
     mounts: HashSet<(usize, usize, String)>,
+    /// The routers that a mount attached. Each router is in a tree of the forest.
+    mounted: HashSet<usize>,
+    tree: Vec<usize>,
     /// The walk only finds the factories. It does not read the calls of the repository.
     dry: bool,
-    factory_keys: Vec<String>,
+    factory_keys: Vec<(String, bool)>,
 }
 
 impl<'c, 'a, 't> Routes<'c, 'a, 't> {
@@ -1381,6 +1505,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             returns: 0,
             router_returns: 0,
             results: Vec::new(),
+            wrapped: false,
             owner,
             pure: true,
             created: Vec::new(),
@@ -1411,7 +1536,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             _ => None,
         };
         let summary = only_router
-            .filter(|_| frame.pure && declared.is_some_and(|name| !self.cyclic.contains(name)))
+            .filter(|_| {
+                frame.pure
+                    && !frame.wrapped
+                    && declared.is_some_and(|name| !self.cyclic.contains(name))
+            })
             .and_then(|router| self.summarize(router, owner));
         let made: Vec<usize> = returned
             .into_iter()
@@ -1425,11 +1554,12 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let id = declared.map(str::to_string).or_else(|| key.clone());
         if let (Some(id), Some(comp)) = (id, comp) {
             let needs_a_summary = declared.is_some()
+                && !frame.wrapped
                 && summary
                     .as_ref()
                     .is_none_or(|summary| !summary.prefixes.is_empty());
             if let Some(key) = &key {
-                self.factory_keys.push(key.clone());
+                self.factory_keys.push((key.clone(), frame.wrapped));
             }
             let attached_in_the_repository = !self.dry
                 && key
@@ -1646,6 +1776,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             returns: 0,
             router_returns: 0,
             results: Vec::new(),
+            wrapped: false,
             owner,
             pure: true,
             created: Vec::new(),
@@ -1763,9 +1894,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             owner: self.current_owner(),
             external: false,
             base: Vec::new(),
-            kids: Vec::new(),
         });
         let id = self.routers.len() - 1;
+        self.tree.push(id);
         if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
             frame.created.push(id);
         }
@@ -1790,10 +1921,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             owner: self.current_owner(),
             external: false,
             base: Vec::new(),
-            kids: Vec::new(),
         });
         let id = self.routers.len() - 1;
-        self.routers[parent].kids.push(id);
+        self.tree.push(id);
+        self.join(parent, id);
         if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
             frame.created.push(id);
         }
@@ -1864,12 +1995,20 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 }
             }
         }
+        let mut wrapped = false;
         for value in values {
             self.escape(value);
-            let router = self.eval(value);
-            routers.extend(router.or_else(|| self.wrapped_router(value)));
+            match self.eval(value) {
+                Some(router) => routers.push(router),
+                None => {
+                    let inside = self.wrapped_router(value);
+                    wrapped |= inside.is_some();
+                    routers.extend(inside);
+                }
+            }
         }
         if let Some(frame) = self.frames.last_mut().filter(|frame| frame.function) {
+            frame.wrapped |= wrapped;
             frame.returns += 1;
             frame.router_returns += usize::from(!routers.is_empty());
             frame.returned.extend(routers);
@@ -2364,8 +2503,16 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         };
         if !self.routers[child].mountable
             || self.mounts.contains(&(child, parent, prefix.to_string()))
-            || self.would_cycle(parent, child)
         {
+            return;
+        }
+        // A router that two mounts attach has more than one place. The walk keeps the
+        // mounts as a forest, so the router and its routes give no entry.
+        if !self.mounted.insert(child) {
+            self.routers[child].partial = true;
+            return;
+        }
+        if self.find(parent) == self.find(child) {
             return;
         }
         self.mounts.insert((child, parent, prefix.to_string()));
@@ -2377,40 +2524,21 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         self.touch(parent);
         self.touch(child);
         self.routers[child].links.push(link);
-        self.routers[parent].kids.push(child);
+        self.join(parent, child);
     }
 
-    /// Tells if a mount of `child` in `parent` makes a cycle: `child` is `parent`, or an
-    /// ancestor of `parent`. The search goes up from `parent` and down from `child` in
-    /// turn, and it stops when one side has no more routers. The cost has the size of
-    /// the smaller side.
-    fn would_cycle(&self, parent: usize, child: usize) -> bool {
-        if parent == child {
-            return true;
+    /// The root of the tree of routers that holds this router.
+    fn find(&mut self, mut router: usize) -> usize {
+        while self.tree[router] != router {
+            self.tree[router] = self.tree[self.tree[router]];
+            router = self.tree[router];
         }
-        let mut up = vec![parent];
-        let mut up_seen = HashSet::from([parent]);
-        let mut down = vec![child];
-        let mut down_seen = HashSet::from([child]);
-        while let (Some(above), Some(below)) = (up.pop(), down.pop()) {
-            for link in &self.routers[above].links {
-                if link.parent == child {
-                    return true;
-                }
-                if up_seen.insert(link.parent) {
-                    up.push(link.parent);
-                }
-            }
-            for kid in &self.routers[below].kids {
-                if *kid == parent {
-                    return true;
-                }
-                if down_seen.insert(*kid) {
-                    down.push(*kid);
-                }
-            }
-        }
-        false
+        router
+    }
+
+    fn join(&mut self, parent: usize, child: usize) {
+        let (parent, child) = (self.find(parent), self.find(child));
+        self.tree[child] = parent;
     }
 
     fn register(
