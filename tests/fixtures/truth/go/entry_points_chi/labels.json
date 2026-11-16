@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed against the chi routing rules. The syntax is valid Go. The chi package and the functions logger, auth, admin, and audit are not in the case. The harness does not build or run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "chi_early", "file": "main.go", "line": 15, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/early"},
+    {"label": "chi_health", "file": "main.go", "line": 17, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/health", "guards": ["logger"]},
+    {"label": "chi_user", "file": "main.go", "line": 20, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/api/users/{id}", "parameters": ["id"], "guards": ["logger", "auth"]},
+    {"label": "chi_user_create", "file": "main.go", "line": 23, "kind": "http_handler", "framework": "chi", "method": "POST", "path": "/api/users", "guards": ["logger", "auth", "admin"]},
+    {"label": "chi_item_delete", "file": "main.go", "line": 26, "kind": "http_handler", "framework": "chi", "method": "DELETE", "path": "/items/{id:[0-9]+}", "parameters": ["id"], "guards": ["logger", "audit"]},
+    {"label": "chi_method", "file": "main.go", "line": 27, "kind": "http_handler", "framework": "chi", "method": "PATCH", "path": "/m", "guards": ["logger"]},
+    {"label": "chi_sub", "file": "main.go", "line": 34, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/sub/", "guards": ["logger"]}
+  ]
+}

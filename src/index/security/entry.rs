@@ -23,6 +23,7 @@ use crate::index::model::{Span, Symbol, SymbolKind};
 use crate::parser::{cfg_test_module_ranges, ParseResult};
 
 mod rails;
+mod go_routes;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1365,6 +1366,10 @@ impl<'a> Context<'a> {
     }
 
     fn go(&self, node: Node<'_>, out: &mut Vec<Draft>) {
+        if node.kind() == "source_file" {
+            go_routes::collect(self, node, out);
+            return;
+        }
         if node.kind() != "call_expression" {
             return;
         }
@@ -2081,6 +2086,90 @@ mod tests {
         assert_eq!(found[0].framework, "aspnet");
         assert_eq!(found[0].route, route("GET", "/api/users/{id}", &["id"]));
         assert_eq!(found[0].guards, ["Authorize"]);
+    }
+
+    fn go_routes(files: &[(&str, &str)]) -> Vec<String> {
+        entries(Language::Go, files)
+            .into_iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .map(|entry| {
+                let route = entry.route.as_ref().unwrap();
+                format!(
+                    "{} {} {} [{}] {}",
+                    entry.framework,
+                    route.method,
+                    route.path,
+                    entry.guards.join(","),
+                    entry
+                        .symbol
+                        .as_deref()
+                        .map_or("-", |symbol| symbol.rsplit('#').next().unwrap())
+                )
+            })
+            .collect()
+    }
+
+    const GO_HANDLERS: &str = "func list(w http.ResponseWriter, r *http.Request) {}\n\nfunc show(w http.ResponseWriter, r *http.Request) {}\n\n";
+
+    #[test]
+    fn chi_routes_join_prefixes_and_apply_use_to_later_routes() {
+        let source = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\n{GO_HANDLERS}func routes() http.Handler {{\n\tr := chi.NewRouter()\n\tr.Get(\"/early\", list)\n\tr.Use(logger)\n\tr.Get(\"/health\", list)\n\tr.Route(\"/api\", func(r chi.Router) {{\n\t\tr.Use(auth)\n\t\tr.Get(\"/users/{{id}}\", show)\n\t\tr.Group(func(r chi.Router) {{\n\t\t\tr.Use(admin)\n\t\t\tr.Post(\"/users\", list)\n\t\t}})\n\t\tr.Put(\"/after\", list)\n\t}})\n\tr.With(audit).Delete(\"/x/{{id:[0-9]+}}\", show)\n\tr.Method(\"PATCH\", \"/m\", list)\n\tr.HandleFunc(\"/any\", list)\n\tr.Handle(\"/handle\", http.HandlerFunc(show))\n\treturn r\n}}\n"
+        );
+        let found = go_routes(&[("main.go", &source)]);
+        assert_eq!(
+            found,
+            [
+                "chi GET /early [] list",
+                "chi GET /health [logger] list",
+                "chi GET /api/users/{id} [logger,auth] show",
+                "chi POST /api/users [logger,auth,admin] list",
+                "chi PUT /api/after [logger,auth] list",
+                "chi DELETE /x/{id:[0-9]+} [logger,audit] show",
+                "chi PATCH /m [logger] list",
+                "chi ANY /any [logger] list",
+                "chi ANY /handle [logger] show",
+            ]
+        );
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        let delete = found
+            .iter()
+            .find(|entry| entry.route.as_ref().is_some_and(|r| r.method == "DELETE"))
+            .unwrap();
+        assert_eq!(delete.route.as_ref().unwrap().parameters, ["id"]);
+    }
+
+    #[test]
+    fn chi_mount_follows_a_router_of_the_same_file_only() {
+        let source = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi\"\n\t\"example.com/app/external\"\n)\n\n{GO_HANDLERS}func routes() http.Handler {{\n\tr := chi.NewRouter()\n\tr.Use(logger)\n\tr.Mount(\"/sub\", subRouter())\n\tr.Mount(\"/ext\", external.Routes())\n\tinline := chi.NewMux()\n\tinline.Get(\"/\", show)\n\tr.Mount(\"/inline\", inline)\n\treturn r\n}}\n\nfunc subRouter() chi.Router {{\n\ts := chi.NewRouter()\n\ts.Get(\"/\", list)\n\treturn s\n}}\n"
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /inline/ [logger] show",
+                "chi GET /sub/ [logger] list",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_chi_receiver_must_be_proven_through_the_import() {
+        let aliased = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\trouting \"github.com/go-chi/chi/v5\"\n)\n\n{GO_HANDLERS}func routes() {{\n\tr := routing.NewRouter()\n\tr.Get(\"/a\", list)\n}}\n\nfunc typed(r routing.Router) {{\n\tr.Get(\"/b\", show)\n}}\n"
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &aliased)]),
+            ["chi GET /a [] list", "chi GET /b [] show"]
+        );
+        let unproven = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\n{GO_HANDLERS}type store struct{{}}\n\nfunc (store) Get(path string, handler http.HandlerFunc) {{}}\n\nfunc routes(r store, chi store) {{\n\tr.Get(\"/a\", list)\n\tchi.Get(\"/b\", list)\n\trouter := newRouter()\n\trouter.Get(\"/c\", list)\n}}\n"
+        );
+        assert!(go_routes(&[("main.go", &unproven)]).is_empty());
+        let no_import = format!(
+            "package main\n\nimport \"net/http\"\n\n{GO_HANDLERS}func routes() {{\n\tr := chi.NewRouter()\n\tr.Get(\"/a\", list)\n}}\n"
+        );
+        assert!(go_routes(&[("main.go", &no_import)]).is_empty());
     }
 
     #[test]
