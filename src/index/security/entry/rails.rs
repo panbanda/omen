@@ -51,6 +51,10 @@
 //! repository has come first. A `skip_before_action` call removes a guard for the actions that
 //! it lists.
 //!
+//! Omen treats the openings of a class with one chain of modules and one name as one class. It
+//! reads the callbacks in the order of the files and then of the positions. If a superclass name
+//! belongs to two different classes, omen reads no guards from the superclass.
+//!
 //! A guard never claims more than omen can read. A `before_action` call gives no guard in two
 //! cases. The first case is an `if:` or `unless:` option. The second case is an `only:` or
 //! `except:` value that is not a literal list. A `skip_before_action` call with `if:` or
@@ -826,11 +830,13 @@ impl<'a> Context<'a> {
         let Some(classes) = index.classes.get(&qualified.join(".")) else {
             return (None, Vec::new());
         };
-        let mut actions: Vec<&Symbol> = Vec::new();
-        let mut guards: Vec<String> = Vec::new();
-        let mut seen_files = Vec::new();
-        for (position, owner) in classes {
-            if !seen_files.contains(position) {
+        let symbol = {
+            let mut actions: Vec<&Symbol> = Vec::new();
+            let mut seen_files = Vec::new();
+            for (position, _) in classes {
+                if seen_files.contains(position) {
+                    continue;
+                }
                 seen_files.push(*position);
                 if let Some(methods) = index
                     .methods
@@ -840,55 +846,63 @@ impl<'a> Context<'a> {
                     actions.extend(methods.iter().copied());
                 }
             }
-            for guard in self.rails_chain_guards(index, *position, owner, action) {
-                if !guards.contains(&guard) {
-                    guards.push(guard);
-                }
-            }
-        }
-        let symbol = (actions.len() == 1).then(|| actions[0].key.to_string());
-        (symbol, guards)
+            (actions.len() == 1).then(|| actions[0].key.to_string())
+        };
+        (symbol, self.rails_chain_guards(index, classes, action))
     }
 
     /// The guards of an action from the class, then from its superclass, as far as the
-    /// repository has exactly one class for each name. A qualified superclass name ends the chain.
+    /// repository has one class identity for the name. The openings of one class are one class,
+    /// in the order of the files and then of the positions. A qualified superclass name ends
+    /// the chain, and so does a name that belongs to two classes.
     fn rails_chain_guards(
         &self,
         index: &RailsIndex<'a>,
-        position: usize,
-        class: &'a Symbol,
+        class: &[Placed<'a>],
         action: &str,
     ) -> Vec<String> {
-        let mut chain = vec![(position, class)];
-        while let Some((_, last)) = chain.last() {
-            let Some(parent) = last.supertypes.first() else {
+        let identity =
+            |(position, symbol): &Placed<'a>| qualified_name(&self.all[*position], symbol);
+        let mut chain: Vec<Vec<Placed<'a>>> = vec![class.to_vec()];
+        while let Some(last) = chain.last() {
+            let Some(parent) = last
+                .iter()
+                .find_map(|(_, symbol)| symbol.supertypes.first())
+            else {
                 break;
             };
             if parent.contains("::") {
                 break;
             }
-            let Some([(parent_position, parent_symbol)]) =
-                index.by_name.get(parent.as_str()).map(Vec::as_slice)
-            else {
+            let Some(candidates) = index.by_name.get(parent.as_str()) else {
                 break;
             };
-            if chain.iter().any(|(_, seen)| seen.key == parent_symbol.key) {
+            let first = identity(&candidates[0]);
+            if candidates
+                .iter()
+                .any(|candidate| identity(candidate) != first)
+                || chain.iter().any(|seen| identity(&seen[0]) == first)
+            {
                 break;
             }
-            chain.push((*parent_position, parent_symbol));
+            let mut group = candidates.clone();
+            group.sort_by_key(|(position, symbol)| (*position, symbol.range.start_byte));
+            chain.push(group);
         }
         let mut active: Vec<String> = Vec::new();
-        for (position, symbol) in chain.into_iter().rev() {
-            for callback in self.rails_callbacks(index, position, symbol).iter() {
-                if !callback.applies_to(action) {
-                    continue;
-                }
-                if callback.skip {
-                    active.retain(|name| !callback.names.contains(name));
-                } else {
-                    for name in &callback.names {
-                        if !active.contains(name) {
-                            active.push(name.clone());
+        for group in chain.iter().rev() {
+            for (position, symbol) in group {
+                for callback in self.rails_callbacks(index, *position, symbol).iter() {
+                    if !callback.applies_to(action) {
+                        continue;
+                    }
+                    if callback.skip {
+                        active.retain(|name| !callback.names.contains(name));
+                    } else {
+                        for name in &callback.names {
+                            if !active.contains(name) {
+                                active.push(name.clone());
+                            }
                         }
                     }
                 }

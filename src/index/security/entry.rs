@@ -2602,6 +2602,51 @@ mod tests {
     }
 
     #[test]
+    fn a_reopened_superclass_keeps_the_guards_of_each_opening() {
+        let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\n  get \"/v\", to: \"users#index\"\nend\n";
+        let first =
+            "class ApplicationController\n  before_action :login\n  before_action :audit\nend\n";
+        let second = "class ApplicationController\n  before_action :locale\n  skip_before_action :audit, only: [:index]\nend\n";
+        let users = "class UsersController < ApplicationController\n  before_action :owner\nend\n\nclass UsersController\n  skip_before_action :owner, only: [:index]\n  def show; end\n  def index; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/application_controller.rb", first),
+                ("controllers/application_more.rb", second),
+                ("controllers/users_controller.rb", users),
+            ],
+        );
+        assert_eq!(
+            guards_by_path(&found),
+            [
+                (
+                    "GET /u".to_string(),
+                    strings(&["login", "audit", "locale", "owner"])
+                ),
+                ("GET /v".to_string(), strings(&["login", "locale"])),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_superclass_name_with_two_identities_is_ambiguous() {
+        let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
+        let top = "class ApplicationController\n  before_action :top\nend\n";
+        let admin =
+            "module Admin\n  class ApplicationController\n    before_action :admin\n  end\nend\n";
+        let users = "class UsersController < ApplicationController\n  before_action :owner\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/application_controller.rb", top),
+                ("controllers/admin.rb", admin),
+                ("controllers/users_controller.rb", users),
+            ],
+        );
+        assert_eq!(found[0].guards, ["owner"]);
+    }
+
+    #[test]
     fn a_method_belongs_to_the_class_that_contains_it() {
         let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
         let controller = "class UsersController < ApplicationController\n  class UsersController\n    def show; end\n  end\nend\n";

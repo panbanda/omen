@@ -117,6 +117,10 @@ A guard is a `before_action` callback of the action. Omen reads the symbols, `on
 the actions that it lists. The guards of a superclass in the repository, such as
 `ApplicationController`, come first.
 
+Omen treats the openings of a class with one chain of modules and one name as one class. It reads
+the callbacks in the order of the files and then of the positions. If a superclass name belongs
+to two different classes, omen reads no guards from the superclass.
+
 A guard never claims more than omen can read. A `before_action` call gives no guard in two
 cases. The first case is an `if:` or `unless:` option. The second case is an `only:` or
 `except:` value that is not a literal list, as in `only: ACTIONS`.
