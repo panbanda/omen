@@ -48,7 +48,7 @@ jobs:
             echo "The tag must have the form omen-vX.Y.Z" >&2
             exit 1
           fi
-          newest=$(gh release list --repo "${{ github.repository }}" --limit 100 --json tagName,createdAt \
+          newest=$(gh release list --repo "${{ github.repository }}" --limit 100 --exclude-drafts --exclude-pre-releases --json tagName,createdAt \
             --jq '[.[] | select(.tagName | startswith("omen-v"))] | sort_by(.createdAt) | last | .tagName')
           if [ "$TAG" != "$newest" ]; then
             echo "The tag must be the newest omen release ($newest)" >&2
