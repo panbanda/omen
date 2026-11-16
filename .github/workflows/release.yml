@@ -13,8 +13,9 @@ on:
         type: string
 
 concurrency:
-  # A manual run updates the same channels as a release from main.
-  group: release-${{ github.event_name == 'workflow_dispatch' && 'refs/heads/main' || github.ref }}
+  # Each run can update the Docker `latest` tag and the Homebrew formula, so
+  # all runs share one group.
+  group: release
   cancel-in-progress: false
 
 permissions: {}
