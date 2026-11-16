@@ -278,18 +278,31 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   struct that embeds or holds a router or a multiplexer. A wrapper type can define a
   method with the name of a method of the framework, or the method `ServeHTTP`. Then its
   values are not routers, and the routes of its factory give no entry, also when a call
-  serves the result as the root. A multiplexer of `net/http` is a variable that has one
-  binding in the file, and the binding is a call of `http.NewServeMux()`.
+  serves the result as the root. Omen compares the name of the type without a pointer,
+  a package, and type arguments, so `Server[int]` and `Server[T]` are the type `Server`.
+  A multiplexer of `net/http` is a variable that has one binding in the file, and the
+  binding is a call of `http.NewServeMux()`.
 - Omen reads a string literal as Go does. An interpreted literal has the escapes `\a`,
   `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\\`, `\"`, octal, `\x`, `\u`, and `\U`. A raw
   literal has no escape. A bad escape, or a value that is not UTF-8, gives no entry.
 - A gorilla/mux route can have an error that stops it from matching. A template with
-  unbalanced braces, an empty name or pattern, a pattern that has a capture group or
-  that is not a regular expression, an odd number of arguments in `Headers`, and a
-  second `Name` set this error. Omen accepts these calls in a chain: `Methods`, `Path`,
-  `PathPrefix`, `Headers`, `Name`, `Schemes`, `MatcherFunc`, and `BuildVarsFunc`. It
-  checks the templates of the paths. A route with `Host`, `Queries`, `HeadersRegexp`,
-  or another call gives no entry.
+  unbalanced braces, an empty name or pattern, an odd number of arguments in `Headers`,
+  and a second `Name` set this error. A pattern that Go does not accept as a regular
+  expression sets it too.
+- Omen checks a pattern with a small grammar that Go and Rust read in the same way. It
+  has ASCII letters, digits, and escaped punctuation, the dot, classes of letters,
+  digits, and ranges, the repetitions `*`, `+`, `?`, `{m}`, `{m,}`, and `{m,n}` with
+  numbers up to 1000, a lazy `?`, and `|`. A pattern outside this grammar gives no
+  entry. Thus a group, a flag, an anchor, and a shorthand class such as `\d` give no
+  entry.
+- A capture group in a pattern makes gorilla/mux v1.8.1 panic at start. A program that
+  panics at start is out of scope, and omen gives no entry for a pattern with a group.
+- Omen accepts these calls in a chain of gorilla/mux: `Methods`, `Path`, `PathPrefix`,
+  `Headers`, `Name`, `Schemes`, `MatcherFunc`, and `BuildVarsFunc`. It checks the
+  templates of the paths. A route with `Host`, `Queries`, `HeadersRegexp`, or another
+  call gives no entry.
+- A handler with a qualifier that is not an import has no function. A package variable
+  or a field, as `box.Show`, is an example. The index does not give a function for it.
 - Any mention of the name of a factory that is not a call is a use of the third kind. A
   function value, a method value, and an argument that is a function are examples. A
   mention of another function with the same name also counts.

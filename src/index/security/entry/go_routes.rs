@@ -767,6 +767,137 @@ pub(super) fn net_http_names(file: &FileSymbols) -> Vec<String> {
     package_names(file, |module| module == "net/http", "http")
 }
 
+/// The name of a type without its pointer, its package, and its type arguments.
+fn type_name(text: &str) -> &str {
+    let text = text.trim_start_matches(['*', '&']);
+    let text = text.split('[').next().unwrap_or(text);
+    text.rsplit('.').next().unwrap_or(text)
+}
+
+/// Tells if a regular expression is in the grammar that Go and Rust read in the same way:
+/// ASCII letters and digits, a backslash and an ASCII punctuation character, a dot, a class of
+/// letters, digits, and ranges, the repetitions `*`, `+`, `?`, `{m}`, `{m,}`, and `{m,n}` with
+/// numbers up to 1000 and an optional `?`, and `|`. A group, a flag, an anchor, a shorthand
+/// class, and a Unicode class are not in the grammar.
+fn common_regex(pattern: &str) -> bool {
+    if !pattern.is_ascii() {
+        return false;
+    }
+    let bytes = pattern.as_bytes();
+    let mut index = 0;
+    let mut quantifiable = false;
+    let lazy = |index: &mut usize| {
+        if bytes.get(*index) == Some(&b'?') {
+            *index += 1;
+        }
+    };
+    while index < bytes.len() {
+        match bytes[index] {
+            b'|' => {
+                quantifiable = false;
+                index += 1;
+            }
+            b'*' | b'+' | b'?' => {
+                if !quantifiable {
+                    return false;
+                }
+                index += 1;
+                lazy(&mut index);
+                quantifiable = false;
+            }
+            b'{' => {
+                let Some(close) = pattern[index..].find('}') else {
+                    return false;
+                };
+                if !quantifiable {
+                    return false;
+                }
+                let inner = &pattern[index + 1..index + close];
+                let number = |text: &str| {
+                    (!text.is_empty()
+                        && text.len() <= 4
+                        && text.bytes().all(|byte| byte.is_ascii_digit()))
+                    .then(|| text.parse::<u32>().ok())
+                    .flatten()
+                    .filter(|value| *value <= 1000)
+                };
+                let valid = match inner.split_once(',') {
+                    None => number(inner).is_some(),
+                    Some((low, "")) => number(low).is_some(),
+                    Some((low, high)) => match (number(low), number(high)) {
+                        (Some(low), Some(high)) => low <= high,
+                        _ => false,
+                    },
+                };
+                if !valid {
+                    return false;
+                }
+                index += close + 1;
+                lazy(&mut index);
+                quantifiable = false;
+            }
+            b'\\' => {
+                if !bytes.get(index + 1).is_some_and(u8::is_ascii_punctuation) {
+                    return false;
+                }
+                index += 2;
+                quantifiable = true;
+            }
+            b'[' => {
+                let Some(end) = common_class(&bytes[index..]) else {
+                    return false;
+                };
+                index += end;
+                quantifiable = true;
+            }
+            b'(' | b')' | b']' | b'}' | b'^' | b'$' => return false,
+            byte if byte.is_ascii_graphic() || byte == b' ' => {
+                index += 1;
+                quantifiable = true;
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// The length of a class `[...]` at the start of the bytes, when it has only letters, digits,
+/// underscores, ranges, and escaped punctuation.
+fn common_class(bytes: &[u8]) -> Option<usize> {
+    let mut index = 1;
+    if bytes.get(index) == Some(&b'^') {
+        index += 1;
+    }
+    let mut items = 0;
+    loop {
+        let byte = *bytes.get(index)?;
+        match byte {
+            b']' if items > 0 => return Some(index + 1),
+            b'\\' => {
+                if !bytes.get(index + 1)?.is_ascii_punctuation() {
+                    return None;
+                }
+                index += 2;
+            }
+            byte if byte.is_ascii_alphanumeric() || byte == b'_' => {
+                let high = bytes.get(index + 2).copied();
+                if bytes.get(index + 1) == Some(&b'-')
+                    && high.is_some_and(|h| h.is_ascii_alphanumeric())
+                {
+                    if high? < byte {
+                        return None;
+                    }
+                    index += 3;
+                } else {
+                    index += 1;
+                }
+            }
+            _ => return None,
+        }
+        items += 1;
+    }
+}
+
 /// Tells if a gorilla/mux template for a path has balanced braces, and each variable has a
 /// name and a pattern that is a regular expression without a capture group. The library
 /// rejects the other templates, and the route then never matches.
@@ -788,14 +919,13 @@ fn mux_template_valid(template: &str) -> bool {
                 depth -= 1;
                 if depth == 0 {
                     let inner = &template[start..index];
-                    let (name, pattern) = inner.split_once(':').unwrap_or((inner, "[^/]+"));
-                    let compiled = regex::Regex::new(&format!("^{pattern}$"));
-                    let groups = regex::Regex::new(pattern).map(|found| found.captures_len());
-                    if name.is_empty()
-                        || pattern.is_empty()
-                        || compiled.is_err()
-                        || !groups.is_ok_and(|count| count == 1)
-                    {
+                    let valid = match inner.split_once(':') {
+                        Some((name, pattern)) => {
+                            !name.is_empty() && !pattern.is_empty() && common_regex(pattern)
+                        }
+                        None => !inner.is_empty(),
+                    };
+                    if !valid {
                         return false;
                     }
                 }
@@ -941,17 +1071,14 @@ impl<'a> Context<'a> {
                         })
                     })
                     .flatten();
-                match import {
-                    Some(binding) => {
-                        let file = match &binding.target_file {
-                            ImportTarget::Resolved(file) => file.as_str(),
-                            ImportTarget::Package(files) => files.first()?.as_str(),
-                            _ => return None,
-                        };
-                        (directory_of(file), name)
-                    }
-                    None => (own, name),
-                }
+                // Another qualifier is a variable or a field. The index has no symbol for it.
+                let binding = import?;
+                let file = match &binding.target_file {
+                    ImportTarget::Resolved(file) => file.as_str(),
+                    ImportTarget::Package(files) => files.first()?.as_str(),
+                    _ => return None,
+                };
+                (directory_of(file), name)
             }
             _ => return None,
         };
@@ -1317,8 +1444,7 @@ impl CallSites {
             for (key, wrapper) in factory_keys(&context, tree.root_node()) {
                 if let Some(kind) = wrapper {
                     wrappers.insert(key.clone());
-                    let name = kind.rsplit('.').next().unwrap_or(&kind);
-                    wrapper_types.push((key.clone(), name.trim_start_matches('*').to_string()));
+                    wrapper_types.push((key.clone(), type_name(&kind).to_string()));
                 }
                 factories.insert(key);
             }
@@ -1343,7 +1469,7 @@ impl CallSites {
                     .receiver_type
                     .as_deref()
                     .or(symbol.container.as_deref())?;
-                Some(kind.trim_start_matches('*').rsplit('.').next()?.to_string())
+                Some(type_name(kind).to_string())
             })
             .collect();
         for (key, name) in &wrapper_types {
@@ -2936,10 +3062,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             };
             methods = Some(match methods {
                 None => list,
-                Some(known) => known
-                    .into_iter()
-                    .filter(|method| list.contains(method))
-                    .collect(),
+                Some(known) => {
+                    let allowed: HashSet<&String> = list.iter().collect();
+                    known
+                        .into_iter()
+                        .filter(|method| allowed.contains(method))
+                        .collect()
+                }
             });
         }
         let methods = methods.unwrap_or_else(|| vec!["ANY".to_string()]);

@@ -3693,6 +3693,120 @@ func routes() {
     }
 
     #[test]
+    fn a_gorilla_pattern_outside_the_common_regular_expression_grammar_gives_no_entry() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.HandleFunc("/a/{id:(?x)a}", list)
+	r.HandleFunc("/b/{id:a{1001}}", list)
+	r.HandleFunc("/c/{id:[0-9]+}", list)
+	r.HandleFunc("/d/{id:[a-z]{2,5}?}", list)
+	r.HandleFunc("/e/{id:\\d+}", list)
+	r.HandleFunc("/f/{id:a|b}", list)
+	r.HandleFunc("/g/{id:(a)}", list)
+	r.HandleFunc("/h/{id:a**}", list)
+	r.HandleFunc("/i/{id:.*}", list)
+	r.HandleFunc("/j/{id:[[:alpha:]]}", list)
+	r.HandleFunc("/k/{id:\\.}", list)
+	r.HandleFunc("/l/{id:[z-a]}", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux ANY /c/{id:[0-9]+} [] list",
+                "gorilla/mux ANY /d/{id:[a-z]{2,5}?} [] list",
+                "gorilla/mux ANY /f/{id:a|b} [] list",
+                "gorilla/mux ANY /i/{id:.*} [] list",
+                "gorilla/mux ANY /k/{id:\\.} [] list",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_selector_handler_needs_an_import_or_a_resolved_selector() {
+        let source = go_source(
+            &[CHI],
+            r#"func Show(w http.ResponseWriter, r *http.Request) {}
+
+func real(w http.ResponseWriter, r *http.Request) {}
+
+var box = struct {
+	Show http.HandlerFunc
+}{Show: real}
+
+func routes() {
+	r := chi.NewRouter()
+	r.Get("/x", box.Show)
+	r.Get("/y", Show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /x [] -", "chi GET /y [] Show"]
+        );
+    }
+
+    #[test]
+    fn a_generic_wrapper_type_with_a_serve_method_gives_no_entry_for_its_factory() {
+        let source = go_source(
+            &[CHI],
+            r#"type Server[T any] struct{ *chi.Mux }
+
+func (s *Server[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	http.NotFound(w, r)
+}
+
+func NewServer() *Server[int] {
+	r := chi.NewRouter()
+	r.Get("/ghost", list)
+	return &Server[int]{Mux: r}
+}
+
+type Box[T any] struct{ *chi.Mux }
+
+func NewBox() *Box[int] {
+	r := chi.NewRouter()
+	r.Get("/real", list)
+	return &Box[int]{Mux: r}
+}
+
+func serve() {
+	http.ListenAndServe(":80", NewServer())
+	http.ListenAndServe(":81", NewBox())
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /real [] list"]
+        );
+    }
+
+    #[test]
+    fn timing_two_long_method_lists_are_intersected_in_linear_time() {
+        let tokens: Vec<String> = (0..100_000)
+            .map(|index| format!("\"M{index:05}\""))
+            .collect();
+        let list = tokens.join(", ");
+        let body = format!(
+            "func routes() {{\n\tr := mux.NewRouter()\n\tr.Methods({list}).Methods({list}).Path(\"/x\").HandlerFunc(list)\n}}\n"
+        );
+        let source = go_source(&[MUX], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), 100_000);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(8),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
     fn documented_gap_a_caller_in_another_file_that_registers_on_a_factory_result_gives_no_entry() {
         let router = factory_file("NewRouter", "/x");
         let main = go_file(
