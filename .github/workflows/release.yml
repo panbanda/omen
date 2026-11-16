@@ -3,9 +3,20 @@ name: Release
 on:
   push:
     branches: [main, rust-rewrite]
+  # Builds and publishes the artifacts of a release that exists, for example
+  # after a build job failed. It does not make a release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag of the release that exists (for example omen-v5.0.0)
+        required: true
+        type: string
 
 concurrency:
-  group: release-${{ github.ref }}
+  # Each run can update the Docker `latest` tag and the Homebrew formula, so
+  # all runs share one group. A queue of one would cancel a pending release.
+  group: release
+  queue: max
   cancel-in-progress: false
 
 permissions: {}
@@ -21,12 +32,36 @@ jobs:
       pull-requests: write
 
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      release_created: ${{ steps.release.outputs.release_created || steps.existing.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name || steps.existing.outputs.tag_name }}
 
     steps:
+      # Later jobs put the tag into shell scripts, so only an exact release tag
+      # is accepted. Only the newest omen release is accepted, because the
+      # Docker `latest` tag and the Homebrew formula follow the tag.
+      - name: Check the tag of the release
+        id: existing
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! [[ "$TAG" =~ ^omen-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "The tag must have the form omen-vX.Y.Z" >&2
+            exit 1
+          fi
+          newest=$(gh release list --repo "${{ github.repository }}" --limit 100 --exclude-drafts --exclude-pre-releases --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("omen-v"))] | sort_by(.createdAt) | last | .tagName')
+          if [ "$TAG" != "$newest" ]; then
+            echo "The tag must be the newest omen release ($newest)" >&2
+            exit 1
+          fi
+          echo "release_created=true" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Release Please
         id: release
+        if: github.event_name == 'push'
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         with:
           config-file: release-please-config.json
@@ -48,7 +83,7 @@ jobs:
             os: ubuntu-24.04-arm
             archive: tar.gz
           - target: x86_64-apple-darwin
-            os: macos-14
+            os: macos-latest
             archive: tar.gz
           - target: aarch64-apple-darwin
             os: macos-latest
@@ -101,7 +136,7 @@ jobs:
   crates-io:
     name: Publish to crates.io
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    if: ${{ github.event_name == 'push' && needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     # Protected environment: keep CARGO_REGISTRY_TOKEN as an environment secret
     # with required reviewers. Switch to crates.io trusted publishing
