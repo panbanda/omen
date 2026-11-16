@@ -280,6 +280,15 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   values are not routers, and the routes of its factory give no entry, also when a call
   serves the result as the root. Omen compares the name of the type without a pointer,
   a package, and type arguments, so `Server[int]` and `Server[T]` are the type `Server`.
+  Omen follows a type alias, as in `type Alias = Server`, and a chain of aliases, to the
+  base type. An alias to a type of another package, or to a type that is not a name, gives
+  no entry when a factory uses it as a wrapper. A cycle of aliases gives no entry too.
+- A package qualifier counts only when no name hides it. The qualifiers are `http`,
+  `chi`, `mux`, `echo`, `gin`, and the aliases that the imports give. A parameter, a
+  receiver, a local variable, a range variable, or a declaration of the package with the
+  same name hides the qualifier. Then the call is not a call of the library, and omen
+  gives no entry. A parameter name is the text that the framework reads, with the
+  spaces that it has.
   A multiplexer of `net/http` is a variable that has one binding in the file, and the
   binding is a call of `http.NewServeMux()`.
 - Omen reads a string literal as Go does. An interpreted literal has the escapes `\a`,

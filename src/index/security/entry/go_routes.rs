@@ -627,6 +627,9 @@ impl<'a> Context<'a> {
         ) else {
             return false;
         };
+        if self.is_go_shadowed(operand) {
+            return false;
+        }
         let (operand, field) = (self.text(operand), self.text(field));
         let from_net_http = package_names(self.file, |module| module == "net/http", "http")
             .iter()
@@ -665,10 +668,8 @@ fn path_parameters(framework: Framework, path: &str) -> Vec<String> {
                     b'}' if depth > 0 => {
                         depth -= 1;
                         if depth == 0 {
-                            let name = path[start..index].split(':').next().unwrap_or("").trim();
-                            if !name.is_empty() {
-                                names.push(name.to_string());
-                            }
+                            let name = path[start..index].split(':').next().unwrap_or("");
+                            names.push(name.to_string());
                         }
                     }
                     b'*' if depth == 0 && framework == Framework::Chi => {
@@ -765,6 +766,79 @@ pub(super) fn servemux_parameters(path: &str) -> Vec<String> {
 /// The names that the imports of a file give to `net/http`.
 pub(super) fn net_http_names(file: &FileSymbols) -> Vec<String> {
     package_names(file, |module| module == "net/http", "http")
+}
+
+/// The type aliases of a file: the name, the name of the base type, and whether the base type
+/// is not in the repository or cannot be read as a name.
+fn collect_aliases(root: Node<'_>, source: &[u8]) -> Vec<(String, (String, bool))> {
+    let text = |node: Node<'_>| std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
+    let mut found = Vec::new();
+    let mut cursor = root.walk();
+    for declaration in root
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "type_declaration")
+    {
+        let mut inner = declaration.walk();
+        for spec in declaration.named_children(&mut inner) {
+            let is_alias = spec.kind() == "type_alias" || {
+                let mut children = spec.walk();
+                let alias = spec
+                    .children(&mut children)
+                    .any(|child| child.kind() == "=");
+                alias
+            };
+            let (Some(name), Some(target)) = (
+                spec.child_by_field_name("name"),
+                spec.child_by_field_name("type"),
+            ) else {
+                continue;
+            };
+            if !is_alias {
+                continue;
+            }
+            let target = text(target).trim_start_matches(['*', '&']);
+            let base = target.split('[').next().unwrap_or(target);
+            let readable =
+                !base.is_empty() && base.chars().all(|c| c.is_alphanumeric() || c == '_');
+            found.push((text(name).to_string(), (base.to_string(), !readable)));
+        }
+    }
+    found
+}
+
+/// The base type of a type name after the aliases, or none for a cycle or for an alias to a
+/// type that is not read as a name. The walk keeps the result of each name.
+fn resolve_alias(
+    aliases: &HashMap<String, (String, bool)>,
+    memo: &mut HashMap<String, Option<String>>,
+    name: &str,
+) -> Option<String> {
+    if let Some(known) = memo.get(name) {
+        return known.clone();
+    }
+    let mut path: Vec<String> = Vec::new();
+    let mut current = name.to_string();
+    let result = loop {
+        if let Some(known) = memo.get(&current) {
+            break known.clone();
+        }
+        match aliases.get(&current) {
+            None => break Some(current.clone()),
+            Some((_, true)) => break None,
+            Some((target, false)) => {
+                if path.contains(&current) {
+                    break None;
+                }
+                path.push(current);
+                current = target.clone();
+            }
+        }
+    };
+    memo.insert(name.to_string(), result.clone());
+    for node in path {
+        memo.insert(node, result.clone());
+    }
+    result
 }
 
 /// The name of a type without its pointer, its package, and its type arguments.
@@ -1146,6 +1220,7 @@ impl<'a> Context<'a> {
                                 let field = function.child_by_field_name("field");
                                 operand.is_some_and(|operand| {
                                     http.iter().any(|name| name == self.text(operand))
+                                        && !self.is_go_shadowed(operand)
                                 }) && field.is_some_and(|field| self.text(field) == "NewServeMux")
                             })
                 };
@@ -1328,6 +1403,44 @@ impl<'a> Context<'a> {
         before > 0 && ends[before - 1] > node.start_byte()
     }
 
+    /// Tells if a local binding or a declaration of the package has the name of this node. The
+    /// package name of an import is then not the name of the package at the node.
+    pub(super) fn is_go_shadowed(&self, node: Node<'_>) -> bool {
+        if self.is_go_local(node) {
+            return true;
+        }
+        self.go_declared
+            .get_or_init(|| {
+                let mut names = HashSet::new();
+                let root = self.parsed.root_node();
+                let mut cursor = root.walk();
+                for declaration in root.named_children(&mut cursor) {
+                    if declaration.kind() == "function_declaration" {
+                        if let Some(name) = declaration.child_by_field_name("name") {
+                            names.insert(self.text(name).to_string());
+                        }
+                        continue;
+                    }
+                    let mut pending = vec![declaration];
+                    while let Some(current) = pending.pop() {
+                        if matches!(
+                            current.kind(),
+                            "type_spec" | "type_alias" | "const_spec" | "var_spec"
+                        ) {
+                            let mut inner = current.walk();
+                            for name in current.children_by_field_name("name", &mut inner) {
+                                names.insert(self.text(name).to_string());
+                            }
+                        }
+                        let mut inner = current.walk();
+                        pending.extend(current.named_children(&mut inner));
+                    }
+                }
+                names
+            })
+            .contains(self.text(node))
+    }
+
     /// The end of the scope of a declaration: its block, its `if`, `for`, or `switch`
     /// statement, or its case clause.
     fn scope_end(node: Node<'_>) -> Option<usize> {
@@ -1432,7 +1545,8 @@ impl CallSites {
     pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> Self {
         let mut factories: HashSet<String> = HashSet::new();
         let mut wrappers: HashSet<String> = HashSet::new();
-        let mut wrapper_types: Vec<(String, String)> = Vec::new();
+        let mut raw_wrapper_types: Vec<(String, String)> = Vec::new();
+        let mut aliases: HashMap<String, (String, bool)> = HashMap::new();
         for (position, file) in files.iter().enumerate() {
             if file.language != Language::Go {
                 continue;
@@ -1441,15 +1555,26 @@ impl CallSites {
                 continue;
             };
             let context = Context::new(&tree, file, files, trees, &[]);
+            aliases.extend(collect_aliases(tree.root_node(), &tree.source));
             for (key, wrapper) in factory_keys(&context, tree.root_node()) {
                 if let Some(kind) = wrapper {
                     wrappers.insert(key.clone());
-                    wrapper_types.push((key.clone(), type_name(&kind).to_string()));
+                    raw_wrapper_types.push((key.clone(), type_name(&kind).to_string()));
                 }
                 factories.insert(key);
             }
         }
         let mut blocked = HashSet::new();
+        let mut memo: HashMap<String, Option<String>> = HashMap::new();
+        let mut wrapper_types: Vec<(String, String)> = Vec::new();
+        for (key, name) in raw_wrapper_types {
+            match resolve_alias(&aliases, &mut memo, &name) {
+                Some(base) => wrapper_types.push((key, base)),
+                None => {
+                    blocked.insert(key);
+                }
+            }
+        }
         if factories.is_empty() {
             return Self { blocked };
         }
@@ -1471,6 +1596,9 @@ impl CallSites {
                     .or(symbol.container.as_deref())?;
                 Some(type_name(kind).to_string())
             })
+            .collect::<Vec<String>>()
+            .into_iter()
+            .filter_map(|name| resolve_alias(&aliases, &mut memo, &name))
             .collect();
         for (key, name) in &wrapper_types {
             if hiding.contains(name) {
@@ -1518,7 +1646,8 @@ impl CallSites {
             if sites.is_empty() {
                 continue;
             }
-            let index = FileUses::new(tree.root_node(), &tree.source, file);
+            let context = Context::new(&tree, file, files, trees, &[]);
+            let index = FileUses::new(tree.root_node(), &tree.source, file, &context);
             for (reference, keys) in sites {
                 let strict = keys.iter().any(|key| wrappers.contains(*key));
                 if index.is_blocked(
@@ -1585,9 +1714,11 @@ impl CallSites {
 }
 
 /// The uses of the variables of one file that the classification of a call site needs.
-struct FileUses<'t> {
+struct FileUses<'t, 'c> {
     root: Node<'t>,
     source: &'t [u8],
+    /// The context of the file. It tells if a local name hides a package name.
+    context: &'c Context<'t>,
     http: Vec<String>,
     /// The start of each use of a name that is not a use as a router, by name, in order.
     bad: HashMap<String, Vec<usize>>,
@@ -1596,11 +1727,12 @@ struct FileUses<'t> {
     bad_strict: HashMap<String, Vec<usize>>,
 }
 
-impl<'t> FileUses<'t> {
-    fn new(root: Node<'t>, source: &'t [u8], file: &FileSymbols) -> Self {
+impl<'t, 'c> FileUses<'t, 'c> {
+    fn new(root: Node<'t>, source: &'t [u8], file: &FileSymbols, context: &'c Context<'t>) -> Self {
         let mut uses = Self {
             root,
             source,
+            context,
             http: package_names(file, |module| module == "net/http", "http"),
             bad: HashMap::new(),
             bad_strict: HashMap::new(),
@@ -1650,6 +1782,7 @@ impl<'t> FileUses<'t> {
             self.text(field),
             "ListenAndServe" | "ListenAndServeTLS" | "Serve" | "ServeTLS"
         ) && self.http.iter().any(|name| name == self.text(operand))
+            && !self.context.is_go_shadowed(operand)
     }
 
     /// Tells if a selector is a call of a method that registers a route, or that serves the
@@ -1667,13 +1800,21 @@ impl<'t> FileUses<'t> {
 
     /// Tells if a literal is an `http.Server`, which serves its handler as the root.
     fn is_server_literal(&self, literal: Node<'t>) -> bool {
-        literal
+        let Some(kind) = literal
             .child_by_field_name("type")
-            .map(|kind| self.text(kind))
-            .and_then(|kind| kind.split_once('.'))
-            .is_some_and(|(package, name)| {
-                name == "Server" && self.http.iter().any(|known| known == package)
-            })
+            .filter(|kind| kind.kind() == "qualified_type")
+        else {
+            return false;
+        };
+        let (Some(package), Some(name)) = (
+            kind.child_by_field_name("package"),
+            kind.child_by_field_name("name"),
+        ) else {
+            return false;
+        };
+        self.text(name) == "Server"
+            && self.http.iter().any(|known| known == self.text(package))
+            && !self.context.is_go_shadowed(package)
     }
 
     /// Tells if a use of a name is not a use as a router that the walk understands. A router
@@ -2195,13 +2336,15 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         matches!(
             self.text(field),
             "ListenAndServe" | "ListenAndServeTLS" | "Serve" | "ServeTLS"
-        ) && self.is_net_http(self.text(operand))
+        ) && self.is_net_http(operand)
     }
 
-    fn is_net_http(&self, package: &str) -> bool {
+    /// Tells if the node names the package `net/http`, and no local name hides it.
+    fn is_net_http(&self, package: Node<'t>) -> bool {
         package_names(self.context.file, |module| module == "net/http", "http")
             .iter()
-            .any(|name| name == package)
+            .any(|name| name == self.text(package))
+            && !self.context.is_go_shadowed(package)
     }
 
     /// The values of a literal escape, unless the literal is an `http.Server`. A server
@@ -2209,9 +2352,16 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     fn literal_escapes(&mut self, literal: Node<'t>) {
         let is_server = literal
             .child_by_field_name("type")
-            .map(|kind| self.text(kind))
-            .and_then(|kind| kind.split_once('.'))
-            .is_some_and(|(package, name)| name == "Server" && self.is_net_http(package));
+            .filter(|kind| kind.kind() == "qualified_type")
+            .and_then(|kind| {
+                Some((
+                    kind.child_by_field_name("package")?,
+                    kind.child_by_field_name("name")?,
+                ))
+            })
+            .is_some_and(|(package, name)| {
+                self.text(name) == "Server" && self.is_net_http(package)
+            });
         if is_server {
             return;
         }
@@ -2397,7 +2547,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         if kind.kind() != "qualified_type" {
             return None;
         }
-        let package = self.text(kind.child_by_field_name("package")?);
+        let package = kind.child_by_field_name("package")?;
         let name = self.text(kind.child_by_field_name("name")?);
         let framework = self.framework_of(package)?;
         if !framework.router_types().contains(&name) {
@@ -2412,13 +2562,15 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         Some(router)
     }
 
-    fn framework_of(&self, package: &str) -> Option<Framework> {
-        if self.lookup(package).is_some() {
+    /// The framework that the node names as a package, when no local name hides it.
+    fn framework_of(&self, package: Node<'t>) -> Option<Framework> {
+        let package_text = self.text(package);
+        if self.lookup(package_text).is_some() || self.context.is_go_shadowed(package) {
             return None;
         }
         self.packages
             .iter()
-            .find(|(name, _)| name == package)
+            .find(|(name, _)| name == package_text)
             .map(|(_, framework)| *framework)
     }
 
@@ -2653,7 +2805,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let name = self.text(function.child_by_field_name("field")?);
         let operand = function.child_by_field_name("operand")?;
         if operand.kind() == "identifier" {
-            if let Some(framework) = self.framework_of(self.text(operand)) {
+            if let Some(framework) = self.framework_of(operand) {
                 return self.construct(framework, name);
             }
         }

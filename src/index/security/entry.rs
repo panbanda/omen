@@ -491,6 +491,8 @@ struct Context<'a> {
     go_locals: std::sync::OnceLock<GoLocals>,
     /// The names of the variables that hold a `net/http` multiplexer, in a Go file.
     go_servemuxes: std::sync::OnceLock<std::collections::HashSet<String>>,
+    /// The names that the package of a Go file declares at the top level.
+    go_declared: std::sync::OnceLock<std::collections::HashSet<String>>,
 }
 
 struct Draft {
@@ -549,6 +551,7 @@ impl<'a> Context<'a> {
             callables_here,
             go_locals: std::sync::OnceLock::new(),
             go_servemuxes: std::sync::OnceLock::new(),
+            go_declared: std::sync::OnceLock::new(),
         }
     }
 
@@ -1617,7 +1620,7 @@ impl<'a> Context<'a> {
         let text = self.text(receiver);
         let names = go_routes::net_http_names(self.file);
         if names.iter().any(|name| name == text) {
-            return !self.is_go_local(receiver);
+            return !self.is_go_shadowed(receiver);
         }
         receiver.kind() == "identifier" && self.is_go_servemux(text)
     }
@@ -3803,6 +3806,129 @@ func serve() {
             started.elapsed() < std::time::Duration::from_secs(8),
             "took {:?}",
             started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_parameter_name_is_kept_as_the_framework_reads_it() {
+        let source = go_source(
+            &[MUX, CHI],
+            r#"func routes() {
+	m := mux.NewRouter()
+	m.HandleFunc("/{ user }", list)
+	c := chi.NewRouter()
+	c.Get("/{ id :[0-9]+}", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_parameters(&[("main.go", &source)]),
+            [
+                "ANY /{ user } [\" user \"]",
+                "GET /{ id :[0-9]+} [\" id \"]"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_local_name_that_hides_a_package_qualifier_gives_no_entry() {
+        let source = go_source(
+            &[CHI],
+            r#"type fakeHTTP struct{}
+
+type fakeMux struct{}
+
+func (fakeHTTP) NewServeMux() *fakeMux { return &fakeMux{} }
+
+func (fakeHTTP) HandlerFunc(any) http.HandlerFunc { return list }
+
+func (*fakeMux) HandleFunc(string, http.HandlerFunc) {}
+
+func wrong(int) {}
+
+func hidden() {
+	http := fakeHTTP{}
+	m := http.NewServeMux()
+	m.HandleFunc("/ghost", list)
+	http.HandleFunc("/also-ghost", list)
+	r := chi.NewRouter()
+	r.Get("/x", http.HandlerFunc(wrong))
+}
+
+func ranged() {
+	for _, chi := range []fakeHTTP{{}} {
+		r := chi.NewRouter()
+		r.Get("/ghost", list)
+	}
+}
+
+func visible() {
+	s := http.NewServeMux()
+	s.HandleFunc("/real", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /x [] -", "net/http ANY /real [] list"]
+        );
+    }
+
+    #[test]
+    fn a_type_alias_is_resolved_before_the_wrapper_type_is_compared() {
+        let source = go_source(
+            &[CHI, "\"example.com/other\""],
+            r#"type Server struct{ *chi.Mux }
+
+func (*Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	http.NotFound(w, r)
+}
+
+type Alias = Server
+
+type Chain = Alias
+
+type Plain struct{ *chi.Mux }
+
+type Same = Plain
+
+type Far = other.Thing
+
+func NewAlias() *Alias {
+	r := chi.NewRouter()
+	r.Get("/ghost-a", list)
+	return &Alias{Mux: r}
+}
+
+func NewChain() *Chain {
+	r := chi.NewRouter()
+	r.Get("/ghost-b", list)
+	return &Chain{Mux: r}
+}
+
+func NewSame() *Same {
+	r := chi.NewRouter()
+	r.Get("/real", list)
+	return &Same{Mux: r}
+}
+
+func NewFar() *Far {
+	r := chi.NewRouter()
+	r.Get("/ghost-c", list)
+	return &Far{Mux: r}
+}
+
+func serve() {
+	http.ListenAndServe(":80", NewAlias())
+	http.ListenAndServe(":81", NewChain())
+	http.ListenAndServe(":82", NewSame())
+	http.ListenAndServe(":83", NewFar())
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /real [] list"]
         );
     }
 
