@@ -289,3 +289,17 @@ fn timing_constructor_calls_in_large_class_are_linear() {
         assert!(elapsed.as_secs() < 30, "{file}: {elapsed:?}");
     }
 }
+
+#[test]
+fn test_csharp_nested_blocks_are_indexed() {
+    let index = build("deep.cs", &nested_csharp(2_000));
+    assert!(!index.files.is_empty());
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_csharp_nested_blocks_are_linear() {
+    let elapsed = timed_build("deep.cs", &nested_csharp(200_000));
+    eprintln!("deep.cs: {elapsed:?}");
+    assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+}
