@@ -326,9 +326,11 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   omen cannot read, such as a variable path, hides all routes of its tree and of the
   routers mounted on it. echo replaces a route that has the same method and path, so an
   echo registration whose path omen cannot read hides all routes of its echo router. An
-  echo route with methods that omen cannot read replaces the routes of its path for all
-  methods. gin and `net/http` panic on a second registration, and gin lets a static child
-  and a parameter child coexist, so an unread registration hides nothing there.- A name that the package declares hides a predeclared name or a qualifier. The package is
+  echo route with a method that omen cannot read replaces the earlier routes of its path
+  for every method, a custom method too, because echo stores each method separately.
+  gin and `net/http` panic on a second registration, and gin lets a static child and a
+  parameter child coexist, so an unread registration hides nothing there.
+- A name that the package declares hides a predeclared name or a qualifier. The package is
   the files of one directory that have the same package clause, so a declaration in
   another file of the package counts.
 - A package qualifier counts only when no name hides it. The qualifiers are `http`,

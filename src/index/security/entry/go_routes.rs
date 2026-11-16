@@ -3645,18 +3645,18 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             name,
             "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS" | "CONNECT" | "TRACE"
         );
-        // Methods that omen cannot read can be any method, so the route replaces the routes of
-        // its path for each method. Omen omits its entry.
+        // A method that omen cannot read can be any method, a custom method too, so the route
+        // replaces the routes of its path for each method. Omen omits its entry.
         let (methods, rest, unread): (Vec<String>, &[Node<'t>], bool) = match (name, arguments) {
             (_, [_, ..]) if verb => (vec![name.to_string()], arguments, false),
             ("Any", [_, ..]) => (ECHO_ANY.map(String::from).to_vec(), arguments, false),
             ("Match", [methods, rest @ ..]) => match self.string_list(*methods) {
                 Some(methods) => (methods, rest, false),
-                None => (ECHO_ANY.map(String::from).to_vec(), rest, true),
+                None => (vec![UNREAD_METHOD.to_string()], rest, true),
             },
             ("Add", [method, rest @ ..]) => match self.string_argument(*method) {
                 Some(method) => (vec![method], rest, false),
-                None => (ECHO_ANY.map(String::from).to_vec(), rest, true),
+                None => (vec![UNREAD_METHOD.to_string()], rest, true),
             },
             _ => return,
         };
@@ -4081,6 +4081,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let mut kept = vec![true; drafts.len()];
         let mut owners: HashMap<(usize, String), HashMap<String, usize>> = HashMap::new();
         let mut last_echo: HashMap<(usize, String, String), usize> = HashMap::new();
+        let mut echo_seen: HashMap<(usize, String), Vec<usize>> = HashMap::new();
         for (index, draft) in drafts.iter().enumerate() {
             let Some((_, duplicate)) = draft else {
                 continue;
@@ -4099,6 +4100,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     }
                 }
                 Duplicate::Echo(root, shape) => {
+                    let seen = echo_seen.entry((*root, shape.clone())).or_default();
+                    if method == UNREAD_METHOD {
+                        for earlier in seen.drain(..) {
+                            kept[earlier] = false;
+                        }
+                    }
+                    seen.push(index);
                     if let Some(earlier) = last_echo.insert((*root, method, shape.clone()), index) {
                         kept[earlier] = false;
                     }
@@ -4123,6 +4131,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         kept
     }
 }
+
+/// The method of a registration whose method omen cannot read. It stands for each method.
+const UNREAD_METHOD: &str = "*";
 
 /// How a record can replace or hide another record.
 enum Duplicate {

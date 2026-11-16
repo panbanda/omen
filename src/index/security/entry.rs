@@ -4546,6 +4546,34 @@ func routes() {
     }
 
     #[test]
+    fn an_echo_registration_with_an_unread_method_replaces_the_routes_of_its_path_for_every_method()
+    {
+        let source = go_source(
+            &[ECHO],
+            r#"func routes(method string, methods []string) {
+	e := echo.New()
+	e.Add("FOO", "/x", list)
+	e.Add(method, "/x", show)
+	e.Add("GET", "/y", list)
+	e.Match(methods, "/y", show)
+	e.Add("POST", "/z", list)
+	e.Add(method, "/w", show)
+	e.Add("BAR", "/w", list)
+	e.Add("GET", "/other", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "echo POST /z [] list",
+                "echo BAR /w [] list",
+                "echo GET /other [] list"
+            ]
+        );
+    }
+
+    #[test]
     fn documented_gap_a_caller_in_another_file_that_registers_on_a_factory_result_gives_no_entry() {
         let router = factory_file("NewRouter", "/x");
         let main = go_file(
