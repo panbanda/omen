@@ -310,6 +310,14 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   common methods of the lists. A route without `Methods` has the method `ANY`. `Use`
   applies to each route of its router and of the sub-routers, as the library does.
   A `Methods` argument that is not a string literal gives no entry.
+- A function is a factory if any return statement can return a router that the function
+  made. A bare `return` gives the value of each named result. Each return statement
+  counts, so the walk takes the union of the routers.
+- Omen does not recognise these forms. They are coverage gaps, and they give no entry:
+  - a route that a caller registers on the result of a factory of another file
+  - an echo group that `Host` makes
+  - a gorilla/mux route that `NewRoute()` builds
+  - the gin methods `Static`, `StaticFile`, `StaticFileFS`, and `StaticFS`
 - Deadcode treats an entry point and the entry points of `[[security.entry_points]]`
   as alive, with their callees.
 - Deadcode reads the path in a Rust `#[serde(...)]` string through the module tree of

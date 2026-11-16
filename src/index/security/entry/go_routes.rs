@@ -27,6 +27,11 @@
 //! no proof: the result of a function without a summary, a package-level router that a
 //! function assigns, and a router that a function receives as a parameter. Thus the
 //! routes on these values give no entry.
+//!
+//! The walk does not recognise these forms, so they give no entry. They are coverage gaps.
+//! The first is a route that a caller registers on the result of a factory of another file.
+//! The others are an echo group that `Host` makes, a gorilla/mux route that `NewRoute()`
+//! builds, and the gin methods `Static`, `StaticFile`, `StaticFileFS`, and `StaticFS`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -388,7 +393,13 @@ struct Lineage {
 
 struct Frame {
     function: bool,
-    returned: Option<usize>,
+    /// The routers that a return statement can return. Each return statement counts.
+    returned: Vec<usize>,
+    /// The return statements, and the return statements that have a router.
+    returns: usize,
+    router_returns: usize,
+    /// The names of the named results. A bare return gives their values.
+    results: Vec<String>,
     owner: usize,
     pure: bool,
     /// The routers that the function body made.
@@ -1182,12 +1193,16 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let owner = self.owners;
         self.frames.push(Frame {
             function: true,
-            returned: None,
+            returned: Vec::new(),
+            returns: 0,
+            router_returns: 0,
+            results: Vec::new(),
             owner,
             pure: true,
             created: Vec::new(),
         });
         self.bind_parameters(node.child_by_field_name("parameters"), None);
+        self.bind_results(node.child_by_field_name("result"));
         if let Some(body) = node.child_by_field_name("body") {
             self.visit(body);
         }
@@ -1204,14 +1219,29 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let key = node
             .child_by_field_name("name")
             .and_then(|name| self.context.symbol_at(name));
-        let summary = frame
-            .returned
+        let mut returned = frame.returned.clone();
+        returned.sort_unstable();
+        returned.dedup();
+        let only_router = match returned.as_slice() {
+            [router] if frame.returns == frame.router_returns => Some(*router),
+            _ => None,
+        };
+        let summary = only_router
             .filter(|_| frame.pure && declared.is_some_and(|name| !self.cyclic.contains(name)))
             .and_then(|router| self.summarize(router, owner));
-        let comp = frame
-            .returned
+        let made: Vec<usize> = returned
+            .into_iter()
             .filter(|router| self.made_by(*router, owner))
-            .map(|router| self.component(router, &frame.created));
+            .collect();
+        let comp = (!made.is_empty()).then(|| {
+            let mut all: Vec<usize> = made
+                .iter()
+                .flat_map(|router| self.component(*router, &frame.created))
+                .collect();
+            all.sort_unstable();
+            all.dedup();
+            all
+        });
         let id = declared.map(str::to_string).or_else(|| key.clone());
         if let (Some(id), Some(comp)) = (id, comp) {
             let needs_a_summary = declared.is_some()
@@ -1432,7 +1462,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let owner = self.current_owner();
         self.frames.push(Frame {
             function: false,
-            returned: None,
+            returned: Vec::new(),
+            returns: 0,
+            router_returns: 0,
+            results: Vec::new(),
             owner,
             pure: true,
             created: Vec::new(),
@@ -1631,18 +1664,52 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn return_statement(&mut self, node: Node<'t>) {
-        let Some(list) = node.named_child(0) else {
-            return;
-        };
-        let values = Self::named_children(list);
-        let [value] = values.as_slice() else {
-            return;
-        };
-        self.escape(*value);
-        let router = self.eval(*value);
-        let router = router.or_else(|| self.wrapped_router(*value));
+        let values = node
+            .named_child(0)
+            .map(Self::named_children)
+            .unwrap_or_default();
+        let mut routers = Vec::new();
+        if values.is_empty() {
+            let results = self
+                .frames
+                .last()
+                .map(|frame| frame.results.clone())
+                .unwrap_or_default();
+            for name in results {
+                if let Some(Some(router)) = self.lookup(&name) {
+                    routers.push(router);
+                }
+            }
+        }
+        for value in values {
+            self.escape(value);
+            let router = self.eval(value);
+            routers.extend(router.or_else(|| self.wrapped_router(value)));
+        }
         if let Some(frame) = self.frames.last_mut().filter(|frame| frame.function) {
-            frame.returned = frame.returned.or(router);
+            frame.returns += 1;
+            frame.router_returns += usize::from(!routers.is_empty());
+            frame.returned.extend(routers);
+        }
+    }
+
+    /// Binds the names of the named results of a function. A bare return gives their values.
+    fn bind_results(&mut self, result: Option<Node<'t>>) {
+        let Some(result) = result.filter(|result| result.kind() == "parameter_list") else {
+            return;
+        };
+        let mut names = Vec::new();
+        for declaration in Self::named_children(result) {
+            let mut cursor = declaration.walk();
+            for name in declaration.children_by_field_name("name", &mut cursor) {
+                names.push(self.text(name).to_string());
+            }
+        }
+        for name in &names {
+            self.bind(name, None, true);
+        }
+        if let Some(frame) = self.frames.last_mut() {
+            frame.results = names;
         }
     }
 

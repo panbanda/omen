@@ -155,12 +155,40 @@ pub trait TreeSource: Sync {
     fn shared(&self) -> &EntryShared;
 }
 
+/// Tells if a symbol is a function, a method, or a constructor.
+fn is_callable_kind(symbol: &Symbol) -> bool {
+    matches!(
+        symbol.kind,
+        SymbolKind::Function | SymbolKind::Method | SymbolKind::Constructor
+    )
+}
+
+/// The position of each function, method, and constructor of the files, by name.
+fn callables_by_name(
+    files: &[FileSymbols],
+) -> std::collections::HashMap<String, Vec<(usize, usize)>> {
+    let mut names: std::collections::HashMap<String, Vec<(usize, usize)>> =
+        std::collections::HashMap::new();
+    for (file, symbols) in files.iter().enumerate() {
+        for (position, symbol) in symbols.symbols.iter().enumerate() {
+            if is_callable_kind(symbol) {
+                names
+                    .entry(symbol.name.clone())
+                    .or_default()
+                    .push((file, position));
+            }
+        }
+    }
+    names
+}
+
 /// The data that one analysis builds one time, and that the search for entry points of each file
 /// uses.
 #[derive(Default)]
 pub struct EntryShared {
     rails: std::sync::OnceLock<rails::RailsShared>,
     go_call_sites: std::sync::OnceLock<go_routes::CallSites>,
+    callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
 }
 
 /// The syntax trees that the entry point rules ask for in other files. The source
@@ -452,6 +480,8 @@ struct Context<'a> {
         std::cell::RefCell<std::collections::HashMap<usize, Option<std::rc::Rc<Vec<usize>>>>>,
     /// The position of the first symbol of the file for each start of a name.
     symbol_starts: std::collections::HashMap<usize, usize>,
+    /// The positions of the functions, the methods, and the constructors of the file, by name.
+    callables_here: std::collections::HashMap<String, Vec<usize>>,
 }
 
 struct Draft {
@@ -480,6 +510,16 @@ impl<'a> Context<'a> {
         } else {
             Vec::new()
         };
+        let mut callables_here: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (position, symbol) in file.symbols.iter().enumerate() {
+            if is_callable_kind(symbol) {
+                callables_here
+                    .entry(symbol.name.clone())
+                    .or_default()
+                    .push(position);
+            }
+        }
         let mut symbol_starts = std::collections::HashMap::new();
         for (position, symbol) in file.symbols.iter().enumerate() {
             symbol_starts
@@ -497,6 +537,7 @@ impl<'a> Context<'a> {
             rails_scopes: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
             symbol_starts,
+            callables_here,
         }
     }
 
@@ -615,24 +656,38 @@ impl<'a> Context<'a> {
 
     /// The one function or method with the name. A definition in the file wins over a definition in another file.
     fn symbol_named(&self, name: &str, container: Option<&str>) -> Option<String> {
-        let matching = |file: &'a FileSymbols| -> Vec<&'a Symbol> {
-            file.symbols
-                .iter()
-                .filter(|symbol| {
-                    matches!(
-                        symbol.kind,
-                        SymbolKind::Function | SymbolKind::Method | SymbolKind::Constructor
-                    ) && symbol.name == name
-                        && container
-                            .is_none_or(|wanted| symbol.container.as_deref() == Some(wanted))
-                })
-                .collect()
+        let fits = |symbol: &Symbol| {
+            container.is_none_or(|wanted| symbol.container.as_deref() == Some(wanted))
         };
-        let here = matching(self.file);
+        let here: Vec<&Symbol> = self
+            .callables_here
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(|position| &self.file.symbols[*position])
+            .filter(|symbol| fits(symbol))
+            .collect();
         if here.len() == 1 {
             return Some(here[0].key.to_string());
         }
-        let everywhere: Vec<&Symbol> = self.all.iter().flat_map(matching).collect();
+        let everywhere: Vec<&Symbol> = match self.all_parsed.shared() {
+            Some(shared) => shared
+                .callables
+                .get_or_init(|| callables_by_name(self.all))
+                .get(name)
+                .into_iter()
+                .flatten()
+                .map(|(file, position)| &self.all[*file].symbols[*position])
+                .filter(|symbol| fits(symbol))
+                .collect(),
+            None => callables_by_name(self.all)
+                .get(name)
+                .into_iter()
+                .flatten()
+                .map(|(file, position)| &self.all[*file].symbols[*position])
+                .filter(|symbol| fits(symbol))
+                .collect(),
+        };
         (everywhere.len() == 1).then(|| everywhere[0].key.to_string())
     }
 
@@ -2919,9 +2974,63 @@ func routes() {
             Vec::<String>::new()
         );
     }
+    #[test]
+    fn a_named_result_with_a_bare_return_makes_a_factory() {
+        let router = go_source(
+            &[CHI],
+            "func NewRouter() (r *chi.Mux) {\n\tr = chi.NewRouter()\n\tr.Get(\"/x\", list)\n\treturn\n}\n",
+        );
+        let main = go_file(
+            &[CHI],
+            "func serve() {\n\troot := chi.NewRouter()\n\troot.Mount(\"/api\", NewRouter())\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[("a_main.go", &main), ("b_router.go", &router)]),
+            Vec::<String>::new()
+        );
+    }
 
     #[test]
-    fn a_call_in_another_file_that_serves_a_factory_as_the_root_keeps_its_routes() {
+    fn each_return_path_can_return_a_router_that_the_function_made() {
+        let router = go_source(
+            &[CHI],
+            "func NewRouter(first bool) (*chi.Mux, error) {\n\ta := chi.NewRouter()\n\ta.Get(\"/a\", list)\n\tif first {\n\t\treturn a, nil\n\t}\n\tb := chi.NewRouter()\n\tb.Get(\"/b\", list)\n\treturn b, nil\n}\n",
+        );
+        let main = go_file(
+            &[CHI],
+            "func serve() {\n\troot := chi.NewRouter()\n\tr, _ := NewRouter(false)\n\troot.Mount(\"/api\", r)\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[("a_main.go", &main), ("b_router.go", &router)]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn timing_ten_thousand_handlers_and_registrations_are_read_in_linear_time() {
+        let mut body = String::new();
+        for index in 0..10_000 {
+            body.push_str(&format!("func h{index}(c *gin.Context) {{}}\n\n"));
+        }
+        body.push_str("func routes() {\n\tr := gin.New()\n");
+        for index in 0..10_000 {
+            body.push_str(&format!("\tr.GET(\"/{index}\", h{index})\n"));
+        }
+        body.push_str("}\n");
+        let source = go_source(&[GIN], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), 10_000);
+        assert!(found.iter().all(|entry| entry.symbol.is_some()));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn documented_gap_a_caller_in_another_file_that_registers_on_a_factory_result_gives_no_entry() {
         let router = factory_file("NewRouter", "/x");
         let main = go_file(
             &["\"net/http\"", CHI],
