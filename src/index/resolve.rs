@@ -424,16 +424,11 @@ impl<'a> Resolver<'a> {
 
     /// The definitions that are not in a type or a function.
     fn top_level(&self, name: &str, files: &[usize]) -> Vec<Id> {
-        let mut found = Vec::new();
-        for &file in files {
-            for (position, symbol) in self.files[file].symbols.iter().enumerate() {
-                let facts = &self.files[file].link_facts[position];
-                if symbol.name == name && symbol.container.is_none() && facts.parent.is_none() {
-                    found.push((file, position));
-                }
-            }
-        }
-        found
+        files
+            .iter()
+            .flat_map(|&file| self.named_in(name, file))
+            .filter(|id| self.symbol(*id).container.is_none() && self.facts(*id).parent.is_none())
+            .collect()
     }
 
     /// The top-level definition `name` of a file, or the definition that the
