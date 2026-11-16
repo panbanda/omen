@@ -3623,7 +3623,9 @@ mod tests {
         let lower = "module Api\n  class UsersController\n    before_action :lower\n    def show; end\n  end\nend\n";
         let reassigned = "ActiveSupport::Inflector.inflections do |inflect|\n  inflect = Fake.new\n  inflect.acronym \"API\"\nend\n";
         let shadowed = "ActiveSupport::Inflector.inflections do |inflect|\n  [1].each do |inflect|\n    inflect.acronym \"API\"\n  end\nend\n";
-        for source in [reassigned, shadowed] {
+        let pattern = "ActiveSupport::Inflector.inflections do |inflect|\n  case Fake.new\n  in inflect\n  end\n  inflect.acronym \"API\"\nend\n";
+        let argument = "ActiveSupport::Inflector.inflections do |inflect|\n  helper(inflect)\n  inflect.acronym \"API\"\nend\n";
+        for source in [reassigned, shadowed, pattern, argument] {
             let found = rails_routes(
                 routes,
                 &[
@@ -3738,6 +3740,45 @@ mod tests {
     #[ignore = "timing: run in release"]
     fn timing_a_chain_of_never_callbacks_resolves_in_linear_time() {
         let elapsed = a_chain_of_never_callbacks_resolves_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    fn a_chain_of_show_callbacks_resolves_in_linear_time_at(depth: usize) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut classes = String::new();
+        for number in (0..depth).rev() {
+            routes.push_str(&format!("  get \"/r{number}\", to: \"c{number}#show\"\n"));
+        }
+        for number in 0..depth {
+            let parent = if number == 0 {
+                String::new()
+            } else {
+                format!(" < C{}Controller", number - 1)
+            };
+            classes.push_str(&format!(
+                "class C{number}Controller{parent}\n  before_action :auth, only: :show\n  def show; end\nend\n"
+            ));
+        }
+        routes.push_str("end\n");
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), depth);
+        assert!(found.iter().all(|entry| entry.guards == ["auth"]));
+        elapsed
+    }
+
+    #[test]
+    fn a_chain_of_show_callbacks_gives_one_guard_to_each_route() {
+        a_chain_of_show_callbacks_resolves_in_linear_time_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_chain_of_show_callbacks_resolves_in_linear_time() {
+        let elapsed = a_chain_of_show_callbacks_resolves_in_linear_time_at(10_000);
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 

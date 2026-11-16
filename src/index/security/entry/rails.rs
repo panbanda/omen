@@ -2068,13 +2068,14 @@ struct Program {
     /// The number of callbacks in the layers of the superclasses.
     offset: usize,
     callbacks: Vec<Callback>,
-    by_action: HashMap<String, Vec<usize>>,
     by_name: HashMap<String, Vec<usize>>,
     /// The actions that a list of a callback of this layer or of a superclass names.
     listed: Arc<HashSet<String>>,
     /// A callback of this layer or of a superclass is in a place that omen cannot read.
     opaque: bool,
     default: std::sync::OnceLock<Arc<DefaultGuards>>,
+    /// The guards of the actions that a list names, for this layer, by action.
+    memo: Mutex<HashMap<String, Arc<Vec<String>>>>,
 }
 
 impl Program {
@@ -2110,17 +2111,12 @@ impl Program {
             parent,
             offset,
             callbacks,
-            by_action,
             by_name,
             listed,
             opaque,
             default: std::sync::OnceLock::new(),
+            memo: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// This layer, then the layers of the superclasses.
-    fn layers(&self) -> impl Iterator<Item = &Program> {
-        std::iter::successors(Some(self), |layer| layer.parent.as_deref())
     }
 
     fn decide(&self, name: &str, action: &str) -> Decision {
@@ -2142,16 +2138,6 @@ impl Program {
             }
         }
         Decision::Undecided
-    }
-
-    /// The slot of the guard with the name, or `None` when the action has no such guard.
-    fn slot_of(&self, name: &str, action: &str) -> Option<Slot> {
-        for layer in self.layers() {
-            if let Decision::Decided(slot) = layer.decide(name, action) {
-                return slot;
-            }
-        }
-        None
     }
 
     /// The default guards. The search goes up to the nearest layer that has them, and it applies
@@ -2226,32 +2212,61 @@ impl Program {
         if self.opaque {
             return Vec::new();
         }
-        let default = self.default_guards();
         if !self.listed.contains(action) {
-            return default.names.clone();
+            return self.default_guards().names.clone();
         }
-        let mut affected: HashSet<&str> = HashSet::new();
-        for layer in self.layers() {
-            for index in layer.by_action.get(action).into_iter().flatten() {
-                affected.extend(layer.callbacks[*index].names.iter().map(String::as_str));
+        self.listed_guards(action).as_ref().clone()
+    }
+
+    /// The guards of an action that a list of a callback names. The result for a layer comes from
+    /// the result of the layer above it, and the program keeps the result for each layer. A
+    /// callback removes the guards with its names, and it adds them when it applies, at the back
+    /// or, with `prepend`, at the front.
+    fn listed_guards(&self, action: &str) -> Arc<Vec<String>> {
+        if let Some(found) = self.memo.lock().get(action) {
+            return Arc::clone(found);
+        }
+        let mut pending = vec![self];
+        let mut current: Arc<Vec<String>> = Arc::new(Vec::new());
+        let mut layer = self.parent.as_deref();
+        while let Some(above) = layer {
+            if let Some(found) = above.memo.lock().get(action) {
+                current = Arc::clone(found);
+                break;
             }
+            pending.push(above);
+            layer = above.parent.as_deref();
         }
-        let mut slots: Vec<(&str, Slot)> = default
-            .slots
-            .iter()
-            .filter(|(name, _)| !affected.contains(name.as_str()))
-            .map(|(name, slot)| (name.as_str(), *slot))
-            .collect();
-        for name in affected {
-            if let Some(slot) = self.slot_of(name, action) {
-                slots.push((name, slot));
+        for layer in pending.iter().rev() {
+            if !layer.callbacks.is_empty() {
+                let mut working: Vec<String> = (*current).clone();
+                for callback in &layer.callbacks {
+                    let applies = callback.applies_to(action);
+                    for name in &callback.names {
+                        if callback.skip {
+                            if applies {
+                                working.retain(|guard| guard != name);
+                            }
+                        } else {
+                            working.retain(|guard| guard != name);
+                            if applies && callback.prepend {
+                                working.insert(0, name.clone());
+                            } else if applies {
+                                working.push(name.clone());
+                            }
+                        }
+                    }
+                }
+                if working != *current {
+                    current = Arc::new(working);
+                }
             }
+            layer
+                .memo
+                .lock()
+                .insert(action.to_string(), Arc::clone(&current));
         }
-        order_slots(&mut slots);
-        slots
-            .into_iter()
-            .map(|(name, _)| name.to_string())
-            .collect()
+        current
     }
 }
 
@@ -2607,10 +2622,11 @@ fn subtree_has_inflection_call(node: Node<'_>, source: &[u8], depth: usize) -> b
         .any(|child| subtree_has_inflection_call(child, source, depth + 1))
 }
 
-/// Tells if the code binds one of the names again: an assignment, a block parameter, a
-/// destructuring, a `for` variable, or a `rescue` variable. The `own` node is the parameter list
-/// of the block that gives the names.
-fn rebinds_name(
+/// Tells if the code uses each name only as the receiver of a call of a method that changes the
+/// inflections. Any other use of the name makes the block of `inflections` not readable: an
+/// assignment, a pattern, an argument, a block parameter, or a call of another method. The `own`
+/// node is the parameter list of the block that gives the names.
+fn parameter_uses_modelled(
     node: Node<'_>,
     source: &[u8],
     names: &[String],
@@ -2618,50 +2634,32 @@ fn rebinds_name(
     depth: usize,
 ) -> bool {
     if depth > MAX_READ_DEPTH {
+        return false;
+    }
+    if Some(node) == own {
         return true;
     }
-    let mentions = |target: Node<'_>| {
-        let mut stack = vec![target];
-        while let Some(current) = stack.pop() {
-            if current.kind() == "identifier"
-                && names
-                    .iter()
-                    .any(|name| name == super::syntax::text(current, source))
-            {
-                return true;
-            }
-            let mut cursor = current.walk();
-            stack.extend(current.named_children(&mut cursor));
+    if node.kind() == "identifier"
+        && names
+            .iter()
+            .any(|name| name == super::syntax::text(node, source))
+    {
+        let modelled = node.parent().is_some_and(|parent| {
+            parent.kind() == "call"
+                && parent.child_by_field_name("receiver") == Some(node)
+                && parent.child_by_field_name("method").is_some_and(|method| {
+                    INFLECTION_METHODS.contains(&super::syntax::text(method, source))
+                })
+        });
+        if !modelled {
+            return false;
         }
-        false
-    };
-    match node.kind() {
-        "assignment" | "operator_assignment" => {
-            if node.child_by_field_name("left").is_some_and(mentions) {
-                return true;
-            }
-        }
-        "left_assignment_list"
-        | "rest_assignment"
-        | "for"
-        | "exception_variable"
-        | "destructured_left_assignment" => {
-            if mentions(node) {
-                return true;
-            }
-        }
-        "block_parameters" | "lambda_parameters" | "method_parameters" | "parameters"
-            if Some(node) != own && mentions(node) =>
-        {
-            return true;
-        }
-        _ => {}
     }
     let mut cursor = node.walk();
     let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
     children
         .into_iter()
-        .any(|child| rebinds_name(child, source, names, own, depth + 1))
+        .all(|child| parameter_uses_modelled(child, source, names, own, depth + 1))
 }
 
 /// Reads the inflection calls in the code: `acronym` with a string, and the calls that change
@@ -2747,7 +2745,7 @@ fn read_inflection_calls(
                     .and_then(|block| block.child_by_field_name("parameters"));
                 let rebound = node
                     .child_by_field_name("block")
-                    .is_some_and(|block| rebinds_name(block, source, &names, own, 0));
+                    .is_some_and(|block| !parameter_uses_modelled(block, source, &names, own, 0));
                 if rebound {
                     unreadable(out);
                 } else {

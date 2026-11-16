@@ -192,9 +192,11 @@ at the front of the chain. If the `prepend:` value is not a literal, the callbac
 A controller path with a leading `/`, such as `to: "/users#show"`, ignores the module of the
 `namespace`.
 
-Omen reports a route in any `if`, `unless`, `case`, or ternary, except in a branch that a literal
-condition makes dead: `if false`, `if nil`, `unless true`, and the `else` branch of `if true`.
-The condition can be true at run time, as `if Rails.env.development?` can be. Omen skips a route
+Omen reports a route in any `if`, `unless`, or ternary, except in a branch that a literal condition
+makes dead: `if false`, `if nil`, `unless true`, and the `else` branch of `if true`. The condition
+can be true at run time, as `if Rails.env.development?` can be. A route in a `case` is reported
+only when the subject and each pattern are `true`, `false`, or `nil`. Omen skips a route in any
+other `case`. Omen skips a route
 in a method, a lambda, a loop, a class body, and outside a `draw` block.
 
 A nested route needs the singular name of the parent resource. Omen uses the default
