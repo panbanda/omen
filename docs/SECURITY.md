@@ -107,20 +107,26 @@ entry point of the framework `rails`. Omen reads the syntax tree, not the text.
 | `namespace :admin do` | The path prefix `/admin`. The controller is `Admin::UsersController`. |
 | `scope "/api" do` and `scope module: "v1"` | A path prefix, and a module for the controller. |
 
-Omen resolves the action to a symbol. For a controller in a module, the index must give
-the module as the container of the class. Otherwise the entry point has no symbol.
+Omen resolves the action to a symbol. The class must be in the same chain of modules as the
+route. For a route in `namespace :admin`, omen matches `Admin::UsersController`. It does not
+match `Other::UsersController`. A route without a module matches only a class that is in no
+module. If no class matches, the entry point has no symbol.
 
 A guard is a `before_action` callback of the action. Omen reads the symbols, `only:`, and
 `except:` of the call from the syntax tree. A `skip_before_action` call removes a guard for
 the actions that it lists. The guards of a superclass in the repository, such as
 `ApplicationController`, come first.
 
-A guard never claims more than omen can read. If a `before_action` call has `if:` or `unless:`, or its `only:` or `except:` value is not
-a literal list, as in `only: ACTIONS`, omen reports no guard from that call. A
-`skip_before_action` call with `if:` or `unless:` removes the guard for the actions that it names. If the value of a `skip_before_action` call is not a literal list, omen removes the
-guard for each action. A controller path with a leading `/`, such as `to: "/users#show"`,
-ignores the module of the `namespace`. A route without a module matches only a class that
-has no module.
+A guard never claims more than omen can read. A `before_action` call gives no guard in two
+cases. The first case is an `if:` or `unless:` option. The second case is an `only:` or
+`except:` value that is not a literal list, as in `only: ACTIONS`.
+
+A `skip_before_action` call with `if:` or `unless:` removes the guard for the actions that it
+names. A `skip_before_action` call with a value that is not a literal list removes the guard
+for each action.
+
+A controller path with a leading `/`, such as `to: "/users#show"`, ignores the module of the
+`namespace`.
 
 Omen skips each route that it cannot read exactly. It never guesses. It skips these forms:
 
@@ -131,10 +137,18 @@ Omen skips each route that it cannot read exactly. It never guesses. It skips th
 - A `scope` path with an optional segment, such as `"(:locale)"`.
 - The calls `concerns`, `draw(:file)`, `mount`, and `devise_for`.
 
-Omen reads a nested route only when the singular name is certain. For `categories` the
-parameter is `:category_id`. For `news`, `movies`, `people`, and other words that omen does
-not know, omen skips the nested routes of the resource.
-For a `resource` call, such as `resource :person`, the entry point has no symbol.
+A nested route needs the singular name of the parent resource. Omen uses the default
+inflections of Rails 7.2.2. For `categories`, the parameter is `:category_id`. For `jeans`,
+the word is uncountable, and the parameter is `:jeans_id`.
+
+An application can change the inflections. Omen checks the files in `config/initializers`
+and the files with `inflect` in the name. If one of them calls `inflections`, `irregular`,
+`uncountable`, `acronym`, or `inflect.singular`, omen skips the nested routes. The `member`
+routes and the `collection` routes stay. Comments do not change the inflections. Omen does
+not find a change in a different file.
+
+For a `resource` call, such as `resource :person`, the entry point has no symbol when the
+plural controller name is irregular.
 
 ## Limits
 

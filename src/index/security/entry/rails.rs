@@ -23,27 +23,35 @@
 //! - The calls `concerns`, `draw(:file)`, `mount`, `devise_for`, `direct`, and
 //!   `resolve`. These calls give no route that omen reads.
 //!
-//! A nested route needs the singular name of its parent resource. Omen reads a
-//! plural when it is certain of the singular name. For `categories` the parameter
-//! is `:category_id`. For `news`, `movies`, `people`, and the words in a short list
-//! of uncertain endings, omen skips the nested routes. It keeps the `member` routes and the `collection` routes.
-//! A `resource` call uses the plural controller. If the plural is irregular, the
-//! route has no symbol.
+//! A nested route needs the singular name of its parent resource. Omen uses the default
+//! inflections of Rails 7.2.2. For `categories`, the parameter is `:category_id`. For `jeans`,
+//! the word is uncountable, and the parameter is `:jeans_id`.
 //!
-//! The guards of a route are the `before_action` callbacks of the action, in the
-//! order that Rails runs them. Omen reads the callbacks from the syntax tree: the
-//! symbol names, the `only:` list, and the `except:` list. The callbacks of a
-//! superclass that the repository has come first. A `skip_before_action` call
-//! removes a guard for the actions that it lists.
+//! An application can change the inflections. Omen checks the files in `config/initializers`
+//! and the files with `inflect` in the name. If one of them calls `inflections`, `irregular`,
+//! `uncountable`, `acronym`, or `inflect.singular`, omen skips the nested routes. It keeps the
+//! `member` routes and the `collection` routes. Comments do not change the inflections. A change
+//! in a different file is not found.
 //!
-//! A guard never claims more than omen can read. If a `before_action`
-//! call has an `if:` or `unless:` option, or its `only:` or `except:` value is not a
-//! literal list, omen reports no guard from that call. A `skip_before_action` call
-//! with an `if:` or `unless:` option removes the guard for the actions that it names. If the value of a `skip_before_action` call is not a literal
-//! list, omen removes the guard for each action. A controller path with a leading
-//! `/` ignores the module of the `namespace`. A route without a module matches
-//! only a class that has no container. The index of the classes is built one time
-//! for each routes file.
+//! A `resource` call uses the plural controller. If the plural is irregular, the route has no
+//! symbol.
+//!
+//! The guards of a route are the `before_action` callbacks of the action. They are in the order
+//! that Rails runs them. Omen reads the callbacks from the syntax tree. It reads the symbol
+//! names, the `only:` list, and the `except:` list. The callbacks of a superclass that the
+//! repository has come first. A `skip_before_action` call removes a guard for the actions that
+//! it lists.
+//!
+//! A guard never claims more than omen can read. A `before_action` call gives no guard in two
+//! cases. The first case is an `if:` or `unless:` option. The second case is an `only:` or
+//! `except:` value that is not a literal list. A `skip_before_action` call with `if:` or
+//! `unless:` removes the guard for the actions that it names. A `skip_before_action` call with
+//! a value that is not a literal list removes the guard for each action.
+//!
+//! A controller path with a leading `/` ignores the module of the `namespace`. The controller
+//! class must have the same chain of modules as the route. A route without a module matches
+//! only a class that is in no module. Omen builds the index of the classes one time for each
+//! routes file.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -142,33 +150,103 @@ fn camelize(part: &str) -> String {
         .collect()
 }
 
-/// The singular of a plural, or `None` when omen is not certain. Omen knows two rules: a plural
-/// that ends with `ies` gives `y`, and a plural that ends with `s` loses the `s`. Each rule has a
-/// list of words and endings for which it is not certain. This list is not complete, so a word
-/// that is not in it can still give a wrong form. Rails reads an irregular word from its inflection table.
-fn singular_of(plural: &str) -> Option<String> {
-    const UNCERTAIN_WORDS: [&str; 19] = [
-        "news", "series", "species", "lens", "gas", "canvas", "atlas", "bias", "alias", "chaos",
-        "ethos", "pathos", "cosmos", "kudos", "movies", "cookies", "zombies", "selfies",
-        "brownies",
-    ];
-    const UNCERTAIN_ENDINGS: [&str; 11] = [
-        "ss", "us", "is", "ses", "xes", "zes", "ches", "shes", "ves", "oes", "ices",
-    ];
-    if UNCERTAIN_WORDS.contains(&plural)
-        || UNCERTAIN_ENDINGS
-            .iter()
-            .any(|ending| plural.ends_with(ending))
-    {
-        return None;
+/// The rules of `ActiveSupport::Inflector#singularize` in Rails 7.2.2, from
+/// `activesupport/lib/active_support/inflections.rb`. The pairs are in the order that the file
+/// defines them. Rails applies the last rule first, and the first rule that matches wins. The
+/// last rules are the singular rules of `inflect.irregular`.
+const SINGULAR_RULES: [(&str, &str); 39] = [
+    ("s$", ""),
+    ("(ss)$", "${1}"),
+    ("(n)ews$", "${1}ews"),
+    ("([ti])a$", "${1}um"),
+    (
+        "((a)naly|(b)a|(d)iagno|(p)arenthe|(p)rogno|(s)ynop|(t)he)(sis|ses)$",
+        "${1}sis",
+    ),
+    ("(^analy)(sis|ses)$", "${1}sis"),
+    ("([^f])ves$", "${1}fe"),
+    ("(hive)s$", "${1}"),
+    ("(tive)s$", "${1}"),
+    ("([lr])ves$", "${1}f"),
+    ("([^aeiouy]|qu)ies$", "${1}y"),
+    ("(s)eries$", "${1}eries"),
+    ("(m)ovies$", "${1}ovie"),
+    ("(x|ch|ss|sh)es$", "${1}"),
+    ("^(m|l)ice$", "${1}ouse"),
+    ("(bus)(es)?$", "${1}"),
+    ("(o)es$", "${1}"),
+    ("(shoe)s$", "${1}"),
+    ("(cris|test)(is|es)$", "${1}is"),
+    ("^(a)x[ie]s$", "${1}xis"),
+    ("(octop|vir)(us|i)$", "${1}us"),
+    ("(alias|status)(es)?$", "${1}"),
+    ("^(ox)en", "${1}"),
+    ("(vert|ind)ices$", "${1}ex"),
+    ("(matr)ices$", "${1}ix"),
+    ("(quiz)zes$", "${1}"),
+    ("(database)s$", "${1}"),
+    ("(p)erson$", "${1}erson"),
+    ("(p)eople$", "${1}erson"),
+    ("(m)an$", "${1}an"),
+    ("(m)en$", "${1}an"),
+    ("(c)hild$", "${1}hild"),
+    ("(c)hildren$", "${1}hild"),
+    ("(s)ex$", "${1}ex"),
+    ("(s)exes$", "${1}ex"),
+    ("(m)ove$", "${1}ove"),
+    ("(m)oves$", "${1}ove"),
+    ("(z)ombie$", "${1}ombie"),
+    ("(z)ombies$", "${1}ombie"),
+];
+
+const UNCOUNTABLE_WORDS: [&str; 10] = [
+    "equipment",
+    "information",
+    "rice",
+    "money",
+    "species",
+    "series",
+    "fish",
+    "sheep",
+    "jeans",
+    "police",
+];
+
+/// The singular of a word as Rails 7.2.2 gives it with its default inflections. Rails uses an
+/// uncountable word as it is. The rules of an application can change the result. See
+/// `Context::rails_has_custom_inflections`.
+fn singularize(word: &str) -> String {
+    static RULES: std::sync::LazyLock<Vec<(regex::Regex, &'static str)>> =
+        std::sync::LazyLock::new(|| {
+            SINGULAR_RULES
+                .iter()
+                .rev()
+                .map(|(pattern, replacement)| {
+                    (
+                        regex::Regex::new(&format!("(?i){pattern}")).expect("a fixed pattern"),
+                        *replacement,
+                    )
+                })
+                .collect()
+        });
+    let lower = word.to_lowercase();
+    let uncountable = UNCOUNTABLE_WORDS.iter().any(|candidate| {
+        lower.strip_suffix(candidate).is_some_and(|before| {
+            before
+                .chars()
+                .next_back()
+                .is_none_or(|last| !(last.is_alphanumeric() || last == '_'))
+        })
+    });
+    if word.is_empty() || uncountable {
+        return word.to_string();
     }
-    if let Some(stem) = plural.strip_suffix("ies") {
-        return (stem.len() > 1).then(|| format!("{stem}y"));
+    for (rule, replacement) in RULES.iter() {
+        if rule.is_match(word) {
+            return rule.replace(word, *replacement).into_owned();
+        }
     }
-    plural
-        .strip_suffix('s')
-        .filter(|stem| stem.len() > 1)
-        .map(str::to_string)
+    word.to_string()
 }
 
 /// The plural of a regular English noun, or `None` when the word needs a dictionary.
@@ -410,7 +488,7 @@ impl<'a> Context<'a> {
                     return None;
                 }
                 let name = &definition.names[0];
-                let paths = definition.paths(singular, &scope, name);
+                let paths = definition.paths(singular, &scope, name, self.rails_singular(name));
                 scope.controller = Some(definition.controller_for(singular, name)?);
                 scope.modules = definition.modules.clone();
                 scope.prefix = paths.nested.clone();
@@ -482,7 +560,7 @@ impl<'a> Context<'a> {
             &COLLECTION_ACTIONS
         };
         for name in &definition.names {
-            let paths = definition.paths(singular, scope, name);
+            let paths = definition.paths(singular, scope, name, self.rails_singular(name));
             let Some(base) = paths.base else {
                 continue;
             };
@@ -505,7 +583,7 @@ impl<'a> Context<'a> {
                     route: Some(route(verb, path)),
                     guards,
                     basis: EntryBasis::Registered,
-                    variant: Some(format!("{action}@{}", route_path)),
+                    variant: Some(format!("{action}@{name}@{route_path}")),
                 });
             }
         }
@@ -645,10 +723,32 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// The singular name that a nested route needs, or `None` when the inflections of the
+    /// application can change the name.
+    fn rails_singular(&self, name: &str) -> Option<String> {
+        (!self.rails_has_custom_inflections()).then(|| singularize(name))
+    }
+
+    /// Tells if a file in `config/initializers`, or a file with `inflect` in its name, changes the
+    /// inflections of Rails. The comments of the generated `inflections.rb` do not change them.
+    fn rails_has_custom_inflections(&self) -> bool {
+        let index = self.rails.get_or_init(|| RailsIndex::build(self.all));
+        *index.custom_inflections.get_or_init(|| {
+            self.all.iter().enumerate().any(|(position, file)| {
+                let name = file.file.rsplit('/').next().unwrap_or("");
+                file.language == Language::Ruby
+                    && (file.file.contains("config/initializers/") || name.contains("inflect"))
+                    && self.all_parsed.tree(position).is_some_and(|parsed| {
+                        changes_inflections(parsed.root_node(), &parsed.source)
+                    })
+            })
+        })
+    }
+
     /// The action symbol and the guards of a controller. `controller` is `admin/users`, and
     /// `modules` are the modules that `namespace` and `scope module:` add. A controller path
-    /// with a leading `/` ignores the modules. The class must have the module as its container,
-    /// and a route without a module matches only a class without a container.
+    /// with a leading `/` ignores the modules. The class must have the same chain of modules as its
+    /// container path. A route without a module matches only a class outside each module.
     fn rails_handler(
         &self,
         modules: &[String],
@@ -665,15 +765,20 @@ impl<'a> Context<'a> {
             return (None, Vec::new());
         };
         let class = format!("{}Controller", camelize(&last));
-        let container = segments.last().map(|module| camelize(module));
+        let mut qualified: Vec<String> = segments.iter().map(|module| camelize(module)).collect();
+        qualified.push(class.clone());
         let index = self.rails.get_or_init(|| RailsIndex::build(self.all));
-        let Some(classes) = index.classes.get(&(container, class.clone())) else {
+        let Some(classes) = index.classes.get(&qualified.join(".")) else {
             return (None, Vec::new());
         };
         let mut actions: Vec<&Symbol> = Vec::new();
         let mut guards: Vec<String> = Vec::new();
         for (position, owner) in classes {
-            if let Some(methods) = index.methods.get(&(*position, class.as_str())) {
+            if let Some(methods) = index
+                .methods
+                .get(&(*position, class.as_str()))
+                .and_then(|by_action| by_action.get(action))
+            {
                 actions.extend(methods.iter().copied().filter(|method| {
                     method.name == action
                         && method.range.start_byte >= owner.range.start_byte
@@ -875,10 +980,11 @@ type Placed<'a> = (usize, &'a Symbol);
 
 /// The controller classes and their methods, by name. Omen builds it one time for each routes file.
 pub(super) struct RailsIndex<'a> {
-    classes: HashMap<(Option<String>, String), Vec<Placed<'a>>>,
+    classes: HashMap<String, Vec<Placed<'a>>>,
     by_name: HashMap<&'a str, Vec<Placed<'a>>>,
-    methods: HashMap<(usize, &'a str), Vec<&'a Symbol>>,
+    methods: HashMap<(usize, &'a str), HashMap<&'a str, Vec<&'a Symbol>>>,
     callbacks: RefCell<HashMap<String, Rc<Vec<Callback>>>>,
+    custom_inflections: std::cell::OnceCell<bool>,
 }
 
 impl<'a> RailsIndex<'a> {
@@ -888,6 +994,7 @@ impl<'a> RailsIndex<'a> {
             by_name: HashMap::new(),
             methods: HashMap::new(),
             callbacks: RefCell::new(HashMap::new()),
+            custom_inflections: std::cell::OnceCell::new(),
         };
         for (position, file) in all.iter().enumerate() {
             if file.language != Language::Ruby {
@@ -897,7 +1004,7 @@ impl<'a> RailsIndex<'a> {
                 if symbol.kind.is_type() {
                     index
                         .classes
-                        .entry((symbol.container.clone(), symbol.name.clone()))
+                        .entry(qualified_name(file, symbol))
                         .or_default()
                         .push((position, symbol));
                     index
@@ -912,12 +1019,46 @@ impl<'a> RailsIndex<'a> {
                         .methods
                         .entry((position, container))
                         .or_default()
+                        .entry(symbol.name.as_str())
+                        .or_default()
                         .push(symbol);
                 }
             }
         }
         index
     }
+}
+
+/// Tells if the code has a call that changes the inflections: `inflections`, `irregular`,
+/// `uncountable`, `acronym`, or `singular`, `plural`, and `human` on a receiver.
+fn changes_inflections(node: Node<'_>, source: &[u8]) -> bool {
+    if node.kind() == "call" {
+        let method = node
+            .child_by_field_name("method")
+            .map_or("", |method| super::syntax::text(method, source));
+        let has_receiver = node.child_by_field_name("receiver").is_some();
+        if matches!(
+            method,
+            "inflections" | "irregular" | "uncountable" | "acronym"
+        ) || (has_receiver && matches!(method, "singular" | "plural" | "human"))
+        {
+            return true;
+        }
+    }
+    let mut cursor = node.walk();
+    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+    children
+        .into_iter()
+        .any(|child| changes_inflections(child, source))
+}
+
+/// The chain of containers and the name of a class, joined with `.`. The key of the symbol has
+/// the chain, so the key tells `Admin::V1::UsersController` from `Other::V1::UsersController`.
+fn qualified_name(file: &FileSymbols, symbol: &Symbol) -> String {
+    let key = symbol.key.to_string();
+    let chain = key.strip_prefix(&format!("{}#", file.file)).unwrap_or(&key);
+    let chain = chain.split('~').next().unwrap_or(chain);
+    chain.replace("::", ".")
 }
 
 fn split_segments(path: &str) -> Vec<String> {
@@ -953,13 +1094,19 @@ impl ResourceDefinition {
             && !self.except.iter().any(|name| name == action)
     }
 
-    fn paths(&self, singular: bool, scope: &Scope, name: &str) -> ResourceWays {
+    fn paths(
+        &self,
+        singular: bool,
+        scope: &Scope,
+        name: &str,
+        singular_name: Option<String>,
+    ) -> ResourceWays {
         let segment = self.path.clone().unwrap_or_else(|| name.to_string());
         let base = append(&scope.prefix, &segment);
         let (member, nested) = if singular {
             (base.clone(), base.clone())
         } else {
-            let nested = singular_of(name).and_then(|singular_name| {
+            let nested = singular_name.and_then(|singular_name| {
                 base.as_ref().map(|b| format!("{b}/:{singular_name}_id"))
             });
             (base.as_ref().map(|b| format!("{b}/:id")), nested)
