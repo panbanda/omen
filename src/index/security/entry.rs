@@ -149,6 +149,16 @@ impl std::ops::Deref for TreeRef<'_> {
 /// the trees of all files at one time.
 pub trait TreeSource: Sync {
     fn tree(&self, position: usize) -> Option<TreeRef<'_>>;
+
+    /// The data that the entry point search shares between the files of one analysis.
+    fn shared(&self) -> &EntryShared;
+}
+
+/// The data that one analysis builds one time, and that the search for entry points of each file
+/// uses.
+#[derive(Default)]
+pub struct EntryShared {
+    rails: std::sync::OnceLock<rails::RailsShared>,
 }
 
 /// The syntax trees that the entry point rules ask for in other files. The source
@@ -157,6 +167,7 @@ pub struct OnDemandTrees<'a> {
     parse_file: &'a (dyn Fn(usize) -> crate::core::Result<Option<ParseResult>> + Sync),
     error: parking_lot::Mutex<Option<crate::core::Error>>,
     parsed: parking_lot::Mutex<std::collections::HashMap<usize, Cell>>,
+    shared: EntryShared,
 }
 
 /// The one parse of a file. The first thread that asks parses the file, and the other
@@ -171,6 +182,7 @@ impl<'a> OnDemandTrees<'a> {
             parse_file,
             error: parking_lot::Mutex::new(None),
             parsed: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            shared: EntryShared::default(),
         }
     }
 
@@ -198,13 +210,21 @@ impl TreeSource for OnDemandTrees<'_> {
             .as_ref()
             .map(|tree| TreeRef::Shared(std::sync::Arc::clone(tree)))
     }
+
+    fn shared(&self) -> &EntryShared {
+        &self.shared
+    }
 }
 
-struct Trees<'a>(&'a [ParseResult]);
+struct Trees<'a>(&'a [ParseResult], EntryShared);
 
 impl TreeSource for Trees<'_> {
     fn tree(&self, position: usize) -> Option<TreeRef<'_>> {
         self.0.get(position).map(TreeRef::Borrowed)
+    }
+
+    fn shared(&self) -> &EntryShared {
+        &self.1
     }
 }
 
@@ -215,7 +235,7 @@ pub fn find_entry_points_with(
     rules: &[EntryRule],
 ) -> Vec<EntryPoint> {
     assert_eq!(parsed.len(), files.len(), "each file needs its syntax tree");
-    let trees = Trees(parsed);
+    let trees = Trees(parsed, EntryShared::default());
     let per_file: Vec<Vec<EntryPoint>> = (0..files.len())
         .into_par_iter()
         .map(|position| entry_points_of_file(position, &parsed[position], files, &trees, rules))
@@ -422,7 +442,6 @@ struct Context<'a> {
     rules: &'a [EntryRule],
     source: &'a [u8],
     test_ranges: Vec<Range<usize>>,
-    rails: std::cell::OnceCell<rails::RailsIndex<'a>>,
 }
 
 struct Draft {
@@ -459,7 +478,6 @@ impl<'a> Context<'a> {
             rules,
             source: &parsed.source,
             test_ranges,
-            rails: std::cell::OnceCell::new(),
         }
     }
 
@@ -2867,6 +2885,171 @@ mod tests {
     #[ignore = "timing: run in release"]
     fn timing_a_deep_chain_of_superclasses_resolves_in_linear_time() {
         let elapsed = a_deep_chain_of_superclasses_resolves_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    #[test]
+    fn only_a_rails_or_an_engine_routes_object_draws_routes() {
+        let routes = "fake_routes = Object.new\ndef fake_routes.draw; end\nfake_routes.draw do\n  get \"/ghost\", to: \"users#show\"\nend\n\nroutes.draw do\n  get \"/bare\", to: \"users#show\"\nend\n\nOther.routes.draw do\n  get \"/other\", to: \"users#show\"\nend\n\nRails.application.routes.draw do\n  get \"/app\", to: \"users#show\"\nend\n\nMyApp::Application.routes.draw do\n  get \"/namespaced\", to: \"users#show\"\nend\n\nMyEngine::Engine.routes.draw do\n  get \"/engine\", to: \"users#show\"\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut paths = verbs_and_paths(&found);
+        paths.sort();
+        assert_eq!(paths, ["GET /app", "GET /engine", "GET /namespaced"]);
+    }
+
+    #[test]
+    fn only_a_public_instance_method_is_an_action() {
+        let actions = [
+            "pub", "single", "meta", "hidden", "guarded", "again", "later", "inline", "listed",
+        ];
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        for action in actions {
+            routes.push_str(&format!("  get \"/{action}\", to: \"users#{action}\"\n"));
+        }
+        routes.push_str(
+            "  get \"/odd\", to: \"odd#show\"\n  get \"/plain\", to: \"plain#show\"\nend\n",
+        );
+        let controller = "class UsersController\n  before_action :auth\n  def pub; end\n  def self.single; end\n  class << self\n    def meta; end\n  end\n  private\n  def hidden; end\n  protected\n  def guarded; end\n  public\n  def again; end\n  def later; end\n  private :later\n  private def inline; end\n  def listed; end\nend\n\nclass UsersController\n  public :hidden\nend\n\nclass OddController\n  private(*LIST)\n  def show; end\nend\n\nclass PlainController\n  def show; end\nend\n";
+        let found = rails_routes(&routes, &[("controllers/users.rb", controller)]);
+        let symbol_of = |action: &str| {
+            found
+                .iter()
+                .find(|entry| entry.route.as_ref().unwrap().path == format!("/{action}"))
+                .unwrap()
+                .symbol
+                .clone()
+        };
+        let has_symbol = |action: &str| symbol_of(action).is_some();
+        assert!(has_symbol("pub"));
+        assert!(has_symbol("again"));
+        assert!(has_symbol("listed"));
+        assert!(!has_symbol("single"));
+        assert!(!has_symbol("meta"));
+        assert!(!has_symbol("hidden"));
+        assert!(!has_symbol("guarded"));
+        assert!(!has_symbol("later"));
+        assert!(!has_symbol("inline"));
+        assert_eq!(symbol_of("odd"), None);
+        assert!(has_symbol("plain"));
+    }
+
+    #[test]
+    fn a_registered_acronym_changes_the_controller_class() {
+        let routes =
+            "Rails.application.routes.draw do\n  get \"/u\", to: \"api/users#show\"\nend\n";
+        let upper = "module API\n  class UsersController\n    before_action :upper\n    def show; end\n  end\nend\n";
+        let lower = "module Api\n  class UsersController\n    before_action :lower\n    def show; end\n  end\nend\n";
+        let acronym = "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  inflect.acronym \"API\"\nend\n";
+        let both = [
+            ("controllers/upper.rb", upper),
+            ("controllers/lower.rb", lower),
+        ];
+        let found = rails_routes(
+            routes,
+            &[
+                both[0],
+                both[1],
+                ("config/initializers/inflections.rb", acronym),
+            ],
+        );
+        assert_eq!(
+            found[0].symbol.as_deref(),
+            Some("controllers/upper.rb#API.UsersController.show")
+        );
+        assert_eq!(found[0].guards, ["upper"]);
+        let found = rails_routes(routes, &both);
+        assert_eq!(
+            found[0].symbol.as_deref(),
+            Some("controllers/lower.rb#Api.UsersController.show")
+        );
+        assert_eq!(found[0].guards, ["lower"]);
+        let unreadable =
+            "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  inflect.acronym NAME\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                both[0],
+                both[1],
+                ("config/initializers/inflections.rb", unreadable),
+            ],
+        );
+        assert_eq!(found[0].symbol, None);
+        assert!(found[0].guards.is_empty());
+    }
+
+    fn many_callbacks_for_other_actions_resolve_in_linear_time_at(
+        count: usize,
+    ) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut controller = String::from("class UsersController\n");
+        for number in 0..count {
+            routes.push_str(&format!("  get \"/r{number}\", to: \"users#a{number}\"\n"));
+            controller.push_str(&format!(
+                "  before_action :g{number}, only: :b{number}\n  def a{number}; end\n"
+            ));
+        }
+        routes.push_str("end\n");
+        controller.push_str("end\n");
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("users_controller.rb", controller.as_str()),
+        ];
+        let (found, elapsed) = entries_timed(Language::Ruby, &files);
+        assert_eq!(found.len(), count);
+        assert!(found
+            .iter()
+            .all(|entry| entry.symbol.is_some() && entry.guards.is_empty()));
+        elapsed
+    }
+
+    #[test]
+    fn many_callbacks_for_other_actions_add_no_guard() {
+        many_callbacks_for_other_actions_resolve_in_linear_time_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_callbacks_for_other_actions_resolve_in_linear_time() {
+        let elapsed = many_callbacks_for_other_actions_resolve_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    fn many_engines_resolve_in_linear_time_at(count: usize) -> std::time::Duration {
+        let mut files: Vec<(String, String)> = Vec::new();
+        let mut controllers = String::new();
+        for number in 0..count {
+            files.push((
+                format!("engines/e{number:06}/config/routes.rb"),
+                format!(
+                    "E{number}::Engine.routes.draw do\n  get \"/x\", to: \"c{number}#show\"\nend\n"
+                ),
+            ));
+            controllers.push_str(&format!(
+                "class C{number}Controller\n  before_action :g\n  def show; end\nend\n"
+            ));
+        }
+        files.push((String::from("controllers.rb"), controllers));
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(name, text)| (name.as_str(), text.as_str()))
+            .collect();
+        let (found, elapsed) = entries_timed(Language::Ruby, &borrowed);
+        assert_eq!(found.len(), count);
+        assert!(found
+            .iter()
+            .all(|entry| entry.symbol.is_some() && entry.guards == ["g"]));
+        elapsed
+    }
+
+    #[test]
+    fn many_engines_each_resolve_their_controller() {
+        many_engines_resolve_in_linear_time_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_engines_resolve_in_linear_time() {
+        let elapsed = many_engines_resolve_in_linear_time_at(5_000);
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 

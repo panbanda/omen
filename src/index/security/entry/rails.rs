@@ -37,10 +37,20 @@
 //! the word is uncountable, and the parameter is `:jeans_id`.
 //!
 //! An application can change the inflections. Omen checks the files in `config/initializers`
-//! and the files with `inflect` in the name. If one of them calls `inflections`, `irregular`,
-//! `uncountable`, `acronym`, or `inflect.singular`, omen skips the nested routes. It keeps the
-//! `member` routes and the `collection` routes. Comments do not change the inflections. Omen does not
-//! find a change in a different file.
+//! and the files with `inflect` in the name. If one of them calls `irregular`,
+//! `uncountable`, or `inflect.singular`, omen skips the nested routes. It keeps the `member`
+//! routes and the `collection` routes. Comments do not change the inflections. Omen does not find
+//! a change in a different file.
+//!
+//! Omen reads a literal `inflect.acronym "API"` call in the same files. It builds the class name
+//! as `camelize` of ActiveSupport does, so `api/users` gives `API::UsersController`. If an
+//! `acronym` argument is not a string, or the files call `clear`, omen does not know the class
+//! names. Then no route has a symbol or a guard.
+//!
+//! A route matches only an instance method that is public: a `def self.x` method, a method in
+//! `class << self`, and a method after `private` or `protected` do not match. A method that
+//! `private :x` or `private def x` hides does not match. If a class has a definition in a block,
+//! or a visibility call that omen cannot read, the route has no symbol.
 //!
 //! A `resource` call uses the plural controller. If the plural is irregular, the route has no
 //! symbol.
@@ -76,12 +86,13 @@
 //! A controller path with a leading `/` ignores the module of the `namespace`. The controller
 //! class must have the same chain of modules as the route. A route without a module matches
 //! only a class that is in no module. Omen builds the index of the classes one time for each
-//! routes file.
+//! analysis, and each routes file uses it. A route matches a `draw` call only on
+//! `Rails.application.routes`, `Name::Application.routes`, or `Name::Engine.routes`.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use tree_sitter::Node;
 
 use super::{join_path, route, Context, Draft, EntryBasis, EntryKind};
@@ -163,9 +174,30 @@ struct Target {
     action: Option<String>,
 }
 
-fn camelize(part: &str) -> String {
+/// Tells if the text is `Rails.application.routes`, or a constant path that ends with
+/// `::Application` or `::Engine`, and then `.routes`.
+fn is_routes_object(text: &str) -> bool {
+    let Some(base) = text.trim().strip_suffix(".routes") else {
+        return false;
+    };
+    let constant_path = base.split("::").all(|part| {
+        part.chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_uppercase())
+            && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    });
+    base == "Rails.application"
+        || (constant_path && (base.ends_with("::Application") || base.ends_with("::Engine")))
+}
+
+/// The class name of a name with `_`, as `camelize` of ActiveSupport gives it. A registered acronym
+/// keeps its form.
+fn camelize(part: &str, acronyms: &HashMap<String, String>) -> String {
     part.split('_')
         .map(|word| {
+            if let Some(acronym) = acronyms.get(word) {
+                return acronym.clone();
+            }
             let mut characters = word.chars();
             characters
                 .next()
@@ -459,13 +491,14 @@ impl<'a> Context<'a> {
         in_main != runs_when
     }
 
-    /// Tells if the call is `routes.draw do`, as `Rails.application.routes.draw` is.
+    /// Tells if the call is `draw` of the routes of the application or of an engine:
+    /// `Rails.application.routes`, `Name::Application.routes`, or `Name::Engine.routes`.
     fn is_draw_block(&self, call: Node<'_>) -> bool {
         call.child_by_field_name("method")
             .is_some_and(|method| self.text(method) == "draw")
             && call
                 .child_by_field_name("receiver")
-                .is_some_and(|receiver| self.text(receiver).ends_with("routes"))
+                .is_some_and(|receiver| is_routes_object(self.text(receiver)))
     }
 
     fn rails_enter(&self, call: Node<'_>, mut scope: Scope) -> Option<Scope> {
@@ -794,39 +827,56 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// The shared index of the repository. The first routes file that asks builds it, and the
+    /// other files of the analysis use it.
+    fn rails_shared(&self) -> &RailsShared {
+        self.all_parsed
+            .shared()
+            .rails
+            .get_or_init(|| RailsShared::build(self.all))
+    }
+
+    fn rails_inflections(&self) -> &Inflections {
+        self.rails_shared()
+            .inflections
+            .get_or_init(|| self.read_inflections())
+    }
+
+    /// Reads the files in `config/initializers`, and the files with `inflect` in the name. The
+    /// comments of the generated `inflections.rb` change nothing.
+    fn read_inflections(&self) -> Inflections {
+        let mut found = Inflections::default();
+        for (position, file) in self.all.iter().enumerate() {
+            let name = file.file.rsplit('/').next().unwrap_or("");
+            if file.language != Language::Ruby
+                || !(file.file.contains("config/initializers/") || name.contains("inflect"))
+            {
+                continue;
+            }
+            if let Some(parsed) = self.all_parsed.tree(position) {
+                read_inflection_calls(parsed.root_node(), &parsed.source, &mut found);
+            }
+        }
+        found
+    }
+
     /// The singular name that a nested route needs, or `None` when the inflections of the
     /// application can change the name.
     fn rails_singular(&self, name: &str) -> Option<String> {
-        (!self.rails_has_custom_inflections()).then(|| singularize(name))
-    }
-
-    /// Tells if a file in `config/initializers`, or a file with `inflect` in its name, changes the
-    /// inflections of Rails. The comments of the generated `inflections.rb` do not change them.
-    fn rails_has_custom_inflections(&self) -> bool {
-        let index = self.rails.get_or_init(|| RailsIndex::build(self.all));
-        *index.custom_inflections.get_or_init(|| {
-            self.all.iter().enumerate().any(|(position, file)| {
-                let name = file.file.rsplit('/').next().unwrap_or("");
-                file.language == Language::Ruby
-                    && (file.file.contains("config/initializers/") || name.contains("inflect"))
-                    && self.all_parsed.tree(position).is_some_and(|parsed| {
-                        changes_inflections(parsed.root_node(), &parsed.source)
-                    })
-            })
-        })
+        (!self.rails_inflections().changes_singulars).then(|| singularize(name))
     }
 
     /// The action symbol and the guards of a controller. `controller` is `admin/users`, and
     /// `modules` are the modules that `namespace` and `scope module:` add. A controller path
     /// with a leading `/` ignores the modules. The class must have the same chain of modules as its
     /// container path. A route without a module matches only a class outside each module. The
-    /// index keeps the result for each class and action.
-    fn rails_handler(
-        &self,
-        modules: &[String],
-        controller: &str,
-        action: &str,
-    ) -> (Option<String>, Vec<String>) {
+    /// index keeps the result for each class and action. If the inflections of the application
+    /// have an acronym that omen cannot read, the controller is not known.
+    fn rails_handler(&self, modules: &[String], controller: &str, action: &str) -> Handler {
+        let inflections = self.rails_inflections();
+        if inflections.unreadable_acronym {
+            return (None, Vec::new());
+        }
         let mut segments: Vec<String> = if controller.starts_with('/') {
             Vec::new()
         } else {
@@ -836,130 +886,157 @@ impl<'a> Context<'a> {
         let Some(last) = segments.pop() else {
             return (None, Vec::new());
         };
-        let mut qualified: Vec<String> = segments.iter().map(|module| camelize(module)).collect();
-        qualified.push(format!("{}Controller", camelize(&last)));
+        let mut qualified: Vec<String> = segments
+            .iter()
+            .map(|module| camelize(module, &inflections.acronyms))
+            .collect();
+        qualified.push(camelize(
+            &format!("{last}_controller"),
+            &inflections.acronyms,
+        ));
         let identity = qualified.join(".");
-        let index = self.rails.get_or_init(|| RailsIndex::build(self.all));
+        let shared = self.rails_shared();
         let key = (identity.clone(), action.to_string());
-        if let Some(found) = index.handled.borrow().get(&key) {
+        if let Some(found) = shared.handled.lock().get(&key) {
             return found.clone();
         }
-        let result = self.rails_resolve(index, &identity, action);
-        index.handled.borrow_mut().insert(key, result.clone());
+        let result = self.rails_resolve(shared, &identity, action);
+        shared.handled.lock().insert(key, result.clone());
         result
     }
 
-    fn rails_resolve(
-        &self,
-        index: &RailsIndex<'a>,
-        identity: &str,
-        action: &str,
-    ) -> (Option<String>, Vec<String>) {
-        if !index.classes.contains_key(identity) {
+    fn rails_resolve(&self, shared: &RailsShared, identity: &str, action: &str) -> Handler {
+        if !shared.classes.contains_key(identity) {
             return (None, Vec::new());
         }
-        let symbol = index
-            .methods
-            .get(identity)
-            .and_then(|by_action| by_action.get(action))
-            .filter(|found| found.len() == 1)
-            .map(|found| found[0].key.to_string());
-        let guards = self.rails_identity_guards(index, identity, action);
-        (symbol, guards.as_ref().clone())
+        let symbol = self.rails_action_symbol(shared, identity, action);
+        let guards = self.rails_program(shared, identity).guards_for(action);
+        (symbol, guards)
     }
 
-    /// The guards of an action for a class identity: the callbacks of the superclasses, then the
-    /// callbacks of each opening of the class in the order of the files and then of the positions.
-    /// A callback replaces an earlier callback with the same name, as Rails does. Omen walks up
-    /// to the nearest superclass that has a result, and it applies the callbacks of the classes
-    /// below it. The index keeps the result for the class and for each superclass with two or
-    /// more subclasses.
-    fn rails_identity_guards(
+    /// The one public instance method with the name of the action. A singleton method, a method
+    /// that `private` or `protected` hides, and a class with a visibility that omen cannot read
+    /// give no symbol.
+    fn rails_action_symbol(
         &self,
-        index: &RailsIndex<'a>,
+        shared: &RailsShared,
         identity: &str,
         action: &str,
-    ) -> Rc<Vec<String>> {
-        let key = (identity.to_string(), action.to_string());
-        if let Some(found) = index.guards.borrow().get(&key) {
-            return Rc::clone(found);
+    ) -> Option<String> {
+        let candidates = shared.methods.get(identity)?.get(action)?;
+        let visibility = self.rails_visibility(shared, identity);
+        if visibility.unreadable {
+            return None;
+        }
+        let mut public = candidates.iter().filter(|(position, index)| {
+            let symbol = &self.all[*position].symbols[*index];
+            visibility
+                .public
+                .contains(&(*position, symbol.name_range.start_byte))
+        });
+        let found = public.next()?;
+        public
+            .next()
+            .is_none()
+            .then(|| self.all[found.0].symbols[found.1].key.to_string())
+    }
+
+    /// The callbacks of the chain of a class, in the order of Rails. The program of a class with
+    /// no callback of its own is the program of its superclass. The index keeps the program of
+    /// each class that a route reaches, and of each superclass with two or more subclasses.
+    fn rails_program(&self, shared: &RailsShared, identity: &str) -> Arc<Program> {
+        if let Some(found) = shared.programs.lock().get(identity) {
+            return Arc::clone(found);
         }
         let mut chain = vec![identity.to_string()];
-        let mut base: Rc<Vec<String>> = Rc::new(Vec::new());
+        let mut base: Option<Arc<Program>> = None;
         let mut current = identity.to_string();
-        while let Some(Some(parent)) = index.parents.get(&current) {
-            if let Some(found) = index
-                .guards
-                .borrow()
-                .get(&(parent.clone(), action.to_string()))
-            {
-                base = Rc::clone(found);
+        while let Some(Some(parent)) = shared.parents.get(&current) {
+            if let Some(found) = shared.programs.lock().get(parent) {
+                base = Some(Arc::clone(found));
                 break;
             }
             chain.push(parent.clone());
             current = parent.clone();
         }
-        let mut active = ActiveGuards::new(&base);
-        let mut changed = false;
+        let mut callbacks: Vec<Callback> = base
+            .as_ref()
+            .map(|program| program.callbacks.clone())
+            .unwrap_or_default();
+        let inherited = callbacks.len();
         for (depth, class) in chain.iter().enumerate().rev() {
-            for (position, symbol) in index.classes.get(class).into_iter().flatten() {
-                for callback in self.rails_callbacks(index, *position, symbol).iter() {
-                    active.apply(callback, action);
-                    changed = true;
-                }
+            for (position, index) in shared.classes.get(class).into_iter().flatten() {
+                callbacks.extend(
+                    self.rails_callbacks(shared, *position, *index)
+                        .iter()
+                        .cloned(),
+                );
             }
-            let shared = index
+            let branching = shared
                 .child_counts
                 .get(class)
                 .is_some_and(|count| *count >= 2);
-            if depth > 0 && shared {
-                index.guards.borrow_mut().insert(
-                    (class.clone(), action.to_string()),
-                    Rc::new(active.to_vec()),
-                );
+            if depth > 0 && branching {
+                shared
+                    .programs
+                    .lock()
+                    .insert(class.clone(), Arc::new(Program::new(callbacks.clone())));
             }
         }
-        let result = if changed {
-            Rc::new(active.into_vec())
-        } else {
-            base
+        let program = match base {
+            Some(base) if callbacks.len() == inherited => base,
+            _ => Arc::new(Program::new(callbacks)),
         };
-        index.guards.borrow_mut().insert(key, Rc::clone(&result));
-        result
+        shared
+            .programs
+            .lock()
+            .insert(identity.to_string(), Arc::clone(&program));
+        program
     }
 
     /// The callback calls in the body of the class, in source order. A call in a method, or in a
     /// nested class or module, is not a callback of this class. The index keeps the result.
     fn rails_callbacks(
         &self,
-        index: &RailsIndex<'a>,
+        shared: &RailsShared,
         position: usize,
-        class: &Symbol,
-    ) -> Rc<Vec<Callback>> {
-        if let Some(found) = index.callbacks.borrow().get(&*class.key) {
-            return Rc::clone(found);
+        index: usize,
+    ) -> Arc<Vec<Callback>> {
+        if let Some(found) = shared.callbacks.lock().get(&(position, index)) {
+            return Arc::clone(found);
         }
-        let callbacks = Rc::new(self.read_callbacks(position, class));
-        index
+        let mut callbacks = Vec::new();
+        self.with_class_body(position, index, |reader, node| {
+            reader.collect_callbacks(node, false, &mut callbacks);
+        });
+        let callbacks = Arc::new(callbacks);
+        shared
             .callbacks
-            .borrow_mut()
-            .insert(class.key.to_string(), Rc::clone(&callbacks));
+            .lock()
+            .insert((position, index), Arc::clone(&callbacks));
         callbacks
     }
 
-    fn read_callbacks(&self, position: usize, class: &Symbol) -> Vec<Callback> {
+    /// Calls `read` with a reader of the file and the syntax node of the class.
+    fn with_class_body(
+        &self,
+        position: usize,
+        index: usize,
+        read: impl FnOnce(&Context<'_>, Node<'_>),
+    ) {
+        let class = &self.all[position].symbols[index];
         let Some(parsed) = self.all_parsed.tree(position) else {
-            return Vec::new();
+            return;
         };
         let Some(mut node) = parsed
             .root_node()
             .descendant_for_byte_range(class.range.start_byte, class.range.end_byte)
         else {
-            return Vec::new();
+            return;
         };
         while !matches!(node.kind(), "class" | "module") {
             let Some(parent) = node.parent() else {
-                return Vec::new();
+                return;
             };
             node = parent;
         }
@@ -970,9 +1047,141 @@ impl<'a> Context<'a> {
             self.all_parsed,
             self.rules,
         );
-        let mut callbacks = Vec::new();
-        reader.collect_callbacks(node, false, &mut callbacks);
-        callbacks
+        read(&reader, node);
+    }
+
+    /// The public instance methods of the openings of a class. The index keeps the result.
+    fn rails_visibility(&self, shared: &RailsShared, identity: &str) -> Arc<Visibility> {
+        if let Some(found) = shared.visibility.lock().get(identity) {
+            return Arc::clone(found);
+        }
+        let mut visibility = Visibility::default();
+        for (position, index) in shared.classes.get(identity).into_iter().flatten() {
+            self.with_class_body(*position, *index, |reader, node| {
+                reader.read_visibility(node, *position, &mut visibility);
+            });
+        }
+        let visibility = Arc::new(visibility);
+        shared
+            .visibility
+            .lock()
+            .insert(identity.to_string(), Arc::clone(&visibility));
+        visibility
+    }
+
+    /// Reads the `def` statements of a class body, with `private`, `protected`, and `public`.
+    /// A singleton method, and a method in `class << self`, is not an instance method. A
+    /// definition in a block or a conditional, and a visibility call with an argument that is not
+    /// a name or a `def`, make the visibility unreadable.
+    fn read_visibility(&self, class: Node<'_>, position: usize, out: &mut Visibility) {
+        struct Def {
+            name: String,
+            start: usize,
+            public: bool,
+        }
+        let mut cursor = class.walk();
+        let statements: Vec<Node<'_>> = match class.child_by_field_name("body") {
+            Some(body) => {
+                let mut body_cursor = body.walk();
+                body.named_children(&mut body_cursor).collect()
+            }
+            None => class.named_children(&mut cursor).collect(),
+        };
+        let mut defs: Vec<Def> = Vec::new();
+        let mut explicit: HashMap<String, bool> = HashMap::new();
+        let mut public = true;
+        let define = |node: Node<'_>, public: bool, defs: &mut Vec<Def>| {
+            if let Some(name) = node.child_by_field_name("name") {
+                defs.push(Def {
+                    name: self.text(name).to_string(),
+                    start: name.start_byte(),
+                    public,
+                });
+            }
+        };
+        for statement in statements {
+            match statement.kind() {
+                "method" => define(statement, public, &mut defs),
+                "singleton_method" | "singleton_class" | "class" | "module" => {}
+                "identifier" => match self.text(statement) {
+                    "private" | "protected" => public = false,
+                    "public" => public = true,
+                    _ => {}
+                },
+                "call"
+                    if statement.child_by_field_name("receiver").is_none()
+                        && matches!(
+                            statement
+                                .child_by_field_name("method")
+                                .map(|method| self.text(method)),
+                            Some("private" | "protected" | "public")
+                        ) =>
+                {
+                    let makes_public = statement
+                        .child_by_field_name("method")
+                        .is_some_and(|method| self.text(method) == "public");
+                    let arguments = Self::arguments_of(statement);
+                    if arguments.is_empty() {
+                        public = makes_public;
+                    }
+                    for argument in arguments {
+                        match argument.kind() {
+                            "method" => define(argument, makes_public, &mut defs),
+                            "simple_symbol" | "string" => match self.rails_literal(argument) {
+                                Some(name) => {
+                                    explicit.insert(name, makes_public);
+                                }
+                                None => out.unreadable = true,
+                            },
+                            "array" => match self.rails_names(argument) {
+                                Some(names) => {
+                                    for name in names {
+                                        explicit.insert(name, makes_public);
+                                    }
+                                }
+                                None => out.unreadable = true,
+                            },
+                            _ => out.unreadable = true,
+                        }
+                    }
+                }
+                _ => {
+                    if self.defines_methods(statement) {
+                        out.unreadable = true;
+                    }
+                }
+            }
+        }
+        for def in defs {
+            if explicit.get(&def.name).copied().unwrap_or(def.public) {
+                out.public.insert((position, def.start));
+            }
+        }
+    }
+
+    /// Tells if the code has a `def`, or a call of `private`, `protected`, or `public`, outside a
+    /// nested class or module.
+    fn defines_methods(&self, node: Node<'_>) -> bool {
+        match node.kind() {
+            "method" => return true,
+            "class" | "module" | "singleton_class" => return false,
+            "call" => {
+                let method = node
+                    .child_by_field_name("method")
+                    .map_or("", |method| self.text(method));
+                if node.child_by_field_name("receiver").is_none()
+                    && matches!(method, "private" | "protected" | "public")
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+        children
+            .into_iter()
+            .any(|child| self.defines_methods(child))
     }
 
     /// Reads the callbacks in the children of the node. `conditional` tells that a branch that
@@ -1069,6 +1278,7 @@ impl<'a> Context<'a> {
     }
 }
 
+#[derive(Clone)]
 struct Callback {
     skip: bool,
     names: Vec<String>,
@@ -1104,8 +1314,119 @@ impl Callback {
     }
 }
 
-/// A class symbol and the position of its file.
-type Placed<'a> = (usize, &'a Symbol);
+/// The place of a guard in the chain: the index of its callback, the place of its name in the
+/// callback, and `prepend`.
+type Slot = (usize, usize, bool);
+
+/// The callbacks of a chain of classes in the order of Rails, ready to answer for an action.
+///
+/// A callback replaces the callbacks with its names, and it adds its names when it applies. Thus
+/// the last callback of a name decides the guard of that name. Only the lists `only:` and
+/// `except:` make the result depend on the action. The program keeps the result for an action that
+/// no list names. For another action, it works out again the names of the callbacks that list the
+/// action.
+struct Program {
+    callbacks: Vec<Callback>,
+    by_action: HashMap<String, Vec<usize>>,
+    by_name: HashMap<String, Vec<usize>>,
+    default_slots: HashMap<String, Slot>,
+    default_names: Vec<String>,
+}
+
+impl Program {
+    fn new(callbacks: Vec<Callback>) -> Self {
+        let mut by_action: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, callback) in callbacks.iter().enumerate() {
+            for name in &callback.names {
+                by_name.entry(name.clone()).or_default().push(index);
+            }
+            if callback.unreadable {
+                continue;
+            }
+            for action in callback.only.iter().chain(&callback.except).flatten() {
+                by_action.entry(action.clone()).or_default().push(index);
+            }
+        }
+        let mut program = Self {
+            callbacks,
+            by_action,
+            by_name,
+            default_slots: HashMap::new(),
+            default_names: Vec::new(),
+        };
+        let names: Vec<String> = program.by_name.keys().cloned().collect();
+        for name in names {
+            if let Some(slot) = program.slot_of(&name, "") {
+                program.default_slots.insert(name, slot);
+            }
+        }
+        let mut slots: Vec<(&str, Slot)> = program
+            .default_slots
+            .iter()
+            .map(|(name, slot)| (name.as_str(), *slot))
+            .collect();
+        order_slots(&mut slots);
+        program.default_names = slots.iter().map(|(name, _)| (*name).to_string()).collect();
+        program
+    }
+
+    /// The slot of the guard with the name, or `None` when the action has no such guard.
+    fn slot_of(&self, name: &str, action: &str) -> Option<Slot> {
+        for index in self.by_name.get(name)?.iter().rev() {
+            let callback = &self.callbacks[*index];
+            let applies = callback.applies_to(action);
+            if callback.skip {
+                if applies {
+                    return None;
+                }
+            } else {
+                return applies.then(|| {
+                    let place = callback.names.iter().position(|n| n == name).unwrap_or(0);
+                    (*index, place, callback.prepend)
+                });
+            }
+        }
+        None
+    }
+
+    fn guards_for(&self, action: &str) -> Vec<String> {
+        let Some(listing) = self.by_action.get(action) else {
+            return self.default_names.clone();
+        };
+        let affected: HashSet<&str> = listing
+            .iter()
+            .flat_map(|index| self.callbacks[*index].names.iter().map(String::as_str))
+            .collect();
+        let mut slots: Vec<(&str, Slot)> = self
+            .default_slots
+            .iter()
+            .filter(|(name, _)| !affected.contains(name.as_str()))
+            .map(|(name, slot)| (name.as_str(), *slot))
+            .collect();
+        for name in affected {
+            if let Some(slot) = self.slot_of(name, action) {
+                slots.push((name, slot));
+            }
+        }
+        order_slots(&mut slots);
+        slots
+            .into_iter()
+            .map(|(name, _)| name.to_string())
+            .collect()
+    }
+}
+
+/// Puts the guards in the order of Rails: the prepended guards first, the last one first, and
+/// then the other guards in the order of their callbacks.
+fn order_slots(slots: &mut [(&str, Slot)]) {
+    slots.sort_by(|(_, left), (_, right)| match (left.2, right.2) {
+        (true, true) => (right.0, right.1).cmp(&(left.0, left.1)),
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => (left.0, left.1).cmp(&(right.0, right.1)),
+    });
+}
 
 /// A class identity and an action name.
 type ActionKey = (String, String);
@@ -1113,38 +1434,113 @@ type ActionKey = (String, String);
 /// The symbol and the guards of an action.
 type Handler = (Option<String>, Vec<String>);
 
+/// A symbol of the index: the position of the file, and the position in the symbols of the file.
+type Placed = (usize, usize);
+
 /// The class that a short name gives. A name that belongs to two classes is ambiguous.
 enum UniqueClass {
     One(String),
     Many,
 }
 
+/// The public instance methods of the openings of a class, by the position of the file and the
+/// start of the name. `unreadable` tells that omen cannot read the visibility of a method.
+#[derive(Default)]
+struct Visibility {
+    public: HashSet<(usize, usize)>,
+    unreadable: bool,
+}
+
+/// What the files of the inflections say.
+#[derive(Default)]
+pub(super) struct Inflections {
+    /// The acronyms, by the lower case word.
+    acronyms: HashMap<String, String>,
+    /// An `acronym` call that omen cannot read, or a `clear` call. The name of a controller is
+    /// not known.
+    unreadable_acronym: bool,
+    /// A call that can change the singular of a word.
+    changes_singulars: bool,
+}
+
+/// Reads the inflection calls in the code: `acronym` with a string, and the calls that change
+/// a singular form.
+fn read_inflection_calls(node: Node<'_>, source: &[u8], out: &mut Inflections) {
+    if node.kind() == "call" {
+        let method = node
+            .child_by_field_name("method")
+            .map_or("", |method| super::syntax::text(method, source));
+        let has_receiver = node.child_by_field_name("receiver").is_some();
+        match method {
+            "acronym" => {
+                let mut cursor = node.walk();
+                let arguments: Vec<Node<'_>> = node
+                    .child_by_field_name("arguments")
+                    .map(|list| list.named_children(&mut cursor).collect())
+                    .unwrap_or_default();
+                let words: Vec<String> = arguments
+                    .iter()
+                    .filter_map(|argument| {
+                        let mut inner = argument.walk();
+                        let interpolated = argument
+                            .named_children(&mut inner)
+                            .any(|child| child.kind() == "interpolation");
+                        (argument.kind() == "string" && !interpolated).then(|| {
+                            super::syntax::unquote(super::syntax::text(*argument, source))
+                                .to_string()
+                        })
+                    })
+                    .collect();
+                if words.is_empty() || words.len() != arguments.len() {
+                    out.unreadable_acronym = true;
+                }
+                for word in words {
+                    out.acronyms.insert(word.to_lowercase(), word);
+                }
+            }
+            "clear" if has_receiver => {
+                out.unreadable_acronym = true;
+                out.changes_singulars = true;
+            }
+            "irregular" | "uncountable" | "human" => out.changes_singulars = true,
+            "singular" | "plural" if has_receiver => out.changes_singulars = true,
+            _ => {}
+        }
+    }
+    let mut cursor = node.walk();
+    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+    for child in children {
+        read_inflection_calls(child, source, out);
+    }
+}
+
 /// The controller classes by their chain of modules, and their methods by the class that holds
 /// them. The key of a method has the chain of its class. The index also keeps the superclass of
-/// each class, and each result that it computes. Omen builds the index one time for each routes
-/// file.
-pub(super) struct RailsIndex<'a> {
-    classes: HashMap<String, Vec<Placed<'a>>>,
-    methods: HashMap<String, HashMap<&'a str, Vec<&'a Symbol>>>,
+/// each class, and each result that it computes. Omen builds the index one time for each
+/// analysis, and each routes file uses it.
+pub(super) struct RailsShared {
+    classes: HashMap<String, Vec<Placed>>,
+    methods: HashMap<String, HashMap<String, Vec<Placed>>>,
     /// The superclass of each class identity. A class in a loop of superclasses has none.
     parents: HashMap<String, Option<String>>,
     child_counts: HashMap<String, usize>,
-    callbacks: RefCell<HashMap<String, Rc<Vec<Callback>>>>,
-    guards: RefCell<HashMap<ActionKey, Rc<Vec<String>>>>,
-    handled: RefCell<HashMap<ActionKey, Handler>>,
-    custom_inflections: std::cell::OnceCell<bool>,
+    inflections: std::sync::OnceLock<Inflections>,
+    callbacks: Mutex<HashMap<Placed, Arc<Vec<Callback>>>>,
+    visibility: Mutex<HashMap<String, Arc<Visibility>>>,
+    programs: Mutex<HashMap<String, Arc<Program>>>,
+    handled: Mutex<HashMap<ActionKey, Handler>>,
 }
 
-impl<'a> RailsIndex<'a> {
-    pub(super) fn build(all: &'a [FileSymbols]) -> Self {
-        let mut classes: HashMap<String, Vec<Placed<'a>>> = HashMap::new();
-        let mut superclasses: HashMap<&'a str, UniqueClass> = HashMap::new();
-        let mut methods: HashMap<String, HashMap<&'a str, Vec<&'a Symbol>>> = HashMap::new();
+impl RailsShared {
+    pub(super) fn build(all: &[FileSymbols]) -> Self {
+        let mut classes: HashMap<String, Vec<Placed>> = HashMap::new();
+        let mut superclasses: HashMap<&str, UniqueClass> = HashMap::new();
+        let mut methods: HashMap<String, HashMap<String, Vec<Placed>>> = HashMap::new();
         for (position, file) in all.iter().enumerate() {
             if file.language != Language::Ruby {
                 continue;
             }
-            for symbol in &file.symbols {
+            for (index, symbol) in file.symbols.iter().enumerate() {
                 if symbol.kind.is_type() {
                     let identity = qualified_name(file, symbol);
                     let unique = match superclasses.get(symbol.name.as_str()) {
@@ -1155,36 +1551,36 @@ impl<'a> RailsIndex<'a> {
                         Some(_) => UniqueClass::Many,
                     };
                     superclasses.insert(symbol.name.as_str(), unique);
-                    classes
-                        .entry(identity)
-                        .or_default()
-                        .push((position, symbol));
+                    classes.entry(identity).or_default().push((position, index));
                 } else if symbol.is_callable() {
                     let qualified = qualified_name(file, symbol);
                     if let Some(owner) = qualified.strip_suffix(&format!(".{}", symbol.name)) {
                         methods
                             .entry(owner.to_string())
                             .or_default()
-                            .entry(symbol.name.as_str())
+                            .entry(symbol.name.clone())
                             .or_default()
-                            .push(symbol);
+                            .push((position, index));
                     }
                 }
             }
         }
         for group in classes.values_mut() {
-            group.sort_by_key(|(position, symbol)| (*position, symbol.range.start_byte));
+            group.sort_by_key(|(position, index)| {
+                (*position, all[*position].symbols[*index].range.start_byte)
+            });
         }
-        let (parents, child_counts) = resolve_parents(&classes, &superclasses);
+        let (parents, child_counts) = resolve_parents(all, &classes, &superclasses);
         Self {
             classes,
             methods,
             parents,
             child_counts,
-            callbacks: RefCell::new(HashMap::new()),
-            guards: RefCell::new(HashMap::new()),
-            handled: RefCell::new(HashMap::new()),
-            custom_inflections: std::cell::OnceCell::new(),
+            inflections: std::sync::OnceLock::new(),
+            callbacks: Mutex::new(HashMap::new()),
+            visibility: Mutex::new(HashMap::new()),
+            programs: Mutex::new(HashMap::new()),
+            handled: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -1194,7 +1590,8 @@ impl<'a> RailsIndex<'a> {
 /// no superclass. A class that leads into a loop keeps its superclass. Omen visits each class one
 /// time.
 fn resolve_parents(
-    classes: &HashMap<String, Vec<Placed<'_>>>,
+    all: &[FileSymbols],
+    classes: &HashMap<String, Vec<Placed>>,
     superclasses: &HashMap<&str, UniqueClass>,
 ) -> (HashMap<String, Option<String>>, HashMap<String, usize>) {
     let raw: HashMap<&str, Option<&str>> = classes
@@ -1202,7 +1599,7 @@ fn resolve_parents(
         .map(|(identity, group)| {
             let parent = group
                 .iter()
-                .find_map(|(_, symbol)| symbol.supertypes.first())
+                .find_map(|(position, index)| all[*position].symbols[*index].supertypes.first())
                 .filter(|parent| !parent.contains("::"))
                 .and_then(|parent| match superclasses.get(parent.as_str()) {
                     Some(UniqueClass::One(found)) => Some(found.as_str()),
@@ -1247,104 +1644,6 @@ fn resolve_parents(
         *child_counts.entry(parent.clone()).or_default() += 1;
     }
     (parents, child_counts)
-}
-
-/// The names of the active guards in the order of Rails. A new callback replaces the callback
-/// with the same name. A callback goes to the back, or to the front when it has `prepend`.
-struct ActiveGuards {
-    ordered: std::collections::BTreeMap<i64, String>,
-    at: HashMap<String, i64>,
-    front: i64,
-    back: i64,
-}
-
-impl ActiveGuards {
-    fn new(names: &[String]) -> Self {
-        let mut active = Self {
-            ordered: std::collections::BTreeMap::new(),
-            at: HashMap::with_capacity(names.len()),
-            front: 0,
-            back: 0,
-        };
-        for name in names {
-            active.push_back(name);
-        }
-        active
-    }
-
-    fn remove(&mut self, name: &str) {
-        if let Some(slot) = self.at.remove(name) {
-            self.ordered.remove(&slot);
-        }
-    }
-
-    fn push_back(&mut self, name: &str) {
-        self.remove(name);
-        self.at.insert(name.to_string(), self.back);
-        self.ordered.insert(self.back, name.to_string());
-        self.back += 1;
-    }
-
-    fn push_front(&mut self, name: &str) {
-        self.remove(name);
-        self.front -= 1;
-        self.at.insert(name.to_string(), self.front);
-        self.ordered.insert(self.front, name.to_string());
-    }
-
-    /// A `before_action` call replaces the earlier callbacks with its names, and it adds a guard
-    /// only when it applies to the action. A `skip_before_action` call removes the guards of the
-    /// actions that it applies to.
-    fn apply(&mut self, callback: &Callback, action: &str) {
-        let applies = callback.applies_to(action);
-        for name in &callback.names {
-            if callback.skip {
-                if applies {
-                    self.remove(name);
-                }
-            } else {
-                self.remove(name);
-                if applies {
-                    if callback.prepend {
-                        self.push_front(name);
-                    } else {
-                        self.push_back(name);
-                    }
-                }
-            }
-        }
-    }
-
-    fn to_vec(&self) -> Vec<String> {
-        self.ordered.values().cloned().collect()
-    }
-
-    fn into_vec(self) -> Vec<String> {
-        self.ordered.into_values().collect()
-    }
-}
-
-/// Tells if the code has a call that changes the inflections: `inflections`, `irregular`,
-/// `uncountable`, `acronym`, or `singular`, `plural`, and `human` on a receiver.
-fn changes_inflections(node: Node<'_>, source: &[u8]) -> bool {
-    if node.kind() == "call" {
-        let method = node
-            .child_by_field_name("method")
-            .map_or("", |method| super::syntax::text(method, source));
-        let has_receiver = node.child_by_field_name("receiver").is_some();
-        if matches!(
-            method,
-            "inflections" | "irregular" | "uncountable" | "acronym"
-        ) || (has_receiver && matches!(method, "singular" | "plural" | "human"))
-        {
-            return true;
-        }
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-    children
-        .into_iter()
-        .any(|child| changes_inflections(child, source))
 }
 
 /// The chain of containers and the name of a class, joined with `.`. The key of the symbol has

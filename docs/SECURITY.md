@@ -164,10 +164,23 @@ inflections of Rails 7.2.2. For `categories`, the parameter is `:category_id`. F
 the word is uncountable, and the parameter is `:jeans_id`.
 
 An application can change the inflections. Omen checks the files in `config/initializers`
-and the files with `inflect` in the name. If one of them calls `inflections`, `irregular`,
-`uncountable`, `acronym`, or `inflect.singular`, omen skips the nested routes. The `member`
-routes and the `collection` routes stay. Comments do not change the inflections. Omen does
-not find a change in a different file.
+and the files with `inflect` in the name. If one of them calls `irregular`,
+`uncountable`, or `inflect.singular`, omen skips the nested routes. The `member` routes and the
+`collection` routes stay. Comments do not change the inflections. Omen does not find a change in
+a different file.
+
+Omen reads a literal `inflect.acronym "API"` call in the same files. It builds the class name as
+`camelize` of ActiveSupport does, so `api/users` gives `API::UsersController`. If an `acronym`
+argument is not a string, or the files call `clear`, omen does not know the class names. Then no
+route has a symbol or a guard.
+
+A route matches only a public instance method. A `def self.x` method, a method in `class << self`,
+and a method after `private` or `protected` do not match. A method that `private :x` or
+`private def x` hides does not match. If a class has a definition in a block, or a visibility call
+that omen cannot read, the route has no symbol.
+
+Omen reads a `draw` call only on `Rails.application.routes`, `Name::Application.routes`, or
+`Name::Engine.routes`.
 
 For a `resource` call, such as `resource :person`, the entry point has no symbol when the
 plural controller name is irregular.
