@@ -1,6 +1,12 @@
 //! Tokenizer for identifiers and code text.
 //!
-//! The search engine does not use this module yet.
+//! The search engine does not use this module. The retrieval gate rejected it
+//! for TF-IDF (see `docs/benchmarks/search-experiments.md`, experiment C). The
+//! benchmark in `src/benchmark/retrieval.rs` uses it to check queries.
+//!
+//! No index stores these tokens. The search cache stores the text of each
+//! symbol, and the engine tokenizes the text again at each search. Thus the
+//! module has no version number.
 //!
 //! An identifier is a sequence of letters, digits, and underscores. The
 //! tokenizer divides each identifier into parts at these boundaries:
@@ -33,10 +39,6 @@
 
 use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
-
-/// Change this value when the tokens for some input change. An index that an
-/// older version made is then not valid.
-pub const TOKENIZER_VERSION: u32 = 3;
 
 /// The lowercase form that the tokenizer uses: the NFKC form of the text, with
 /// each character changed independently of its neighbours.
@@ -279,11 +281,6 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(&tokenize(input), expected, "input: {input:?}");
         }
-    }
-
-    #[test]
-    fn the_version_is_set() {
-        assert_eq!(TOKENIZER_VERSION, 3);
     }
 
     proptest! {
