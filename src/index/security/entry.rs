@@ -2313,6 +2313,123 @@ mod tests {
         assert_eq!(verbs_and_paths(&rooted), ["GET /"]);
     }
 
+    fn guards_by_path(found: &[EntryPoint]) -> Vec<(String, Vec<String>)> {
+        let mut pairs: Vec<(String, Vec<String>)> = found
+            .iter()
+            .map(|entry| {
+                let route = entry.route.as_ref().unwrap();
+                (
+                    format!("{} {}", route.method, route.path),
+                    entry.guards.clone(),
+                )
+            })
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn only_and_except_make_a_guard_apply_to_some_actions() {
+        let routes = "Rails.application.routes.draw do\n  resources :users, only: [:index, :show, :edit]\nend\n";
+        let controller = "class UsersController\n  before_action :authenticate_user!, only: [:show, :edit]\n  before_action :load_audit, except: :index\n  before_action(:always, :tracked)\n  before_action :multi,\n    only: %i[\n      index\n    ]\n  before_action :conditional, if: :enabled?\n\n  def index; end\n  def show; end\n  def edit; end\nend\n";
+        let found = rails_routes(routes, &[("users_controller.rb", controller)]);
+        assert_eq!(
+            guards_by_path(&found),
+            [
+                (
+                    "GET /users".to_string(),
+                    strings(&["always", "tracked", "multi", "conditional"])
+                ),
+                (
+                    "GET /users/:id".to_string(),
+                    strings(&[
+                        "authenticate_user!",
+                        "load_audit",
+                        "always",
+                        "tracked",
+                        "conditional"
+                    ])
+                ),
+                (
+                    "GET /users/:id/edit".to_string(),
+                    strings(&[
+                        "authenticate_user!",
+                        "load_audit",
+                        "always",
+                        "tracked",
+                        "conditional"
+                    ])
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_guard_name_in_a_comment_or_a_string_is_not_a_guard() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"users#show\"\nend\n";
+        let controller = "class UsersController\n  # before_action :commented\n  before_action :real # and :not_this\n  NOTE = \"before_action :quoted\"\n\n  def show; end\nend\n";
+        let found = rails_routes(routes, &[("users_controller.rb", controller)]);
+        assert_eq!(found[0].guards, ["real"]);
+    }
+
+    #[test]
+    fn skip_before_action_removes_a_guard_for_the_listed_actions() {
+        let routes =
+            "Rails.application.routes.draw do\n  resources :pages, only: [:index, :show]\nend\n";
+        let base = "class ApplicationController\n  before_action :authenticate_user!\n  before_action :set_locale\nend\n";
+        let controller = "class PagesController < ApplicationController\n  skip_before_action :authenticate_user!, only: [:index]\n  skip_before_action :set_locale, except: [:index]\n\n  def index; end\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/application_controller.rb", base),
+                ("controllers/pages_controller.rb", controller),
+            ],
+        );
+        assert_eq!(
+            guards_by_path(&found),
+            [
+                ("GET /pages".to_string(), strings(&["set_locale"])),
+                (
+                    "GET /pages/:id".to_string(),
+                    strings(&["authenticate_user!"])
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn guards_of_a_superclass_in_the_repository_come_first() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"users#show\"\n  get \"/b\", to: \"orphans#show\"\n  get \"/c\", to: \"loops#show\"\nend\n";
+        let base = "class ApplicationController < ActionController::Base\n  before_action :authenticate_user!\nend\n";
+        let users = "class UsersController < ApplicationController\n  before_action :load_user\n  def show; end\nend\n";
+        let orphan = "class OrphansController < ExternalController\n  before_action :own\n  def show; end\nend\n";
+        let loops = "class LoopsController < LoopsController\n  before_action :once\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/application_controller.rb", base),
+                ("controllers/loops_controller.rb", loops),
+                ("controllers/orphans_controller.rb", orphan),
+                ("controllers/users_controller.rb", users),
+            ],
+        );
+        assert_eq!(
+            guards_by_path(&found),
+            [
+                (
+                    "GET /a".to_string(),
+                    strings(&["authenticate_user!", "load_user"])
+                ),
+                ("GET /b".to_string(), strings(&["own"])),
+                ("GET /c".to_string(), strings(&["once"])),
+            ]
+        );
+    }
+
     #[test]
     fn routes_that_omen_cannot_read_exactly_are_skipped() {
         let routes = "Rails.application.routes.draw do\n  name = \"dynamic\"\n  get \"/#{name}\", to: \"a#b\"\n  %w[a b].each do |part|\n    get \"/#{part}\", to: \"a#b\"\n  end\n  [:c].each do |part|\n    resources part\n  end\n  concern :commentable do\n    get \"/comments\", to: \"comments#index\"\n  end\n  resources :things, concerns: :commentable, only: [:index]\n  draw(:admin)\n  mount Sidekiq::Web => \"/sidekiq\"\n  resources :users, only: only_actions\n  resources :slugs, param: :slug\n  resources name\n  get \"/kept\", to: \"a#b\"\nend\n";

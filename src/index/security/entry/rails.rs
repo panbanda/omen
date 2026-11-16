@@ -33,7 +33,7 @@ use tree_sitter::Node;
 
 use super::{join_path, route, Context, Draft, EntryBasis, EntryKind};
 use crate::core::Language;
-use crate::index::model::Span;
+use crate::index::model::{Span, Symbol};
 
 /// The routes of a `resources` call, in the order of Rails.
 const COLLECTION_ACTIONS: [(&str, &str, &str); 8] = [
@@ -631,7 +631,10 @@ impl<'a> Context<'a> {
             None => self.symbol_named(action, Some(&class)),
             Some(container) => self.rails_module_action(container, &class, action),
         };
-        (symbol, self.rails_guards(&class, container.as_deref()))
+        (
+            symbol,
+            self.rails_guards(&class, container.as_deref(), action),
+        )
     }
 
     /// The action of a controller class that is in a module. The index must give the module as the
@@ -660,47 +663,182 @@ impl<'a> Context<'a> {
         (found.len() == 1).then(|| found[0].key.to_string())
     }
 
-    /// The `before_action` callbacks in the body of a controller class, in any file.
-    fn rails_guards(&self, class: &str, container: Option<&str>) -> Vec<String> {
+    /// The guards of an action: the `before_action` callbacks of the controller class and of
+    /// its superclasses in the repository, after the `skip_before_action` calls.
+    fn rails_guards(&self, class: &str, container: Option<&str>, action: &str) -> Vec<String> {
         let mut guards = Vec::new();
         for (position, file) in self.all.iter().enumerate() {
             if file.language != Language::Ruby {
                 continue;
             }
-            let Some(symbol) = file.symbols.iter().find(|symbol| {
+            for symbol in file.symbols.iter().filter(|symbol| {
                 symbol.name == class
                     && symbol.kind.is_type()
                     && container.is_none_or(|wanted| symbol.container.as_deref() == Some(wanted))
-            }) else {
-                continue;
-            };
-            let Some(parsed) = self.all_parsed.tree(position) else {
-                continue;
-            };
-            let source = String::from_utf8_lossy(&parsed.source);
-            for reference in &file.references {
-                let inside = reference.name_range.start_byte >= symbol.range.start_byte
-                    && reference.name_range.end_byte <= symbol.range.end_byte;
-                if !inside || !matches!(reference.name.as_str(), "before_action" | "before_filter")
-                {
-                    continue;
+            }) {
+                for guard in self.rails_chain_guards(position, symbol, action) {
+                    if !guards.contains(&guard) {
+                        guards.push(guard);
+                    }
                 }
-                let line = source
-                    .lines()
-                    .nth(reference.name_range.start_line as usize - 1);
-                let rest = line
-                    .and_then(|line| line.trim().split_once(' '))
-                    .map(|pair| pair.1);
-                guards.extend(
-                    rest.unwrap_or("")
-                        .split(',')
-                        .map(str::trim)
-                        .filter_map(|part| part.strip_prefix(':'))
-                        .map(str::to_string),
-                );
             }
         }
         guards
+    }
+
+    /// The class, then its superclass, as far as the repository has exactly one class for each
+    /// name. A qualified superclass name ends the chain.
+    fn rails_chain_guards(&self, position: usize, class: &Symbol, action: &str) -> Vec<String> {
+        let mut chain = vec![(position, class)];
+        while let Some((_, last)) = chain.last() {
+            let Some(parent) = last.supertypes.first() else {
+                break;
+            };
+            if parent.contains("::") {
+                break;
+            }
+            let candidates: Vec<(usize, &Symbol)> = self
+                .all
+                .iter()
+                .enumerate()
+                .filter(|(_, file)| file.language == Language::Ruby)
+                .flat_map(|(position, file)| {
+                    file.symbols
+                        .iter()
+                        .filter(|symbol| symbol.kind.is_type() && symbol.name == *parent)
+                        .map(move |symbol| (position, symbol))
+                })
+                .collect();
+            let [(parent_position, parent_symbol)] = candidates.as_slice() else {
+                break;
+            };
+            if chain.iter().any(|(_, seen)| seen.key == parent_symbol.key) {
+                break;
+            }
+            chain.push((*parent_position, parent_symbol));
+        }
+        let mut active: Vec<String> = Vec::new();
+        for (position, symbol) in chain.into_iter().rev() {
+            for callback in self.rails_callbacks(position, symbol) {
+                if !callback.applies_to(action) {
+                    continue;
+                }
+                if callback.skip {
+                    active.retain(|name| !callback.names.contains(name));
+                } else {
+                    for name in callback.names {
+                        if !active.contains(&name) {
+                            active.push(name);
+                        }
+                    }
+                }
+            }
+        }
+        active
+    }
+
+    /// The callback calls in the body of the class, in source order. A call in a method, or in a
+    /// nested class or module, is not a callback of this class.
+    fn rails_callbacks(&self, position: usize, class: &Symbol) -> Vec<Callback> {
+        let Some(parsed) = self.all_parsed.tree(position) else {
+            return Vec::new();
+        };
+        let Some(mut node) = parsed
+            .root_node()
+            .descendant_for_byte_range(class.range.start_byte, class.range.end_byte)
+        else {
+            return Vec::new();
+        };
+        while !matches!(node.kind(), "class" | "module") {
+            let Some(parent) = node.parent() else {
+                return Vec::new();
+            };
+            node = parent;
+        }
+        let reader = Context::new(
+            &parsed,
+            &self.all[position],
+            self.all,
+            self.all_parsed,
+            self.rules,
+        );
+        let mut callbacks = Vec::new();
+        reader.collect_callbacks(node, &mut callbacks);
+        callbacks
+    }
+
+    fn collect_callbacks(&self, node: Node<'_>, out: &mut Vec<Callback>) {
+        let mut cursor = node.walk();
+        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+        for child in children {
+            match child.kind() {
+                "method" | "singleton_method" | "class" | "module" | "singleton_class" => {}
+                "call" if child.child_by_field_name("receiver").is_none() => {
+                    match self.rails_callback(child) {
+                        Some(callback) => out.push(callback),
+                        None => self.collect_callbacks(child, out),
+                    }
+                }
+                _ => self.collect_callbacks(child, out),
+            }
+        }
+    }
+
+    /// The names, the `only:` and `except:` lists, and the conditions of a callback call.
+    /// A list that is not a literal gives no condition, so the callback applies to each action.
+    fn rails_callback(&self, call: Node<'_>) -> Option<Callback> {
+        let skip = match self.text(call.child_by_field_name("method")?) {
+            "before_action" | "before_filter" => false,
+            "skip_before_action" | "skip_before_filter" => true,
+            _ => return None,
+        };
+        let arguments = Self::arguments_of(call);
+        let options = self.rails_options(&arguments);
+        let names = Self::rails_positional(&arguments)
+            .into_iter()
+            .filter_map(|argument| self.rails_literal(argument))
+            .collect();
+        let list = |key: &str| {
+            options
+                .as_ref()
+                .and_then(|options| options.get(key))
+                .and_then(|value| self.rails_names(value))
+        };
+        let conditional = options
+            .as_ref()
+            .is_some_and(|options| options.get("if").is_some() || options.get("unless").is_some());
+        Some(Callback {
+            skip,
+            names,
+            only: list("only"),
+            except: list("except"),
+            conditional,
+        })
+    }
+}
+
+struct Callback {
+    skip: bool,
+    names: Vec<String>,
+    only: Option<Vec<String>>,
+    except: Option<Vec<String>>,
+    /// An `if:` or `unless:` option. A condition does not decide the action.
+    conditional: bool,
+}
+
+impl Callback {
+    /// A `skip_before_action` call with a condition removes no guard, because omen does not
+    /// evaluate the condition.
+    fn applies_to(&self, action: &str) -> bool {
+        (!self.skip || !self.conditional)
+            && self
+                .only
+                .as_ref()
+                .is_none_or(|only| only.iter().any(|name| name == action))
+            && self
+                .except
+                .as_ref()
+                .is_none_or(|except| !except.iter().any(|name| name == action))
     }
 }
 
