@@ -244,15 +244,22 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   function writes no package-level variable, no parameter, and no router that it did
   not make. The summary has the prefixes and the guards of the returned router. A call
   of the function gives a new router with these prefixes and guards.
-- A function registers routes on the router that it returns. The paths of these routes
-  depend on the call. A call can mount the result at a prefix. Thus omen gives no entry
-  for these routes when a call of the function attaches the result. A call attaches the
-  result when it passes the result as an argument, returns it, or stores it in a field,
-  a package variable, or a literal. The call `http.ListenAndServe(address, router)` and
-  a literal `http.Server{Handler: router}` serve the result as the root, so they do not
-  attach it. A function without a summary that returns a router it made gives no entry
-  for these routes. A function that returns a group or a sub-router gives none either.
-  A function that no call of the file attaches keeps its routes at the paths of the function.
+- A function or a method registers routes on the router that it returns. The paths of
+  these routes depend on the call. A call can mount the result at a prefix. Omen
+  reads the calls of the whole repository, in each file of each package, with the
+  references of the index. A call is one of three kinds. The first kind serves the
+  result as the root: `http.ListenAndServe(address, router)`, a literal
+  `http.Server{Handler: router}`, a call that discards the result, and a local variable
+  that only calls methods or serves the result. The second kind attaches the result: it passes the
+  result as an argument, returns it, or stores it in a field, a package variable, or a
+  literal. The third kind is a use that omen cannot classify. If one call of the
+  function is of the second or the third kind, omen gives no entry for these routes.
+- A function without a summary that returns a router it made gives no entry for these
+  routes. A function that returns a group or a sub-router gives none either. A
+  function or a method that no call in the repository uses keeps its routes at the
+  paths of the function, because the function can be an entry of a library. A call that
+  the index does not resolve to the function, as a call through a function value, is not
+  a call of the function for omen.
 - These values have no proof, and the routes on them give no entry: the result of a
   function without a summary, the result of a recursive function, a package-level router
   that a function assigns, and a router that a function receives as a parameter of a

@@ -160,6 +160,7 @@ pub trait TreeSource: Sync {
 #[derive(Default)]
 pub struct EntryShared {
     rails: std::sync::OnceLock<rails::RailsShared>,
+    go_call_sites: std::sync::OnceLock<go_routes::CallSites>,
 }
 
 /// The syntax trees that the entry point rules ask for in other files. The source
@@ -1809,7 +1810,7 @@ mod tests {
             .collect();
         link_files(&mut index);
         if resolve {
-            resolve_imports(&mut index, &Manifests::default());
+            resolve_imports(&mut index, &test_manifests());
             resolve_references(&mut index);
         }
         let started = std::time::Instant::now();
@@ -1817,8 +1818,20 @@ mod tests {
         (found, started.elapsed())
     }
 
+    /// The Go module `example.com/app` is at the root of the files of a test.
+    fn test_manifests() -> Manifests {
+        let mut manifests = Manifests::default();
+        manifests
+            .go_modules
+            .insert(String::new(), "example.com/app".to_string());
+        manifests
+    }
+
     /// The keys of each draft of the files, before the removal of equal keys.
     fn raw_entry_keys(language: Language, files: &[(&str, &str)]) -> Vec<String> {
+        let mut sorted = files.to_vec();
+        sorted.sort_by_key(|(name, _)| *name);
+        let files = sorted.as_slice();
         let parsed: Vec<ParseResult> = files
             .iter()
             .map(|(name, text)| {
@@ -1833,9 +1846,9 @@ mod tests {
             .map(|((name, _), parsed)| extract_file(parsed, name))
             .collect();
         link_files(&mut index);
-        resolve_imports(&mut index, &Manifests::default());
+        resolve_imports(&mut index, &test_manifests());
         resolve_references(&mut index);
-        let trees = Trees(&parsed);
+        let trees = Trees(&parsed, EntryShared::default());
         (0..parsed.len())
             .flat_map(|position| {
                 Context::new(&parsed[position], &index[position], &index, &trees, &[])
@@ -2871,6 +2884,132 @@ func routes() {
                 "chi GET /a/x [audit] show",
                 "chi GET /b/x [audit] show",
             ]
+        );
+    }
+
+    fn go_file(imports: &[&str], body: &str) -> String {
+        let imports: String = imports.iter().map(|name| format!("\t{name}\n")).collect();
+        format!("package main\n\nimport (\n{imports})\n\n{body}")
+    }
+
+    fn factory_file(name: &str, path: &str) -> String {
+        go_source(
+            &[CHI],
+            &format!(
+                "func {name}() *chi.Mux {{\n\tr := chi.NewRouter()\n\tr.Get(\"{path}\", list)\n\treturn r\n}}\n"
+            ),
+        )
+    }
+
+    #[test]
+    fn a_call_in_another_file_that_mounts_a_factory_removes_its_routes() {
+        let router = factory_file("NewRouter", "/x");
+        let main = go_file(
+            &[CHI],
+            "func serve() {\n\troot := chi.NewRouter()\n\troot.Mount(\"/api\", NewRouter())\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[("router.go", &router), ("main.go", &main)]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_call_in_another_file_that_serves_a_factory_as_the_root_keeps_its_routes() {
+        let router = factory_file("NewRouter", "/x");
+        let main = go_file(
+            &["\"net/http\"", CHI],
+            "func serve() {\n\tr := NewRouter()\n\tr.Get(\"/y\", nil)\n\thttp.ListenAndServe(\":80\", r)\n\thttp.ListenAndServe(\":81\", NewRouter())\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[("router.go", &router), ("main.go", &main)]),
+            ["chi GET /x [] list"]
+        );
+    }
+
+    #[test]
+    fn a_call_in_another_file_that_passes_the_result_on_gives_no_entry() {
+        let router = factory_file("NewRouter", "/x");
+        let other = factory_file("OtherRouter", "/z");
+        let main = go_file(
+            &[CHI],
+            "func setup(r chi.Router) {}\n\nfunc serve() {\n\tr := NewRouter()\n\tsetup(r)\n\to := OtherRouter()\n\t_ = o\n\tgo func() { o.Get(\"/w\", nil) }()\n\tx := OtherRouter()\n\tholder = x\n}\n\nvar holder chi.Router\n",
+        );
+        assert_eq!(
+            go_routes(&[
+                ("main.go", &main),
+                ("other.go", &other),
+                ("router.go", &router)
+            ]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_call_through_the_import_of_another_package_attaches_the_factory() {
+        let router = factory_file("NewRouter", "/x").replacen("package main", "package api", 1);
+        let main = go_file(
+            &[CHI, "\"example.com/app/api\""],
+            "func serve() {\n\troot := chi.NewRouter()\n\troot.Mount(\"/api\", api.NewRouter())\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[("api/router.go", &router), ("main.go", &main)]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_factory_without_a_call_in_the_repository_keeps_its_routes() {
+        let router = factory_file("NewRouter", "/x");
+        let main = go_file(&[], "func serve() {}\n");
+        assert_eq!(
+            go_routes(&[("router.go", &router), ("main.go", &main)]),
+            ["chi GET /x [] list"]
+        );
+    }
+
+    #[test]
+    fn a_method_that_returns_a_router_follows_the_same_rule() {
+        let server = go_source(
+            &[CHI],
+            "type Server struct{}\n\nfunc (s *Server) Routes() *chi.Mux {\n\tr := chi.NewRouter()\n\tr.Get(\"/m\", list)\n\treturn r\n}\n",
+        );
+        let main = go_file(
+            &[CHI],
+            "func serve(s *Server) {\n\troot := chi.NewRouter()\n\troot.Mount(\"/api\", s.Routes())\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[("server.go", &server), ("main.go", &main)]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn timing_five_thousand_files_that_call_one_factory_are_read_in_linear_time() {
+        let router = factory_file("NewRouter", "/x");
+        let mut files: Vec<(String, String)> = vec![("router.go".to_string(), router)];
+        for index in 0..5_000 {
+            files.push((
+                format!("use{index:05}.go"),
+                go_file(
+                    &["\"net/http\""],
+                    &format!(
+                        "func serve{index}() {{\n\thttp.ListenAndServe(\":80\", NewRouter())\n}}\n"
+                    ),
+                ),
+            ));
+        }
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(name, text)| (name.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &borrowed);
+        assert_eq!(found.len(), 1);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(120),
+            "took {:?}",
+            started.elapsed()
         );
     }
 

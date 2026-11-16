@@ -17,9 +17,11 @@
 //! of the function gives a new router with these prefixes and guards. The routes that
 //! the function registers on its own routers give their entries in the function, with
 //! the paths of the function. A call can attach the returned router to a parent, so the
-//! paths of these routes can depend on the call. When a call attaches the result, or
-//! when the use of the result is not known, these routes give no entry. A call that
-//! serves the result as the root does not attach it.
+//! paths of these routes can depend on the call. When a call anywhere in the repository
+//! attaches the result, or when the use of the result is not known, these routes give
+//! no entry. A call that serves the result as the root does not attach it. A function
+//! that no call in the repository uses keeps its routes. The analysis reads the calls of
+//! the repository one time, with the references of the index, and shares the result.
 //!
 //! When the syntax does not prove a fact, the walk gives no entry. These values have
 //! no proof: the result of a function without a summary, a package-level router that a
@@ -30,9 +32,10 @@ use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
 
-use super::{route_parameters, Context, Draft, EntryBasis, EntryKind, Route};
+use super::{route_parameters, Context, Draft, EntryBasis, EntryKind, Route, TreeSource};
+use crate::core::Language;
 use crate::index::extract::FileSymbols;
-use crate::index::model::{ImportKind, Span, Symbol};
+use crate::index::model::{ImportKind, Reference, Span, Symbol};
 
 /// The methods that `Any` registers. gin v1.11.0 `anyMethods`.
 const GIN_ANY: [&str; 9] = [
@@ -409,6 +412,17 @@ impl<'a> Context<'a> {
         )
     }
 
+    /// Tells if a call anywhere in the repository attaches the result of the function, or
+    /// uses it in a way that the walk cannot classify. The analysis computes the facts
+    /// one time for all files.
+    fn go_factory_blocked(&self, key: &str) -> bool {
+        self.all_parsed
+            .shared()
+            .go_call_sites
+            .get_or_init(|| CallSites::build(self.all, self.all_parsed))
+            .is_blocked(key)
+    }
+
     /// The name of a guard that a call or an identifier gives, as `auth` or `middleware.Auth`.
     fn go_guard_name(&self, node: Node<'_>) -> Option<String> {
         match node.kind() {
@@ -615,6 +629,294 @@ impl<'a> Context<'a> {
         (from_net_http && field == "HandlerFunc")
             || (from(Framework::Gin) && matches!(field, "WrapF" | "WrapH"))
             || (from(Framework::Echo) && field == "WrapHandler")
+    }
+}
+
+/// The factories of the repository with a call that attaches the result, or that the
+/// walk cannot classify. A factory is a function or a method that returns a router. A call
+/// serves the result as the root, or it attaches it to a parent. One pass over the files
+/// that call a factory gives the facts for the whole analysis.
+#[derive(Default)]
+pub(super) struct CallSites {
+    /// The keys of the symbols of the factories.
+    blocked: HashSet<String>,
+}
+
+/// The words in the result type of a function that returns a router or a handler.
+const ROUTER_WORDS: [&str; 8] = [
+    "Router", "Mux", "Engine", "Echo", "Group", "Handler", "IRoutes", "IRouter",
+];
+
+impl CallSites {
+    pub(super) fn is_blocked(&self, key: &str) -> bool {
+        self.blocked.contains(key)
+    }
+
+    pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> Self {
+        let factories: HashSet<&str> = files
+            .iter()
+            .filter(|file| file.language == Language::Go)
+            .flat_map(|file| &file.symbols)
+            .filter(|symbol| symbol.is_callable())
+            .filter(|symbol| {
+                parse_signature(&symbol.signature, &symbol.name).is_some_and(|signature| {
+                    ROUTER_WORDS
+                        .iter()
+                        .any(|word| signature.result.contains(word))
+                })
+            })
+            .map(|symbol| &*symbol.key)
+            .collect();
+        let mut blocked = HashSet::new();
+        if factories.is_empty() {
+            return Self { blocked };
+        }
+        for (position, file) in files.iter().enumerate() {
+            if file.language != Language::Go {
+                continue;
+            }
+            let sites: Vec<(&Reference, Vec<&str>)> = file
+                .references
+                .iter()
+                .filter_map(|reference| {
+                    let keys: Vec<&str> = reference
+                        .resolution
+                        .candidates
+                        .iter()
+                        .map(|key| &**key)
+                        .filter(|key| factories.contains(key))
+                        .collect();
+                    (!keys.is_empty()).then_some((reference, keys))
+                })
+                .collect();
+            if sites.is_empty() {
+                continue;
+            }
+            let Some(tree) = trees.tree(position) else {
+                blocked.extend(
+                    sites
+                        .iter()
+                        .flat_map(|(_, keys)| keys)
+                        .map(|key| key.to_string()),
+                );
+                continue;
+            };
+            let index = FileUses::new(tree.root_node(), &tree.source, file);
+            for (reference, keys) in sites {
+                if index.is_blocked(
+                    reference.name_range.start_byte,
+                    reference.name_range.end_byte,
+                ) {
+                    blocked.extend(keys.into_iter().map(str::to_string));
+                }
+            }
+        }
+        Self { blocked }
+    }
+}
+
+/// The uses of the variables of one file that the classification of a call site needs.
+struct FileUses<'t> {
+    root: Node<'t>,
+    source: &'t [u8],
+    http: Vec<String>,
+    /// The start of each use of a name that is not a use as a router, by name, in order.
+    bad: HashMap<String, Vec<usize>>,
+}
+
+impl<'t> FileUses<'t> {
+    fn new(root: Node<'t>, source: &'t [u8], file: &FileSymbols) -> Self {
+        let mut uses = Self {
+            root,
+            source,
+            http: package_names(file, |module| module == "net/http", "http"),
+            bad: HashMap::new(),
+        };
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            if node.kind() == "identifier" && uses.is_bad_use(node) {
+                let name = uses.text(node).to_string();
+                uses.bad.entry(name).or_default().push(node.start_byte());
+            }
+            let mut cursor = node.walk();
+            let children: Vec<Node<'t>> = node.named_children(&mut cursor).collect();
+            pending.extend(children.into_iter().rev());
+        }
+        uses
+    }
+
+    fn text(&self, node: Node<'t>) -> &'t str {
+        std::str::from_utf8(&self.source[node.byte_range()]).unwrap_or("")
+    }
+
+    /// Tells if a call serves its argument as the root handler of a server.
+    fn is_sink(&self, call: Option<Node<'t>>) -> bool {
+        let Some(function) = call
+            .filter(|call| call.kind() == "call_expression")
+            .and_then(|call| call.child_by_field_name("function"))
+            .filter(|function| function.kind() == "selector_expression")
+        else {
+            return false;
+        };
+        let (Some(operand), Some(field)) = (
+            function.child_by_field_name("operand"),
+            function.child_by_field_name("field"),
+        ) else {
+            return false;
+        };
+        matches!(
+            self.text(field),
+            "ListenAndServe" | "ListenAndServeTLS" | "Serve" | "ServeTLS"
+        ) && self.http.iter().any(|name| name == self.text(operand))
+    }
+
+    /// Tells if a literal is an `http.Server`, which serves its handler as the root.
+    fn is_server_literal(&self, literal: Node<'t>) -> bool {
+        literal
+            .child_by_field_name("type")
+            .map(|kind| self.text(kind))
+            .and_then(|kind| kind.split_once('.'))
+            .is_some_and(|(package, name)| {
+                name == "Server" && self.http.iter().any(|known| known == package)
+            })
+    }
+
+    /// Tells if a use of a name is not a use as a router that the walk understands. A router
+    /// that a variable holds is only a receiver of a call, or the root handler of a server.
+    fn is_bad_use(&self, node: Node<'t>) -> bool {
+        let mut child = node;
+        let mut parent = child.parent();
+        while let Some(found) = parent.filter(|found| found.kind() == "parenthesized_expression") {
+            child = found;
+            parent = found.parent();
+        }
+        let Some(parent) = parent else {
+            return false;
+        };
+        match parent.kind() {
+            "selector_expression" => parent.child_by_field_name("operand") != Some(child),
+            "argument_list" => !self.is_sink(parent.parent()),
+            "var_spec" => parent.child_by_field_name("value") == Some(child),
+            "expression_list" => {
+                let Some(grand) = parent.parent() else {
+                    return false;
+                };
+                match grand.kind() {
+                    "short_var_declaration" | "assignment_statement" => {
+                        grand.child_by_field_name("left") != Some(parent)
+                    }
+                    "var_spec" => grand.child_by_field_name("value") == Some(parent),
+                    _ => true,
+                }
+            }
+            "literal_element" | "keyed_element" | "literal_value" => {
+                let mut up = parent.parent();
+                while let Some(found) = up.filter(|found| found.kind() != "composite_literal") {
+                    up = found.parent();
+                }
+                !up.is_some_and(|literal| self.is_server_literal(literal))
+            }
+            "block" | "statement_list" | "expression_statement" | "source_file" => false,
+            _ => true,
+        }
+    }
+
+    /// Tells if the call site that has the name at these bytes attaches the result, or has
+    /// a use that the walk cannot classify.
+    fn is_blocked(&self, start: usize, end: usize) -> bool {
+        let Some(mut node) = self.root.descendant_for_byte_range(start, end) else {
+            return true;
+        };
+        let call = loop {
+            if node.kind() == "call_expression"
+                && node
+                    .child_by_field_name("function")
+                    .is_some_and(|function| function.end_byte() == end)
+            {
+                break node;
+            }
+            match node.parent() {
+                Some(parent) => node = parent,
+                None => return true,
+            }
+        };
+        let mut value = call;
+        let mut parent = value.parent();
+        while let Some(found) = parent.filter(|found| found.kind() == "parenthesized_expression") {
+            value = found;
+            parent = found.parent();
+        }
+        let Some(parent) = parent else {
+            return true;
+        };
+        match parent.kind() {
+            "expression_statement" => false,
+            "selector_expression" => parent.child_by_field_name("operand") != Some(value),
+            "argument_list" => !self.is_sink(parent.parent()),
+            "literal_element" | "keyed_element" => {
+                let mut up = parent.parent();
+                while let Some(found) = up.filter(|found| found.kind() != "composite_literal") {
+                    up = found.parent();
+                }
+                !up.is_some_and(|literal| self.is_server_literal(literal))
+            }
+            "expression_list" => self.is_blocked_assignment(value, parent),
+            "var_spec" => true,
+            _ => true,
+        }
+    }
+
+    /// A call in a list of values: a local variable that only receives calls, or the blank name.
+    fn is_blocked_assignment(&self, value: Node<'t>, list: Node<'t>) -> bool {
+        let Some(declaration) = list.parent() else {
+            return true;
+        };
+        let kind = declaration.kind();
+        if !matches!(
+            kind,
+            "short_var_declaration" | "var_spec" | "assignment_statement"
+        ) {
+            return true;
+        }
+        let mut cursor = list.walk();
+        let values: Vec<Node<'t>> = list.named_children(&mut cursor).collect();
+        let Some(position) = values.iter().position(|candidate| *candidate == value) else {
+            return true;
+        };
+        let mut cursor = declaration.walk();
+        let names: Vec<Node<'t>> = if kind == "var_spec" {
+            declaration
+                .children_by_field_name("name", &mut cursor)
+                .collect()
+        } else {
+            let Some(left) = declaration.child_by_field_name("left") else {
+                return true;
+            };
+            let mut inner = left.walk();
+            left.named_children(&mut inner).collect()
+        };
+        let Some(target) = names.get(position).filter(|_| names.len() == values.len()) else {
+            return true;
+        };
+        let name = self.text(*target);
+        if name == "_" {
+            return false;
+        }
+        if kind == "assignment_statement" {
+            return true;
+        }
+        let mut block = declaration.parent();
+        while let Some(found) = block.filter(|found| found.kind() != "block") {
+            block = found.parent();
+        }
+        let Some(block) = block else {
+            return true;
+        };
+        let (from, to) = (declaration.end_byte(), block.end_byte());
+        self.bad.get(name).is_some_and(|starts| {
+            let first = starts.partition_point(|start| *start <= from);
+            starts.get(first).is_some_and(|start| *start < to)
+        })
     }
 }
 
@@ -826,24 +1128,35 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let globals = self.scopes.swap_remove(0);
         self.scopes = saved;
         self.scopes[0] = globals;
-        if let (Some(name), Some(frame)) = (declared, frame) {
-            let summary = frame
-                .returned
-                .filter(|_| frame.pure && !declared.is_some_and(|name| self.cyclic.contains(name)))
-                .and_then(|router| self.summarize(router, owner));
-            let comp = frame
-                .returned
-                .filter(|router| self.made_by(*router, owner))
-                .map(|router| self.component(router, &frame.created));
-            if let Some(comp) = comp {
-                let needs_a_call_site = summary
+        let Some(frame) = frame else {
+            return;
+        };
+        let key = node
+            .child_by_field_name("name")
+            .and_then(|name| self.context.symbol_at(name));
+        let summary = frame
+            .returned
+            .filter(|_| frame.pure && declared.is_some_and(|name| !self.cyclic.contains(name)))
+            .and_then(|router| self.summarize(router, owner));
+        let comp = frame
+            .returned
+            .filter(|router| self.made_by(*router, owner))
+            .map(|router| self.component(router, &frame.created));
+        let id = declared.map(str::to_string).or_else(|| key.clone());
+        if let (Some(id), Some(comp)) = (id, comp) {
+            let needs_a_summary = declared.is_some()
+                && summary
                     .as_ref()
                     .is_none_or(|summary| !summary.prefixes.is_empty());
-                if needs_a_call_site {
-                    self.attached.insert(name.to_string());
-                }
-                self.components.insert(name.to_string(), comp);
+            let attached_in_the_repository = key
+                .as_deref()
+                .is_some_and(|key| self.context.go_factory_blocked(key));
+            if needs_a_summary || attached_in_the_repository {
+                self.attached.insert(id.clone());
             }
+            self.components.insert(id, comp);
+        }
+        if let Some(name) = declared {
             self.summaries.insert(name.to_string(), summary);
         }
     }
