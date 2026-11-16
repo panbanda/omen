@@ -1409,13 +1409,14 @@ impl<'a> Context<'a> {
         let path = path
             .split_once(' ')
             .map_or(path.clone(), |(_, rest)| rest.to_string());
+        let wrapped = self.go_handler(*handler);
         out.push(Draft {
             range: Span::of(&node),
             kind: EntryKind::HttpHandler,
-            symbol: self.handler_symbol(*handler),
+            symbol: wrapped.symbol,
             framework: "net/http",
             route: Some(route(&method, path)),
-            guards: Vec::new(),
+            guards: wrapped.guards,
             basis: EntryBasis::Registered,
             variant: None,
         });
@@ -2265,6 +2266,38 @@ mod tests {
             "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n{GO_HANDLERS}func routes(store thing) {{\n\tstore.GET(\"/a\", list)\n\tstore.Group(\"/x\").GET(\"/b\", list)\n\trouter := newRouter()\n\trouter.GET(\"/c\", list)\n}}\n"
         );
         assert!(go_routes(&[("main.go", &unproven)]).is_empty());
+    }
+
+    #[test]
+    fn net_http_wrapped_handlers_give_the_inner_function_and_the_wrappers_as_guards() {
+        let source = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n)\n\n{GO_HANDLERS}func routes() {{\n\thttp.Handle(\"/p\", auth(http.HandlerFunc(show)))\n\thttp.HandleFunc(\"/q\", auth(show))\n\thttp.Handle(\"/r\", audit(auth(http.HandlerFunc(show))))\n\thttp.HandleFunc(\"/s\", combine(list, show))\n\thttp.HandleFunc(\"/t\", makeHandler(\"x\"))\n\thttp.Handle(\"/u\", http.StripPrefix(\"/x\", files))\n\tmux := http.NewServeMux()\n\tmux.Handle(\"/v\", middleware.Auth(cfg)(http.HandlerFunc(show)))\n\tmux.HandleFunc(\"GET /w/{{id}}\", wrap(db, show))\n\thttp.HandleFunc(\"/x\", http.HandlerFunc(list))\n}}\n"
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "net/http ANY /p [auth] show",
+                "net/http ANY /q [auth] show",
+                "net/http ANY /r [audit,auth] show",
+                "net/http ANY /s [combine] -",
+                "net/http ANY /t [] -",
+                "net/http ANY /u [] -",
+                "net/http ANY /v [middleware.Auth] show",
+                "net/http GET /w/{id} [wrap] show",
+                "net/http ANY /x [] list",
+            ]
+        );
+    }
+
+    #[test]
+    fn framework_handler_adapters_are_not_guards() {
+        let source = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n{GO_HANDLERS}func routes() {{\n\tr := gin.New()\n\tr.GET(\"/a\", gin.WrapF(show))\n\tr.GET(\"/b\", auth(show))\n}}\n"
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gin GET /a [] show", "gin GET /b [auth] show"]
+        );
     }
 
     #[test]

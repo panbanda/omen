@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Go. The functions auth, audit, combine, wrap, and the variable db are not in the case. The harness does not build or run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "wrapped_p", "file": "main.go", "line": 10, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/p", "guards": ["auth"]},
+    {"label": "wrapped_q", "file": "main.go", "line": 11, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/q", "guards": ["auth"]},
+    {"label": "wrapped_r", "file": "main.go", "line": 12, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/r", "guards": ["audit", "auth"]},
+    {"label": "wrapped_s", "file": "main.go", "line": 13, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/s", "guards": ["combine"]},
+    {"label": "wrapped_w", "file": "main.go", "line": 14, "kind": "http_handler", "framework": "net/http", "method": "GET", "path": "/w/{id}", "parameters": ["id"], "guards": ["wrap"]}
+  ]
+}

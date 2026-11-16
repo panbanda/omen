@@ -235,6 +235,10 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   is a value that the import of the framework proves. It is a constructor call, a
   group or sub-router of a router, or a parameter that has a router type. A variable
   name alone does not prove a router.
+- A handler that a call wraps, as in `http.Handle("/p", auth(http.HandlerFunc(show)))`,
+  has the guard `auth`. The handler is the one argument of the wrapper that names a
+  function of the repository. If a wrapper has more than one such argument, the entry
+  has no handler. A conversion such as `http.HandlerFunc` or `gin.WrapF` is not a guard.
 - For chi, a prefix comes from `Route`. A guard comes from `Use` and `With`, and
   applies to the routes that follow it. `Mount` joins a router of the same file. It
   skips a router of another file.

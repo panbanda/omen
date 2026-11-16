@@ -161,17 +161,23 @@ impl<'a> Context<'a> {
                     .map(|argument| self.go_handler(argument))
                     .filter(|handler| handler.function_like)
                     .collect();
-                let (Some(name), 1) = (self.go_guard_name(function), inner.len()) else {
+                if inner.is_empty() {
+                    return Handler::default();
+                }
+                let Some(name) = self.go_guard_name(function) else {
                     return Handler {
-                        function_like: !inner.is_empty(),
+                        function_like: true,
                         ..Handler::default()
                     };
                 };
-                let only = inner.remove(0);
+                let (symbol, nested) = match inner.pop() {
+                    Some(only) if inner.is_empty() => (only.symbol, only.guards),
+                    _ => (None, Vec::new()),
+                };
                 let mut guards = vec![name];
-                guards.extend(only.guards);
+                guards.extend(nested);
                 Handler {
-                    symbol: only.symbol,
+                    symbol,
                     guards,
                     function_like: true,
                 }
@@ -192,16 +198,20 @@ impl<'a> Context<'a> {
             return false;
         };
         let (operand, field) = (self.text(operand), self.text(field));
-        self.file
+        let from_net_http = self
+            .file
             .imports
             .iter()
             .filter(|binding| binding.local_name.as_deref() == Some(operand))
-            .any(|binding| {
-                matches!(
-                    (binding.module_path.as_str(), field),
-                    ("net/http", "HandlerFunc")
-                )
-            })
+            .any(|binding| binding.module_path == "net/http");
+        let from = |framework: Framework| {
+            self.go_package_names(framework)
+                .iter()
+                .any(|name| name == operand)
+        };
+        (from_net_http && field == "HandlerFunc")
+            || (from(Framework::Gin) && matches!(field, "WrapF" | "WrapH"))
+            || (from(Framework::Echo) && field == "WrapHandler")
     }
 }
 
