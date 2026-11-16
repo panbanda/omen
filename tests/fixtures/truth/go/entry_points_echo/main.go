@@ -19,7 +19,6 @@ func routes() *echo.Echo {
 	admin.Use(extra)
 	admin.POST("/users", list)
 	api.PUT("/late", list)
-	e.Any("/any", list)
 	e.Match([]string{"GET", "POST"}, "/multi", list)
 	return e
 }

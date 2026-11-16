@@ -700,8 +700,10 @@ impl<'a> Context<'a> {
                 }
             })
             .collect();
-        // One registration can give more than one route, as a router that two paths mount does.
-        // The path then separates the keys. A key without a collision does not change.
+        // One registration can give more than one entry, as a router that two paths mount
+        // does. The path then separates the keys. A key without a collision does not change.
+        // Two entries with the same path, as two calls of a function give, get the number of
+        // their place in the walk. The walk order is the same for each run.
         let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for entry in &entries {
             *counts.entry(entry.key.clone()).or_default() += 1;
@@ -711,6 +713,19 @@ impl<'a> Context<'a> {
                 if let Some(route) = &entry.route {
                     entry.key = format!("{}:{}", entry.key, route.path);
                 }
+            }
+        }
+        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut totals: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for entry in &entries {
+            *totals.entry(entry.key.clone()).or_default() += 1;
+        }
+        for entry in &mut entries {
+            if totals[&entry.key] > 1 {
+                let number = seen.entry(entry.key.clone()).or_default();
+                let suffixed = format!("{}#{number}", entry.key);
+                *number += 1;
+                entry.key = suffixed;
             }
         }
         entries
@@ -1802,6 +1817,35 @@ mod tests {
         (found, started.elapsed())
     }
 
+    /// The keys of each draft of the files, before the removal of equal keys.
+    fn raw_entry_keys(language: Language, files: &[(&str, &str)]) -> Vec<String> {
+        let parsed: Vec<ParseResult> = files
+            .iter()
+            .map(|(name, text)| {
+                Parser::new()
+                    .parse(text.as_bytes(), language, Path::new(name))
+                    .unwrap()
+            })
+            .collect();
+        let mut index: Vec<FileSymbols> = files
+            .iter()
+            .zip(&parsed)
+            .map(|((name, _), parsed)| extract_file(parsed, name))
+            .collect();
+        link_files(&mut index);
+        resolve_imports(&mut index, &Manifests::default());
+        resolve_references(&mut index);
+        let trees = Trees(&parsed);
+        (0..parsed.len())
+            .flat_map(|position| {
+                Context::new(&parsed[position], &index[position], &index, &trees, &[])
+                    .detect()
+                    .into_iter()
+                    .map(|entry| entry.key)
+            })
+            .collect()
+    }
+
     fn route(method: &str, path: &str, parameters: &[&str]) -> Option<Route> {
         Some(Route {
             method: method.to_string(),
@@ -2086,6 +2130,13 @@ mod tests {
     }
 
     fn go_routes(files: &[(&str, &str)]) -> Vec<String> {
+        let keys = raw_entry_keys(Language::Go, files);
+        let unique: std::collections::HashSet<&String> = keys.iter().collect();
+        assert_eq!(
+            keys.len(),
+            unique.len(),
+            "each draft has its own key: {keys:?}"
+        );
         entries(Language::Go, files)
             .into_iter()
             .filter(|entry| entry.kind == EntryKind::HttpHandler)
@@ -2181,18 +2232,19 @@ func makeHandler(callback func(error)) http.Handler { return nil }
     }
 
     #[test]
-    fn a_chi_use_after_a_route_panics_so_the_later_routes_are_not_entries() {
+    fn a_chi_use_guards_the_routes_of_its_router_in_any_source_order() {
         let source = go_source(
             &[CHI],
             r#"func routes() {
 	r := chi.NewRouter()
-	r.Get("/public", show)
+	r.Get("/before", show)
 	r.Use(auth)
-	r.Get("/admin", show)
-	w := chi.NewRouter()
-	w.With(audit).Get("/w", list)
-	w.Use(auth)
-	w.Get("/z", show)
+	r.Get("/after", show)
+	root := chi.NewRouter()
+	root.Route("/api", func(r chi.Router) {
+		root.Use(audit)
+		r.Get("/x", show)
+	})
 	g := chi.NewRouter()
 	g.Get("/ok", list)
 	g.Group(func(g chi.Router) {
@@ -2205,11 +2257,30 @@ func makeHandler(callback func(error)) http.Handler { return nil }
         assert_eq!(
             go_routes(&[("main.go", &source)]),
             [
-                "chi GET /public [] show",
-                "chi GET /w [audit] list",
+                "chi GET /before [auth] show",
+                "chi GET /after [auth] show",
+                "chi GET /api/x [audit] show",
                 "chi GET /ok [] list",
                 "chi GET /inner [auth] show",
             ]
+        );
+    }
+
+    #[test]
+    fn chi_route_returns_the_sub_router_and_query_is_a_method() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	root := chi.NewRouter()
+	api := root.Route("/api", func(r chi.Router) {})
+	api.Get("/x", show)
+	root.Query("/search", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /api/x [] show", "chi QUERY /search [] show"]
         );
     }
 
@@ -2381,7 +2452,6 @@ func routes(r store, chi store) {
 	admin.Use(extra)
 	admin.POST("/users", list)
 	api.PUT("/late", list)
-	e.Any("/any", list)
 	e.Match([]string{"GET", "POST"}, "/multi", list)
 	e.Add("TRACE", "/add", list)
 	return e
@@ -2395,7 +2465,6 @@ func routes(r store, chi store) {
                 "echo GET /api/users/:id [middleware.Logger,auth,audit] show",
                 "echo POST /api/admin/users [middleware.Logger,auth,root,extra] list",
                 "echo PUT /api/late [middleware.Logger,auth] list",
-                "echo ANY /any [middleware.Logger] list",
                 "echo GET /multi [middleware.Logger] list",
                 "echo POST /multi [middleware.Logger] list",
                 "echo TRACE /add [middleware.Logger] list",
@@ -2544,6 +2613,9 @@ func routes(e store) {
 	r.PathPrefix("/static/").HandlerFunc(list)
 	r.PathPrefix("/a").Path("/b").HandlerFunc(list)
 	r.Methods("GET").HandlerFunc(list)
+	r.Methods("GET", "POST").Methods("POST", "PUT").Path("/i").HandlerFunc(list)
+	r.Methods("GET").Methods("PUT").Path("/n").HandlerFunc(list)
+	r.Methods(verbs...).Path("/s").HandlerFunc(list)
 	sub := r.PathPrefix("/api/").Subrouter()
 	sub.Methods("GET").Path("/z").HandlerFunc(show)
 	sub.HandleFunc("w", show)
@@ -2558,6 +2630,8 @@ func routes(e store) {
                 "gorilla/mux POST /y/{id} [auth] list",
                 "gorilla/mux PUT /y/{id} [auth] list",
                 "gorilla/mux ANY /static/ [auth] list",
+                "gorilla/mux ANY /a/b [auth] list",
+                "gorilla/mux POST /i [auth] list",
                 "gorilla/mux GET /api/z [auth] show",
             ]
         );
@@ -2684,7 +2758,6 @@ func typed(s *gorilla.Router) {
 	r := gin.New()
 	r.Any("/a", show)
 	r.Handle("PATCH", "/b", audit, show)
-	r.Handle("patch", "/c", show)
 	r.Match([]string{"GET", "POST"}, "/d", show)
 }
 "#,
@@ -2692,11 +2765,205 @@ func typed(s *gorilla.Router) {
         assert_eq!(
             go_routes(&[("main.go", &source)]),
             [
-                "gin ANY /a [] show",
+                "gin CONNECT /a [] show",
+                "gin DELETE /a [] show",
+                "gin GET /a [] show",
+                "gin HEAD /a [] show",
+                "gin OPTIONS /a [] show",
+                "gin PATCH /a [] show",
+                "gin POST /a [] show",
+                "gin PUT /a [] show",
+                "gin TRACE /a [] show",
                 "gin PATCH /b [audit] show",
                 "gin GET /d [] show",
                 "gin POST /d [] show",
             ]
+        );
+    }
+    #[test]
+    fn a_gin_route_call_returns_the_router_so_calls_can_chain() {
+        let source = go_source(
+            &[GIN],
+            r#"func routes() {
+	gin.New().GET("/a", show).POST("/b", list).Use(auth).PUT("/c", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gin GET /a [] show",
+                "gin POST /b [] list",
+                "gin PUT /c [auth] list",
+            ]
+        );
+    }
+
+    #[test]
+    fn match_needs_a_literal_list_of_strings_to_prove_the_methods() {
+        let source = go_source(
+            &[GIN, "\"github.com/labstack/echo/v4\""],
+            r#"func methods(name string) []string { return []string{"DELETE"} }
+
+func routes() {
+	g := gin.New()
+	g.Match(methods("GET"), "/a", show)
+	g.Match([]string{"GET", "PUT"}, "/b", show)
+	verbs := []string{"GET"}
+	g.Match(verbs, "/c", show)
+	e := echo.New()
+	e.Match(methods("GET"), "/d", show)
+	e.Match([]string{"POST"}, "/e", show)
+	e.Match([]string{"POST", name()}, "/f", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gin GET /b [] show",
+                "gin PUT /b [] show",
+                "echo POST /e [] show",
+            ]
+        );
+    }
+
+    #[test]
+    fn echo_any_registers_each_method_of_the_library() {
+        let source = go_source(
+            &[ECHO],
+            r#"func routes() {
+	e := echo.New()
+	e.Any("/a", show)
+}
+"#,
+        );
+        let methods: Vec<String> = go_routes(&[("main.go", &source)])
+            .iter()
+            .map(|line| line.split(' ').nth(1).unwrap().to_string())
+            .collect();
+        assert_eq!(
+            methods,
+            [
+                "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PROPFIND", "PUT",
+                "REPORT", "TRACE"
+            ]
+        );
+    }
+
+    #[test]
+    fn two_drafts_of_one_registration_do_not_share_a_key() {
+        let source = go_source(
+            &[ECHO, CHI],
+            r#"func newRouter() *echo.Echo {
+	e := echo.New()
+	e.GET("/x", show)
+	return e
+}
+
+func routes() {
+	a := newRouter()
+	a.Use(auth)
+	b := newRouter()
+	b.Use(audit)
+	root := chi.NewRouter()
+	sub := chi.NewRouter()
+	sub.Get("/x", show)
+	root.Mount("/a", sub)
+	root.Mount("/a", sub)
+	root.Mount("/b", sub)
+}
+"#,
+        );
+        let routes = go_routes(&[("main.go", &source)]);
+        assert!(routes.contains(&"echo GET /x [auth] show".to_string()));
+        assert!(routes.contains(&"echo GET /x [audit] show".to_string()));
+        assert_eq!(
+            routes.iter().filter(|line| line.contains("/a/x")).count(),
+            1
+        );
+        assert_eq!(
+            routes.iter().filter(|line| line.contains("/b/x")).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn timing_a_chain_of_factories_that_call_each_other_twice_is_read_in_linear_time() {
+        let mut body = String::from("func f0() *gin.Engine { return gin.New() }\n\n");
+        for step in 1..=30 {
+            body.push_str(&format!(
+                "func f{step}() *gin.Engine {{\n\ta := f{previous}()\n\t_ = f{previous}()\n\treturn a\n}}\n\n",
+                previous = step - 1
+            ));
+        }
+        body.push_str("func routes() {\n\tr := f30()\n\tr.GET(\"/x\", show)\n}\n");
+        let source = go_source(&[GIN], &body);
+        let started = std::time::Instant::now();
+        let found = go_routes(&[("main.go", &source)]);
+        assert_eq!(found, ["gin GET /x [] show"]);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_handler_signature_is_proven_from_the_parameter_list() {
+        let source = go_source(
+            &[],
+            r#"func callback(w http.ResponseWriter, r *http.Request, err error) {}
+
+func build(fn func(http.ResponseWriter, *http.Request, error)) http.Handler {
+	return http.NotFoundHandler()
+}
+
+func unnamed(http.ResponseWriter, *http.Request) {}
+
+func swapped(r *http.Request, w http.ResponseWriter) {}
+
+func routes() {
+	http.Handle("/a", build(callback))
+	http.Handle("/b", auth(http.HandlerFunc(unnamed)))
+	http.Handle("/c", auth(http.HandlerFunc(swapped)))
+	http.HandleFunc("/d", authFunc(unnamed))
+	http.HandleFunc("/e", authFunc(swapped))
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "net/http ANY /a [] -",
+                "net/http ANY /b [auth] unnamed",
+                "net/http ANY /c [auth] swapped",
+                "net/http ANY /d [authFunc] unnamed",
+                "net/http ANY /e [] -",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_echo_handler_has_the_context_parameter_and_an_error_result() {
+        let source = go_source(
+            &[ECHO],
+            r#"func echoShow(c echo.Context) error { return nil }
+
+func echoWrong(c echo.Context) {}
+
+func guard(next echo.HandlerFunc) echo.HandlerFunc { return next }
+
+func routes() {
+	e := echo.New()
+	e.GET("/a", guard(echoShow))
+	e.GET("/b", guard(echoWrong))
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["echo GET /a [guard] echoShow", "echo GET /b [] -"]
         );
     }
 

@@ -231,42 +231,53 @@ files call `clear`, omen does not know the class names. Then no route has a symb
 - A route is an entry point only when its receiver is a framework object. The receiver
   is a framework call, a value that the file binds to one, or an import of a
   constructor of the framework, or of a repository file that binds the name to one.
-- Omen reads the routes of these Go frameworks: `net/http`, gin, chi, echo, and gorilla/mux. A router
-  is a value that the import of the framework proves. It is a constructor call, a
-  group or sub-router of a router, or a parameter that has a router type. A variable
-  name alone does not prove a router.
-- A function that returns a router gives a new router for each call. A function that
-  receives a router of a type that can be a group or a sub-router, such as `chi.Router`,
-  has an unknown prefix. Omen gives no entry for its routes, unless a call in the same
-  file gives the router to it, as in `r.Route("/api", api)`. A function that receives a
+- Omen reads the routes of these Go frameworks: `net/http`, gin, chi, echo, and
+  gorilla/mux. Omen models the registrations of a valid program. It does not model a
+  framework panic. A program that panics at start, as chi does when `Use` follows a
+  route in some versions, is out of scope.
+- A router is a value that the import of the framework proves. It is a constructor
+  call, a group or sub-router of a router, or a parameter that has a router type. A
+  variable name alone does not prove a router.
+- A function that returns a router gives a new router for each call. Omen reads the
+  function one time and copies the result for each call. A function that receives a
+  router of a type that can be a group or a sub-router, such as `chi.Router`, has an
+  unknown prefix. Omen gives no entry for its routes, unless a call in the same file
+  gives the router to it, as in `r.Route("/api", api)`. A function that receives a
   root router, such as `*gin.Engine`, gives entries.
 - A handler that a call wraps, as in `http.Handle("/p", auth(http.HandlerFunc(show)))`,
   has the function `show` as its handler when a conversion proves it, or when the
-  signature of `show` is the signature of a handler. A wrapper with more than one such
-  function gives no handler. A wrapper is a guard only when the repository defines it
-  with the signature of a middleware. A conversion such as `http.HandlerFunc` or
-  `gin.WrapF` is not a guard.
+  parameter list of `show` is the parameter list of a handler of the framework. For
+  `net/http` it is `(http.ResponseWriter, *http.Request)`. For gin it is
+  `(*gin.Context)`. For echo it is `(echo.Context) error`. A wrapper with more than
+  one such function gives no handler. A wrapper is a guard only when the repository
+  defines it as a function that takes a handler and gives a handler. A conversion such
+  as `http.HandlerFunc` or `gin.WrapF` is not a guard.
 - A key of an entry point has the path at its end when one registration gives more than
-  one route, as a router that two paths mount does.
-- For chi, a prefix comes from `Route`. A guard comes from `Use` and `With`, and
-  applies to the routes that follow it. chi panics when `Use` follows a route of the
-  same router, so Omen gives no entry for a route after such a `Use`. `Mount` joins a
-  router of the same file, at each of its mounts. It skips a router of another file.
-  A pattern without a leading slash gives no entry.
+  one entry with the same method, as a router that two paths mount does. If the keys are
+  still equal, as for two calls of a function, each key has the number of its entry in
+  the walk.
+- For chi, a prefix comes from `Route`, which also gives the new router. A guard comes
+  from `Use` and `With`. `Use` guards each route of its router and of its sub-routers,
+  in any source order. `Mount` joins a router of the same file, at each of its mounts.
+  It skips a router of another file. A pattern without a leading slash gives no entry.
+  `Query` gives the method `QUERY`.
 - For echo, a prefix and the guards of `Group` apply to the routes of the group. A
   group copies the guards of its parent when the group is made. `Use` and `Pre` on the
   echo value apply to each route. The path is the plain concatenation of the prefixes
-  and the path. `Any`, `Match`, and `Add` give one entry for each method.
+  and the path. `Any` gives one entry for each method in the list of echo v4.13.4.
+  `Match` gives entries only for a literal list of strings.
 - For gin, the guards of a route are the arguments between the path and the last
   argument. A group has a prefix, and it copies the guards of its parent when the
-  group is made. `Use` gives a guard to the routes that follow it, and it returns the
-  router. Paths join as `path.Join` does. `Any`, `Handle`, and `Match` give entries.
-- For gorilla/mux, `PathPrefix(...).Subrouter()` gives a prefix. `Methods` gives one
-  entry for each method, and a route without `Methods` has the method `ANY`. `Use`
+  group is made. `Use` gives a guard to the routes that follow it. Each method that adds
+  a route or a guard returns the router, so calls can chain. Paths join as `path.Join`
+  does. `Any` gives one entry for each method in the list of gin v1.11.0. `Handle` gives
+  one entry. `Match` gives entries only for a literal list of strings.
+- For gorilla/mux, `PathPrefix(...).Subrouter()` gives a prefix. A chain of matchers
+  that ends in `HandlerFunc` or `Handler` gives a route. The path matchers join in the
+  order of the calls. Each `Methods` list limits the methods, so the result is the
+  common methods of the lists. A route without `Methods` has the method `ANY`. `Use`
   applies to each route of its router and of the sub-routers, as the library does.
-  A call of `Methods` with an argument that is not a string literal gives no entry.
-  A builder chain such as `r.Methods("GET").Path("/x").HandlerFunc(show)` gives an
-  entry when it has exactly one path.
+  A `Methods` argument that is not a string literal gives no entry.
 - Deadcode treats an entry point and the entry points of `[[security.entry_points]]`
   as alive, with their callees.
 - Deadcode reads the path in a Rust `#[serde(...)]` string through the module tree of
