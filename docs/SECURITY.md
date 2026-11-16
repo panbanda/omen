@@ -89,6 +89,45 @@ surface" with the coverage statement, a matrix, a Sankey diagram, the entry
 points, and the choke points. A choke point is a symbol that each path to a
 sink goes through.
 
+## Rails routes
+
+Omen reads the routes in each file whose name ends with `routes.rb`. Each route is an
+entry point of the framework `rails`. Omen reads the syntax tree, not the text.
+
+| Form | Entry points |
+| --- | --- |
+| `get`, `post`, `put`, `patch`, `delete "/path", to: "c#a"` | One route. The forms `controller: "c", action: "a"` and `"/path" => "c#a"` also work. |
+| `match "/x", to: "c#a", via: [:get, :post]` | One route for each verb. `via: :all` gives the method `ANY`. |
+| `root "pages#home"` or `root to: "pages#home"` | `GET /`. |
+| `resources :users` | The seven routes of Rails, with `PATCH` and `PUT` for `update`. |
+| `resource :profile` | The routes of a singular resource: no `index` and no `:id`. The controller is `ProfilesController`. |
+| `only:` and `except:` | Limit the actions of a `resources` call or a `resource` call. |
+| Nested `resources` | The path `/users/:user_id/posts/:id`. |
+| `member do` and `collection do` | The paths `/users/:id/x` and `/users/x`. The option `on:` has the same effect. |
+| `namespace :admin do` | The path prefix `/admin`. The controller is `Admin::UsersController`. |
+| `scope "/api" do` and `scope module: "v1"` | A path prefix, and a module for the controller. |
+
+Omen resolves the action to a symbol. For a controller in a module, the index must give
+the module as the container of the class. Otherwise the entry point has no symbol.
+
+A guard is a `before_action` callback of the action. Omen reads the symbols, `only:`, and
+`except:` of the call from the syntax tree. A `skip_before_action` call removes a guard for
+the actions that it lists. The guards of a superclass in the repository, such as
+`ApplicationController`, come first. A `skip_before_action` call with `if:` or `unless:`
+removes no guard. A list that is not a literal gives no condition.
+
+Omen skips each route that it cannot read exactly. It never guesses. It skips these forms:
+
+- A path, a name, or an option that is not a literal, such as a string with interpolation.
+- A route in a loop or in a block that omen does not know, such as `each` or `concern`.
+- A `resources` call with an option that changes the paths in a way that omen does not
+  read, such as `param:` or `shallow:`.
+- A `scope` path with an optional segment, such as `"(:locale)"`.
+- The calls `concerns`, `draw(:file)`, `mount`, and `devise_for`.
+
+For an irregular plural, such as `people`, omen skips the nested routes of the resource.
+For a `resource` call, such as `resource :person`, the entry point has no symbol.
+
 ## Limits
 
 - Omen does not follow data. A path is a chain of calls that the index resolves.

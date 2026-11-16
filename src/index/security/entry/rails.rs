@@ -28,6 +28,15 @@
 //! the nested routes. It keeps the `member` routes and the `collection` routes.
 //! A `resource` call uses the plural controller. If the plural is irregular, the
 //! route has no symbol.
+//!
+//! The guards of a route are the `before_action` callbacks of the action, in the
+//! order that Rails runs them. Omen reads the callbacks from the syntax tree: the
+//! symbol names, the `only:` list, and the `except:` list. The callbacks of a
+//! superclass that the repository has come first. A `skip_before_action` call
+//! removes a guard for the actions that it lists. An `if:` or `unless:` option
+//! does not change a `before_action` guard. A `skip_before_action` call with one
+//! of these options removes no guard. A list that is not a literal gives no
+//! condition.
 
 use tree_sitter::Node;
 
