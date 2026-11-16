@@ -198,3 +198,49 @@ commit `5264585`. B in that commit goes on the base, not on A.
 For A, the unit tests of `chunking.rs` that count chunks also fail. They count
 the documents of types as chunks. We did not correct them, because A is not
 adopted.
+
+## Experiment C: the identifier tokenizer for TF-IDF
+
+This section is written before any code and before any run of the experiment.
+The text of "Pre-registration of experiment C" does not change after the first
+run. The results go in a later section.
+
+### Pre-registration of experiment C
+
+The base is commit `2d9bb49`. The data is the retrieval corpus
+`tests/fixtures/retrieval/corpus.json`, with the ledger and the rank baseline
+of the base. We do not move a query to `retired`. We do not tune a constant
+after the first run.
+
+The reason: `search` uses a private tokenizer. It finds the runs of `\w+`,
+changes them to lowercase, and adds bigrams. The identifier tokenizer in
+`src/semantic/tokenize.rs` divides `parseFile` and `parse_file` into `parse`
+and `file`, and it keeps the whole identifier. We measured it only inside
+BM25F, and BM25F was not adopted. We did not measure it with TF-IDF alone.
+
+The change:
+
+- The engine tokenizes each document and each query with
+  `semantic::tokenize::tokenize`. The private tokenizer is deleted.
+- Bigrams are the pairs of adjacent tokens in the list that `tokenize` gives.
+  The list has the parts of each identifier, then its whole form, as the
+  tokenizer defines. A bigram is the two tokens, joined by one space. This is
+  the same rule as on the base, applied to the new list.
+- The vocabulary limit, the IDF formula, the sublinear TF, the L2
+  normalization, the order of the results, the documents, and the chunking
+  stay the same.
+- The change has no flag.
+
+The metrics are recall@1, recall@5, recall@10, and MRR, for each language and
+each query type, as in the tables above. The report never pools them.
+
+The adoption rule is the rule of "Adoption rule" above, without change:
+
+- `cargo test --test retrieval` passes with the ledger and the rank baseline of
+  the base, unchanged.
+- `ledger_never_grows` passes against a copy of `tests/fixtures` of the base
+  (made with `git archive`), with no new accepted entry.
+- No query has a rank worse than its rank on the base.
+
+A gain does not pay for a loss. If experiment C is not adopted, a later commit
+reverts the code, and this file keeps the full tables and the rejection.
