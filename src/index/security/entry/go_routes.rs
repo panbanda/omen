@@ -16,8 +16,10 @@
 //! not make. The summary has the prefixes and the guards of the returned router. A call
 //! of the function gives a new router with these prefixes and guards. The routes that
 //! the function registers on its own routers give their entries in the function, with
-//! the paths of the function. A mount of the returned router does not add its prefix to
-//! them.
+//! the paths of the function. A call can attach the returned router to a parent, so the
+//! paths of these routes can depend on the call. When a call attaches the result, or
+//! when the use of the result is not known, these routes give no entry. A call that
+//! serves the result as the root does not attach it.
 //!
 //! When the syntax does not prove a fact, the walk gives no entry. These values have
 //! no proof: the result of a function without a summary, a package-level router that a
@@ -386,6 +388,8 @@ struct Frame {
     returned: Option<usize>,
     owner: usize,
     pure: bool,
+    /// The routers that the function body made.
+    created: Vec<usize>,
 }
 
 #[derive(Default)]
@@ -640,6 +644,9 @@ pub(super) fn collect(context: &Context<'_>, root: Node<'_>, out: &mut Vec<Draft
         in_progress: HashSet::new(),
         cyclic: HashSet::new(),
         summaries: HashMap::new(),
+        fresh_of: HashMap::new(),
+        components: HashMap::new(),
+        attached: HashSet::new(),
         owners: 0,
         frames: Vec::new(),
     };
@@ -665,6 +672,13 @@ struct Routes<'c, 'a, 't> {
     cyclic: HashSet<String>,
     /// The summary of each function that the walk read, or none.
     summaries: HashMap<String, Option<Summary>>,
+    /// The factory that made a router for a call, by router.
+    fresh_of: HashMap<usize, String>,
+    /// The routers of the returned router of each factory, and the routers that join to it.
+    components: HashMap<String, Vec<usize>>,
+    /// The factories whose result a call can attach to a parent. Their own routes have
+    /// paths that depend on the call.
+    attached: HashSet<String>,
     owners: usize,
     frames: Vec<Frame>,
 }
@@ -768,6 +782,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             "short_var_declaration" | "assignment_statement" => self.assignment(node),
             "var_spec" => self.var_spec(node),
             "return_statement" => self.return_statement(node),
+            "composite_literal" => self.literal_escapes(node),
             "call_expression" if !self.consumed.contains(&node.id()) => self.call(node),
             _ => {}
         }
@@ -798,6 +813,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             returned: None,
             owner,
             pure: true,
+            created: Vec::new(),
         });
         self.bind_parameters(node.child_by_field_name("parameters"), None);
         if let Some(body) = node.child_by_field_name("body") {
@@ -815,6 +831,19 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 .returned
                 .filter(|_| frame.pure && !declared.is_some_and(|name| self.cyclic.contains(name)))
                 .and_then(|router| self.summarize(router, owner));
+            let comp = frame
+                .returned
+                .filter(|router| self.made_by(*router, owner))
+                .map(|router| self.component(router, &frame.created));
+            if let Some(comp) = comp {
+                let needs_a_call_site = summary
+                    .as_ref()
+                    .is_none_or(|summary| !summary.prefixes.is_empty());
+                if needs_a_call_site {
+                    self.attached.insert(name.to_string());
+                }
+                self.components.insert(name.to_string(), comp);
+            }
             self.summaries.insert(name.to_string(), summary);
         }
     }
@@ -838,6 +867,133 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         if router.external || router.owner != self.current_owner() {
             self.mark_impure();
         }
+    }
+
+    /// Notes that a router that a factory made leaves the proof of the walk. A call can
+    /// then attach it to a parent, so the paths of the routes of the factory depend on the call.
+    fn escape_router(&mut self, router: usize) {
+        if let Some(name) = self.fresh_of.get(&router) {
+            self.attached.insert(name.clone());
+        }
+    }
+
+    /// Notes the use of an expression as a value, as an argument, a returned value, or a
+    /// stored value. A router that a factory gives and a call of a factory escape here.
+    fn escape(&mut self, expression: Node<'t>) {
+        match expression.kind() {
+            "identifier" => {
+                if let Some(Some(router)) = self.lookup(self.text(expression)) {
+                    self.escape_router(router);
+                }
+            }
+            "call_expression" => {
+                let name = expression
+                    .child_by_field_name("function")
+                    .filter(|function| function.kind() == "identifier")
+                    .map(|function| self.text(function));
+                if let Some(name) = name.filter(|name| self.functions.contains_key(*name)) {
+                    self.attached.insert(name.to_string());
+                }
+            }
+            "parenthesized_expression" | "unary_expression" => {
+                if let Some(inner) = expression.named_child(0) {
+                    self.escape(inner);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Tells if a call serves its argument as the root handler of a server, as
+    /// `http.ListenAndServe(":80", router)` does.
+    fn is_root_sink(&self, call: Node<'t>) -> bool {
+        let Some(function) = call
+            .child_by_field_name("function")
+            .filter(|function| function.kind() == "selector_expression")
+        else {
+            return false;
+        };
+        let (Some(operand), Some(field)) = (
+            function.child_by_field_name("operand"),
+            function.child_by_field_name("field"),
+        ) else {
+            return false;
+        };
+        matches!(
+            self.text(field),
+            "ListenAndServe" | "ListenAndServeTLS" | "Serve" | "ServeTLS"
+        ) && self.is_net_http(self.text(operand))
+    }
+
+    fn is_net_http(&self, package: &str) -> bool {
+        package_names(self.context.file, |module| module == "net/http", "http")
+            .iter()
+            .any(|name| name == package)
+    }
+
+    /// The values of a literal escape, unless the literal is an `http.Server`. A server
+    /// serves its handler as the root.
+    fn literal_escapes(&mut self, literal: Node<'t>) {
+        let is_server = literal
+            .child_by_field_name("type")
+            .map(|kind| self.text(kind))
+            .and_then(|kind| kind.split_once('.'))
+            .is_some_and(|(package, name)| name == "Server" && self.is_net_http(package));
+        if is_server {
+            return;
+        }
+        let Some(body) = literal.child_by_field_name("body") else {
+            return;
+        };
+        let mut values = Vec::new();
+        Self::literal_values(body, &mut values);
+        for value in values {
+            self.escape(value);
+        }
+    }
+
+    fn literal_values(node: Node<'t>, out: &mut Vec<Node<'t>>) {
+        match node.kind() {
+            "identifier" | "call_expression" => out.push(node),
+            "literal_value"
+            | "literal_element"
+            | "parenthesized_expression"
+            | "unary_expression" => {
+                for child in Self::named_children(node) {
+                    Self::literal_values(child, out);
+                }
+            }
+            "keyed_element" => {
+                if let Some(value) = Self::named_children(node).pop() {
+                    Self::literal_values(value, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The routers that a function body made, and that join to the returned router.
+    fn component(&self, returned: usize, created: &[usize]) -> Vec<usize> {
+        let mut neighbors: HashMap<usize, Vec<usize>> = HashMap::new();
+        let made: HashSet<usize> = created.iter().copied().collect();
+        for router in created {
+            for link in &self.routers[*router].links {
+                if made.contains(&link.parent) {
+                    neighbors.entry(*router).or_default().push(link.parent);
+                    neighbors.entry(link.parent).or_default().push(*router);
+                }
+            }
+        }
+        let mut seen: HashSet<usize> = HashSet::from([returned]);
+        let mut pending = vec![returned];
+        while let Some(router) = pending.pop() {
+            for next in neighbors.get(&router).into_iter().flatten() {
+                if seen.insert(*next) {
+                    pending.push(*next);
+                }
+            }
+        }
+        seen.into_iter().collect()
     }
 
     /// Tells if a function body made the router, and each router that it joins to.
@@ -880,6 +1036,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         router.guards = summary.guards;
         router.mountable = summary.prefixes.is_empty();
         router.base = summary.prefixes;
+        self.fresh_of.insert(id, name.to_string());
         Some(id)
     }
 
@@ -891,6 +1048,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             returned: None,
             owner,
             pure: true,
+            created: Vec::new(),
         });
         self.bind_parameters(literal.child_by_field_name("parameters"), bound);
         if let Some(body) = literal.child_by_field_name("body") {
@@ -985,6 +1143,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         };
         if index == 0 && !self.frames.is_empty() {
             self.mark_impure();
+            if let Some(router) = router {
+                self.escape_router(router);
+            }
             return;
         }
         self.scopes[index].insert(name.to_string(), router);
@@ -1003,7 +1164,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             external: false,
             base: Vec::new(),
         });
-        self.routers.len() - 1
+        let id = self.routers.len() - 1;
+        if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
+            frame.created.push(id);
+        }
+        id
     }
 
     fn make_child(&mut self, parent: usize, prefix: String, guards: Vec<String>) -> usize {
@@ -1025,7 +1190,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             external: false,
             base: Vec::new(),
         });
-        self.routers.len() - 1
+        let id = self.routers.len() - 1;
+        if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
+            frame.created.push(id);
+        }
+        id
     }
 
     fn assignment(&mut self, node: Node<'t>) {
@@ -1068,6 +1237,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         for (name, router) in names.iter().zip(routers) {
             if name.kind() == "identifier" {
                 self.bind(self.text(*name), router, define);
+            } else if let Some(router) = router {
+                self.escape_router(router);
             }
         }
     }
@@ -1080,6 +1251,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let [value] = values.as_slice() else {
             return;
         };
+        self.escape(*value);
         let router = self.eval(*value);
         if let Some(frame) = self.frames.last_mut().filter(|frame| frame.function) {
             frame.returned = frame.returned.or(router);
@@ -1193,6 +1365,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn call(&mut self, node: Node<'t>) {
+        if !self.is_root_sink(node) {
+            for argument in Context::arguments_of(node) {
+                self.escape(argument);
+            }
+        }
         let Some(function) = node.child_by_field_name("function") else {
             return;
         };
@@ -1622,7 +1799,18 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn finish(self, out: &mut Vec<Draft>) {
-        for record in &self.records {
+        let blocked: HashSet<usize> = self
+            .attached
+            .iter()
+            .filter_map(|name| self.components.get(name))
+            .flatten()
+            .copied()
+            .collect();
+        for record in self
+            .records
+            .iter()
+            .filter(|record| !blocked.contains(&record.router))
+        {
             let framework = self.routers[record.router].framework;
             for place in self.lineage(record.router, Some(record.limit)) {
                 let Some(path) = framework.compose(&place.prefixes, &record.path) else {

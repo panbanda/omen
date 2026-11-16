@@ -2308,7 +2308,7 @@ func subRouter() chi.Router {
         );
         assert_eq!(
             go_routes(&[("main.go", &source)]),
-            ["chi GET /inline/ [logger] show", "chi GET / [] list",]
+            ["chi GET /inline/ [logger] show"]
         );
     }
 
@@ -2872,6 +2872,141 @@ func routes() {
                 "chi GET /b/x [audit] show",
             ]
         );
+    }
+
+    #[test]
+    fn the_routes_of_a_factory_keep_their_paths_when_the_result_is_only_a_root() {
+        let source = go_source(
+            &[CHI],
+            r#"func rootRouter() chi.Router {
+	r := chi.NewRouter()
+	r.Get("/root", list)
+	return r
+}
+
+func serve() {
+	r := rootRouter()
+	r.Get("/extra", show)
+	http.ListenAndServe(":8080", r)
+	server := &http.Server{Addr: ":9090", Handler: rootRouter()}
+	_ = server
+}
+
+func never() {
+	_ = rootRouter()
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /root [] list", "chi GET /extra [] show"]
+        );
+    }
+
+    #[test]
+    fn the_routes_of_a_factory_give_no_entry_when_a_call_attaches_the_result() {
+        let source = go_source(
+            &[CHI],
+            r#"type holder struct{ router chi.Router }
+
+func attach(parent chi.Router, sub chi.Router) {}
+
+func mounted() chi.Router {
+	s := chi.NewRouter()
+	s.Get("/a", list)
+	return s
+}
+
+func passed() chi.Router {
+	s := chi.NewRouter()
+	s.Get("/b", list)
+	return s
+}
+
+func stored() chi.Router {
+	s := chi.NewRouter()
+	s.Get("/c", list)
+	return s
+}
+
+func forwarded() chi.Router {
+	s := chi.NewRouter()
+	s.Get("/d", list)
+	return s
+}
+
+func wrapped() chi.Router {
+	return forwarded()
+}
+
+func grouped() chi.Router {
+	s := chi.NewRouter()
+	s.Get("/e", list)
+	return s
+}
+
+func prefixed() chi.Router {
+	root := chi.NewRouter()
+	root.Get("/f", list)
+	return root.Route("/p", func(r chi.Router) {})
+}
+
+func routes() {
+	root := chi.NewRouter()
+	root.Mount("/sub", mounted())
+	attach(root, passed())
+	h := holder{}
+	h.router = stored()
+	_ = wrapped()
+	g := grouped()
+	root.Mount("/g", g)
+	_ = prefixed()
+}
+"#,
+        );
+        assert_eq!(go_routes(&[("main.go", &source)]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_factory_that_is_called_twice_gives_no_entry_when_one_call_mounts_it() {
+        let source = go_source(
+            &[CHI],
+            r#"func api() chi.Router {
+	s := chi.NewRouter()
+	s.Get("/x", list)
+	return s
+}
+
+func routes() {
+	root := chi.NewRouter()
+	root.Mount("/v1", api())
+	other := api()
+	other.Get("/own", show)
+}
+"#,
+        );
+        assert_eq!(go_routes(&[("main.go", &source)]), ["chi GET /own [] show"]);
+    }
+
+    #[test]
+    fn a_factory_without_a_summary_that_returns_a_router_gives_no_entry() {
+        let source = go_source(
+            &[CHI],
+            r#"var shared = chi.NewRouter()
+
+func impure() chi.Router {
+	shared.Use(auth)
+	s := chi.NewRouter()
+	s.Get("/x", list)
+	return s
+}
+
+func routes() {
+	_ = impure()
+}
+"#,
+        );
+        assert_eq!(go_routes(&[("main.go", &source)]), Vec::<String>::new());
     }
 
     #[test]

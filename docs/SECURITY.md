@@ -243,9 +243,16 @@ files call `clear`, omen does not know the class names. Then no route has a symb
 - A function that makes a router and returns it has a summary when it is pure. A pure
   function writes no package-level variable, no parameter, and no router that it did
   not make. The summary has the prefixes and the guards of the returned router. A call
-  of the function gives a new router with these prefixes and guards. The routes that
-  the function registers on its own routers keep the paths of the function. A mount of
-  the returned router does not add its prefix to them.
+  of the function gives a new router with these prefixes and guards.
+- A function registers routes on the router that it returns. The paths of these routes
+  depend on the call. A call can mount the result at a prefix. Thus omen gives no entry
+  for these routes when a call of the function attaches the result. A call attaches the
+  result when it passes the result as an argument, returns it, or stores it in a field,
+  a package variable, or a literal. The call `http.ListenAndServe(address, router)` and
+  a literal `http.Server{Handler: router}` serve the result as the root, so they do not
+  attach it. A function without a summary that returns a router it made gives no entry
+  for these routes. A function that returns a group or a sub-router gives none either.
+  A function that no call of the file attaches keeps its routes at the paths of the function.
 - These values have no proof, and the routes on them give no entry: the result of a
   function without a summary, the result of a recursive function, a package-level router
   that a function assigns, and a router that a function receives as a parameter of a
