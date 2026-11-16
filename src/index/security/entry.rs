@@ -4149,7 +4149,6 @@ func serve() {
             [
                 "chi GET /a/{name} [] show",
                 "chi GET /b/{key:[0-9]+} [] show",
-                "chi GET /c/{id} [] list",
                 "chi GET /c/{id:[0-9]+} [] show",
                 "chi GET /d/{x}/e [] list",
                 "chi GET /d/{y}/f [] show",
@@ -4388,6 +4387,87 @@ func routes() {
             ]
         );
     }
+    #[test]
+    fn a_chi_node_that_has_a_higher_child_hides_the_lower_children() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	r := chi.NewRouter()
+	r.Get("/a/{id:.+}", list)
+	r.Get("/a/{name}", show)
+	r.Get("/b/{id}", list)
+	r.Get("/b/*", show)
+	r.Get("/c/{id:[0-9]+}", list)
+	r.Get("/c/{key:[a-z]+}", show)
+	r.Get("/d/{id}", list)
+	r.Get("/d/new", show)
+	r.Get("/e/{id}", list)
+	r.Get("/f/{id:[0-9]+}", show)
+	r.Get("/g/{id:[0-9]+}/x", list)
+	r.Get("/g/{id:[0-9]+}/{name}", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /a/{id:.+} [] list",
+                "chi GET /b/{id} [] list",
+                "chi GET /d/{id} [] list",
+                "chi GET /d/new [] show",
+                "chi GET /e/{id} [] list",
+                "chi GET /f/{id:[0-9]+} [] show",
+                "chi GET /g/{id:[0-9]+}/x [] list",
+                "chi GET /g/{id:[0-9]+}/{name} [] show",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gorilla_scheme_or_method_must_be_a_value_that_a_request_can_have() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.Path("/ok").Schemes("HTTPS").HandlerFunc(list)
+	r.Path("/ok2").Methods("get").HandlerFunc(list)
+	r.Path("/a").Schemes("").HandlerFunc(show)
+	r.Path("/b").Schemes("ftp").HandlerFunc(show)
+	r.Path("/c").Methods("").HandlerFunc(show)
+	r.Path("/d").Methods("GE T").HandlerFunc(show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux ANY /ok [] list",
+                "gorilla/mux GET /ok2 [] list"
+            ]
+        );
+    }
+
+    #[test]
+    fn timing_ten_thousand_nested_gin_groups_with_a_slash_prefix_cost_linear_time() {
+        let mut body = String::from("func routes() {\n\tr0 := gin.New()\n");
+        for index in 1..=50_000 {
+            body.push_str(&format!(
+                "\tr{index} := r{previous}.Group(\"/\")\n\tr{index}.GET(\"/{index}\", list)\n",
+                previous = index - 1
+            ));
+        }
+        body.push_str("}\n");
+        let source = go_source(&[GIN], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), 50_000);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(8),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
     #[test]
     fn documented_gap_a_caller_in_another_file_that_registers_on_a_factory_result_gives_no_entry() {
         let router = factory_file("NewRouter", "/x");

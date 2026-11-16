@@ -127,6 +127,99 @@ impl Framework {
         }
     }
 
+    /// Adds one part to a joined path, with the rules of `compose`. A joined path is a
+    /// persistent list, so a router shares the list of its parent and a route costs the
+    /// length of its own part. None means that the library rejects the route.
+    fn extend(self, state: &PrefixState, part: &str) -> Option<PrefixState> {
+        if part.is_empty() && self != Self::Echo {
+            return Some(state.clone());
+        }
+        let mut top = state.top.clone();
+        let mut slash = state.slash;
+        match self {
+            Self::Chi | Self::Mux => {
+                if !part.starts_with('/') {
+                    return None;
+                }
+                while let Some(piece) = top.clone() {
+                    let trimmed = piece.text.trim_end_matches('/');
+                    if trimmed.len() == piece.text.len() {
+                        break;
+                    }
+                    if trimmed.is_empty() {
+                        top = piece.parent.clone();
+                    } else {
+                        top = Some(Rc::new(Piece {
+                            text: trimmed.to_string(),
+                            parent: piece.parent.clone(),
+                        }));
+                        break;
+                    }
+                }
+                top = Some(Rc::new(Piece {
+                    text: part.to_string(),
+                    parent: top,
+                }));
+            }
+            Self::Echo => {
+                if !part.is_empty() {
+                    top = Some(Rc::new(Piece {
+                        text: part.to_string(),
+                        parent: top,
+                    }));
+                }
+            }
+            Self::Gin => {
+                for segment in part.split('/') {
+                    match segment {
+                        "" | "." => {}
+                        ".." => top = top.and_then(|piece| piece.parent.clone()),
+                        _ => {
+                            top = Some(Rc::new(Piece {
+                                text: segment.to_string(),
+                                parent: top,
+                            }));
+                        }
+                    }
+                }
+                slash = part.ends_with('/');
+            }
+        }
+        Some(PrefixState { top, slash })
+    }
+
+    /// The path that a joined list gives.
+    fn materialize(self, state: &PrefixState) -> Option<String> {
+        let mut pieces: Vec<&str> = Vec::new();
+        let mut current = state.top.as_ref();
+        while let Some(piece) = current {
+            pieces.push(&piece.text);
+            current = piece.parent.as_ref();
+        }
+        pieces.reverse();
+        match self {
+            Self::Chi | Self::Mux => {
+                let joined = pieces.concat();
+                (!joined.is_empty()).then_some(joined)
+            }
+            Self::Echo => {
+                let joined = pieces.concat();
+                Some(match joined.as_str() {
+                    "" => "/".to_string(),
+                    text if text.starts_with('/') => joined,
+                    _ => format!("/{joined}"),
+                })
+            }
+            Self::Gin => {
+                let mut joined = format!("/{}", pieces.join("/"));
+                if state.slash && !joined.ends_with('/') {
+                    joined.push('/');
+                }
+                Some(joined)
+            }
+        }
+    }
+
     /// The path of a route, from the prefixes of its routers and its own path. The rules
     /// are the rules of each library. None means that the library rejects the route.
     fn compose(self, prefixes: &[String], path: &str) -> Option<String> {
@@ -3349,6 +3442,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                         .iter()
                         .filter_map(|argument| self.string_argument(*argument))
                         .collect();
+                    unreadable |= names.iter().any(|name| !is_http_token(name));
                     method_lists.push(
                         (names.len() == arguments.len())
                             .then(|| names.iter().map(|name| name.to_uppercase()).collect()),
@@ -3382,7 +3476,15 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                         .and_then(|name| self.string_argument(*name)),
                 ),
                 // A matcher of schemes or methods that has no value rejects each request.
-                "Schemes" => unreadable |= arguments.is_empty(),
+                // A request has the scheme `http` or `https`, so another value never matches.
+                "Schemes" => {
+                    unreadable |= arguments.is_empty()
+                        || arguments.iter().any(|argument| {
+                            self.string_argument(*argument).is_none_or(|scheme| {
+                                !matches!(scheme.to_lowercase().as_str(), "http" | "https")
+                            })
+                        });
+                }
                 "MatcherFunc" => {}
                 "BuildVarsFunc" => {}
                 // `BuildOnly` makes a route that never matches.
@@ -3736,7 +3838,12 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let router = &self.routers[node];
         match router.links.as_slice() {
             [] => Up {
-                prefixes: push_chain(&None, router.base.clone()),
+                state: router
+                    .base
+                    .iter()
+                    .try_fold(PrefixState::default(), |state, part| {
+                        router.framework.extend(&state, part)
+                    }),
                 guards: None,
                 dead: false,
             },
@@ -3745,17 +3852,15 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 let Some(parent) = memo[link.parent].as_ref() else {
                     return Up::dead();
                 };
-                let prefix = if link.prefix.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![link.prefix.clone()]
-                };
                 let above_limit = (!above.retroactive).then_some(link.parent_len);
                 let count = Self::visible_guards(above, above_limit);
                 let mut own = above.pre.clone();
                 own.extend(above.guards[..count].iter().cloned());
                 Up {
-                    prefixes: push_chain(&parent.prefixes, prefix),
+                    state: parent
+                        .state
+                        .as_ref()
+                        .and_then(|state| router.framework.extend(state, &link.prefix)),
                     guards: push_chain(&parent.guards, own),
                     dead: parent.dead || above.partial,
                 }
@@ -3860,8 +3965,12 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 continue;
             }
             let framework = router.framework;
-            let prefixes = flatten_chain(&up.prefixes);
-            let Some(path) = framework.compose(&prefixes, &record.path) else {
+            let Some(path) = up
+                .state
+                .as_ref()
+                .and_then(|state| framework.extend(state, &record.path))
+                .and_then(|state| framework.materialize(&state))
+            else {
                 continue;
             };
             let mut guards = flatten_chain(&up.guards);
@@ -3902,6 +4011,15 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             })
             .collect();
         mux_order(&self.records, &drafts, &mux_roots, &mut kept);
+        let chi_trees: Vec<Option<usize>> = self
+            .records
+            .iter()
+            .map(|record| {
+                (self.routers[record.router].framework == Framework::Chi)
+                    .then_some(tree_of[record.router])
+            })
+            .collect();
+        chi_precedence(&self.records, &drafts, &chi_trees, &mut kept);
         for (index, draft) in drafts.into_iter().enumerate() {
             if let (Some((draft, _)), true) = (draft, kept[index]) {
                 out.push(draft);
@@ -4054,6 +4172,32 @@ fn echo_shape(path: &str) -> String {
     shape
 }
 
+/// A part of a joined path, with the part before it.
+struct Piece {
+    text: String,
+    parent: Option<Rc<Piece>>,
+}
+
+/// A joined path of the routers above a router. `slash` tells if the last part that is
+/// not empty ends in a slash, which gin keeps.
+#[derive(Clone, Default)]
+struct PrefixState {
+    top: Option<Rc<Piece>>,
+    slash: bool,
+}
+
+impl Drop for Piece {
+    fn drop(&mut self) {
+        let mut next = self.parent.take();
+        while let Some(node) = next {
+            match Rc::try_unwrap(node) {
+                Ok(mut inner) => next = inner.parent.take(),
+                Err(_) => break,
+            }
+        }
+    }
+}
+
 /// A list of strings that shares its start with the list of the router above.
 struct Chain {
     items: Vec<String>,
@@ -4062,7 +4206,7 @@ struct Chain {
 
 /// The prefixes and the guards that the routers above a router give.
 struct Up {
-    prefixes: Option<Rc<Chain>>,
+    state: Option<PrefixState>,
     guards: Option<Rc<Chain>>,
     /// A router above is not known, or a router has more than one place.
     dead: bool,
@@ -4071,7 +4215,7 @@ struct Up {
 impl Up {
     fn dead() -> Self {
         Self {
-            prefixes: None,
+            state: None,
             guards: None,
             dead: true,
         }
@@ -4110,6 +4254,14 @@ impl Drop for Chain {
             }
         }
     }
+}
+
+/// Tells if a text is an HTTP token, as a method name must be.
+fn is_http_token(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
 /// What a route path can match. A variable that has no constraint matches one segment, so a
@@ -4299,6 +4451,141 @@ fn mux_order(
                 .entry(router)
                 .or_default()
                 .insert(method, literal, kind);
+        }
+    }
+}
+
+/// The elements of a chi pattern, as the tree reads them: the static text, a parameter, a
+/// regular expression, and a catch-all. A pattern that chi does not accept gives none.
+fn chi_tokens(pattern: &str) -> Option<Vec<String>> {
+    let mut tokens = Vec::new();
+    let mut rest = pattern;
+    loop {
+        let parameter = rest.find('{');
+        let wildcard = rest.find('*');
+        match (parameter, wildcard) {
+            (None, None) => {
+                if !rest.is_empty() {
+                    tokens.push(format!("s{rest}"));
+                }
+                return Some(tokens);
+            }
+            (Some(start), other) if other.is_none_or(|wild| start < wild) => {
+                if start > 0 {
+                    tokens.push(format!("s{}", &rest[..start]));
+                }
+                let mut depth = 0_usize;
+                let mut end = None;
+                for (offset, character) in rest[start..].char_indices() {
+                    match character {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = Some(start + offset);
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let end = end?;
+                match rest[start + 1..end].split_once(':') {
+                    None => tokens.push("p".to_string()),
+                    Some((_, expression)) => {
+                        let mut token = String::from("r");
+                        if !expression.is_empty() && !expression.starts_with('^') {
+                            token.push('^');
+                        }
+                        token.push_str(expression);
+                        if !expression.is_empty() && !expression.ends_with('$') {
+                            token.push('$');
+                        }
+                        tokens.push(token);
+                    }
+                }
+                rest = &rest[end + 1..];
+            }
+            (Some(_), _) => return None,
+            (None, Some(wild)) => {
+                if wild + 1 != rest.len() {
+                    return None;
+                }
+                if wild > 0 {
+                    tokens.push(format!("s{}", &rest[..wild]));
+                }
+                tokens.push("c".to_string());
+                return Some(tokens);
+            }
+        }
+    }
+}
+
+/// chi tries the children of a node in the order static, regular expression, parameter,
+/// and catch-all, and goes back when a child fails. A parameter or a catch-all can have
+/// a sibling of higher order that takes the request, so its routes give no entry. Two
+/// different regular expressions have an order that omen does not read. Each tree has one
+/// walk over the elements of its patterns.
+fn chi_precedence(
+    records: &[Record],
+    drafts: &[Option<(Draft, Duplicate)>],
+    trees: &[Option<usize>],
+    kept: &mut [bool],
+) {
+    let mut edges: HashMap<(usize, String), usize> = HashMap::new();
+    let mut counts: Vec<[usize; 3]> = Vec::new();
+    let mut roots: HashMap<usize, usize> = HashMap::new();
+    let mut walks: Vec<Vec<(usize, Option<usize>)>> = vec![Vec::new(); records.len()];
+    for (index, record) in records.iter().enumerate() {
+        let Some(tree) = trees[index] else {
+            continue;
+        };
+        if drafts[index].is_none() {
+            continue;
+        }
+        let Some(tokens) = chi_tokens(&record.path) else {
+            continue;
+        };
+        let root = *roots.entry(tree).or_insert_with(|| {
+            counts.push([0; 3]);
+            counts.len() - 1
+        });
+        let mut node = root;
+        for token in tokens {
+            let kind = match token.as_bytes()[0] {
+                b'r' => Some(0),
+                b'p' => Some(1),
+                b'c' => Some(2),
+                _ => None,
+            };
+            let next = match edges.get(&(node, token.clone())) {
+                Some(next) => *next,
+                None => {
+                    counts.push([0; 3]);
+                    let next = counts.len() - 1;
+                    edges.insert((node, token), next);
+                    if let Some(kind) = kind {
+                        counts[node][kind] += 1;
+                    }
+                    next
+                }
+            };
+            walks[index].push((node, kind));
+            node = next;
+        }
+    }
+    for (index, walk) in walks.iter().enumerate() {
+        for (node, kind) in walk {
+            let siblings = counts[*node];
+            let hidden = match kind {
+                Some(0) => siblings[0] > 1,
+                Some(1) => siblings[0] > 0,
+                Some(2) => siblings[0] > 0 || siblings[1] > 0,
+                _ => false,
+            };
+            if hidden {
+                kept[index] = false;
+            }
         }
     }
 }
