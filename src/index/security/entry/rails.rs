@@ -24,8 +24,9 @@
 //!   `resolve`. These calls give no route that omen reads.
 //!
 //! A nested route needs the singular name of its parent resource. Omen reads a
-//! regular English plural. For an irregular plural, such as `people`, omen skips
-//! the nested routes. It keeps the `member` routes and the `collection` routes.
+//! plural when it is certain of the singular name. For `categories` the parameter
+//! is `:category_id`. For `news`, `movies`, `people`, and the words in a short list
+//! of uncertain endings, omen skips the nested routes. It keeps the `member` routes and the `collection` routes.
 //! A `resource` call uses the plural controller. If the plural is irregular, the
 //! route has no symbol.
 //!
@@ -33,15 +34,26 @@
 //! order that Rails runs them. Omen reads the callbacks from the syntax tree: the
 //! symbol names, the `only:` list, and the `except:` list. The callbacks of a
 //! superclass that the repository has come first. A `skip_before_action` call
-//! removes a guard for the actions that it lists. An `if:` or `unless:` option
-//! does not change a `before_action` guard. A `skip_before_action` call with one
-//! of these options removes no guard. A list that is not a literal gives no
-//! condition.
+//! removes a guard for the actions that it lists.
+//!
+//! A guard never claims more than omen can read. If a `before_action`
+//! call has an `if:` or `unless:` option, or its `only:` or `except:` value is not a
+//! literal list, omen reports no guard from that call. A `skip_before_action` call
+//! with an `if:` or `unless:` option removes the guard for the actions that it names. If the value of a `skip_before_action` call is not a literal
+//! list, omen removes the guard for each action. A controller path with a leading
+//! `/` ignores the module of the `namespace`. A route without a module matches
+//! only a class that has no container. The index of the classes is built one time
+//! for each routes file.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use tree_sitter::Node;
 
 use super::{join_path, route, Context, Draft, EntryBasis, EntryKind};
 use crate::core::Language;
+use crate::index::extract::FileSymbols;
 use crate::index::model::{Span, Symbol};
 
 /// The routes of a `resources` call, in the order of Rails.
@@ -130,21 +142,32 @@ fn camelize(part: &str) -> String {
         .collect()
 }
 
-/// The singular of a regular English plural, or `None` when the word needs a dictionary.
+/// The singular of a plural, or `None` when omen is not certain. Omen knows two rules: a plural
+/// that ends with `ies` gives `y`, and a plural that ends with `s` loses the `s`. Each rule has a
+/// list of words and endings for which it is not certain. This list is not complete, so a word
+/// that is not in it can still give a wrong form. Rails reads an irregular word from its inflection table.
 fn singular_of(plural: &str) -> Option<String> {
-    if let Some(stem) = plural.strip_suffix("ies") {
-        return (!stem.is_empty()).then(|| format!("{stem}y"));
-    }
-    let irregular_endings = ["ses", "xes", "zes", "ches", "shes", "ss", "us", "is", "ves"];
-    if irregular_endings
-        .iter()
-        .any(|ending| plural.ends_with(ending))
+    const UNCERTAIN_WORDS: [&str; 19] = [
+        "news", "series", "species", "lens", "gas", "canvas", "atlas", "bias", "alias", "chaos",
+        "ethos", "pathos", "cosmos", "kudos", "movies", "cookies", "zombies", "selfies",
+        "brownies",
+    ];
+    const UNCERTAIN_ENDINGS: [&str; 11] = [
+        "ss", "us", "is", "ses", "xes", "zes", "ches", "shes", "ves", "oes", "ices",
+    ];
+    if UNCERTAIN_WORDS.contains(&plural)
+        || UNCERTAIN_ENDINGS
+            .iter()
+            .any(|ending| plural.ends_with(ending))
     {
         return None;
     }
+    if let Some(stem) = plural.strip_suffix("ies") {
+        return (stem.len() > 1).then(|| format!("{stem}y"));
+    }
     plural
         .strip_suffix('s')
-        .filter(|stem| !stem.is_empty())
+        .filter(|stem| stem.len() > 1)
         .map(str::to_string)
 }
 
@@ -469,6 +492,7 @@ impl<'a> Context<'a> {
                     continue;
                 }
                 let path = format!("{base}{suffix}");
+                let route_path = path.clone();
                 let (symbol, guards) = match &controller {
                     Some(controller) => self.rails_handler(&definition.modules, controller, action),
                     None => (None, Vec::new()),
@@ -481,7 +505,7 @@ impl<'a> Context<'a> {
                     route: Some(route(verb, path)),
                     guards,
                     basis: EntryBasis::Registered,
-                    variant: Some((*action).to_string()),
+                    variant: Some(format!("{action}@{}", route_path)),
                 });
             }
         }
@@ -622,82 +646,59 @@ impl<'a> Context<'a> {
     }
 
     /// The action symbol and the guards of a controller. `controller` is `admin/users`, and
-    /// `modules` are the modules that `namespace` and `scope module:` add.
+    /// `modules` are the modules that `namespace` and `scope module:` add. A controller path
+    /// with a leading `/` ignores the modules. The class must have the module as its container,
+    /// and a route without a module matches only a class without a container.
     fn rails_handler(
         &self,
         modules: &[String],
         controller: &str,
         action: &str,
     ) -> (Option<String>, Vec<String>) {
-        let mut segments: Vec<String> = modules.to_vec();
+        let mut segments: Vec<String> = if controller.starts_with('/') {
+            Vec::new()
+        } else {
+            modules.to_vec()
+        };
         segments.extend(split_segments(controller));
         let Some(last) = segments.pop() else {
             return (None, Vec::new());
         };
         let class = format!("{}Controller", camelize(&last));
         let container = segments.last().map(|module| camelize(module));
-        let symbol = match &container {
-            None => self.symbol_named(action, Some(&class)),
-            Some(container) => self.rails_module_action(container, &class, action),
+        let index = self.rails.get_or_init(|| RailsIndex::build(self.all));
+        let Some(classes) = index.classes.get(&(container, class.clone())) else {
+            return (None, Vec::new());
         };
-        (
-            symbol,
-            self.rails_guards(&class, container.as_deref(), action),
-        )
-    }
-
-    /// The action of a controller class that is in a module. The index must give the module as the
-    /// container of the class.
-    fn rails_module_action(&self, module: &str, class: &str, action: &str) -> Option<String> {
-        let mut found = Vec::new();
-        for file in self
-            .all
-            .iter()
-            .filter(|file| file.language == Language::Ruby)
-        {
-            for owner in file.symbols.iter().filter(|symbol| {
-                symbol.kind.is_type()
-                    && symbol.name == class
-                    && symbol.container.as_deref() == Some(module)
-            }) {
-                found.extend(file.symbols.iter().filter(|symbol| {
-                    symbol.is_callable()
-                        && symbol.name == action
-                        && symbol.container.as_deref() == Some(class)
-                        && symbol.range.start_byte >= owner.range.start_byte
-                        && symbol.range.end_byte <= owner.range.end_byte
+        let mut actions: Vec<&Symbol> = Vec::new();
+        let mut guards: Vec<String> = Vec::new();
+        for (position, owner) in classes {
+            if let Some(methods) = index.methods.get(&(*position, class.as_str())) {
+                actions.extend(methods.iter().copied().filter(|method| {
+                    method.name == action
+                        && method.range.start_byte >= owner.range.start_byte
+                        && method.range.end_byte <= owner.range.end_byte
                 }));
             }
-        }
-        (found.len() == 1).then(|| found[0].key.to_string())
-    }
-
-    /// The guards of an action: the `before_action` callbacks of the controller class and of
-    /// its superclasses in the repository, after the `skip_before_action` calls.
-    fn rails_guards(&self, class: &str, container: Option<&str>, action: &str) -> Vec<String> {
-        let mut guards = Vec::new();
-        for (position, file) in self.all.iter().enumerate() {
-            if file.language != Language::Ruby {
-                continue;
-            }
-            for symbol in file.symbols.iter().filter(|symbol| {
-                symbol.name == class
-                    && symbol.kind.is_type()
-                    && container.is_none_or(|wanted| symbol.container.as_deref() == Some(wanted))
-            }) {
-                for guard in self.rails_chain_guards(position, symbol, action) {
-                    if !guards.contains(&guard) {
-                        guards.push(guard);
-                    }
+            for guard in self.rails_chain_guards(index, *position, owner, action) {
+                if !guards.contains(&guard) {
+                    guards.push(guard);
                 }
             }
         }
-        guards
+        let symbol = (actions.len() == 1).then(|| actions[0].key.to_string());
+        (symbol, guards)
     }
 
-    /// The class, then its superclass, as far as the repository has exactly one class for each
-    /// name. A qualified superclass name ends the chain.
-    fn rails_chain_guards(&self, position: usize, class: &Symbol, action: &str) -> Vec<String> {
+    /// The guards of an action from the class, then from its superclass, as far as the
+    /// repository has exactly one class for each name. A qualified superclass name ends the chain.
+    fn rails_chain_guards(
+        &self,
+        index: &RailsIndex<'a>,
+        position: usize,
+        class: &'a Symbol,
+        action: &str,
+    ) -> Vec<String> {
         let mut chain = vec![(position, class)];
         while let Some((_, last)) = chain.last() {
             let Some(parent) = last.supertypes.first() else {
@@ -706,19 +707,9 @@ impl<'a> Context<'a> {
             if parent.contains("::") {
                 break;
             }
-            let candidates: Vec<(usize, &Symbol)> = self
-                .all
-                .iter()
-                .enumerate()
-                .filter(|(_, file)| file.language == Language::Ruby)
-                .flat_map(|(position, file)| {
-                    file.symbols
-                        .iter()
-                        .filter(|symbol| symbol.kind.is_type() && symbol.name == *parent)
-                        .map(move |symbol| (position, symbol))
-                })
-                .collect();
-            let [(parent_position, parent_symbol)] = candidates.as_slice() else {
+            let Some([(parent_position, parent_symbol)]) =
+                index.by_name.get(parent.as_str()).map(Vec::as_slice)
+            else {
                 break;
             };
             if chain.iter().any(|(_, seen)| seen.key == parent_symbol.key) {
@@ -728,16 +719,16 @@ impl<'a> Context<'a> {
         }
         let mut active: Vec<String> = Vec::new();
         for (position, symbol) in chain.into_iter().rev() {
-            for callback in self.rails_callbacks(position, symbol) {
+            for callback in self.rails_callbacks(index, position, symbol).iter() {
                 if !callback.applies_to(action) {
                     continue;
                 }
                 if callback.skip {
                     active.retain(|name| !callback.names.contains(name));
                 } else {
-                    for name in callback.names {
-                        if !active.contains(&name) {
-                            active.push(name);
+                    for name in &callback.names {
+                        if !active.contains(name) {
+                            active.push(name.clone());
                         }
                     }
                 }
@@ -747,8 +738,25 @@ impl<'a> Context<'a> {
     }
 
     /// The callback calls in the body of the class, in source order. A call in a method, or in a
-    /// nested class or module, is not a callback of this class.
-    fn rails_callbacks(&self, position: usize, class: &Symbol) -> Vec<Callback> {
+    /// nested class or module, is not a callback of this class. The index keeps the result.
+    fn rails_callbacks(
+        &self,
+        index: &RailsIndex<'a>,
+        position: usize,
+        class: &Symbol,
+    ) -> Rc<Vec<Callback>> {
+        if let Some(found) = index.callbacks.borrow().get(&*class.key) {
+            return Rc::clone(found);
+        }
+        let callbacks = Rc::new(self.read_callbacks(position, class));
+        index
+            .callbacks
+            .borrow_mut()
+            .insert(class.key.to_string(), Rc::clone(&callbacks));
+        callbacks
+    }
+
+    fn read_callbacks(&self, position: usize, class: &Symbol) -> Vec<Callback> {
         let Some(parsed) = self.all_parsed.tree(position) else {
             return Vec::new();
         };
@@ -794,7 +802,7 @@ impl<'a> Context<'a> {
     }
 
     /// The names, the `only:` and `except:` lists, and the conditions of a callback call.
-    /// A list that is not a literal gives no condition, so the callback applies to each action.
+    /// A list that is not a literal makes the callback unreadable. See `Callback::applies_to`.
     fn rails_callback(&self, call: Node<'_>) -> Option<Callback> {
         let skip = match self.text(call.child_by_field_name("method")?) {
             "before_action" | "before_filter" => false,
@@ -811,16 +819,20 @@ impl<'a> Context<'a> {
             options
                 .as_ref()
                 .and_then(|options| options.get(key))
-                .and_then(|value| self.rails_names(value))
+                .map(|value| self.rails_names(value))
         };
+        let (only, except) = (list("only"), list("except"));
+        let unreadable =
+            options.is_none() || matches!(only, Some(None)) || matches!(except, Some(None));
         let conditional = options
             .as_ref()
             .is_some_and(|options| options.get("if").is_some() || options.get("unless").is_some());
         Some(Callback {
             skip,
             names,
-            only: list("only"),
-            except: list("except"),
+            only: only.flatten(),
+            except: except.flatten(),
+            unreadable,
             conditional,
         })
     }
@@ -831,15 +843,22 @@ struct Callback {
     names: Vec<String>,
     only: Option<Vec<String>>,
     except: Option<Vec<String>>,
+    /// An `only:` or `except:` value that is not a literal list.
+    unreadable: bool,
     /// An `if:` or `unless:` option. A condition does not decide the action.
     conditional: bool,
 }
 
 impl Callback {
-    /// A `skip_before_action` call with a condition removes no guard, because omen does not
-    /// evaluate the condition.
+    /// A callback never claims a guard that may not apply. A `before_action` call with a list
+    /// that omen cannot read, or with `if:` or `unless:`, adds no guard. A `skip_before_action`
+    /// call with a list that omen cannot read removes the guard for each action. A
+    /// `skip_before_action` call with a condition removes the guard for the actions that it names.
     fn applies_to(&self, action: &str) -> bool {
-        (!self.skip || !self.conditional)
+        if self.unreadable {
+            return self.skip;
+        }
+        (self.skip || !self.conditional)
             && self
                 .only
                 .as_ref()
@@ -848,6 +867,56 @@ impl Callback {
                 .except
                 .as_ref()
                 .is_none_or(|except| !except.iter().any(|name| name == action))
+    }
+}
+
+/// A class symbol and the position of its file.
+type Placed<'a> = (usize, &'a Symbol);
+
+/// The controller classes and their methods, by name. Omen builds it one time for each routes file.
+pub(super) struct RailsIndex<'a> {
+    classes: HashMap<(Option<String>, String), Vec<Placed<'a>>>,
+    by_name: HashMap<&'a str, Vec<Placed<'a>>>,
+    methods: HashMap<(usize, &'a str), Vec<&'a Symbol>>,
+    callbacks: RefCell<HashMap<String, Rc<Vec<Callback>>>>,
+}
+
+impl<'a> RailsIndex<'a> {
+    pub(super) fn build(all: &'a [FileSymbols]) -> Self {
+        let mut index = Self {
+            classes: HashMap::new(),
+            by_name: HashMap::new(),
+            methods: HashMap::new(),
+            callbacks: RefCell::new(HashMap::new()),
+        };
+        for (position, file) in all.iter().enumerate() {
+            if file.language != Language::Ruby {
+                continue;
+            }
+            for symbol in &file.symbols {
+                if symbol.kind.is_type() {
+                    index
+                        .classes
+                        .entry((symbol.container.clone(), symbol.name.clone()))
+                        .or_default()
+                        .push((position, symbol));
+                    index
+                        .by_name
+                        .entry(symbol.name.as_str())
+                        .or_default()
+                        .push((position, symbol));
+                } else if let (true, Some(container)) =
+                    (symbol.is_callable(), symbol.container.as_deref())
+                {
+                    index
+                        .methods
+                        .entry((position, container))
+                        .or_default()
+                        .push(symbol);
+                }
+            }
+        }
+        index
     }
 }
 

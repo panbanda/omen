@@ -422,6 +422,7 @@ struct Context<'a> {
     rules: &'a [EntryRule],
     source: &'a [u8],
     test_ranges: Vec<Range<usize>>,
+    rails: std::cell::OnceCell<rails::RailsIndex<'a>>,
 }
 
 struct Draft {
@@ -458,6 +459,7 @@ impl<'a> Context<'a> {
             rules,
             source: &parsed.source,
             test_ranges,
+            rails: std::cell::OnceCell::new(),
         }
     }
 
@@ -2342,27 +2344,15 @@ mod tests {
             [
                 (
                     "GET /users".to_string(),
-                    strings(&["always", "tracked", "multi", "conditional"])
+                    strings(&["always", "tracked", "multi"])
                 ),
                 (
                     "GET /users/:id".to_string(),
-                    strings(&[
-                        "authenticate_user!",
-                        "load_audit",
-                        "always",
-                        "tracked",
-                        "conditional"
-                    ])
+                    strings(&["authenticate_user!", "load_audit", "always", "tracked",])
                 ),
                 (
                     "GET /users/:id/edit".to_string(),
-                    strings(&[
-                        "authenticate_user!",
-                        "load_audit",
-                        "always",
-                        "tracked",
-                        "conditional"
-                    ])
+                    strings(&["authenticate_user!", "load_audit", "always", "tracked",])
                 ),
             ]
         );
@@ -2428,6 +2418,160 @@ mod tests {
                 ("GET /c".to_string(), strings(&["once"])),
             ]
         );
+    }
+
+    #[test]
+    fn an_absolute_controller_ignores_the_module_of_the_namespace() {
+        let routes = "Rails.application.routes.draw do\n  namespace :admin do\n    get \"/x\", to: \"/users#show\"\n    get \"/y\", controller: \"/users\", action: \"show\"\n    get \"/z\", to: \"users#show\"\n  end\nend\n";
+        let admin = "module Admin\n  class UsersController\n    before_action :admin_only\n    def show; end\n  end\nend\n";
+        let top = "class UsersController\n  before_action :top_only\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/admin.rb", admin),
+                ("users_controller.rb", top),
+            ],
+        );
+        let by_path = |path: &str| {
+            let entry = found
+                .iter()
+                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .unwrap();
+            (entry.symbol.clone(), entry.guards.clone())
+        };
+        let top_side = (
+            Some("users_controller.rb#UsersController.show".to_string()),
+            strings(&["top_only"]),
+        );
+        assert_eq!(by_path("/admin/x"), top_side);
+        assert_eq!(by_path("/admin/y"), top_side);
+        assert_eq!(
+            by_path("/admin/z"),
+            (
+                Some("controllers/admin.rb#Admin.UsersController.show".to_string()),
+                strings(&["admin_only"])
+            )
+        );
+    }
+
+    #[test]
+    fn resources_with_two_names_give_distinct_keys() {
+        let routes =
+            "Rails.application.routes.draw do\n  resources :posts, :comments, only: :index\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut routes = verbs_and_paths(&found);
+        routes.sort();
+        assert_eq!(routes, ["GET /comments", "GET /posts"]);
+        let keys: std::collections::BTreeSet<&str> =
+            found.iter().map(|entry| entry.key.as_str()).collect();
+        assert_eq!(keys.len(), 2);
+    }
+
+    #[test]
+    fn a_route_without_a_module_matches_only_a_class_without_a_container() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"users#show\"\n  get \"/b\", to: \"reports#show\"\nend\n";
+        let admin = "module Admin\n  class UsersController\n    before_action :admin_only\n    def show; end\n  end\n  class ReportsController\n    before_action :admin_only\n    def show; end\n  end\nend\n";
+        let top = "class UsersController\n  before_action :top_only\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/admin.rb", admin),
+                ("users_controller.rb", top),
+            ],
+        );
+        assert_eq!(
+            found[0].symbol.as_deref(),
+            Some("users_controller.rb#UsersController.show")
+        );
+        assert_eq!(found[0].guards, ["top_only"]);
+        assert_eq!(found[1].symbol, None);
+        assert!(found[1].guards.is_empty());
+    }
+
+    #[test]
+    fn a_list_that_is_not_a_literal_never_claims_a_guard() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"users#show\"\nend\n";
+        let controller = "class UsersController\n  before_action :unknown_list, only: ACTIONS\n  before_action :unknown_except, except: ACTIONS\n  before_action :kept\n  before_action :removed\n  skip_before_action :removed, only: ACTIONS\n\n  def show; end\nend\n";
+        let found = rails_routes(routes, &[("users_controller.rb", controller)]);
+        assert_eq!(found[0].guards, ["kept"]);
+    }
+
+    #[test]
+    fn a_condition_never_claims_a_guard() {
+        let routes = "Rails.application.routes.draw do\n  resources :users, only: [:index, :show, :edit]\nend\n";
+        let controller = "class UsersController\n  before_action :if_guard, if: :enabled?\n  before_action :unless_guard, unless: :disabled?\n  before_action :first\n  before_action :second\n  before_action :third\n  skip_before_action :first, if: :flag?\n  skip_before_action :second, only: [:show], unless: :flag?\n  skip_before_action :third, only: LIST, if: :flag?\n\n  def index; end\n  def show; end\n  def edit; end\nend\n";
+        let found = rails_routes(routes, &[("users_controller.rb", controller)]);
+        assert_eq!(
+            guards_by_path(&found),
+            [
+                ("GET /users".to_string(), strings(&["second"])),
+                ("GET /users/:id".to_string(), Vec::new()),
+                ("GET /users/:id/edit".to_string(), strings(&["second"])),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_nested_route_needs_a_certain_singular() {
+        let routes = "Rails.application.routes.draw do\n  resources :news, only: [:index] do\n    resources :comments, only: [:index]\n  end\n  resources :categories, only: [:index] do\n    resources :items, only: [:index]\n  end\n  resources :movies, only: [:index] do\n    resources :actors, only: [:index]\n  end\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut routes = verbs_and_paths(&found);
+        routes.sort();
+        assert_eq!(
+            routes,
+            [
+                "GET /categories",
+                "GET /categories/:category_id/items",
+                "GET /movies",
+                "GET /news",
+            ]
+        );
+    }
+
+    fn many_routes_and_controllers_resolve_in_linear_time_at(count: usize) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut controllers = Vec::new();
+        for number in 0..count {
+            routes.push_str(&format!("  get \"/r{number}\", to: \"c{number}#show\"\n"));
+            controllers.push((
+                format!("controllers/c{number:06}_controller.rb"),
+                format!(
+                    "class C{number}Controller < ApplicationController\n  before_action :guard{number}, only: [:show]\n  def show; end\nend\n"
+                ),
+            ));
+        }
+        routes.push_str("end\n");
+        controllers.push((
+            "controllers/application_controller.rb".to_string(),
+            "class ApplicationController\n  before_action :login\nend\n".to_string(),
+        ));
+        controllers.sort();
+        let mut files: Vec<(&str, &str)> = vec![("config/routes.rb", routes.as_str())];
+        files.extend(
+            controllers
+                .iter()
+                .map(|(name, text)| (name.as_str(), text.as_str())),
+        );
+        let started = std::time::Instant::now();
+        let found = entries(Language::Ruby, &files);
+        let elapsed = started.elapsed();
+        assert_eq!(found.len(), count);
+        assert!(found
+            .iter()
+            .all(|entry| entry.symbol.is_some() && entry.guards.len() == 2));
+        elapsed
+    }
+
+    #[test]
+    fn many_routes_and_controllers_resolve_with_their_guards() {
+        many_routes_and_controllers_resolve_in_linear_time_at(50);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_routes_and_controllers_resolve_in_linear_time() {
+        let elapsed = many_routes_and_controllers_resolve_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
     #[test]

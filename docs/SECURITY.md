@@ -113,8 +113,14 @@ the module as the container of the class. Otherwise the entry point has no symbo
 A guard is a `before_action` callback of the action. Omen reads the symbols, `only:`, and
 `except:` of the call from the syntax tree. A `skip_before_action` call removes a guard for
 the actions that it lists. The guards of a superclass in the repository, such as
-`ApplicationController`, come first. A `skip_before_action` call with `if:` or `unless:`
-removes no guard. A list that is not a literal gives no condition.
+`ApplicationController`, come first.
+
+A guard never claims more than omen can read. If a `before_action` call has `if:` or `unless:`, or its `only:` or `except:` value is not
+a literal list, as in `only: ACTIONS`, omen reports no guard from that call. A
+`skip_before_action` call with `if:` or `unless:` removes the guard for the actions that it names. If the value of a `skip_before_action` call is not a literal list, omen removes the
+guard for each action. A controller path with a leading `/`, such as `to: "/users#show"`,
+ignores the module of the `namespace`. A route without a module matches only a class that
+has no module.
 
 Omen skips each route that it cannot read exactly. It never guesses. It skips these forms:
 
@@ -125,7 +131,9 @@ Omen skips each route that it cannot read exactly. It never guesses. It skips th
 - A `scope` path with an optional segment, such as `"(:locale)"`.
 - The calls `concerns`, `draw(:file)`, `mount`, and `devise_for`.
 
-For an irregular plural, such as `people`, omen skips the nested routes of the resource.
+Omen reads a nested route only when the singular name is certain. For `categories` the
+parameter is `:category_id`. For `news`, `movies`, `people`, and other words that omen does
+not know, omen skips the nested routes of the resource.
 For a `resource` call, such as `resource :person`, the entry point has no symbol.
 
 ## Limits
