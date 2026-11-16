@@ -126,7 +126,8 @@ each form against the source of Rails 7.2.2.
 | `match` with `via:` | Read. A call without `via:` is skipped. |
 | `root` | Read. In a `resources` block the path is the collection path. In a `resource` block it is skipped. |
 | `resources` and `resource` with `only:`, `except:`, `path:`, `controller:`, `module:`, `as:`, `constraints:`, `defaults:`, `concerns:`, `format: false` | Read. The option `as:` gives the name for the nested parameter: `as: :articles` gives `:article_id`. Any other option, such as `param:` or `shallow:`, skips the call. |
-| `config.api_only = true` in a file in `config` | The `resources` and `resource` calls have no `new` and no `edit` route, unless `only:` lists them. A value that is not `true` or `false`, or an assignment in a branch that omen cannot evaluate, skips each `resources` and `resource` call. |
+| `config.api_only = true` | Read for each route set. The body of the application class, and a file in `config`, give the value for `Rails.application` and for the application class. The body of an engine class gives the value for the routes of that engine. With the value `true`, the `resources` and `resource` calls have no `new` and no `edit` route, unless `only:` lists them. A value that is not `true` or `false`, an assignment in a branch that omen cannot evaluate, and an assignment that omen cannot give to one route set, skip each `resources` and `resource` call. |
+| A string in double quotes or single quotes | Omen evaluates the string as Ruby does, before it escapes the path. It models `\n \t \r \a \b \e \f \v \s`, the octal and `\x` forms, `\uXXXX`, `\u{...}`, and a backslash before another character. An interpolation, `\c`, `\C-`, `\M-`, a line continuation, and the forms `%q` and `%Q` skip the route. |
 | `member do`, `collection do`, `on: :member`, `on: :collection` | Read. A canonical action name, such as `get :show`, adds no path segment. `on: :new` is skipped. |
 | A route in a `scope` in a `resources` block | Read. The nested path follows the path of the scope: `/x/users/:user_id/y`. |
 | `concerns`, `draw(:file)`, `mount`, `devise_for`, `direct`, `resolve` | No route. |
@@ -205,8 +206,10 @@ controller for a `resource` call. The `member` routes and the `collection` route
 do not change the inflections. Omen does not find a change in a different file.
 
 Omen reads a literal `inflect.acronym "API"` call in the same files. The receiver must be the
-parameter of the block of `ActiveSupport::Inflector.inflections`, or the result of that call. A
-call on another receiver has no effect. It builds the class name as
+parameter of the block of `ActiveSupport::Inflector.inflections`, or the result of that call. The
+constant must be exactly `ActiveSupport::Inflector`, with or without a leading `::`. If the
+repository defines a module or a class with that name, omen does not trust it, and the class
+names are not known. A call on another receiver has no effect. It builds the class name as
 `camelize` of ActiveSupport does, so `api/users` gives `API::UsersController`. A call in a dead
 branch has no effect. A call in any other `if`, `case`, loop, method, or block, except the block of
 `inflections`, makes the inflections unreadable. If an `acronym` argument is not a string, or the

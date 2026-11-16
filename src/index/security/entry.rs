@@ -3441,6 +3441,128 @@ mod tests {
     }
 
     #[test]
+    fn api_only_belongs_to_the_route_set_that_owns_it() {
+        let app_routes =
+            "Rails.application.routes.draw do\n  resources :users, only: [:new]\nend\n";
+        let engine_routes =
+            "Blog::Engine.routes.draw do\n  resources :posts, only: [:new, :index]\nend\n";
+        let engine =
+            "module Blog\n  class Engine < Rails::Engine\n    config.api_only = true\n  end\nend\n";
+        let paths = |files: &[(&str, &str)]| {
+            let mut paths = verbs_and_paths(
+                &entries(Language::Ruby, files)
+                    .into_iter()
+                    .filter(|entry| entry.framework == "rails")
+                    .collect::<Vec<_>>(),
+            );
+            paths.sort();
+            paths
+        };
+        let found = paths(&[
+            ("config/routes.rb", app_routes),
+            ("blog/config/routes.rb", engine_routes),
+            ("lib/blog/engine.rb", engine),
+        ]);
+        assert_eq!(found, ["GET /posts", "GET /posts/new", "GET /users/new"]);
+        let stray = "config.api_only = true\n";
+        let found = paths(&[
+            ("config/routes.rb", app_routes),
+            ("blog/config/routes.rb", engine_routes),
+            ("lib/blog/engine.rb", engine),
+            ("lib/stray.rb", stray),
+        ]);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn only_the_inflector_of_active_support_registers_an_acronym() {
+        let routes =
+            "Rails.application.routes.draw do\n  get \"/u\", to: \"api/users#show\"\nend\n";
+        let upper = "module API\n  class UsersController\n    before_action :upper\n    def show; end\n  end\nend\n";
+        let lower = "module Api\n  class UsersController\n    before_action :lower\n    def show; end\n  end\nend\n";
+        let fake = "module Fake\n  module Inflector\n    def self.inflections\n      yield Object.new\n    end\n  end\nend\n\nFake::Inflector.inflections do |inflect|\n  inflect.acronym \"API\"\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/upper.rb", upper),
+                ("controllers/lower.rb", lower),
+                ("config/initializers/fake.rb", fake),
+            ],
+        );
+        assert_eq!(found[0].guards, ["lower"]);
+        let real = "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  inflect.acronym \"API\"\nend\n";
+        let shadow = "module ActiveSupport\n  module Inflector\n  end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/upper.rb", upper),
+                ("controllers/lower.rb", lower),
+                ("config/initializers/real.rb", real),
+                ("lib/shadow.rb", shadow),
+            ],
+        );
+        assert_eq!(found[0].symbol, None);
+        assert!(found[0].guards.is_empty());
+        let rooted = "::ActiveSupport::Inflector.inflections(:en) do |inflect|\n  inflect.acronym \"API\"\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/upper.rb", upper),
+                ("controllers/lower.rb", lower),
+                ("config/initializers/real.rb", rooted),
+            ],
+        );
+        assert_eq!(found[0].guards, ["upper"]);
+    }
+
+    #[test]
+    fn a_ruby_string_is_evaluated_before_the_path_is_escaped() {
+        let routes = "Rails.application.routes.draw do\n  get \"/caf\\u00E9\", to: \"a#b\"\n  get 'q\\nr', to: \"a#b\"\n  get \"/t\\tab\", to: \"a#b\"\n  get \"/x\\x41\", to: \"a#b\"\n  get \"/o\\101\", to: \"a#b\"\n  get \"/u\\u{41 42}\", to: \"a#b\"\n  get '/s\\\\t', to: \"a#b\"\n  get \"/i#{1}\", to: \"a#b\"\n  get \"/m\\M-a\", to: \"a#b\"\n  get %q(/pct), to: \"a#b\"\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut paths = verbs_and_paths(&found);
+        paths.sort();
+        assert_eq!(
+            paths,
+            [
+                "GET /caf%C3%A9",
+                "GET /oA",
+                "GET /q%5Cnr",
+                "GET /s%5Ct",
+                "GET /t%09ab",
+                "GET /uAB",
+                "GET /xA",
+            ]
+        );
+    }
+
+    fn many_nested_conditions_resolve_in_linear_time_at(depth: usize) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        for number in 0..depth {
+            routes.push_str(&format!("if true\n  get \"/r{number}\", to: \"a#b\"\n"));
+        }
+        for _ in 0..depth {
+            routes.push_str("end\n");
+        }
+        routes.push_str("end\n");
+        let files = [("config/routes.rb", routes.as_str())];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), depth);
+        elapsed
+    }
+
+    #[test]
+    fn many_nested_conditions_each_give_their_route() {
+        many_nested_conditions_resolve_in_linear_time_at(1_500);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_nested_conditions_resolve_in_linear_time() {
+        let elapsed = many_nested_conditions_resolve_in_linear_time_at(2_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    #[test]
     fn a_superclass_name_with_two_identities_is_ambiguous() {
         let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
         let top = "class ApplicationController\n  before_action :top\nend\n";

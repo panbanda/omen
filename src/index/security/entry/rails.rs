@@ -76,6 +76,8 @@ pub(super) struct Scope {
     method_scope: bool,
     /// The route is in a `draw` block of the routes of the application or of an engine.
     draw: bool,
+    /// The value of `config.api_only` for the route set of the `draw` call.
+    api_only: ApiOnly,
 }
 
 impl Scope {
@@ -120,6 +122,71 @@ impl<'t> Options<'t> {
 struct Target {
     controller: Option<String>,
     action: Option<String>,
+}
+
+/// Appends the bytes of an escape sequence of a Ruby string in double quotes. The escapes that omen
+/// models are `\n \t \r \a \b \e \f \v \s`, `\0` and the octal form, `\xHH`, `\uXXXX`, `\u{...}`,
+/// and a backslash before another character. The forms `\c`, `\C-`, `\M-`, and a backslash before
+/// a line break give `None`.
+fn decode_escape(escape: &str, out: &mut Vec<u8>) -> Option<()> {
+    let characters: Vec<char> = escape.chars().collect();
+    if characters.first() != Some(&'\\') || characters.len() < 2 {
+        return None;
+    }
+    let push = |character: char, out: &mut Vec<u8>| {
+        let mut buffer = [0u8; 4];
+        out.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
+    };
+    match characters[1] {
+        'n' => out.push(b'\n'),
+        't' => out.push(b'\t'),
+        'r' => out.push(b'\r'),
+        'a' => out.push(7),
+        'b' => out.push(8),
+        'e' => out.push(27),
+        'f' => out.push(12),
+        'v' => out.push(11),
+        's' => out.push(b' '),
+        'c' | 'C' | 'M' | '\n' | '\r' => return None,
+        'x' => {
+            let digits: String = characters[2..].iter().collect();
+            if digits.is_empty() || digits.len() > 2 {
+                return None;
+            }
+            out.push(u8::from_str_radix(&digits, 16).ok()?);
+        }
+        'u' => {
+            let rest: String = characters[2..].iter().collect();
+            let codes: Vec<&str> = match rest.strip_prefix('{') {
+                Some(braced) => braced.strip_suffix('}')?.split_whitespace().collect(),
+                None if rest.len() == 4 => vec![rest.as_str()],
+                None => return None,
+            };
+            if codes.is_empty() {
+                return None;
+            }
+            for code in codes {
+                if code.len() > 6 {
+                    return None;
+                }
+                push(char::from_u32(u32::from_str_radix(code, 16).ok()?)?, out);
+            }
+        }
+        '0'..='7' => {
+            let digits: String = characters[1..].iter().collect();
+            if digits.len() > 3 || !digits.chars().all(|digit| ('0'..='7').contains(&digit)) {
+                return None;
+            }
+            out.push(u8::try_from(u32::from_str_radix(&digits, 8).ok()?).ok()?);
+        }
+        other => {
+            if characters.len() != 2 {
+                return None;
+            }
+            push(other, out);
+        }
+    }
+    Some(())
 }
 
 /// The class name of a name with `_`, as `camelize` of ActiveSupport gives it. A registered acronym
@@ -399,17 +466,50 @@ impl<'a> Context<'a> {
     /// The text of a string without interpolation, or of a symbol.
     fn rails_literal(&self, node: Node<'_>) -> Option<String> {
         match node.kind() {
-            "string" => {
-                let mut cursor = node.walk();
-                let interpolated = node
-                    .named_children(&mut cursor)
-                    .any(|child| child.kind() == "interpolation");
-                (!interpolated).then(|| self.string_of(node))
-            }
+            "string" => self.ruby_string_value(node),
             "simple_symbol" => Some(self.text(node).trim_start_matches(':').to_string()),
             "bare_symbol" | "hash_key_symbol" => Some(self.text(node).to_string()),
             _ => None,
         }
+    }
+
+    /// The value of a Ruby string literal in double quotes or single quotes. An interpolation, a
+    /// form such as `%q(...)`, and an escape that omen does not model give `None`.
+    fn ruby_string_value(&self, node: Node<'_>) -> Option<String> {
+        let text = self.text(node);
+        let mut bytes: Vec<u8> = Vec::new();
+        match text.as_bytes().first()? {
+            b'\'' => {
+                let body = text.strip_prefix('\'')?.strip_suffix('\'')?;
+                let mut characters = body.chars().peekable();
+                while let Some(character) = characters.next() {
+                    if character == '\\' && matches!(characters.peek(), Some('\\' | '\'')) {
+                        let escaped = characters.next()?;
+                        bytes.extend_from_slice(escaped.to_string().as_bytes());
+                    } else {
+                        bytes.extend_from_slice(character.to_string().as_bytes());
+                    }
+                }
+            }
+            b'"' => {
+                let mut cursor = node.walk();
+                for part in node.named_children(&mut cursor) {
+                    match part.kind() {
+                        "string_content" => {
+                            let content = self.text(part);
+                            if content.contains("#$") || content.contains("#@") {
+                                return None;
+                            }
+                            bytes.extend_from_slice(content.as_bytes());
+                        }
+                        "escape_sequence" => decode_escape(self.text(part), &mut bytes)?,
+                        _ => return None,
+                    }
+                }
+            }
+            _ => return None,
+        }
+        String::from_utf8(bytes).ok()
     }
 
     /// One literal, or a list of literals.
@@ -467,74 +567,79 @@ impl<'a> Context<'a> {
     }
 
     /// The scope that the blocks around the node give. `None` means that a block is not readable.
-    /// The scope inside each block is kept, so a route reads the scope of its nearest block, and
-    /// the search does not walk to the `draw` call again.
+    /// The scope inside each node is kept, so the search goes up only to the nearest node that it
+    /// has already seen, and it does not walk to the `draw` call again.
     fn rails_scope(&self, node: Node<'_>) -> Option<Scope> {
-        let mut pending: Vec<Node<'_>> = Vec::new();
-        let mut current = node;
+        let mut path: Vec<Node<'_>> = Vec::new();
+        let mut current = node.parent();
         let mut scope: Option<Rc<Scope>> = loop {
-            match Self::next_frame(current) {
-                Frame::Invalid => break None,
-                Frame::Root => {
-                    break Some(Rc::new(Scope {
-                        prefix: Some(String::from("/")),
-                        ..Scope::default()
-                    }))
-                }
-                Frame::Call(frame) => {
-                    if let Some(known) = self.rails_scopes.borrow().get(&frame.id()) {
-                        break known.clone();
-                    }
-                    pending.push(frame);
-                    current = frame;
-                }
+            let Some(above) = current else {
+                break Some(Rc::new(Scope {
+                    prefix: Some(String::from("/")),
+                    ..Scope::default()
+                }));
+            };
+            if let Some(known) = self.rails_scopes.borrow().get(&above.id()) {
+                break known.clone();
             }
+            path.push(above);
+            current = above.parent();
         };
-        for frame in pending.into_iter().rev() {
-            scope = scope.and_then(|outer| {
-                if matches!(
-                    frame
-                        .child_by_field_name("method")
-                        .map(|method| self.text(method)),
-                    Some("constraints" | "defaults")
-                ) && frame.child_by_field_name("receiver").is_none()
-                {
-                    return Some(outer);
-                }
-                self.rails_enter(frame, (*outer).clone()).map(Rc::new)
-            });
+        for above in path.into_iter().rev() {
+            scope = scope.and_then(|outer| self.scope_inside(above, outer));
             self.rails_scopes
                 .borrow_mut()
-                .insert(frame.id(), scope.clone());
+                .insert(above.id(), scope.clone());
         }
+        let scope = scope.and_then(|outer| self.scope_inside(node, outer));
         scope
             .filter(|scope| scope.draw)
             .map(|scope| (*scope).clone())
     }
 
-    /// The nearest block call above the node. A method, a lambda, a loop, a class, and a dead
-    /// branch between them make the scope not readable.
-    fn next_frame(start: Node<'_>) -> Frame<'_> {
-        let mut child = start;
-        while let Some(parent) = child.parent() {
-            match parent.kind() {
-                "call" if parent.child_by_field_name("block") == Some(child) => {
-                    return Frame::Call(parent)
-                }
-                "for" | "while" | "until" | "while_modifier" | "until_modifier" | "method"
-                | "singleton_method" | "lambda" | "class" | "module" | "singleton_class" => {
-                    return Frame::Invalid
-                }
-                "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional"
-                    if Self::is_dead_branch(parent, child) =>
-                {
-                    return Frame::Invalid
-                }
-                _ => {}
-            }
-            child = parent;
+    /// The scope for the code inside the node, from the scope outside it. A method, a lambda, a
+    /// loop, a class, and a dead branch make the scope not readable. The block of a call enters
+    /// the scope of the call.
+    fn scope_inside(&self, node: Node<'_>, outer: Rc<Scope>) -> Option<Rc<Scope>> {
+        if matches!(
+            node.kind(),
+            "for"
+                | "while"
+                | "until"
+                | "while_modifier"
+                | "until_modifier"
+                | "method"
+                | "singleton_method"
+                | "lambda"
+                | "class"
+                | "module"
+                | "singleton_class"
+        ) {
+            return None;
         }
-        Frame::Root
+        let Some(parent) = node.parent() else {
+            return Some(outer);
+        };
+        if matches!(
+            parent.kind(),
+            "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional"
+        ) && Self::is_dead_branch(parent, node)
+        {
+            return None;
+        }
+        if parent.kind() == "call" && parent.child_by_field_name("block") == Some(node) {
+            if matches!(
+                parent
+                    .child_by_field_name("method")
+                    .map(|method| self.text(method)),
+                Some("constraints" | "defaults")
+            ) && parent.child_by_field_name("receiver").is_none()
+            {
+                return Some(outer);
+            }
+            return self.rails_enter(parent, (*outer).clone()).map(Rc::new);
+        }
+        Some(outer)
     }
 
     /// Tells if a literal condition makes the branch of `child` dead: `if false`, `if nil`,
@@ -575,6 +680,11 @@ impl<'a> Context<'a> {
         let receiver = call.child_by_field_name("receiver").is_some();
         if self.is_draw_block(call) {
             scope.draw = true;
+            scope.api_only = call
+                .child_by_field_name("receiver")
+                .map_or(ApiOnly::Unknown, |receiver| {
+                    self.rails_api_only(self.text(receiver))
+                });
             return Some(scope);
         }
         if receiver {
@@ -672,7 +782,7 @@ impl<'a> Context<'a> {
                 let definition = self.rails_resource_definition(&positional, &options, &scope)?;
                 if definition.names.len() != 1
                     || scope.method_scope
-                    || matches!(self.rails_api_only(), ApiOnly::Unknown)
+                    || matches!(scope.api_only, ApiOnly::Unknown)
                 {
                     return None;
                 }
@@ -750,7 +860,7 @@ impl<'a> Context<'a> {
         if scope.method_scope {
             return;
         }
-        let api_only = match self.rails_api_only() {
+        let api_only = match scope.api_only {
             ApiOnly::On => true,
             ApiOnly::Off => false,
             ApiOnly::Unknown => return,
@@ -992,8 +1102,23 @@ impl<'a> Context<'a> {
                 continue;
             }
             if let Some(parsed) = self.all_parsed.tree(position) {
-                read_inflection_calls(parsed.root_node(), &parsed.source, false, &[], &mut found);
+                read_inflection_calls(
+                    parsed.root_node(),
+                    &parsed.source,
+                    0,
+                    false,
+                    &[],
+                    &mut found,
+                );
             }
+        }
+        if self
+            .rails_shared()
+            .classes
+            .contains_key("ActiveSupport.Inflector")
+        {
+            found.unreadable_acronym = true;
+            found.changes_singulars = true;
         }
         found
     }
@@ -1010,31 +1135,181 @@ impl<'a> Context<'a> {
         (!self.rails_inflections().changes_singulars).then(|| pluralize(name))
     }
 
-    /// Whether the application sets `config.api_only`. Omen reads the files in `config`. A value
-    /// that is not `true` or `false`, and an assignment in a branch that omen cannot evaluate,
-    /// make the value unknown.
-    fn rails_api_only(&self) -> ApiOnly {
-        *self.rails_shared().api_only.get_or_init(|| {
-            let mut values: Vec<Option<bool>> = Vec::new();
+    /// The value of `config.api_only` for the route set of a `draw` call: `Rails.application`, a
+    /// class that extends `Rails::Application`, or an engine. Omen reads each Ruby file. An
+    /// assignment in the body of the application class, or in a file in `config`, belongs to the
+    /// application. An assignment in the body of an engine class belongs to that engine. Any
+    /// other assignment, a value that is not `true` or `false`, and an assignment in a branch that
+    /// omen cannot evaluate make the value unknown.
+    fn rails_api_only(&self, receiver: &str) -> ApiOnly {
+        let sets = self.rails_shared().api_only.get_or_init(|| {
+            let mut sets = ApiOnlySets::default();
             for (position, file) in self.all.iter().enumerate() {
-                let in_config = file.file.starts_with("config/") || file.file.contains("/config/");
-                if file.language != Language::Ruby || !in_config {
+                if file.language != Language::Ruby {
                     continue;
                 }
+                let in_config = file.file.starts_with("config/") || file.file.contains("/config/");
                 if let Some(parsed) = self.all_parsed.tree(position) {
-                    read_api_only(parsed.root_node(), &parsed.source, false, &mut values);
+                    self.collect_api_only(
+                        parsed.root_node(),
+                        &ApiScan {
+                            source: &parsed.source,
+                            in_config,
+                        },
+                        0,
+                        false,
+                        &mut Vec::new(),
+                        &mut sets,
+                    );
                 }
             }
-            if values.iter().any(Option::is_none)
-                || (values.contains(&Some(true)) && values.contains(&Some(false)))
-            {
-                ApiOnly::Unknown
-            } else if values.contains(&Some(true)) {
-                ApiOnly::On
-            } else {
-                ApiOnly::Off
+            sets
+        });
+        let Some(base) = receiver.trim().strip_suffix(".routes") else {
+            return ApiOnly::Unknown;
+        };
+        let constant = base.trim_start_matches("::");
+        if base == "Rails.application" || constant.ends_with("::Application") {
+            sets.for_application()
+        } else {
+            sets.for_engine(&constant.replace("::", "."))
+        }
+    }
+
+    /// The kind of the class with the identity: an application, an engine, or another class.
+    fn rails_class_kind(&self, identity: &str) -> ClassKind {
+        let superclass = |symbols: &[(usize, usize)]| {
+            symbols.iter().find_map(|(position, index)| {
+                self.all[*position].symbols[*index]
+                    .supertypes
+                    .first()
+                    .map(|parent| parent.trim_start_matches("::").to_string())
+            })
+        };
+        match self
+            .rails_shared()
+            .classes
+            .get(identity)
+            .and_then(|symbols| superclass(symbols))
+            .as_deref()
+        {
+            Some("Rails::Application") => ClassKind::Application,
+            Some("Rails::Engine") => ClassKind::Engine,
+            _ => ClassKind::Other,
+        }
+    }
+
+    /// Reads the assignments `x.api_only = value`. `names` are the modules and the classes around
+    /// the node, and a flag that tells which of them is a class.
+    fn collect_api_only(
+        &self,
+        node: Node<'_>,
+        scan: &ApiScan<'_>,
+        depth: usize,
+        conditional: bool,
+        names: &mut Vec<(bool, String)>,
+        out: &mut ApiOnlySets,
+    ) {
+        if depth > MAX_READ_DEPTH {
+            out.unattributed = true;
+            return;
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+        match node.kind() {
+            "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
+                let condition = node.child_by_field_name("condition");
+                let literal = condition
+                    .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"));
+                for part in children {
+                    if Some(part) == condition || Self::is_dead_branch(node, part) {
+                        continue;
+                    }
+                    self.collect_api_only(
+                        part,
+                        scan,
+                        depth + 1,
+                        conditional || !literal,
+                        names,
+                        out,
+                    );
+                }
+                return;
             }
-        })
+            "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
+            | "until" | "while_modifier" | "until_modifier" => {
+                for child in children {
+                    self.collect_api_only(child, scan, depth + 1, true, names, out);
+                }
+                return;
+            }
+            "class" | "module" => {
+                let name = node
+                    .child_by_field_name("name")
+                    .map(|name| super::syntax::text(name, scan.source).replace("::", "."))
+                    .unwrap_or_default();
+                names.push((node.kind() == "class", name));
+                for child in children {
+                    self.collect_api_only(child, scan, depth + 1, conditional, names, out);
+                }
+                names.pop();
+                return;
+            }
+            "assignment" => {
+                let assigns_api_only = node.child_by_field_name("left").is_some_and(|left| {
+                    left.kind() == "call"
+                        && left.child_by_field_name("method").is_some_and(|method| {
+                            super::syntax::text(method, scan.source) == "api_only"
+                        })
+                });
+                if assigns_api_only {
+                    let value = match node.child_by_field_name("right").map(|right| right.kind()) {
+                        Some("true") if !conditional => Some(true),
+                        Some("false") if !conditional => Some(false),
+                        _ => None,
+                    };
+                    match names.iter().rposition(|(is_class, _)| *is_class) {
+                        Some(class_depth) => {
+                            let identity = names[..=class_depth]
+                                .iter()
+                                .map(|(_, name)| name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(".");
+                            match self.rails_class_kind(&identity) {
+                                ClassKind::Application => out.application.push(value),
+                                ClassKind::Engine => {
+                                    out.engines.entry(identity).or_default().push(value)
+                                }
+                                ClassKind::Other => out.unattributed = true,
+                            }
+                        }
+                        None if scan.in_config => out.application.push(value),
+                        None => out.unattributed = true,
+                    }
+                }
+            }
+            _ => {}
+        }
+        let block_conditional = conditional
+            || node.kind() != "call"
+            || node
+                .child_by_field_name("method")
+                .is_none_or(|method| super::syntax::text(method, scan.source) != "configure");
+        for child in children {
+            let is_block = matches!(child.kind(), "do_block" | "block");
+            self.collect_api_only(
+                child,
+                scan,
+                depth + 1,
+                if is_block {
+                    block_conditional
+                } else {
+                    conditional
+                },
+                names,
+                out,
+            );
+        }
     }
 
     /// Tells if the text names the routes of the application or of an engine, and the repository
@@ -1411,7 +1686,7 @@ impl<'a> Context<'a> {
                     }
                 }
                 _ => {
-                    if self.defines_methods(statement) {
+                    if self.defines_methods(statement, 0) {
                         out.unreadable = true;
                     }
                 }
@@ -1421,7 +1696,10 @@ impl<'a> Context<'a> {
 
     /// Tells if the code has a `def`, or a call of `private`, `protected`, or `public`, outside a
     /// nested class or module.
-    fn defines_methods(&self, node: Node<'_>) -> bool {
+    fn defines_methods(&self, node: Node<'_>, depth: usize) -> bool {
+        if depth > MAX_READ_DEPTH {
+            return true;
+        }
         match node.kind() {
             "method" => return true,
             "class" | "module" | "singleton_class" => return false,
@@ -1441,7 +1719,7 @@ impl<'a> Context<'a> {
         let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
         children
             .into_iter()
-            .any(|child| self.defines_methods(child))
+            .any(|child| self.defines_methods(child, depth + 1))
     }
 
     /// Reads the callbacks in the children of the node. `conditional` tells that a branch that
@@ -1764,13 +2042,6 @@ type ActionKey = (String, String);
 /// The symbol and the guards of an action.
 type Handler = (Option<String>, Vec<String>);
 
-/// The nearest block call above a node.
-enum Frame<'t> {
-    Invalid,
-    Root,
-    Call(Node<'t>),
-}
-
 /// A symbol of the index: the position of the file, and the position in the symbols of the file.
 type Placed = (usize, usize);
 
@@ -1921,77 +2192,68 @@ pub(super) struct Inflections {
     changes_singulars: bool,
 }
 
-/// The value of `config.api_only` of the application.
-#[derive(Clone, Copy)]
+/// The deepest syntax node that omen reads with a recursive search of the whole tree. A deeper
+/// tree makes the result unknown, so the search does not overflow the stack of the thread.
+const MAX_READ_DEPTH: usize = 1_000;
+
+/// The value of `config.api_only` for a route set.
+#[derive(Clone, Copy, Default, PartialEq)]
 enum ApiOnly {
-    On,
+    #[default]
     Off,
+    On,
     Unknown,
 }
 
-/// Reads the assignments `x.api_only = value` in the code. A literal `true` or `false` gives the
-/// value. Any other value, and an assignment in a branch that omen cannot evaluate, give `None`.
-/// A dead branch has no effect. A block is a branch that omen cannot evaluate, except the block of
-/// `configure`.
-fn read_api_only(node: Node<'_>, source: &[u8], conditional: bool, out: &mut Vec<Option<bool>>) {
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-    match node.kind() {
-        "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
-            let condition = node.child_by_field_name("condition");
-            let literal = condition
-                .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"));
-            for part in children {
-                if Some(part) == condition || Context::is_dead_branch(node, part) {
-                    continue;
-                }
-                read_api_only(part, source, conditional || !literal, out);
-            }
-            return;
+/// The text of a file, and whether the file is in `config`, for the search for `api_only`.
+struct ApiScan<'s> {
+    source: &'s [u8],
+    in_config: bool,
+}
+
+/// The kind of a class of the repository, for `config`.
+enum ClassKind {
+    Application,
+    Engine,
+    Other,
+}
+
+/// The assignments `x.api_only = value` of the application and of each engine. A value is `None`
+/// when it is not `true` or `false`, or when omen cannot evaluate the branch that holds it.
+#[derive(Default)]
+struct ApiOnlySets {
+    application: Vec<Option<bool>>,
+    engines: HashMap<String, Vec<Option<bool>>>,
+    /// An assignment that omen cannot attribute to one route set.
+    unattributed: bool,
+}
+
+impl ApiOnlySets {
+    fn value(&self, values: &[Option<bool>]) -> ApiOnly {
+        if self.unattributed
+            || values.iter().any(Option::is_none)
+            || (values.contains(&Some(true)) && values.contains(&Some(false)))
+        {
+            ApiOnly::Unknown
+        } else if values.contains(&Some(true)) {
+            ApiOnly::On
+        } else {
+            ApiOnly::Off
         }
-        "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
-        | "until" | "while_modifier" | "until_modifier" => {
-            for child in children {
-                read_api_only(child, source, true, out);
-            }
-            return;
-        }
-        "assignment" => {
-            let assigns_api_only = node.child_by_field_name("left").is_some_and(|left| {
-                left.kind() == "call"
-                    && left
-                        .child_by_field_name("method")
-                        .is_some_and(|method| super::syntax::text(method, source) == "api_only")
-            });
-            if assigns_api_only {
-                let value = match node.child_by_field_name("right").map(|right| right.kind()) {
-                    Some("true") => Some(true),
-                    Some("false") => Some(false),
-                    _ => None,
-                };
-                out.push(if conditional { None } else { value });
-            }
-        }
-        _ => {}
     }
-    let block_conditional = conditional
-        || node.kind() != "call"
-        || node
-            .child_by_field_name("method")
-            .is_none_or(|method| super::syntax::text(method, source) != "configure");
-    for child in children {
-        let is_block = matches!(child.kind(), "do_block" | "block");
-        read_api_only(
-            child,
-            source,
-            if is_block {
-                block_conditional
-            } else {
-                conditional
-            },
-            out,
-        );
+
+    fn for_application(&self) -> ApiOnly {
+        self.value(&self.application)
     }
+
+    fn for_engine(&self, identity: &str) -> ApiOnly {
+        self.value(self.engines.get(identity).map_or(&[], Vec::as_slice))
+    }
+}
+
+/// Tells if the text is the constant `ActiveSupport::Inflector`, with or without a leading `::`.
+fn is_inflector_constant(text: &str) -> bool {
+    text.trim().trim_start_matches("::") == "ActiveSupport::Inflector"
 }
 
 /// Tells if the node is the object of the inflections: a block parameter of
@@ -2007,11 +2269,7 @@ fn is_inflection_object(node: Node<'_>, source: &[u8], params: &[String]) -> boo
             .is_some_and(|method| super::syntax::text(method, source) == "inflections")
         && node
             .child_by_field_name("receiver")
-            .is_some_and(|receiver| {
-                super::syntax::text(receiver, source)
-                    .trim_start_matches("::")
-                    .ends_with("Inflector")
-            })
+            .is_some_and(|receiver| is_inflector_constant(super::syntax::text(receiver, source)))
 }
 
 /// The names of the parameters of a block of the call.
@@ -2038,10 +2296,16 @@ fn block_parameter_names(call: Node<'_>, source: &[u8]) -> Vec<String> {
 fn read_inflection_calls(
     node: Node<'_>,
     source: &[u8],
+    depth: usize,
     conditional: bool,
     params: &[String],
     out: &mut Inflections,
 ) {
+    if depth > MAX_READ_DEPTH {
+        out.unreadable_acronym = true;
+        out.changes_singulars = true;
+        return;
+    }
     let mut cursor = node.walk();
     let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
     match node.kind() {
@@ -2053,14 +2317,21 @@ fn read_inflection_calls(
                 if Some(part) == condition || Context::is_dead_branch(node, part) {
                     continue;
                 }
-                read_inflection_calls(part, source, conditional || !literal, params, out);
+                read_inflection_calls(
+                    part,
+                    source,
+                    depth + 1,
+                    conditional || !literal,
+                    params,
+                    out,
+                );
             }
             return;
         }
         "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
         | "until" | "while_modifier" | "until_modifier" => {
             for child in children {
-                read_inflection_calls(child, source, true, params, out);
+                read_inflection_calls(child, source, depth + 1, true, params, out);
             }
             return;
         }
@@ -2075,9 +2346,7 @@ fn read_inflection_calls(
         let receiver = node.child_by_field_name("receiver");
         let opens_inflections = method == "inflections"
             && receiver.is_some_and(|receiver| {
-                super::syntax::text(receiver, source)
-                    .trim_start_matches("::")
-                    .ends_with("Inflector")
+                is_inflector_constant(super::syntax::text(receiver, source))
             });
         block_conditional = conditional || !opens_inflections;
         if opens_inflections {
@@ -2132,9 +2401,16 @@ fn read_inflection_calls(
     for child in children {
         let is_block = matches!(child.kind(), "do_block" | "block");
         if is_block {
-            read_inflection_calls(child, source, block_conditional, &block_params, out);
+            read_inflection_calls(
+                child,
+                source,
+                depth + 1,
+                block_conditional,
+                &block_params,
+                out,
+            );
         } else {
-            read_inflection_calls(child, source, conditional, params, out);
+            read_inflection_calls(child, source, depth + 1, conditional, params, out);
         }
     }
 }
@@ -2150,7 +2426,7 @@ pub(super) struct RailsShared {
     parents: HashMap<String, Option<String>>,
     child_counts: HashMap<String, usize>,
     inflections: std::sync::OnceLock<Inflections>,
-    api_only: std::sync::OnceLock<ApiOnly>,
+    api_only: std::sync::OnceLock<ApiOnlySets>,
     callbacks: Mutex<HashMap<Placed, Arc<Vec<Callback>>>>,
     visibility: Mutex<HashMap<String, Arc<Visibility>>>,
     programs: Mutex<HashMap<String, Arc<Program>>>,
