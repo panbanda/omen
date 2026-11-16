@@ -17,16 +17,18 @@ enum Framework {
     Chi,
     Echo,
     Mux,
+    Gin,
 }
 
 impl Framework {
-    const ALL: [Self; 3] = [Self::Chi, Self::Echo, Self::Mux];
+    const ALL: [Self; 4] = [Self::Chi, Self::Echo, Self::Mux, Self::Gin];
 
     fn name(self) -> &'static str {
         match self {
             Self::Chi => "chi",
             Self::Echo => "echo",
             Self::Mux => "gorilla/mux",
+            Self::Gin => "gin",
         }
     }
 
@@ -36,6 +38,7 @@ impl Framework {
             Self::Chi => "chi",
             Self::Echo => "echo",
             Self::Mux => "mux",
+            Self::Gin => "gin",
         }
     }
 
@@ -44,6 +47,7 @@ impl Framework {
             Self::Chi => "github.com/go-chi/chi",
             Self::Echo => "github.com/labstack/echo",
             Self::Mux => "github.com/gorilla/mux",
+            Self::Gin => "github.com/gin-gonic/gin",
         };
         module == base
             || module
@@ -59,6 +63,7 @@ impl Framework {
             Self::Chi => &["Router", "Mux"],
             Self::Echo => &["Echo", "Group"],
             Self::Mux => &["Router"],
+            Self::Gin => &["Engine", "RouterGroup", "IRouter", "IRoutes"],
         }
     }
 }
@@ -526,10 +531,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 let guards = self.guard_names(&arguments);
                 Some(self.new_router(Framework::Chi, Some(parent), String::new(), guards))
             }
-            (Framework::Echo, "Group") => {
+            (Framework::Echo | Framework::Gin, "Group") => {
                 let prefix = self.string_argument(*arguments.first()?)?;
                 let guards = self.guard_names(&arguments[1..]);
-                Some(self.new_router(Framework::Echo, Some(parent), prefix, guards))
+                let framework = self.routers[parent].framework;
+                Some(self.new_router(framework, Some(parent), prefix, guards))
             }
             _ => None,
         }
@@ -540,6 +546,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             Framework::Chi => matches!(name, "NewRouter" | "NewMux"),
             Framework::Echo => name == "New",
             Framework::Mux => name == "NewRouter",
+            Framework::Gin => matches!(name, "Default" | "New"),
         };
         makes.then(|| self.new_router(framework, None, String::new(), Vec::new()))
     }
@@ -595,6 +602,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         match self.routers[router].framework {
             Framework::Chi => self.chi_call(router, node, name, &arguments),
             Framework::Echo => self.echo_call(router, node, name, &arguments),
+            Framework::Gin => self.gin_call(router, node, name, &arguments),
             Framework::Mux => {}
         }
     }
@@ -729,6 +737,25 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             .into_iter()
             .flat_map(|child| self.strings_in(child))
             .collect()
+    }
+
+    /// `router.GET("/path", guard, handler)`. The last argument is the handler, and the
+    /// arguments before it are guards.
+    fn gin_call(&mut self, router: usize, node: Node<'t>, name: &str, arguments: &[Node<'t>]) {
+        if !matches!(
+            name,
+            "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS"
+        ) {
+            return;
+        }
+        let [path, guards @ .., handler] = arguments else {
+            return;
+        };
+        let Some(path) = self.string_argument(*path) else {
+            return;
+        };
+        let range = Span::of(&node);
+        self.register(router, &[name], &path, Some(*handler), guards, range);
     }
 
     fn echo_call(&mut self, router: usize, node: Node<'t>, name: &str, arguments: &[Node<'t>]) {

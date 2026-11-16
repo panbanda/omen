@@ -1393,36 +1393,18 @@ impl<'a> Context<'a> {
         if arguments.len() < 2 || !self.is_string(*first) {
             return;
         }
-        let path = self.string_of(*first);
-        let (framework, method, guards) = if matches!(name, "HandleFunc" | "Handle")
+        if !(matches!(name, "HandleFunc" | "Handle")
             && self.imports("net.http")
-            && self.is_go_http_receiver(receiver)
+            && self.is_go_http_receiver(receiver))
         {
-            let method = match path.split_once(' ') {
-                Some((method, _)) if method.chars().all(|c| c.is_ascii_uppercase()) => {
-                    method.to_string()
-                }
-                _ => "ANY".to_string(),
-            };
-            ("net/http", method, Vec::new())
-        } else if matches!(
-            name,
-            "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS"
-        ) && self.imports("github.com.gin-gonic.gin")
-            && self.is_framework_value(
-                receiver,
-                &["gin.", ".Group("],
-                &[("github.com.gin-gonic.gin", &["Default", "New"])],
-            )
-        {
-            let guards = arguments[1..arguments.len() - 1]
-                .iter()
-                .filter(|argument| matches!(argument.kind(), "identifier" | "selector_expression"))
-                .map(|argument| self.text(*argument).to_string())
-                .collect();
-            ("gin", name.to_string(), guards)
-        } else {
             return;
+        }
+        let path = self.string_of(*first);
+        let method = match path.split_once(' ') {
+            Some((method, _)) if method.chars().all(|c| c.is_ascii_uppercase()) => {
+                method.to_string()
+            }
+            _ => "ANY".to_string(),
         };
         let path = path
             .split_once(' ')
@@ -1431,9 +1413,9 @@ impl<'a> Context<'a> {
             range: Span::of(&node),
             kind: EntryKind::HttpHandler,
             symbol: self.handler_symbol(*handler),
-            framework,
+            framework: "net/http",
             route: Some(route(&method, path)),
-            guards,
+            guards: Vec::new(),
             basis: EntryBasis::Registered,
             variant: None,
         });
@@ -2250,6 +2232,39 @@ mod tests {
             go_routes(&[("main.go", &unproven)]),
             ["net/http ANY /b [] list"]
         );
+    }
+
+    #[test]
+    fn gin_groups_join_prefixes_and_use_gives_guards() {
+        let source = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n{GO_HANDLERS}func routes() {{\n\tr := gin.New()\n\tr.GET(\"/early\", list)\n\tr.Use(logger)\n\tv1 := r.Group(\"/v1\", auth)\n\tv1.GET(\"/users/:id\", audit, show)\n\tinner := v1.Group(\"/inner\")\n\tinner.Use(extra)\n\tinner.POST(\"/x\", list)\n\tr.Group(\"/chain\").DELETE(\"/c\", list)\n\tv1.PUT(\"/late\", list)\n\tr.GET(\"/after\", list)\n}}\n"
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gin GET /early [] list",
+                "gin GET /v1/users/:id [logger,auth,audit] show",
+                "gin POST /v1/inner/x [logger,auth,extra] list",
+                "gin DELETE /chain/c [logger] list",
+                "gin PUT /v1/late [logger,auth] list",
+                "gin GET /after [logger] list",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gin_receiver_must_be_proven_through_the_import() {
+        let aliased = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\tg \"github.com/gin-gonic/gin\"\n)\n\n{GO_HANDLERS}func routes() {{\n\tr := g.Default()\n\tr.GET(\"/a\", list)\n}}\n\nfunc typed(group *g.RouterGroup) {{\n\tgroup.POST(\"/b\", show)\n}}\n"
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &aliased)]),
+            ["gin GET /a [] list", "gin POST /b [] show"]
+        );
+        let unproven = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n{GO_HANDLERS}func routes(store thing) {{\n\tstore.GET(\"/a\", list)\n\tstore.Group(\"/x\").GET(\"/b\", list)\n\trouter := newRouter()\n\trouter.GET(\"/c\", list)\n}}\n"
+        );
+        assert!(go_routes(&[("main.go", &unproven)]).is_empty());
     }
 
     #[test]

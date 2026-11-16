@@ -241,6 +241,9 @@ files call `clear`, omen does not know the class names. Then no route has a symb
 - For echo, a prefix and the guards of `Group` apply to the routes of the group. A
   group copies the guards of its parent when the group is made. `Use` on the echo
   value applies to each route. `Any`, `Match`, and `Add` give one entry for each method.
+- For gin, the guards of a route are the arguments between the path and the last
+  argument. A group has a prefix, and it copies the guards of its parent when the
+  group is made. `Use` gives a guard to the routes that follow it.
 - For gorilla/mux, `PathPrefix(...).Subrouter()` gives a prefix. `Methods` gives one
   entry for each method, and a route without `Methods` has the method `ANY`. `Use`
   applies to each route of its router and of the sub-routers, as the library does.
