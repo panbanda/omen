@@ -2629,6 +2629,107 @@ mod tests {
     }
 
     #[test]
+    fn a_callback_with_the_same_name_replaces_the_earlier_one() {
+        let routes = "Rails.application.routes.draw do\n  resources :users, only: [:index, :show]\n  resources :posts, only: [:index, :show]\nend\n";
+        let base =
+            "class ApplicationController\n  before_action :auth\n  before_action :other\nend\n";
+        let users = "class UsersController < ApplicationController\n  before_action :auth, only: :show\n  before_action :auth, only: :index\n\n  def show; end\n  def index; end\nend\n";
+        let posts = "class PostsController < ApplicationController\n  before_action :auth, only: :index\n\n  def show; end\n  def index; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/application_controller.rb", base),
+                ("controllers/posts_controller.rb", posts),
+                ("controllers/users_controller.rb", users),
+            ],
+        );
+        assert_eq!(
+            guards_by_path(&found),
+            [
+                ("GET /posts".to_string(), strings(&["other", "auth"])),
+                ("GET /posts/:id".to_string(), strings(&["other"])),
+                ("GET /users".to_string(), strings(&["other", "auth"])),
+                ("GET /users/:id".to_string(), strings(&["other"])),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_callback_in_a_dead_or_a_conditional_branch_of_a_class_body() {
+        let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
+        let base = "class ApplicationController\n  before_action :a\n  before_action :b\n  before_action :c\nend\n";
+        let users = "class UsersController < ApplicationController\n  if false\n    before_action :dead_false\n  end\n  unless true\n    before_action :dead_unless\n  end\n  if true\n    before_action :live_true\n  else\n    before_action :dead_else\n  end\n  before_action :dead_modifier if nil\n  if Rails.env.production?\n    before_action :maybe\n    skip_before_action :a\n  end\n  case mode\n  when :x\n    skip_before_action :b\n  end\n  skip_before_action :c if false\n\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/application_controller.rb", base),
+                ("controllers/users_controller.rb", users),
+            ],
+        );
+        assert_eq!(found[0].guards, ["c", "live_true"]);
+    }
+
+    fn many_openings_of_a_superclass_resolve_in_linear_time_at(
+        controller_count: usize,
+        opening_count: usize,
+    ) -> std::time::Duration {
+        let mut routes =
+            String::from("Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\n");
+        let mut controllers = String::new();
+        let mut openings = Vec::new();
+        for number in 0..controller_count {
+            routes.push_str(&format!("  get \"/r{number}\", to: \"c{number}#show\"\n"));
+            controllers.push_str(&format!(
+                "class C{number}Controller < ApplicationController\n  def show; end\nend\n"
+            ));
+        }
+        for number in 0..opening_count {
+            openings.push((
+                format!("controllers/a{number:06}.rb"),
+                format!(
+                    "class ApplicationController\n  before_action :g{number}\nend\n\nclass UsersController < ApplicationController\n  before_action :u{number}\n{}end\n",
+                    if number == 0 { "  def show; end\n" } else { "" }
+                ),
+            ));
+        }
+        routes.push_str("end\n");
+        let mut files: Vec<(&str, &str)> = vec![
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/classes.rb", controllers.as_str()),
+        ];
+        files.extend(
+            openings
+                .iter()
+                .map(|(name, text)| (name.as_str(), text.as_str())),
+        );
+        let started = std::time::Instant::now();
+        let found = entries(Language::Ruby, &files);
+        let elapsed = started.elapsed();
+        assert_eq!(found.len(), controller_count + 1);
+        assert!(found.iter().all(|entry| entry.symbol.is_some()));
+        let users = found
+            .iter()
+            .find(|entry| entry.route.as_ref().unwrap().path == "/u")
+            .unwrap();
+        assert_eq!(users.guards.len(), 2 * opening_count);
+        elapsed
+    }
+
+    #[test]
+    fn many_openings_of_a_superclass_give_each_guard() {
+        many_openings_of_a_superclass_resolve_in_linear_time_at(20, 20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_openings_of_a_superclass_resolve_in_linear_time() {
+        let many_routes = many_openings_of_a_superclass_resolve_in_linear_time_at(10_000, 1_000);
+        let many_openings = many_openings_of_a_superclass_resolve_in_linear_time_at(10, 10_000);
+        assert!(many_routes.as_secs() < 30, "{many_routes:?}");
+        assert!(many_openings.as_secs() < 30, "{many_openings:?}");
+    }
+
+    #[test]
     fn a_superclass_name_with_two_identities_is_ambiguous() {
         let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
         let top = "class ApplicationController\n  before_action :top\nend\n";

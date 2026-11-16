@@ -129,6 +129,14 @@ A `skip_before_action` call with `if:` or `unless:` removes the guard for the ac
 names. A `skip_before_action` call with a value that is not a literal list removes the guard
 for each action.
 
+A `before_action` call replaces an earlier callback with the same name, as Rails does. The
+replaced callback is gone for each action. If `ApplicationController` has `before_action :auth`
+and a child has `before_action :auth, only: :index`, then `auth` guards only `index`.
+
+A callback in a class body follows the same rule for dead branches as a route does. A callback in
+any other `if`, `unless`, or `case` is conditional. It adds no guard. A `skip_before_action` call
+in it removes the guard for the actions that it names.
+
 A controller path with a leading `/`, such as `to: "/users#show"`, ignores the module of the
 `namespace`.
 
