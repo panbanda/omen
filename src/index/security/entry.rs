@@ -3354,7 +3354,7 @@ mod tests {
             "Rails.application.routes.draw do\n  get \"/u\", to: \"api/users#show\"\nend\n";
         let upper = "module API\n  class UsersController\n    before_action :upper\n    def show; end\n  end\nend\n";
         let lower = "module Api\n  class UsersController\n    before_action :lower\n    def show; end\n  end\nend\n";
-        let other = "Other.acronym \"API\"\nOther.irregular \"a\", \"b\"\nActiveSupport::Inflector.inflections(:en) do |inflect|\n  Other.acronym \"API\"\nend\n";
+        let other = "Other.acronym \"API\"\nOther.irregular \"a\", \"b\"\n";
         let found = rails_routes(
             routes,
             &[
@@ -3779,6 +3779,106 @@ mod tests {
     #[ignore = "timing: run in release"]
     fn timing_a_chain_of_show_callbacks_resolves_in_linear_time() {
         let elapsed = a_chain_of_show_callbacks_resolves_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    #[test]
+    fn a_controller_string_with_an_empty_or_unknown_segment_gives_no_controller() {
+        let routes = "Rails.application.routes.draw do\n  get \"/ok\", to: \"users#show\"\n  get \"/a\", to: \"users/#show\"\n  get \"/b\", to: \"/users/#show\"\n  get \"/c\", to: \"users//x#show\"\n  get \"/d\", to: \"Users#show\"\n  get \"/e\", controller: \"users/\", action: \"show\"\n  scope module: \"m//n\" do\n    get \"/f\", to: \"users#show\"\n  end\nend\n";
+        let users = "class UsersController\n  before_action :auth\n  def show; end\nend\n";
+        let found = rails_routes(routes, &[("controllers/users.rb", users)]);
+        let by_path = |path: &str| {
+            let entry = found
+                .iter()
+                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .unwrap();
+            (entry.symbol.is_some(), entry.guards.clone())
+        };
+        assert_eq!(by_path("/ok"), (true, strings(&["auth"])));
+        for path in ["/a", "/b", "/c", "/d", "/e", "/f"] {
+            assert_eq!(by_path(path), (false, Vec::new()), "{path}");
+        }
+    }
+
+    #[test]
+    fn only_a_modelled_statement_makes_the_inflections_readable() {
+        let routes =
+            "Rails.application.routes.draw do\n  get \"/u\", to: \"api/users#show\"\nend\n";
+        let upper = "module API\n  class UsersController\n    before_action :upper\n    def show; end\n  end\nend\n";
+        let lower = "module Api\n  class UsersController\n    before_action :lower\n    def show; end\n  end\nend\n";
+        let others = [
+            "binding.local_variable_set(:inflect, Fake.new)",
+            "send(:instance_variable_set, :@x, 1)",
+            "eval(\"inflect = Fake.new\")",
+            "def helper; end",
+            "puts 1",
+            "if ENV[\"X\"]\n    puts 2\n  end",
+        ];
+        for other in others {
+            let source = format!(
+                "ActiveSupport::Inflector.inflections do |inflect|\n  {other}\n  inflect.acronym \"API\"\nend\n"
+            );
+            let found = rails_routes(
+                routes,
+                &[
+                    ("controllers/upper.rb", upper),
+                    ("controllers/lower.rb", lower),
+                    ("config/initializers/inflections.rb", source.as_str()),
+                ],
+            );
+            assert_eq!(found[0].symbol, None, "{other}");
+        }
+        let fine = "ActiveSupport::Inflector.inflections do |inflect|\n  # a comment\n  inflect.acronym \"API\"\n  if true\n    inflect.irregular \"a\", \"b\"\n  end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/upper.rb", upper),
+                ("controllers/lower.rb", lower),
+                ("config/initializers/inflections.rb", fine),
+            ],
+        );
+        assert_eq!(found[0].guards, ["upper"]);
+        let stored = "inflections = ActiveSupport::Inflector.inflections(:en)\ninflections.acronym \"API\"\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/upper.rb", upper),
+                ("controllers/lower.rb", lower),
+                ("config/initializers/inflections.rb", stored),
+            ],
+        );
+        assert_eq!(found[0].symbol, None);
+    }
+
+    fn many_prepend_callbacks_resolve_in_linear_time_at(count: usize) -> std::time::Duration {
+        let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
+        let mut controller = String::from("class UsersController\n");
+        for number in 0..count {
+            controller.push_str(&format!(
+                "  prepend_before_action :g{number}, only: :show\n"
+            ));
+        }
+        controller.push_str("  def show; end\nend\n");
+        let files = [
+            ("config/routes.rb", routes),
+            ("controllers/users.rb", controller.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), 1);
+        let expected: Vec<String> = (0..count).rev().map(|n| format!("g{n}")).collect();
+        assert_eq!(found[0].guards, expected);
+        elapsed
+    }
+
+    #[test]
+    fn many_prepend_callbacks_give_the_guards_in_reverse_order() {
+        many_prepend_callbacks_resolve_in_linear_time_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_prepend_callbacks_resolve_in_linear_time() {
+        let elapsed = many_prepend_callbacks_resolve_in_linear_time_at(10_000);
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 

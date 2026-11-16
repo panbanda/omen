@@ -796,7 +796,7 @@ impl<'a> Context<'a> {
                     .get("module")
                     .map_or(Some(name), |value| self.rails_literal(value))?;
                 scope.prefix = join(&scope.nested_prefix(), &path);
-                scope.modules.extend(split_segments(&module));
+                scope.modules.extend(split_module(&module));
                 scope.resource = None;
                 scope.method_scope = false;
                 Some(scope)
@@ -831,7 +831,7 @@ impl<'a> Context<'a> {
                 if let Some(value) = options.get("module") {
                     scope
                         .modules
-                        .extend(split_segments(&self.rails_literal(value)?));
+                        .extend(split_module(&self.rails_literal(value)?));
                 }
                 if let Some(value) = options.get("controller") {
                     scope.controller = Some(self.rails_literal(value)?);
@@ -921,7 +921,7 @@ impl<'a> Context<'a> {
             }
         }
         if let Some(module) = module {
-            modules.extend(split_segments(&module));
+            modules.extend(split_module(&module));
         }
         Some(ResourceDefinition {
             names,
@@ -1525,12 +1525,25 @@ impl<'a> Context<'a> {
         if inflections.unreadable_acronym {
             return (None, Vec::new());
         }
-        let mut segments: Vec<String> = if controller.starts_with('/') {
+        let relative = controller.strip_prefix('/');
+        let own: Vec<&str> = relative.unwrap_or(controller).split('/').collect();
+        let valid = |part: &str| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_'))
+        };
+        if !own.iter().all(|part| valid(part))
+            || (relative.is_none() && !modules.iter().all(|module| valid(module)))
+        {
+            return (None, Vec::new());
+        }
+        let mut segments: Vec<String> = if relative.is_some() {
             Vec::new()
         } else {
             modules.to_vec()
         };
-        segments.extend(split_segments(controller));
+        segments.extend(own.iter().map(|part| part.to_string()));
         let Some(last) = segments.pop() else {
             return (None, Vec::new());
         };
@@ -2219,9 +2232,10 @@ impl Program {
     }
 
     /// The guards of an action that a list of a callback names. The result for a layer comes from
-    /// the result of the layer above it, and the program keeps the result for each layer. A
-    /// callback removes the guards with its names, and it adds them when it applies, at the back
-    /// or, with `prepend`, at the front.
+    /// the result of the layer above it, and the program keeps the result for the layer that
+    /// asks, and for a layer above it that the callbacks of the layer do not change. A callback
+    /// removes the guards with its names, and it adds them when it applies, at the back or, with
+    /// `prepend`, at the front.
     fn listed_guards(&self, action: &str) -> Arc<Vec<String>> {
         if let Some(found) = self.memo.lock().get(action) {
             return Arc::clone(found);
@@ -2237,28 +2251,19 @@ impl Program {
             pending.push(above);
             layer = above.parent.as_deref();
         }
-        for layer in pending.iter().rev() {
+        let count = pending.len();
+        for (position, layer) in pending.iter().rev().enumerate() {
             if !layer.callbacks.is_empty() {
-                let mut working: Vec<String> = (*current).clone();
+                let mut working = ActiveGuards::new(&current);
                 for callback in &layer.callbacks {
-                    let applies = callback.applies_to(action);
-                    for name in &callback.names {
-                        if callback.skip {
-                            if applies {
-                                working.retain(|guard| guard != name);
-                            }
-                        } else {
-                            working.retain(|guard| guard != name);
-                            if applies && callback.prepend {
-                                working.insert(0, name.clone());
-                            } else if applies {
-                                working.push(name.clone());
-                            }
-                        }
-                    }
+                    working.apply(callback, action);
                 }
-                if working != *current {
-                    current = Arc::new(working);
+                let next = working.into_vec();
+                if next != *current {
+                    current = Arc::new(next);
+                    if position + 1 < count {
+                        continue;
+                    }
                 }
             }
             layer
@@ -2267,6 +2272,74 @@ impl Program {
                 .insert(action.to_string(), Arc::clone(&current));
         }
         current
+    }
+}
+
+/// The names of the guards in the order of Rails while a layer applies its callbacks. A new
+/// callback replaces the callback with the same name. A callback goes to the back, or to the front
+/// when it has `prepend`. Each change takes a time in proportion to the logarithm of the number of
+/// guards.
+struct ActiveGuards {
+    ordered: std::collections::BTreeMap<i64, String>,
+    at: HashMap<String, i64>,
+    front: i64,
+    back: i64,
+}
+
+impl ActiveGuards {
+    fn new(names: &[String]) -> Self {
+        let mut active = Self {
+            ordered: std::collections::BTreeMap::new(),
+            at: HashMap::with_capacity(names.len()),
+            front: 0,
+            back: 0,
+        };
+        for name in names {
+            active.push_back(name);
+        }
+        active
+    }
+
+    fn remove(&mut self, name: &str) {
+        if let Some(slot) = self.at.remove(name) {
+            self.ordered.remove(&slot);
+        }
+    }
+
+    fn push_back(&mut self, name: &str) {
+        self.remove(name);
+        self.at.insert(name.to_string(), self.back);
+        self.ordered.insert(self.back, name.to_string());
+        self.back += 1;
+    }
+
+    fn push_front(&mut self, name: &str) {
+        self.remove(name);
+        self.front -= 1;
+        self.at.insert(name.to_string(), self.front);
+        self.ordered.insert(self.front, name.to_string());
+    }
+
+    fn apply(&mut self, callback: &Callback, action: &str) {
+        let applies = callback.applies_to(action);
+        for name in &callback.names {
+            if callback.skip {
+                if applies {
+                    self.remove(name);
+                }
+            } else {
+                self.remove(name);
+                if applies && callback.prepend {
+                    self.push_front(name);
+                } else if applies {
+                    self.push_back(name);
+                }
+            }
+        }
+    }
+
+    fn into_vec(self) -> Vec<String> {
+        self.ordered.into_values().collect()
     }
 }
 
@@ -2615,6 +2688,9 @@ fn subtree_has_inflection_call(node: Node<'_>, source: &[u8], depth: usize) -> b
     {
         return true;
     }
+    if is_inflection_object(node, source, &[]) {
+        return true;
+    }
     let mut cursor = node.walk();
     let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
     children
@@ -2622,14 +2698,63 @@ fn subtree_has_inflection_call(node: Node<'_>, source: &[u8], depth: usize) -> b
         .any(|child| subtree_has_inflection_call(child, source, depth + 1))
 }
 
-/// Tells if the code uses each name only as the receiver of a call of a method that changes the
-/// inflections. Any other use of the name makes the block of `inflections` not readable: an
-/// assignment, a pattern, an argument, a block parameter, or a call of another method. The `own`
-/// node is the parameter list of the block that gives the names.
-fn parameter_uses_modelled(
+/// Tells if the call is `<name>.<method>(<literals>)` for a name of `params`, a method that changes
+/// the inflections, no block, and arguments that are strings, symbols, regular expressions, or
+/// lists of them, without interpolation.
+fn modelled_inflection_call(node: Node<'_>, source: &[u8], params: &[String]) -> bool {
+    fn literal(node: Node<'_>, source: &[u8]) -> bool {
+        match node.kind() {
+            "string" => evaluate_string(node, source).is_some(),
+            "simple_symbol" => true,
+            "regex" => {
+                let mut cursor = node.walk();
+                let plain = node
+                    .named_children(&mut cursor)
+                    .all(|child| child.kind() != "interpolation");
+                plain
+            }
+            "array" => {
+                let mut cursor = node.walk();
+                let all = node
+                    .named_children(&mut cursor)
+                    .all(|child| literal(child, source));
+                all
+            }
+            _ => false,
+        }
+    }
+    let receiver_ok = node
+        .child_by_field_name("receiver")
+        .is_some_and(|receiver| {
+            receiver.kind() == "identifier"
+                && params
+                    .iter()
+                    .any(|name| name == super::syntax::text(receiver, source))
+        });
+    let method_ok = node
+        .child_by_field_name("method")
+        .is_some_and(|method| INFLECTION_METHODS.contains(&super::syntax::text(method, source)));
+    let arguments_ok = node
+        .child_by_field_name("arguments")
+        .is_none_or(|arguments| {
+            let mut cursor = arguments.walk();
+            let all = arguments
+                .named_children(&mut cursor)
+                .all(|argument| literal(argument, source));
+            all
+        });
+    receiver_ok && method_ok && arguments_ok && node.child_by_field_name("block").is_none()
+}
+
+/// Tells if each statement of the block of `inflections` is a modelled call, a comment, or a
+/// condition or a `case` that omen can evaluate, with branches that follow the same rule. A dead
+/// branch is not read. Any other statement, such as a call of `binding`, `eval`, or `send`, a
+/// definition, or a condition that omen cannot evaluate, makes the block not readable. The `own`
+/// node is the parameter list of the block.
+fn inflection_statements_ok(
     node: Node<'_>,
     source: &[u8],
-    names: &[String],
+    params: &[String],
     own: Option<Node<'_>>,
     depth: usize,
 ) -> bool {
@@ -2639,27 +2764,36 @@ fn parameter_uses_modelled(
     if Some(node) == own {
         return true;
     }
-    if node.kind() == "identifier"
-        && names
-            .iter()
-            .any(|name| name == super::syntax::text(node, source))
-    {
-        let modelled = node.parent().is_some_and(|parent| {
-            parent.kind() == "call"
-                && parent.child_by_field_name("receiver") == Some(node)
-                && parent.child_by_field_name("method").is_some_and(|method| {
-                    INFLECTION_METHODS.contains(&super::syntax::text(method, source))
-                })
-        });
-        if !modelled {
-            return false;
-        }
-    }
     let mut cursor = node.walk();
     let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-    children
-        .into_iter()
-        .all(|child| parameter_uses_modelled(child, source, names, own, depth + 1))
+    let all = |parts: Vec<Node<'_>>| {
+        parts
+            .into_iter()
+            .all(|part| inflection_statements_ok(part, source, params, own, depth + 1))
+    };
+    match node.kind() {
+        "comment" | "pattern" | "true" | "false" | "nil" => true,
+        "do_block" | "block" | "body_statement" | "block_body" | "then" | "else" => all(children),
+        "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" => {
+            let condition = node.child_by_field_name("condition");
+            if !condition
+                .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"))
+            {
+                return false;
+            }
+            all(children
+                .into_iter()
+                .filter(|part| Some(*part) != condition && !Context::is_dead_branch(node, *part))
+                .collect())
+        }
+        "case" => match literal_case_children(node) {
+            Some(alive) => all(alive),
+            None => false,
+        },
+        "when" => all(children),
+        "call" => modelled_inflection_call(node, source, params),
+        _ => false,
+    }
 }
 
 /// Reads the inflection calls in the code: `acronym` with a string, and the calls that change
@@ -2743,13 +2877,20 @@ fn read_inflection_calls(
                 let own = node
                     .child_by_field_name("block")
                     .and_then(|block| block.child_by_field_name("parameters"));
-                let rebound = node
-                    .child_by_field_name("block")
-                    .is_some_and(|block| !parameter_uses_modelled(block, source, &names, own, 0));
-                if rebound {
-                    unreadable(out);
-                } else {
+                let readable = match node.child_by_field_name("block") {
+                    Some(block) => inflection_statements_ok(block, source, &names, own, 0),
+                    None => node.parent().is_some_and(|parent| {
+                        parent.kind() == "call"
+                            && parent.child_by_field_name("receiver") == Some(node)
+                            && parent.child_by_field_name("method").is_some_and(|method| {
+                                INFLECTION_METHODS.contains(&super::syntax::text(method, source))
+                            })
+                    }),
+                };
+                if readable {
                     block_params.extend(names);
+                } else {
+                    unreadable(out);
                 }
             }
             let on_object =
@@ -2795,7 +2936,9 @@ fn read_inflection_calls(
                         out,
                     );
                 } else if affects {
-                    if subtree_has_inflection_call(child, source, 0) {
+                    if !is_inflection_object(child, source, params)
+                        && subtree_has_inflection_call(child, source, 0)
+                    {
                         unreadable(out);
                     }
                 } else if subtree_has_inflection_call(child, source, 0)
@@ -2952,11 +3095,10 @@ fn qualified_name(file: &FileSymbols, symbol: &Symbol) -> String {
     chain.replace("::", ".")
 }
 
-fn split_segments(path: &str) -> Vec<String> {
-    path.split('/')
-        .filter(|segment| !segment.is_empty())
-        .map(str::to_string)
-        .collect()
+/// The parts of a module path. An empty part stays: Rails builds the name of the controller class
+/// from it, and the class does not exist.
+fn split_module(path: &str) -> Vec<String> {
+    path.split('/').map(str::to_string).collect()
 }
 
 struct ResourceDefinition {
