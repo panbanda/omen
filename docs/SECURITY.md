@@ -132,10 +132,16 @@ Omen skips each route that it cannot read exactly. It never guesses. It skips th
 
 - A path, a name, or an option that is not a literal, such as a string with interpolation.
 - A route in a loop or in a block that omen does not know, such as `each` or `concern`.
+- A route in a branch that a literal condition makes dead: `if false`, `if nil`,
+  `unless true`, and the `else` branch of `if true`.
+- A route in a method, a lambda, or a class body, and a route outside a `routes.draw` block.
 - A `resources` call with an option that changes the paths in a way that omen does not
   read, such as `param:` or `shallow:`.
 - A `scope` path with an optional segment, such as `"(:locale)"`.
 - The calls `concerns`, `draw(:file)`, `mount`, and `devise_for`.
+
+Omen reports a route in any other `if`, `unless`, `case`, or ternary. The condition can be true
+at run time, as `if Rails.env.development?` can be.
 
 A nested route needs the singular name of the parent resource. Omen uses the default
 inflections of Rails 7.2.2. For `categories`, the parameter is `:category_id`. For `jeans`,

@@ -17,6 +17,15 @@
 //!   interpolation, a variable, and a constant.
 //! - A route in a block that omen does not know, such as `each`, `times`, or
 //!   `concern`. A route in a `for` loop or a `while` loop is also skipped.
+//! - A route in a branch that a literal condition makes dead: `if false`, `if nil`,
+//!   `unless true`, and the `else` branch of `if true`.
+//!
+//! A route in any other `if`, `unless`, `case`, or ternary is registered. The condition can be
+//! true at run time, as `if Rails.env.development?` can be. A route in a method, a lambda, or a
+//! class body is not registered. A route outside a `routes.draw` block is not registered.
+//!
+//! Omen also skips these forms:
+//!
 //! - A `resources` call with an option that changes the paths in a way that omen
 //!   does not read. Examples are `param:`, `shallow:`, `path_names:`, and `singular:`.
 //! - A `scope` path with an optional segment, such as `"(:locale)"`.
@@ -388,6 +397,11 @@ impl<'a> Context<'a> {
                 | "singleton_method" | "lambda" | "class" | "module" | "singleton_class" => {
                     return None
                 }
+                "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional"
+                    if Self::is_dead_branch(parent, child) =>
+                {
+                    return None
+                }
                 _ => {}
             }
             child = parent;
@@ -404,6 +418,29 @@ impl<'a> Context<'a> {
             scope = self.rails_enter(frame, scope)?;
         }
         Some(scope)
+    }
+
+    /// Tells if a literal condition makes the branch of `child` dead: `if false`, `if nil`,
+    /// `unless true`, and the `else` of `if true`. A condition that is not a literal is live.
+    fn is_dead_branch(parent: Node<'_>, child: Node<'_>) -> bool {
+        let Some(condition) = parent.child_by_field_name("condition") else {
+            return false;
+        };
+        if condition == child {
+            return false;
+        }
+        let truth = match condition.kind() {
+            "true" => true,
+            "false" | "nil" => false,
+            _ => return false,
+        };
+        let inverted = matches!(parent.kind(), "unless" | "unless_modifier");
+        let runs_when = truth != inverted;
+        let main_branch = parent
+            .child_by_field_name("consequence")
+            .or_else(|| parent.child_by_field_name("body"));
+        let in_main = main_branch == Some(child);
+        in_main != runs_when
     }
 
     /// Tells if the call is `routes.draw do`, as `Rails.application.routes.draw` is.
@@ -791,13 +828,17 @@ impl<'a> Context<'a> {
         };
         let mut actions: Vec<&Symbol> = Vec::new();
         let mut guards: Vec<String> = Vec::new();
+        let mut seen_files = Vec::new();
         for (position, owner) in classes {
-            if let Some(methods) = index
-                .methods
-                .get(&(*position, qualified.join(".")))
-                .and_then(|by_action| by_action.get(action))
-            {
-                actions.extend(methods.iter().copied());
+            if !seen_files.contains(position) {
+                seen_files.push(*position);
+                if let Some(methods) = index
+                    .methods
+                    .get(&(*position, qualified.join(".")))
+                    .and_then(|by_action| by_action.get(action))
+                {
+                    actions.extend(methods.iter().copied());
+                }
             }
             for guard in self.rails_chain_guards(index, *position, owner, action) {
                 if !guards.contains(&guard) {

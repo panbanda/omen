@@ -2563,6 +2563,45 @@ mod tests {
     }
 
     #[test]
+    fn a_conditional_route_is_registered_unless_the_literal_condition_kills_it() {
+        let routes = "Rails.application.routes.draw do\n  if Rails.env.development?\n    get \"/dev\", to: \"users#index\"\n  end\n  unless ENV[\"X\"]\n    get \"/unless_live\", to: \"users#index\"\n  end\n  get \"/modifier_live\", to: \"users#index\" if ready?\n  x = ready? ? get(\"/ternary\", to: \"users#index\") : nil\n  if false\n    get \"/dead_false\", to: \"users#index\"\n  end\n  if nil\n    get \"/dead_nil\", to: \"users#index\"\n  end\n  unless true\n    get \"/dead_unless\", to: \"users#index\"\n  end\n  if true\n    get \"/live_true\", to: \"users#index\"\n  else\n    get \"/dead_else\", to: \"users#index\"\n  end\n  if false\n    get \"/dead_if\", to: \"users#index\"\n  elsif ready?\n    get \"/live_elsif\", to: \"users#index\"\n  else\n    get \"/live_else\", to: \"users#index\"\n  end\n  get \"/dead_modifier\", to: \"users#index\" if false\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut paths = verbs_and_paths(&found);
+        paths.sort();
+        assert_eq!(
+            paths,
+            [
+                "GET /dev",
+                "GET /live_else",
+                "GET /live_elsif",
+                "GET /live_true",
+                "GET /modifier_live",
+                "GET /ternary",
+                "GET /unless_live",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reopened_class_counts_a_method_one_time() {
+        let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
+        let base = "class ApplicationController\n  before_action :login\nend\n";
+        let controller = "class UsersController < ApplicationController\nend\n\nclass UsersController\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/application_controller.rb", base),
+                ("controllers/users_controller.rb", controller),
+            ],
+        );
+        assert_eq!(
+            found[0].symbol.as_deref(),
+            Some("controllers/users_controller.rb#UsersController.show")
+        );
+        assert_eq!(found[0].guards, ["login"]);
+    }
+
+    #[test]
     fn a_method_belongs_to_the_class_that_contains_it() {
         let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
         let controller = "class UsersController < ApplicationController\n  class UsersController\n    def show; end\n  end\nend\n";
