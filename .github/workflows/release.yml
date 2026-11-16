@@ -13,7 +13,8 @@ on:
         type: string
 
 concurrency:
-  group: release-${{ github.ref }}
+  # A manual run updates the same channels as a release from main.
+  group: release-${{ github.event_name == 'workflow_dispatch' && 'refs/heads/main' || github.ref }}
   cancel-in-progress: false
 
 permissions: {}
@@ -34,7 +35,8 @@ jobs:
 
     steps:
       # Later jobs put the tag into shell scripts, so only an exact release tag
-      # that exists is accepted.
+      # is accepted. Only the newest omen release is accepted, because the
+      # Docker `latest` tag and the Homebrew formula follow the tag.
       - name: Check the tag of the release
         id: existing
         if: github.event_name == 'workflow_dispatch'
@@ -46,7 +48,12 @@ jobs:
             echo "The tag must have the form omen-vX.Y.Z" >&2
             exit 1
           fi
-          gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null
+          newest=$(gh release list --repo "${{ github.repository }}" --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("omen-v"))] | sort_by(.createdAt) | last | .tagName')
+          if [ "$TAG" != "$newest" ]; then
+            echo "The tag must be the newest omen release ($newest)" >&2
+            exit 1
+          fi
           echo "release_created=true" >> "$GITHUB_OUTPUT"
           echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
 
