@@ -1,7 +1,7 @@
-# Search: two experiments on the TF-IDF engine
+# Search: three experiments on the TF-IDF engine
 
-This file records two experiments before the first run. Omen keeps TF-IDF for
-`search` (see `search-bm25f.md`). Neither experiment was measured on that
+This file records three experiments before the first run. Omen keeps TF-IDF for
+`search` (see `search-bm25f.md`). We did not measure the first two on that
 engine. The text of "Pre-registration" does not change after the first run.
 
 ## Pre-registration
@@ -201,7 +201,7 @@ adopted.
 
 ## Experiment C: the identifier tokenizer for TF-IDF
 
-This section is written before any code and before any run of the experiment.
+We write this section before any code and before any run of the experiment.
 The text of "Pre-registration of experiment C" does not change after the first
 run. The results go in a later section.
 
@@ -216,22 +216,22 @@ The reason: `search` uses a private tokenizer. It finds the runs of `\w+`,
 changes them to lowercase, and adds bigrams. The identifier tokenizer in
 `src/semantic/tokenize.rs` divides `parseFile` and `parse_file` into `parse`
 and `file`, and it keeps the whole identifier. We measured it only inside
-BM25F, and BM25F was not adopted. We did not measure it with TF-IDF alone.
+BM25F, and we did not adopt BM25F. We did not measure it with TF-IDF alone.
 
 The change:
 
 - The engine tokenizes each document and each query with
-  `semantic::tokenize::tokenize`. The private tokenizer is deleted.
+  `semantic::tokenize::tokenize`. The change deletes the private tokenizer.
 - Bigrams are the pairs of adjacent tokens in the list that `tokenize` gives.
   The list has the parts of each identifier, then its whole form, as the
-  tokenizer defines. A bigram is the two tokens, joined by one space. This is
+  tokenizer defines. A bigram is the two tokens, with one space between them. This is
   the same rule as on the base, applied to the new list.
 - The vocabulary limit, the IDF formula, the sublinear TF, the L2
   normalization, the order of the results, the documents, and the chunking
   stay the same.
 - The change has no flag.
 
-The metrics are recall@1, recall@5, recall@10, and MRR, for each language and
+The metrics are hit@1, hit@5, hit@10, and MRR, for each language and
 each query type, as in the tables above. The report never pools them.
 
 The adoption rule is the rule of "Adoption rule" above, without change:
@@ -239,10 +239,10 @@ The adoption rule is the rule of "Adoption rule" above, without change:
 - `cargo test --test retrieval` passes with the ledger and the rank baseline of
   the base, unchanged.
 - `ledger_never_grows` passes against a copy of `tests/fixtures` of the base
-  (made with `git archive`), with no new accepted entry.
+  (a copy that `git archive` makes), with no new accepted entry.
 - No query has a rank worse than its rank on the base.
 
-A gain does not pay for a loss. If experiment C is not adopted, a later commit
+A gain does not pay for a loss. If we do not adopt experiment C, a later commit
 reverts the code, and this file keeps the full tables and the rejection.
 
 ### Result of experiment C
@@ -297,7 +297,7 @@ and `tsx/i-part-click` keeps the hit@1 of the `identifier` type in `jsx` and
 
 The cells that are lower than on the base are `cpp` `code_sketch` (hit@1 and
 MRR) and `php` `natural_language` (hit@5 and MRR). The gate does not let a gain
-pay for a loss, so experiment C is not adopted.
+pay for a loss. We do not adopt experiment C.
 
 The tokenizer gives a real gain for queries with a part of an identifier. A
 second experiment, for example new tokens for the name of a symbol only, needs
