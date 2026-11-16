@@ -1,5 +1,59 @@
 # Changelog
 
+## [5.0.0](https://github.com/panbanda/omen/compare/omen-v4.30.0...omen-v5.0.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+Read [docs/MIGRATING-5.0.md](https://github.com/panbanda/omen/blob/main/docs/MIGRATING-5.0.md) before you upgrade. It lists each change and the action for it. The summary below is not complete.
+
+* **CLI flags:** `--check` is now `--gate off|warn|error`. `search query -k`/`--top-k` is now `-n`/`--top`. `--days N` is now `--since Nd` on `churn`, `defect`, `hotspot` and `report generate`; `temporal` also takes `--since`. `-p` is always the repository path; `-p`, `-f`, `-c`, `-v`, `-j`, `--compact`, `--ref` and `--shallow` are global flags. `report generate --output` is now `--data`, and `mutation --output-survivors` is now `--output`. See the guide for the commands that accept `--ref`.
+* **CLI output:** a gated command writes the report to stdout and the violations to stderr. `all` obeys `-f` and writes Markdown by default. `path` and `file_path` are now `file`. The analyzer `duplicates` is now `clones`, and the report files `duplicates.json` and `hotspots.json` are now `clones.json` and `hotspot.json`. `score trend` keys `Slope` and `Correlation` are lowercase. `search query --min-score` defaults to 0. `outline --file` gives repository-relative paths for files in the repository.
+* **Symbol identifiers:** the form is `path#Container.name`, with `~2`, `~3` for a later duplicate. Give an identifier back as it is; do not parse it. A call with only a name as evidence is a candidate, not an edge, unless you give `--min-basis name_only`.
+* **Configuration:** only TOML. The `[gate]` table is removed; each gated command has a `gate` key in its own table. Each history window is a `since` duration. A removed key is an error that names the new key; another unknown key is an error.
+* **MCP:** `semantic_search` is now `search`, and `semantic_search_hyde` is removed. `files` and `include_projects` of `search` are arrays of strings. Each tool call is validated: a missing required argument, an invalid argument and an unknown argument are errors (`missing_argument`, `invalid_argument`, `unknown_argument`), not defaults. A tool failure is a result with `isError: true` and `error.code`; protocol faults stay JSON-RPC errors. Paginated tools return at most 50 items by default; read `has_more` and `next_offset`. The `days` argument is now `since`. Some defaults changed (for example `churn` history and the `clones` threshold); send the argument to keep the old value.
+
+
+
+* remove --days; since is the one history window ([#555](https://github.com/panbanda/omen/issues/555))
+* omen 5.0 part 2: analyzers on the shared index, configuration, handlers ([#543](https://github.com/panbanda/omen/issues/543))
+* omen 5.0 part 1: PR comment, sink table, agent surface ([#542](https://github.com/panbanda/omen/issues/542))
+* `churn` without `days` reads 180 days of history, not 30. `clones` without `similarity` uses the threshold 0.9, not 0.7. `flags` without `stale_days` uses 90 days, not the configured value or 14. Send the argument to get the old value. A configuration file now changes the results of `churn`, `clones`, `changes`, and `satd`.
+* correct the review findings on the 5.0 interface ([#535](https://github.com/panbanda/omen/issues/535))
+* `files` and `include_projects` of `semantic_search` and `semantic_search_hyde` are arrays of strings. Before, each was one string with commas. Send `["a.rs", "b.rs"]`, not `"a.rs,b.rs"`.
+
+### Features
+
+* **cohesion:** measure classes from the shared index ([#548](https://github.com/panbanda/omen/issues/548)) ([1bb8d2d](https://github.com/panbanda/omen/commit/1bb8d2d1a0f328454f3ee227517a6255329ad96b))
+* give the CLI and the MCP server one strict 5.0 interface ([#533](https://github.com/panbanda/omen/issues/533)) ([bd470b1](https://github.com/panbanda/omen/commit/bd470b137a9e6f7d761da6a8a1f312b0cfdc2cfb))
+* **index:** classify standard-library, builtin and dependency calls as External ([#550](https://github.com/panbanda/omen/issues/550)) ([3624771](https://github.com/panbanda/omen/commit/3624771f6d523510f7448641c16201e30dc29f4f))
+* omen 5.0 part 1: PR comment, sink table, agent surface ([#542](https://github.com/panbanda/omen/issues/542)) ([8945463](https://github.com/panbanda/omen/commit/8945463bf2a0d5cac208902a9f5f09f21c6d096a))
+* omen 5.0 part 2: analyzers on the shared index, configuration, handlers ([#543](https://github.com/panbanda/omen/issues/543)) ([7451ea8](https://github.com/panbanda/omen/commit/7451ea8bd36fee16c5c66d0f9bd937a13ab20785))
+* omen 5.0 part 3: security findings, entry points, reachability ([#544](https://github.com/panbanda/omen/issues/544)) ([38f87d4](https://github.com/panbanda/omen/commit/38f87d400e35ff9ecc928b16e67182470b7abb8c))
+* remove --days; since is the one history window ([#555](https://github.com/panbanda/omen/issues/555)) ([7a03a0a](https://github.com/panbanda/omen/commit/7a03a0acc8830ec734a988714f407f436a89fd84))
+
+
+### Bug Fixes
+
+* correct the review findings on the 5.0 interface ([#535](https://github.com/panbanda/omen/issues/535)) ([00d5807](https://github.com/panbanda/omen/commit/00d580771ae558b5b423e4eb27a9b5333f8ba6b5))
+* **deps:** update quinn-udp to 0.5.16 for RUSTSEC-2026-0538 ([#534](https://github.com/panbanda/omen/issues/534)) ([07d830d](https://github.com/panbanda/omen/commit/07d830d425829241fe91a38ff2b187b7d8d3ff9e))
+* **deps:** update rusqlite to 0.42 for RUSTSEC-2026-0459 ([#532](https://github.com/panbanda/omen/issues/532)) ([9b84d36](https://github.com/panbanda/omen/commit/9b84d364639edd7df8d8f9d2bd72b93bf00c7759))
+* **deps:** update rustls, quinn-proto, pulldown-cmark, webpki for security advisories ([#526](https://github.com/panbanda/omen/issues/526)) ([f72749f](https://github.com/panbanda/omen/commit/f72749f60f390426b208486704f76fba8b665db1))
+* make the MCP server and the CLI give the same result ([#536](https://github.com/panbanda/omen/issues/536)) ([a9fb5e4](https://github.com/panbanda/omen/commit/a9fb5e40fccb07be35fca41aad914faf321ae7e5))
+* **mutation:** a process group exists until its last process is reaped ([#539](https://github.com/panbanda/omen/issues/539)) ([a5721a3](https://github.com/panbanda/omen/commit/a5721a3e5755b5af36649856877a7a6fc740b06a))
+* **mutation:** give an interrupted run one exit status ([#538](https://github.com/panbanda/omen/issues/538)) ([864a002](https://github.com/panbanda/omen/commit/864a0025f2e92bee11b7b75c68ce63798079475a))
+* post-merge review of cohesion and External calls ([#552](https://github.com/panbanda/omen/issues/552)) ([94e3b1d](https://github.com/panbanda/omen/commit/94e3b1d1601b1f860126f57976f7189fd3f0dce9))
+* post-merge review of mutation safety, ledger, and report generate ([#553](https://github.com/panbanda/omen/issues/553)) ([de7b351](https://github.com/panbanda/omen/commit/de7b351ff0e79590375dd1958637836e0e43172c))
+* **search:** keep two definitions with one name in one file ([#540](https://github.com/panbanda/omen/issues/540)) ([95f26e1](https://github.com/panbanda/omen/commit/95f26e1dcdd4e66e01ceb78adb4a9d2f4533d85a))
+* ternary complexity, ledger inheritance, in-place mutation writes ([#549](https://github.com/panbanda/omen/issues/549)) ([6a65487](https://github.com/panbanda/omen/commit/6a65487144f908eb24bb3ee78963b8a41f758122))
+
+
+### Performance Improvements
+
+* **index:** look up top-level names and C# locals by key ([#561](https://github.com/panbanda/omen/issues/561)) ([cf4e66d](https://github.com/panbanda/omen/commit/cf4e66dcc2e1b1ef7098967cf4692950b1f8a323))
+* **index:** read parents from the walk and class bodies once ([#558](https://github.com/panbanda/omen/issues/558)) ([9a7a7b0](https://github.com/panbanda/omen/commit/9a7a7b0cf093d3b08c50c9b4b8b344b17e254e3a))
+* **index:** share keys, compact call evidence, and parse one file at a time ([#546](https://github.com/panbanda/omen/issues/546)) ([3696791](https://github.com/panbanda/omen/commit/36967916d2f1f06a888bc6cadc282b8c51ecdae6))
+
 ## [4.30.0](https://github.com/panbanda/omen/compare/omen-v4.29.0...omen-v4.30.0) (2026-09-18)
 
 
