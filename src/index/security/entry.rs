@@ -2554,6 +2554,67 @@ mod tests {
     }
 
     #[test]
+    fn only_a_route_in_a_draw_block_is_registered() {
+        let routes = "def unused_routes\n  get \"/ghost\", to: \"users#show\"\nend\n\nget \"/outside\", to: \"users#show\"\n\nhandler = -> { get \"/lambda\", to: \"users#show\" }\nother = lambda do\n  get \"/lambda_block\", to: \"users#show\"\nend\nproc { get \"/proc\", to: \"users#show\" }\n\nclass Holder\n  def self.build\n    post \"/singleton\", to: \"users#show\"\n  end\nend\n\nRails.application.routes.draw do\n  get \"/live\", to: \"users#index\"\nend\n\nMyApp::Application.routes.draw do\n  get \"/live_two\", to: \"users#index\"\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut paths = verbs_and_paths(&found);
+        paths.sort();
+        assert_eq!(paths, ["GET /live", "GET /live_two"]);
+    }
+
+    #[test]
+    fn a_method_belongs_to_the_class_that_contains_it() {
+        let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
+        let controller = "class UsersController < ApplicationController\n  class UsersController\n    def show; end\n  end\nend\n";
+        let found = rails_routes(routes, &[("users_controller.rb", controller)]);
+        assert_eq!(found[0].symbol, None);
+        let direct = "class UsersController\n  def show; end\n  class Helper\n    def show; end\n  end\nend\n";
+        let found = rails_routes(routes, &[("users_controller.rb", direct)]);
+        assert_eq!(
+            found[0].symbol.as_deref(),
+            Some("users_controller.rb#UsersController.show")
+        );
+    }
+
+    fn same_named_controllers_in_one_file_resolve_in_linear_time_at(
+        count: usize,
+    ) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut controllers = String::new();
+        for number in 0..count {
+            routes.push_str(&format!(
+                "  get \"/r{number}\", to: \"m{number}/users#show\"\n"
+            ));
+            controllers.push_str(&format!(
+                "module M{number}\n  class UsersController\n    def show; end\n  end\nend\n"
+            ));
+        }
+        routes.push_str("end\n");
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers.rb", controllers.as_str()),
+        ];
+        let started = std::time::Instant::now();
+        let found = entries(Language::Ruby, &files);
+        let elapsed = started.elapsed();
+        assert_eq!(found.len(), count);
+        assert!(found.iter().all(|entry| entry.symbol.is_some()));
+        elapsed
+    }
+
+    #[test]
+    fn same_named_controllers_in_one_file_resolve_to_their_own_module() {
+        same_named_controllers_in_one_file_resolve_in_linear_time_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_same_named_controllers_in_one_file_resolve_in_linear_time() {
+        let elapsed = same_named_controllers_in_one_file_resolve_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    #[test]
     fn nested_namespaces_match_the_whole_module_path() {
         let routes = "Rails.application.routes.draw do\n  namespace :admin do\n    namespace :v1 do\n      get \"/u\", to: \"users#show\"\n    end\n  end\nend\n";
         let right = "module Admin\n  module V1\n    class UsersController\n      before_action :right\n      def show; end\n    end\n  end\nend\n";

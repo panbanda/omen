@@ -30,8 +30,8 @@
 //! An application can change the inflections. Omen checks the files in `config/initializers`
 //! and the files with `inflect` in the name. If one of them calls `inflections`, `irregular`,
 //! `uncountable`, `acronym`, or `inflect.singular`, omen skips the nested routes. It keeps the
-//! `member` routes and the `collection` routes. Comments do not change the inflections. A change
-//! in a different file is not found.
+//! `member` routes and the `collection` routes. Comments do not change the inflections. Omen does not
+//! find a change in a different file.
 //!
 //! A `resource` call uses the plural controller. If the plural is irregular, the route has no
 //! symbol.
@@ -384,7 +384,10 @@ impl<'a> Context<'a> {
         while let Some(parent) = child.parent() {
             match parent.kind() {
                 "call" if parent.child_by_field_name("block") == Some(child) => frames.push(parent),
-                "for" | "while" | "until" | "while_modifier" | "until_modifier" => return None,
+                "for" | "while" | "until" | "while_modifier" | "until_modifier" | "method"
+                | "singleton_method" | "lambda" | "class" | "module" | "singleton_class" => {
+                    return None
+                }
                 _ => {}
             }
             child = parent;
@@ -393,16 +396,31 @@ impl<'a> Context<'a> {
             prefix: Some(String::from("/")),
             ..Scope::default()
         };
+        let draws = |frame: &Node<'_>| self.is_draw_block(*frame);
+        if !frames.iter().any(draws) {
+            return None;
+        }
         for frame in frames.into_iter().rev() {
             scope = self.rails_enter(frame, scope)?;
         }
         Some(scope)
     }
 
+    /// Tells if the call is `routes.draw do`, as `Rails.application.routes.draw` is.
+    fn is_draw_block(&self, call: Node<'_>) -> bool {
+        call.child_by_field_name("method")
+            .is_some_and(|method| self.text(method) == "draw")
+            && call
+                .child_by_field_name("receiver")
+                .is_some_and(|receiver| self.text(receiver).ends_with("routes"))
+    }
+
     fn rails_enter(&self, call: Node<'_>, mut scope: Scope) -> Option<Scope> {
         let method = self.text(call.child_by_field_name("method")?);
         let receiver = call.child_by_field_name("receiver").is_some();
-        if TRANSPARENT_BLOCKS.contains(&method) && (method == "draw" || !receiver) {
+        if TRANSPARENT_BLOCKS.contains(&method)
+            && (self.is_draw_block(call) || (method != "draw" && !receiver))
+        {
             return Some(scope);
         }
         let arguments = Self::arguments_of(call);
@@ -776,14 +794,10 @@ impl<'a> Context<'a> {
         for (position, owner) in classes {
             if let Some(methods) = index
                 .methods
-                .get(&(*position, class.as_str()))
+                .get(&(*position, qualified.join(".")))
                 .and_then(|by_action| by_action.get(action))
             {
-                actions.extend(methods.iter().copied().filter(|method| {
-                    method.name == action
-                        && method.range.start_byte >= owner.range.start_byte
-                        && method.range.end_byte <= owner.range.end_byte
-                }));
+                actions.extend(methods.iter().copied());
             }
             for guard in self.rails_chain_guards(index, *position, owner, action) {
                 if !guards.contains(&guard) {
@@ -978,11 +992,13 @@ impl Callback {
 /// A class symbol and the position of its file.
 type Placed<'a> = (usize, &'a Symbol);
 
-/// The controller classes and their methods, by name. Omen builds it one time for each routes file.
+/// The controller classes by their chain of modules, and their methods by the class that holds
+/// them. The key of a method has the chain of its class. Omen builds the index one time for each
+/// routes file.
 pub(super) struct RailsIndex<'a> {
     classes: HashMap<String, Vec<Placed<'a>>>,
     by_name: HashMap<&'a str, Vec<Placed<'a>>>,
-    methods: HashMap<(usize, &'a str), HashMap<&'a str, Vec<&'a Symbol>>>,
+    methods: HashMap<(usize, String), HashMap<&'a str, Vec<&'a Symbol>>>,
     callbacks: RefCell<HashMap<String, Rc<Vec<Callback>>>>,
     custom_inflections: std::cell::OnceCell<bool>,
 }
@@ -1012,16 +1028,17 @@ impl<'a> RailsIndex<'a> {
                         .entry(symbol.name.as_str())
                         .or_default()
                         .push((position, symbol));
-                } else if let (true, Some(container)) =
-                    (symbol.is_callable(), symbol.container.as_deref())
-                {
-                    index
-                        .methods
-                        .entry((position, container))
-                        .or_default()
-                        .entry(symbol.name.as_str())
-                        .or_default()
-                        .push(symbol);
+                } else if symbol.is_callable() {
+                    let qualified = qualified_name(file, symbol);
+                    if let Some(owner) = qualified.strip_suffix(&format!(".{}", symbol.name)) {
+                        index
+                            .methods
+                            .entry((position, owner.to_string()))
+                            .or_default()
+                            .entry(symbol.name.as_str())
+                            .or_default()
+                            .push(symbol);
+                    }
                 }
             }
         }
