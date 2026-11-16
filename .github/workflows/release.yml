@@ -14,8 +14,9 @@ on:
 
 concurrency:
   # Each run can update the Docker `latest` tag and the Homebrew formula, so
-  # all runs share one group.
+  # all runs share one group. A queue of one would cancel a pending release.
   group: release
+  queue: max
   cancel-in-progress: false
 
 permissions: {}
