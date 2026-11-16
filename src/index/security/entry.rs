@@ -1741,13 +1741,23 @@ mod tests {
     }
 
     fn entries(language: Language, files: &[(&str, &str)]) -> Vec<EntryPoint> {
-        entries_timed(language, files).0
+        entries_timed(language, files, true).0
+    }
+
+    /// Like `entries`, without the resolution of the references. The search for Rails entry points
+    /// does not use them, and the resolution of a large input takes much more time than the search.
+    fn entries_lean(
+        language: Language,
+        files: &[(&str, &str)],
+    ) -> (Vec<EntryPoint>, std::time::Duration) {
+        entries_timed(language, files, false)
     }
 
     /// The entry points, and the time of the search for entry points alone.
     fn entries_timed(
         language: Language,
         files: &[(&str, &str)],
+        resolve: bool,
     ) -> (Vec<EntryPoint>, std::time::Duration) {
         let mut files = files.to_vec();
         files.sort_by_key(|(name, _)| *name);
@@ -1766,8 +1776,10 @@ mod tests {
             .map(|((name, _), parsed)| extract_file(parsed, name))
             .collect();
         link_files(&mut index);
-        resolve_imports(&mut index, &Manifests::default());
-        resolve_references(&mut index);
+        if resolve {
+            resolve_imports(&mut index, &Manifests::default());
+            resolve_references(&mut index);
+        }
         let started = std::time::Instant::now();
         let found = find_entry_points(&parsed, &index);
         (found, started.elapsed())
@@ -2584,7 +2596,8 @@ mod tests {
     #[test]
     fn only_a_route_in_a_draw_block_is_registered() {
         let routes = "def unused_routes\n  get \"/ghost\", to: \"users#show\"\nend\n\nget \"/outside\", to: \"users#show\"\n\nhandler = -> { get \"/lambda\", to: \"users#show\" }\nother = lambda do\n  get \"/lambda_block\", to: \"users#show\"\nend\nproc { get \"/proc\", to: \"users#show\" }\n\nclass Holder\n  def self.build\n    post \"/singleton\", to: \"users#show\"\n  end\nend\n\nRails.application.routes.draw do\n  get \"/live\", to: \"users#index\"\nend\n\nMyApp::Application.routes.draw do\n  get \"/live_two\", to: \"users#index\"\nend\n";
-        let found = rails_routes(routes, &[]);
+        let defined = "module MyApp\n  class Application < Rails::Application\n  end\nend\n";
+        let found = rails_routes(routes, &[("config/application.rb", defined)]);
         let mut paths = verbs_and_paths(&found);
         paths.sort();
         assert_eq!(paths, ["GET /live", "GET /live_two"]);
@@ -2730,9 +2743,7 @@ mod tests {
                 .iter()
                 .map(|(name, text)| (name.as_str(), text.as_str())),
         );
-        let started = std::time::Instant::now();
-        let found = entries(Language::Ruby, &files);
-        let elapsed = started.elapsed();
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), controller_count + 1);
         assert!(found.iter().all(|entry| entry.symbol.is_some()));
         let users = found
@@ -2823,9 +2834,7 @@ mod tests {
                 .iter()
                 .map(|(name, text)| (name.as_str(), text.as_str())),
         );
-        let started = std::time::Instant::now();
-        let found = entries(Language::Ruby, &files);
-        let elapsed = started.elapsed();
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), count);
         assert!(found.iter().all(|entry| entry.symbol.is_some()));
         elapsed
@@ -2865,7 +2874,7 @@ mod tests {
             ("config/routes.rb", routes.as_str()),
             ("controllers/chain.rb", classes.as_str()),
         ];
-        let (found, elapsed) = entries_timed(Language::Ruby, &files);
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].guards.len(), depth);
         elapsed
@@ -2891,7 +2900,8 @@ mod tests {
     #[test]
     fn only_a_rails_or_an_engine_routes_object_draws_routes() {
         let routes = "fake_routes = Object.new\ndef fake_routes.draw; end\nfake_routes.draw do\n  get \"/ghost\", to: \"users#show\"\nend\n\nroutes.draw do\n  get \"/bare\", to: \"users#show\"\nend\n\nOther.routes.draw do\n  get \"/other\", to: \"users#show\"\nend\n\nRails.application.routes.draw do\n  get \"/app\", to: \"users#show\"\nend\n\nMyApp::Application.routes.draw do\n  get \"/namespaced\", to: \"users#show\"\nend\n\nMyEngine::Engine.routes.draw do\n  get \"/engine\", to: \"users#show\"\nend\n";
-        let found = rails_routes(routes, &[]);
+        let defined = "module MyApp\n  class Application < Rails::Application\n  end\nend\n\nmodule MyEngine\n  class Engine < ::Rails::Engine\n  end\nend\n";
+        let found = rails_routes(routes, &[("config/application.rb", defined)]);
         let mut paths = verbs_and_paths(&found);
         paths.sort();
         assert_eq!(paths, ["GET /app", "GET /engine", "GET /namespaced"]);
@@ -2925,7 +2935,7 @@ mod tests {
         assert!(has_symbol("listed"));
         assert!(!has_symbol("single"));
         assert!(!has_symbol("meta"));
-        assert!(!has_symbol("hidden"));
+        assert!(has_symbol("hidden"));
         assert!(!has_symbol("guarded"));
         assert!(!has_symbol("later"));
         assert!(!has_symbol("inline"));
@@ -2994,7 +3004,7 @@ mod tests {
             ("config/routes.rb", routes.as_str()),
             ("users_controller.rb", controller.as_str()),
         ];
-        let (found, elapsed) = entries_timed(Language::Ruby, &files);
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), count);
         assert!(found
             .iter()
@@ -3025,7 +3035,7 @@ mod tests {
                 ),
             ));
             controllers.push_str(&format!(
-                "class C{number}Controller\n  before_action :g\n  def show; end\nend\n"
+                "module E{number}\n  class Engine < ::Rails::Engine\n  end\nend\nclass C{number}Controller\n  before_action :g\n  def show; end\nend\n"
             ));
         }
         files.push((String::from("controllers.rb"), controllers));
@@ -3033,7 +3043,7 @@ mod tests {
             .iter()
             .map(|(name, text)| (name.as_str(), text.as_str()))
             .collect();
-        let (found, elapsed) = entries_timed(Language::Ruby, &borrowed);
+        let (found, elapsed) = entries_lean(Language::Ruby, &borrowed);
         assert_eq!(found.len(), count);
         assert!(found
             .iter()
@@ -3050,6 +3060,203 @@ mod tests {
     #[ignore = "timing: run in release"]
     fn timing_many_engines_resolve_in_linear_time() {
         let elapsed = many_engines_resolve_in_linear_time_at(5_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    #[test]
+    fn a_namespace_or_scope_option_that_omen_does_not_model_skips_the_block() {
+        let routes = "Rails.application.routes.draw do\n  namespace :admin, only: :index do\n    resources :users\n  end\n  scope \"/s\", except: :index do\n    get \"/in_scope\", to: \"a#b\"\n  end\n  namespace :adm, path: \"p\", as: \"x\", module: \"m\" do\n    get \"/ok\", to: \"a#b\"\n  end\nend\n";
+        let found = rails_routes(routes, &[]);
+        assert_eq!(verbs_and_paths(&found), ["GET /p/ok"]);
+    }
+
+    #[test]
+    fn a_non_public_action_has_no_symbol_and_no_guard() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"users#show\"\n  get \"/b\", to: \"users#edit\"\n  get \"/c\", to: \"posts#show\"\n  get \"/d\", to: \"inherits#hidden\"\n  get \"/e\", to: \"implicit#page\"\nend\n";
+        let users = "class UsersController\n  before_action :auth\n  def edit; end\n  private\n  def show; end\nend\n\nclass PostsController < ApplicationController\n  before_action :auth\n  def show; end\nend\n\nclass InheritsController < ParentController\n  before_action :child\nend\n\nclass ParentController\n  before_action :base\n  private\n  def hidden; end\nend\n\nclass ImplicitController\n  before_action :implicit\nend\n";
+        let found = rails_routes(routes, &[("controllers/users.rb", users)]);
+        let by_path = |path: &str| {
+            let entry = found
+                .iter()
+                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .unwrap();
+            (entry.symbol.is_some(), entry.guards.clone())
+        };
+        assert_eq!(by_path("/a"), (false, Vec::new()));
+        assert_eq!(by_path("/b"), (true, strings(&["auth"])));
+        assert_eq!(by_path("/c"), (true, strings(&["auth"])));
+        assert_eq!(by_path("/d"), (false, Vec::new()));
+        assert_eq!(by_path("/e"), (false, strings(&["implicit"])));
+    }
+
+    #[test]
+    fn visibility_applies_across_the_openings_of_a_class() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"users#show\"\n  get \"/b\", to: \"posts#show\"\n  get \"/c\", to: \"pages#show\"\nend\n";
+        let users = "class UsersController\n  before_action :auth\n  def show; end\nend\n\nclass UsersController\n  private :show\nend\n";
+        let posts_first = "class PostsController\n  before_action :auth\n  def show; end\nend\n";
+        let posts_second = "class PostsController\n  private :show\nend\n";
+        let pages = "class PagesController\n  before_action :auth\n  def show; end\nend\n\nclass PagesController\n  private :show\n  public :show\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/a_users.rb", users),
+                ("controllers/b_posts.rb", posts_first),
+                ("controllers/c_posts.rb", posts_second),
+                ("controllers/d_pages.rb", pages),
+            ],
+        );
+        let by_path = |path: &str| {
+            let entry = found
+                .iter()
+                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .unwrap();
+            (entry.symbol.is_some(), entry.guards.clone())
+        };
+        assert_eq!(by_path("/a"), (false, Vec::new()));
+        assert_eq!(by_path("/b"), (false, Vec::new()));
+        assert_eq!(by_path("/c"), (true, strings(&["auth"])));
+    }
+
+    #[test]
+    fn an_acronym_in_a_dead_branch_or_a_conditional_is_handled() {
+        let routes =
+            "Rails.application.routes.draw do\n  get \"/u\", to: \"api/users#show\"\nend\n";
+        let upper = "module API\n  class UsersController\n    before_action :upper\n    def show; end\n  end\nend\n";
+        let lower = "module Api\n  class UsersController\n    before_action :lower\n    def show; end\n  end\nend\n";
+        let files = |initializer: &'static str| {
+            vec![
+                ("controllers/upper.rb", upper),
+                ("controllers/lower.rb", lower),
+                ("config/initializers/inflections.rb", initializer),
+            ]
+        };
+        let dead = "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  if false\n    inflect.acronym \"API\"\n  end\nend\n";
+        let found = rails_routes(routes, &files(dead));
+        assert_eq!(found[0].guards, ["lower"]);
+        let live = "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  if true\n    inflect.acronym \"API\"\n  end\nend\n";
+        let found = rails_routes(routes, &files(live));
+        assert_eq!(found[0].guards, ["upper"]);
+        let conditional = "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  if ENV[\"X\"]\n    inflect.acronym \"API\"\n  end\nend\n";
+        let found = rails_routes(routes, &files(conditional));
+        assert_eq!(found[0].symbol, None);
+        assert!(found[0].guards.is_empty());
+        let looped = "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  %w[API].each do |word|\n    inflect.acronym word\n  end\nend\n";
+        let found = rails_routes(routes, &files(looped));
+        assert_eq!(found[0].symbol, None);
+    }
+
+    #[test]
+    fn a_routes_object_needs_a_class_that_the_repository_defines() {
+        let routes = "Fake::Engine.routes.draw do\n  get \"/ghost\", to: \"a#b\"\nend\n\nMyEngine::Engine.routes.draw do\n  get \"/engine\", to: \"a#b\"\nend\n\nCompact::Engine.routes.draw do\n  get \"/compact\", to: \"a#b\"\nend\n\nWrong::Engine.routes.draw do\n  get \"/wrong\", to: \"a#b\"\nend\n\nMyApp::Application.routes.draw do\n  get \"/app\", to: \"a#b\"\nend\n\nNoApp::Application.routes.draw do\n  get \"/no_app\", to: \"a#b\"\nend\n";
+        let classes = "module MyEngine\n  class Engine < ::Rails::Engine\n  end\nend\n\nclass Compact::Engine < Rails::Engine\nend\n\nclass Wrong::Engine < Object\nend\n\nmodule MyApp\n  class Application < Rails::Application\n  end\nend\n";
+        let found = rails_routes(routes, &[("config/application.rb", classes)]);
+        let mut paths = verbs_and_paths(&found);
+        paths.sort();
+        assert_eq!(paths, ["GET /app", "GET /compact", "GET /engine"]);
+    }
+
+    #[test]
+    fn a_singular_resource_uses_the_plural_of_active_support() {
+        let routes = "Rails.application.routes.draw do\n  resource :wife, only: :show\n  resource :fish, only: :show\n  resource :child, only: :show\n  resource :category, only: :show\nend\n";
+        let controllers = "class WivesController\n  def show; end\nend\nclass WifesController\n  def show; end\nend\nclass FishController\n  def show; end\nend\nclass ChildrenController\n  def show; end\nend\nclass CategoriesController\n  def show; end\nend\n";
+        let found = rails_routes(routes, &[("controllers/c.rb", controllers)]);
+        let symbols: Vec<String> = found
+            .iter()
+            .map(|entry| entry.symbol.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            symbols,
+            [
+                "controllers/c.rb#WivesController.show",
+                "controllers/c.rb#FishController.show",
+                "controllers/c.rb#ChildrenController.show",
+                "controllers/c.rb#CategoriesController.show",
+            ]
+        );
+        let custom = "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  inflect.irregular \"wife\", \"wifes\"\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/c.rb", controllers),
+                ("config/initializers/inflections.rb", custom),
+            ],
+        );
+        assert!(found.iter().all(|entry| entry.symbol.is_none()));
+    }
+
+    #[test]
+    fn a_path_is_normalized_as_journey_does() {
+        let routes = "Rails.application.routes.draw do\n  get \"/health/\", to: \"a#b\"\n  get \"//a//b/\", to: \"a#b\"\n  get \"plain\", to: \"a#b\"\n  get \"/%ab/x\", to: \"a#b\"\n  scope \"/api/\" do\n    get \"/v1/\", to: \"a#b\"\n  end\n  get \"/with space\", to: \"a#b\"\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut paths = verbs_and_paths(&found);
+        paths.sort();
+        assert_eq!(
+            paths,
+            [
+                "GET /%AB/x",
+                "GET /a/b",
+                "GET /api/v1",
+                "GET /health",
+                "GET /plain",
+            ]
+        );
+    }
+
+    #[test]
+    fn nesting_and_canonical_actions_follow_the_rails_mapper() {
+        let routes = "Rails.application.routes.draw do\n  resources :users, only: [] do\n    scope \"x\" do\n      get :y\n    end\n    root \"pages#home\"\n    member do\n      get :show\n      get :custom\n      get \"my-action\"\n    end\n    collection do\n      get :index\n    end\n  end\n  resources :posts, only: [] do\n    get :search\n  end\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut paths = verbs_and_paths(&found);
+        paths.sort();
+        assert_eq!(
+            paths,
+            [
+                "GET /posts/:post_id/search",
+                "GET /users",
+                "GET /users",
+                "GET /users/:id",
+                "GET /users/:id/custom",
+                "GET /users/:id/my-action",
+                "GET /x/users/:user_id/y",
+            ]
+        );
+    }
+
+    fn many_children_of_one_parent_resolve_in_linear_time_at(count: usize) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut base = String::from("class ApplicationController\n");
+        let mut children = String::new();
+        for number in 0..count {
+            base.push_str(&format!("  before_action :p{number}, only: :never\n"));
+            routes.push_str(&format!("  get \"/r{number}\", to: \"c{number}#show\"\n"));
+            children.push_str(&format!(
+                "class C{number}Controller < ApplicationController\n  before_action :own{number}, only: :never\n  def show; end\nend\n"
+            ));
+        }
+        base.push_str("end\n");
+        routes.push_str("end\n");
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/application.rb", base.as_str()),
+            ("controllers/children.rb", children.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), count);
+        assert!(found
+            .iter()
+            .all(|entry| entry.symbol.is_some() && entry.guards.is_empty()));
+        elapsed
+    }
+
+    #[test]
+    fn many_children_of_one_parent_share_its_callbacks() {
+        many_children_of_one_parent_resolve_in_linear_time_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_children_of_one_parent_resolve_in_linear_time() {
+        let elapsed = many_children_of_one_parent_resolve_in_linear_time_at(10_000);
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -3103,9 +3310,7 @@ mod tests {
             ("config/routes.rb", routes.as_str()),
             ("controllers.rb", controllers.as_str()),
         ];
-        let started = std::time::Instant::now();
-        let found = entries(Language::Ruby, &files);
-        let elapsed = started.elapsed();
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), count);
         assert!(found.iter().all(|entry| entry.symbol.is_some()));
         elapsed
@@ -3184,9 +3389,7 @@ mod tests {
             ("config/routes.rb", routes.as_str()),
             ("users_controller.rb", controller.as_str()),
         ];
-        let started = std::time::Instant::now();
-        let found = entries(Language::Ruby, &files);
-        let elapsed = started.elapsed();
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), count);
         assert!(found
             .iter()
@@ -3230,9 +3433,7 @@ mod tests {
                 .iter()
                 .map(|(name, text)| (name.as_str(), text.as_str())),
         );
-        let started = std::time::Instant::now();
-        let found = entries(Language::Ruby, &files);
-        let elapsed = started.elapsed();
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), count);
         assert!(found
             .iter()
