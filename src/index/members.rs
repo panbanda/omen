@@ -637,6 +637,10 @@ impl Recorder {
             .map(|name| strip_sigil(language, name))
             .collect();
 
+        let local_names: HashSet<(usize, &str)> = locals
+            .iter()
+            .filter_map(|local| Some((local.owner?, local.name.name.as_str())))
+            .collect();
         let type_parameters = TypeParameterScopes::new(&self.type_parameters, source);
         let mut pool: HashMap<&str, SharedStr> = HashMap::new();
         let mut seen: HashSet<(u8, u32, &str)> = HashSet::new();
@@ -666,9 +670,7 @@ impl Recorder {
                 UseKind::Implicit => {
                     let symbol = &symbols[owner as usize];
                     let out_of_line = symbol.has_receiver;
-                    let local = locals.iter().any(|local| {
-                        local.owner == Some(owner as usize) && local.name.name == name
-                    });
+                    let local = local_names.contains(&(owner as usize, name));
                     if local || !(out_of_line || declared_in_file.contains(name)) {
                         continue;
                     }
