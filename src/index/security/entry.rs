@@ -662,7 +662,7 @@ impl<'a> Context<'a> {
         let mut drafts = Vec::new();
         self.walk(self.parsed.root_node(), &mut drafts);
         self.convention_entries(&mut drafts);
-        drafts
+        let mut entries: Vec<EntryPoint> = drafts
             .into_iter()
             .map(|draft| {
                 let method = draft
@@ -699,7 +699,21 @@ impl<'a> Context<'a> {
                             .any(|range| range.contains(&draft.range.start_byte)),
                 }
             })
-            .collect()
+            .collect();
+        // One registration can give more than one route, as a router that two paths mount does.
+        // The path then separates the keys. A key without a collision does not change.
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for entry in &entries {
+            *counts.entry(entry.key.clone()).or_default() += 1;
+        }
+        for entry in &mut entries {
+            if counts[&entry.key] > 1 {
+                if let Some(route) = &entry.route {
+                    entry.key = format!("{}:{}", entry.key, route.path);
+                }
+            }
+        }
+        entries
     }
 
     /// Visits the node and its descendants in source order. The visit keeps its own stack, so a deep
@@ -1409,7 +1423,7 @@ impl<'a> Context<'a> {
         let path = path
             .split_once(' ')
             .map_or(path.clone(), |(_, rest)| rest.to_string());
-        let wrapped = self.go_handler(*handler);
+        let wrapped = self.go_handler(*handler, go_routes::HandlerKind::Http);
         out.push(Draft {
             range: Span::of(&node),
             kind: EntryKind::HttpHandler,
@@ -2092,18 +2106,62 @@ mod tests {
             .collect()
     }
 
-    const GO_HANDLERS: &str = "func list(w http.ResponseWriter, r *http.Request) {}\n\nfunc show(w http.ResponseWriter, r *http.Request) {}\n\n";
+    const GO_HANDLERS: &str = r#"func list(w http.ResponseWriter, r *http.Request) {}
+
+func show(w http.ResponseWriter, r *http.Request) {}
+
+func auth(next http.Handler) http.Handler { return next }
+
+func audit(next http.Handler) http.Handler { return next }
+
+func authFunc(next http.HandlerFunc) http.HandlerFunc { return next }
+
+func combine(first, second http.HandlerFunc) http.HandlerFunc { return first }
+
+func onError(err error) {}
+
+func makeHandler(callback func(error)) http.Handler { return nil }
+
+"#;
+
+    fn go_source(imports: &[&str], body: &str) -> String {
+        let imports: String = imports.iter().map(|name| format!("\t{name}\n")).collect();
+        format!("package main\n\nimport (\n\t\"net/http\"\n{imports})\n\n{GO_HANDLERS}{body}")
+    }
+
+    const CHI: &str = "\"github.com/go-chi/chi/v5\"";
+    const ECHO: &str = "\"github.com/labstack/echo/v4\"";
+    const MUX: &str = "\"github.com/gorilla/mux\"";
+    const GIN: &str = "\"github.com/gin-gonic/gin\"";
 
     #[test]
     fn chi_routes_join_prefixes_and_apply_use_to_later_routes() {
-        let source = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\n{GO_HANDLERS}func routes() http.Handler {{\n\tr := chi.NewRouter()\n\tr.Get(\"/early\", list)\n\tr.Use(logger)\n\tr.Get(\"/health\", list)\n\tr.Route(\"/api\", func(r chi.Router) {{\n\t\tr.Use(auth)\n\t\tr.Get(\"/users/{{id}}\", show)\n\t\tr.Group(func(r chi.Router) {{\n\t\t\tr.Use(admin)\n\t\t\tr.Post(\"/users\", list)\n\t\t}})\n\t\tr.Put(\"/after\", list)\n\t}})\n\tr.With(audit).Delete(\"/x/{{id:[0-9]+}}\", show)\n\tr.Method(\"PATCH\", \"/m\", list)\n\tr.HandleFunc(\"/any\", list)\n\tr.Handle(\"/handle\", http.HandlerFunc(show))\n\treturn r\n}}\n"
+        let source = go_source(
+            &[CHI],
+            r#"func routes() http.Handler {
+	r := chi.NewRouter()
+	r.Use(logger)
+	r.Get("/health", list)
+	r.Route("/api", func(r chi.Router) {
+		r.Use(auth)
+		r.Get("/users/{id}", show)
+		r.Group(func(r chi.Router) {
+			r.Use(admin)
+			r.Post("/users", list)
+		})
+		r.Put("/after", list)
+	})
+	r.With(audit).Delete("/x/{id:[0-9]+}", show)
+	r.Method("PATCH", "/m", list)
+	r.HandleFunc("/any", list)
+	r.Handle("/handle", http.HandlerFunc(show))
+	return r
+}
+"#,
         );
-        let found = go_routes(&[("main.go", &source)]);
         assert_eq!(
-            found,
+            go_routes(&[("main.go", &source)]),
             [
-                "chi GET /early [] list",
                 "chi GET /health [logger] list",
                 "chi GET /api/users/{id} [logger,auth] show",
                 "chi POST /api/users [logger,auth,admin] list",
@@ -2123,9 +2181,59 @@ mod tests {
     }
 
     #[test]
+    fn a_chi_use_after_a_route_panics_so_the_later_routes_are_not_entries() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	r := chi.NewRouter()
+	r.Get("/public", show)
+	r.Use(auth)
+	r.Get("/admin", show)
+	w := chi.NewRouter()
+	w.With(audit).Get("/w", list)
+	w.Use(auth)
+	w.Get("/z", show)
+	g := chi.NewRouter()
+	g.Get("/ok", list)
+	g.Group(func(g chi.Router) {
+		g.Use(auth)
+		g.Get("/inner", show)
+	})
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /public [] show",
+                "chi GET /w [audit] list",
+                "chi GET /ok [] list",
+                "chi GET /inner [auth] show",
+            ]
+        );
+    }
+
+    #[test]
     fn chi_mount_follows_a_router_of_the_same_file_only() {
-        let source = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi\"\n\t\"example.com/app/external\"\n)\n\n{GO_HANDLERS}func routes() http.Handler {{\n\tr := chi.NewRouter()\n\tr.Use(logger)\n\tr.Mount(\"/sub\", subRouter())\n\tr.Mount(\"/ext\", external.Routes())\n\tinline := chi.NewMux()\n\tinline.Get(\"/\", show)\n\tr.Mount(\"/inline\", inline)\n\treturn r\n}}\n\nfunc subRouter() chi.Router {{\n\ts := chi.NewRouter()\n\ts.Get(\"/\", list)\n\treturn s\n}}\n"
+        let source = go_source(
+            &[CHI, "\"example.com/app/external\""],
+            r#"func routes() http.Handler {
+	r := chi.NewRouter()
+	r.Use(logger)
+	r.Mount("/sub", subRouter())
+	r.Mount("/ext", external.Routes())
+	inline := chi.NewMux()
+	inline.Get("/", show)
+	r.Mount("/inline", inline)
+	return r
+}
+
+func subRouter() chi.Router {
+	s := chi.NewRouter()
+	s.Get("/", list)
+	return s
+}
+"#,
         );
         assert_eq!(
             go_routes(&[("main.go", &source)]),
@@ -2137,28 +2245,148 @@ mod tests {
     }
 
     #[test]
+    fn a_chi_router_mounted_at_two_paths_gives_an_entry_for_each_path() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	root := chi.NewRouter()
+	sub := chi.NewRouter()
+	sub.Get("/x", show)
+	root.Mount("/a", sub)
+	root.Mount("/b", sub)
+	solo := chi.NewRouter()
+	solo.Get("/y", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /a/x [] show",
+                "chi GET /b/x [] show",
+                "chi GET /y [] show"
+            ]
+        );
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert!(found[0].key.ends_with(":http_handler:GET:/a/x"));
+        assert!(found[1].key.ends_with(":http_handler:GET:/b/x"));
+        assert!(found[2].key.ends_with(":http_handler:GET"));
+    }
+
+    #[test]
+    fn a_named_chi_route_callback_gets_the_prefix_and_an_unpassed_one_gives_no_entry() {
+        let source = go_source(
+            &[CHI],
+            r#"func api(r chi.Router) {
+	r.Get("/users", show)
+}
+
+func unused(r chi.Router) {
+	r.Get("/never", list)
+}
+
+func routes() {
+	root := chi.NewRouter()
+	root.Route("/api", api)
+	root.Route("/v2", api)
+	root.Route("/other", elsewhere.Routes)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /api/users [] show", "chi GET /v2/users [] show"]
+        );
+    }
+
+    #[test]
+    fn a_chi_pattern_without_a_leading_slash_is_not_a_route() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	r := chi.NewRouter()
+	r.Get("bad", list)
+	r.Route("/api/", func(r chi.Router) {
+		r.Get("/users", show)
+		r.Get("nope", show)
+	})
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /api/users [] show"]
+        );
+    }
+
+    #[test]
     fn a_chi_receiver_must_be_proven_through_the_import() {
-        let aliased = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\trouting \"github.com/go-chi/chi/v5\"\n)\n\n{GO_HANDLERS}func routes() {{\n\tr := routing.NewRouter()\n\tr.Get(\"/a\", list)\n}}\n\nfunc typed(r routing.Router) {{\n\tr.Get(\"/b\", show)\n}}\n"
+        let aliased = go_source(
+            &["routing \"github.com/go-chi/chi/v5\""],
+            r#"func routes() {
+	r := routing.NewRouter()
+	r.Get("/a", list)
+}
+
+func typed(r routing.Router) {
+	r.Get("/b", show)
+}
+
+func root(m *routing.Mux) {
+	m.Get("/c", show)
+}
+"#,
         );
         assert_eq!(
             go_routes(&[("main.go", &aliased)]),
-            ["chi GET /a [] list", "chi GET /b [] show"]
+            ["chi GET /a [] list", "chi GET /c [] show"]
         );
-        let unproven = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\n{GO_HANDLERS}type store struct{{}}\n\nfunc (store) Get(path string, handler http.HandlerFunc) {{}}\n\nfunc routes(r store, chi store) {{\n\tr.Get(\"/a\", list)\n\tchi.Get(\"/b\", list)\n\trouter := newRouter()\n\trouter.Get(\"/c\", list)\n}}\n"
+        let unproven = go_source(
+            &[CHI],
+            r#"type store struct{}
+
+func (store) Get(path string, handler http.HandlerFunc) {}
+
+func routes(r store, chi store) {
+	r.Get("/a", list)
+	chi.Get("/b", list)
+	router := newRouter()
+	router.Get("/c", list)
+}
+"#,
         );
         assert!(go_routes(&[("main.go", &unproven)]).is_empty());
-        let no_import = format!(
-            "package main\n\nimport \"net/http\"\n\n{GO_HANDLERS}func routes() {{\n\tr := chi.NewRouter()\n\tr.Get(\"/a\", list)\n}}\n"
+        let no_import = go_source(
+            &[],
+            r#"func routes() {
+	r := chi.NewRouter()
+	r.Get("/a", list)
+}
+"#,
         );
         assert!(go_routes(&[("main.go", &no_import)]).is_empty());
     }
 
     #[test]
     fn echo_routes_join_group_prefixes_and_guards() {
-        let source = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/labstack/echo/v4\"\n\t\"github.com/labstack/echo/v4/middleware\"\n)\n\n{GO_HANDLERS}func routes() *echo.Echo {{\n\te := echo.New()\n\te.GET(\"/health\", list)\n\te.Use(middleware.Logger())\n\tapi := e.Group(\"/api\", auth)\n\tapi.GET(\"/users/:id\", show, audit)\n\tadmin := api.Group(\"/admin\", root)\n\tadmin.Use(extra)\n\tadmin.POST(\"/users\", list)\n\tapi.PUT(\"/late\", list)\n\te.Any(\"/any\", list)\n\te.Match([]string{{\"GET\", \"POST\"}}, \"/multi\", list)\n\te.Add(\"TRACE\", \"/add\", list)\n\treturn e\n}}\n"
+        let source = go_source(
+            &[ECHO, "\"github.com/labstack/echo/v4/middleware\""],
+            r#"func routes() *echo.Echo {
+	e := echo.New()
+	e.GET("/health", list)
+	e.Use(middleware.Logger())
+	api := e.Group("/api", auth)
+	api.GET("/users/:id", show, audit)
+	admin := api.Group("/admin", root)
+	admin.Use(extra)
+	admin.POST("/users", list)
+	api.PUT("/late", list)
+	e.Any("/any", list)
+	e.Match([]string{"GET", "POST"}, "/multi", list)
+	e.Add("TRACE", "/add", list)
+	return e
+}
+"#,
         );
         assert_eq!(
             go_routes(&[("main.go", &source)]),
@@ -2178,24 +2406,112 @@ mod tests {
     }
 
     #[test]
+    fn an_echo_pre_middleware_guards_every_route() {
+        let source = go_source(
+            &[ECHO],
+            r#"func routes() {
+	e := echo.New()
+	e.GET("/a", show)
+	e.Use(logger)
+	e.Pre(gate)
+	g := e.Group("/g")
+	g.GET("/b", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "echo GET /a [gate,logger] show",
+                "echo GET /g/b [gate,logger] show"
+            ]
+        );
+    }
+
+    #[test]
+    fn echo_joins_paths_by_plain_concatenation() {
+        let source = go_source(
+            &[ECHO],
+            r#"func routes() {
+	e := echo.New()
+	g := e.Group("/api/")
+	g.GET("/users", show)
+	e.GET("plain", show)
+	e.GET("", show)
+	h := e.Group("api")
+	h.GET("x", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "echo GET /api//users [] show",
+                "echo GET /plain [] show",
+                "echo GET / [] show",
+                "echo GET /apix [] show",
+            ]
+        );
+    }
+
+    #[test]
     fn an_echo_receiver_must_be_proven_through_the_import() {
-        let aliased = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\tframework \"github.com/labstack/echo/v4\"\n)\n\n{GO_HANDLERS}func routes() {{\n\te := framework.New()\n\te.GET(\"/a\", list)\n}}\n\nfunc typed(g *framework.Group) {{\n\tg.POST(\"/b\", show)\n}}\n"
+        let aliased = go_source(
+            &["framework \"github.com/labstack/echo/v4\""],
+            r#"func routes() {
+	e := framework.New()
+	e.GET("/a", list)
+}
+
+func typed(g *framework.Group) {
+	g.POST("/b", show)
+}
+
+func root(e *framework.Echo) {
+	e.POST("/c", show)
+}
+"#,
         );
         assert_eq!(
             go_routes(&[("main.go", &aliased)]),
-            ["echo GET /a [] list", "echo POST /b [] show"]
+            ["echo GET /a [] list", "echo POST /c [] show"]
         );
-        let unproven = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/labstack/echo/v4\"\n)\n\n{GO_HANDLERS}type store struct{{}}\n\nfunc (store) GET(path string, handler http.HandlerFunc) {{}}\n\nfunc routes(e store) {{\n\te.GET(\"/a\", list)\n\tg := e.Group(\"/x\")\n\tg.GET(\"/b\", list)\n\tx := echo.Echo{{}}\n\tx.GET(\"/c\", list)\n}}\n"
+        let unproven = go_source(
+            &[ECHO],
+            r#"type store struct{}
+
+func (store) GET(path string, handler http.HandlerFunc) {}
+
+func routes(e store) {
+	e.GET("/a", list)
+	g := e.Group("/x")
+	g.GET("/b", list)
+	x := echo.Echo{}
+	x.GET("/c", list)
+}
+"#,
         );
         assert!(go_routes(&[("main.go", &unproven)]).is_empty());
     }
 
     #[test]
     fn gorilla_mux_routes_have_methods_prefixes_and_guards() {
-        let source = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gorilla/mux\"\n)\n\n{GO_HANDLERS}func routes() http.Handler {{\n\thttp.HandleFunc(\"/plain\", list)\n\tr := mux.NewRouter()\n\tr.HandleFunc(\"/health\", list)\n\tr.HandleFunc(\"/users/{{id}}\", show).Methods(\"GET\", \"POST\")\n\tr.HandleFunc(\"/items/{{id:[0-9]+}}\", show).Methods(\"DELETE\").Name(\"item\")\n\tr.Handle(\"/handle\", http.HandlerFunc(list))\n\tapi := r.PathPrefix(\"/api\").Subrouter()\n\tapi.Use(auth)\n\tapi.HandleFunc(\"/ping\", list).Methods(\"GET\")\n\tr.Use(logger)\n\treturn r\n}}\n"
+        let source = go_source(
+            &[MUX],
+            r#"func routes() http.Handler {
+	http.HandleFunc("/plain", list)
+	r := mux.NewRouter()
+	r.HandleFunc("/health", list)
+	r.HandleFunc("/users/{id}", show).Methods("GET", "POST")
+	r.HandleFunc("/items/{id:[0-9]+}", show).Methods("DELETE").Name("item")
+	r.Handle("/handle", http.HandlerFunc(list))
+	api := r.PathPrefix("/api").Subrouter()
+	api.Use(auth)
+	api.HandleFunc("/ping", list).Methods("GET")
+	r.Use(logger)
+	return r
+}
+"#,
         );
         assert_eq!(
             go_routes(&[("main.go", &source)]),
@@ -2218,16 +2534,63 @@ mod tests {
     }
 
     #[test]
+    fn gorilla_mux_route_builders_register_routes() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.Methods("GET").Path("/x").HandlerFunc(show)
+	r.Path("/y/{id}").Methods("POST", "PUT").Handler(http.HandlerFunc(list))
+	r.PathPrefix("/static/").HandlerFunc(list)
+	r.PathPrefix("/a").Path("/b").HandlerFunc(list)
+	r.Methods("GET").HandlerFunc(list)
+	sub := r.PathPrefix("/api/").Subrouter()
+	sub.Methods("GET").Path("/z").HandlerFunc(show)
+	sub.HandleFunc("w", show)
+	r.Use(auth)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux GET /x [auth] show",
+                "gorilla/mux POST /y/{id} [auth] list",
+                "gorilla/mux PUT /y/{id} [auth] list",
+                "gorilla/mux ANY /static/ [auth] list",
+                "gorilla/mux GET /api/z [auth] show",
+            ]
+        );
+    }
+
+    #[test]
     fn a_gorilla_mux_receiver_must_be_proven_through_the_import() {
-        let aliased = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\tgorilla \"github.com/gorilla/mux\"\n)\n\n{GO_HANDLERS}func routes() {{\n\tr := gorilla.NewRouter()\n\tr.HandleFunc(\"/a\", list).Methods(\"PUT\")\n}}\n\nfunc typed(s *gorilla.Router) {{\n\ts.HandleFunc(\"/b\", show)\n}}\n"
+        let aliased = go_source(
+            &["gorilla \"github.com/gorilla/mux\""],
+            r#"func routes() {
+	r := gorilla.NewRouter()
+	r.HandleFunc("/a", list).Methods("PUT")
+}
+
+func typed(s *gorilla.Router) {
+	s.HandleFunc("/b", show)
+}
+"#,
         );
         assert_eq!(
             go_routes(&[("main.go", &aliased)]),
-            ["gorilla/mux PUT /a [] list", "gorilla/mux ANY /b [] show"]
+            ["gorilla/mux PUT /a [] list"]
         );
-        let unproven = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gorilla/mux\"\n)\n\n{GO_HANDLERS}func routes(r thing) {{\n\tr.HandleFunc(\"/a\", list).Methods(\"GET\")\n\tm := http.NewServeMux()\n\tm.HandleFunc(\"/b\", list)\n\tn := mux.Vars(nil)\n\tn.HandleFunc(\"/c\", list)\n}}\n"
+        let unproven = go_source(
+            &[MUX],
+            r#"func routes(r thing) {
+	r.HandleFunc("/a", list).Methods("GET")
+	m := http.NewServeMux()
+	m.HandleFunc("/b", list)
+	n := mux.Vars(nil)
+	n.HandleFunc("/c", list)
+}
+"#,
         );
         assert_eq!(
             go_routes(&[("main.go", &unproven)]),
@@ -2237,8 +2600,22 @@ mod tests {
 
     #[test]
     fn gin_groups_join_prefixes_and_use_gives_guards() {
-        let source = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n{GO_HANDLERS}func routes() {{\n\tr := gin.New()\n\tr.GET(\"/early\", list)\n\tr.Use(logger)\n\tv1 := r.Group(\"/v1\", auth)\n\tv1.GET(\"/users/:id\", audit, show)\n\tinner := v1.Group(\"/inner\")\n\tinner.Use(extra)\n\tinner.POST(\"/x\", list)\n\tr.Group(\"/chain\").DELETE(\"/c\", list)\n\tv1.PUT(\"/late\", list)\n\tr.GET(\"/after\", list)\n}}\n"
+        let source = go_source(
+            &[GIN],
+            r#"func routes() {
+	r := gin.New()
+	r.GET("/early", list)
+	r.Use(logger)
+	v1 := r.Group("/v1", auth)
+	v1.GET("/users/:id", audit, show)
+	inner := v1.Group("/inner")
+	inner.Use(extra)
+	inner.POST("/x", list)
+	r.Group("/chain").DELETE("/c", list)
+	v1.PUT("/late", list)
+	r.GET("/after", list)
+}
+"#,
         );
         assert_eq!(
             go_routes(&[("main.go", &source)]),
@@ -2254,36 +2631,165 @@ mod tests {
     }
 
     #[test]
+    fn a_gin_use_returns_the_router_so_calls_can_chain() {
+        let source = go_source(
+            &[GIN],
+            r#"func routes() {
+	gin.New().Use(auth).GET("/x", show)
+	r := gin.New()
+	r.Use(first).Use(second).GET("/y", show)
+	r.GET("/z", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gin GET /x [auth] show",
+                "gin GET /y [first,second] show",
+                "gin GET /z [first,second] show",
+            ]
+        );
+    }
+
+    #[test]
+    fn gin_joins_paths_as_the_library_does() {
+        let source = go_source(
+            &[GIN],
+            r#"func routes() {
+	r := gin.New()
+	g := r.Group("/api/")
+	g.GET("/users/", show)
+	h := r.Group("/a//b")
+	h.GET("/../c", show)
+	r.GET("", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gin GET /api/users/ [] show",
+                "gin GET /a/c [] show",
+                "gin GET / [] show",
+            ]
+        );
+    }
+
+    #[test]
+    fn gin_any_handle_and_match_register_routes() {
+        let source = go_source(
+            &[GIN],
+            r#"func routes() {
+	r := gin.New()
+	r.Any("/a", show)
+	r.Handle("PATCH", "/b", audit, show)
+	r.Handle("patch", "/c", show)
+	r.Match([]string{"GET", "POST"}, "/d", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gin ANY /a [] show",
+                "gin PATCH /b [audit] show",
+                "gin GET /d [] show",
+                "gin POST /d [] show",
+            ]
+        );
+    }
+
+    #[test]
+    fn each_call_of_a_router_factory_gives_a_new_router() {
+        let source = go_source(
+            &[GIN],
+            r#"func newRouter() *gin.Engine { return gin.New() }
+
+func routes() {
+	a := newRouter()
+	a.Use(auth)
+	a.GET("/private", show)
+	b := newRouter()
+	b.GET("/public", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gin GET /private [auth] show", "gin GET /public [] list"]
+        );
+    }
+
+    #[test]
     fn a_gin_receiver_must_be_proven_through_the_import() {
-        let aliased = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\tg \"github.com/gin-gonic/gin\"\n)\n\n{GO_HANDLERS}func routes() {{\n\tr := g.Default()\n\tr.GET(\"/a\", list)\n}}\n\nfunc typed(group *g.RouterGroup) {{\n\tgroup.POST(\"/b\", show)\n}}\n"
+        let aliased = go_source(
+            &["g \"github.com/gin-gonic/gin\""],
+            r#"func routes() {
+	r := g.Default()
+	r.GET("/a", list)
+}
+
+func typed(group *g.RouterGroup) {
+	group.POST("/b", show)
+}
+
+func engine(e *g.Engine) {
+	e.POST("/c", show)
+}
+"#,
         );
         assert_eq!(
             go_routes(&[("main.go", &aliased)]),
-            ["gin GET /a [] list", "gin POST /b [] show"]
+            ["gin GET /a [] list", "gin POST /c [] show"]
         );
-        let unproven = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n{GO_HANDLERS}func routes(store thing) {{\n\tstore.GET(\"/a\", list)\n\tstore.Group(\"/x\").GET(\"/b\", list)\n\trouter := newRouter()\n\trouter.GET(\"/c\", list)\n}}\n"
+        let unproven = go_source(
+            &[GIN],
+            r#"func routes(store thing) {
+	store.GET("/a", list)
+	store.Group("/x").GET("/b", list)
+	router := newRouter()
+	router.GET("/c", list)
+}
+"#,
         );
         assert!(go_routes(&[("main.go", &unproven)]).is_empty());
     }
 
     #[test]
-    fn net_http_wrapped_handlers_give_the_inner_function_and_the_wrappers_as_guards() {
-        let source = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n)\n\n{GO_HANDLERS}func routes() {{\n\thttp.Handle(\"/p\", auth(http.HandlerFunc(show)))\n\thttp.HandleFunc(\"/q\", auth(show))\n\thttp.Handle(\"/r\", audit(auth(http.HandlerFunc(show))))\n\thttp.HandleFunc(\"/s\", combine(list, show))\n\thttp.HandleFunc(\"/t\", makeHandler(\"x\"))\n\thttp.Handle(\"/u\", http.StripPrefix(\"/x\", files))\n\tmux := http.NewServeMux()\n\tmux.Handle(\"/v\", middleware.Auth(cfg)(http.HandlerFunc(show)))\n\tmux.HandleFunc(\"GET /w/{{id}}\", wrap(db, show))\n\thttp.HandleFunc(\"/x\", http.HandlerFunc(list))\n}}\n"
+    fn net_http_wrapped_handlers_need_a_handler_signature_and_a_known_middleware() {
+        let source = go_source(
+            &[],
+            r#"func routes() {
+	http.Handle("/p", auth(http.HandlerFunc(show)))
+	http.HandleFunc("/q", authFunc(show))
+	http.Handle("/r", audit(auth(http.HandlerFunc(show))))
+	http.HandleFunc("/s", combine(list, show))
+	http.HandleFunc("/t", makeHandler(onError))
+	http.Handle("/u", http.StripPrefix("/x", files))
+	http.HandleFunc("/v", unknownWrap(show))
+	http.HandleFunc("/y", unknownWrap(helper))
+	http.Handle("/z", middleware.Auth(cfg)(http.HandlerFunc(show)))
+	http.HandleFunc("GET /w/{id}", authFunc(show))
+	http.HandleFunc("/x", http.HandlerFunc(list))
+}
+
+func helper(count int) {}
+"#,
         );
         assert_eq!(
             go_routes(&[("main.go", &source)]),
             [
                 "net/http ANY /p [auth] show",
-                "net/http ANY /q [auth] show",
+                "net/http ANY /q [authFunc] show",
                 "net/http ANY /r [audit,auth] show",
                 "net/http ANY /s [combine] -",
                 "net/http ANY /t [] -",
                 "net/http ANY /u [] -",
-                "net/http ANY /v [middleware.Auth] show",
-                "net/http GET /w/{id} [wrap] show",
+                "net/http ANY /v [] show",
+                "net/http ANY /y [] -",
+                "net/http ANY /z [] show",
+                "net/http GET /w/{id} [authFunc] show",
                 "net/http ANY /x [] list",
             ]
         );
@@ -2291,12 +2797,27 @@ mod tests {
 
     #[test]
     fn framework_handler_adapters_are_not_guards() {
-        let source = format!(
-            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n{GO_HANDLERS}func routes() {{\n\tr := gin.New()\n\tr.GET(\"/a\", gin.WrapF(show))\n\tr.GET(\"/b\", auth(show))\n}}\n"
+        let source = go_source(
+            &[GIN],
+            r#"func ginShow(c *gin.Context) {}
+
+func gate(next gin.HandlerFunc) gin.HandlerFunc { return next }
+
+func routes() {
+	r := gin.New()
+	r.GET("/a", gin.WrapF(show))
+	r.GET("/b", gate(ginShow))
+	r.GET("/c", gate(show))
+}
+"#,
         );
         assert_eq!(
             go_routes(&[("main.go", &source)]),
-            ["gin GET /a [] show", "gin GET /b [auth] show"]
+            [
+                "gin GET /a [] show",
+                "gin GET /b [gate] ginShow",
+                "gin GET /c [] -"
+            ]
         );
     }
 

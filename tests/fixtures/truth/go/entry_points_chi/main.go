@@ -12,7 +12,6 @@ func show(w http.ResponseWriter, r *http.Request) {}
 
 func routes() http.Handler {
 	r := chi.NewRouter()
-	r.Get("/early", list)
 	r.Use(logger)
 	r.Get("/health", list)
 	r.Route("/api", func(r chi.Router) {

@@ -235,23 +235,38 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   is a value that the import of the framework proves. It is a constructor call, a
   group or sub-router of a router, or a parameter that has a router type. A variable
   name alone does not prove a router.
+- A function that returns a router gives a new router for each call. A function that
+  receives a router of a type that can be a group or a sub-router, such as `chi.Router`,
+  has an unknown prefix. Omen gives no entry for its routes, unless a call in the same
+  file gives the router to it, as in `r.Route("/api", api)`. A function that receives a
+  root router, such as `*gin.Engine`, gives entries.
 - A handler that a call wraps, as in `http.Handle("/p", auth(http.HandlerFunc(show)))`,
-  has the guard `auth`. The handler is the one argument of the wrapper that names a
-  function of the repository. If a wrapper has more than one such argument, the entry
-  has no handler. A conversion such as `http.HandlerFunc` or `gin.WrapF` is not a guard.
+  has the function `show` as its handler when a conversion proves it, or when the
+  signature of `show` is the signature of a handler. A wrapper with more than one such
+  function gives no handler. A wrapper is a guard only when the repository defines it
+  with the signature of a middleware. A conversion such as `http.HandlerFunc` or
+  `gin.WrapF` is not a guard.
+- A key of an entry point has the path at its end when one registration gives more than
+  one route, as a router that two paths mount does.
 - For chi, a prefix comes from `Route`. A guard comes from `Use` and `With`, and
-  applies to the routes that follow it. `Mount` joins a router of the same file. It
-  skips a router of another file.
+  applies to the routes that follow it. chi panics when `Use` follows a route of the
+  same router, so Omen gives no entry for a route after such a `Use`. `Mount` joins a
+  router of the same file, at each of its mounts. It skips a router of another file.
+  A pattern without a leading slash gives no entry.
 - For echo, a prefix and the guards of `Group` apply to the routes of the group. A
-  group copies the guards of its parent when the group is made. `Use` on the echo
-  value applies to each route. `Any`, `Match`, and `Add` give one entry for each method.
+  group copies the guards of its parent when the group is made. `Use` and `Pre` on the
+  echo value apply to each route. The path is the plain concatenation of the prefixes
+  and the path. `Any`, `Match`, and `Add` give one entry for each method.
 - For gin, the guards of a route are the arguments between the path and the last
   argument. A group has a prefix, and it copies the guards of its parent when the
-  group is made. `Use` gives a guard to the routes that follow it.
+  group is made. `Use` gives a guard to the routes that follow it, and it returns the
+  router. Paths join as `path.Join` does. `Any`, `Handle`, and `Match` give entries.
 - For gorilla/mux, `PathPrefix(...).Subrouter()` gives a prefix. `Methods` gives one
   entry for each method, and a route without `Methods` has the method `ANY`. `Use`
   applies to each route of its router and of the sub-routers, as the library does.
   A call of `Methods` with an argument that is not a string literal gives no entry.
+  A builder chain such as `r.Methods("GET").Path("/x").HandlerFunc(show)` gives an
+  entry when it has exactly one path.
 - Deadcode treats an entry point and the entry points of `[[security.entry_points]]`
   as alive, with their callees.
 - Deadcode reads the path in a Rust `#[serde(...)]` string through the module tree of
