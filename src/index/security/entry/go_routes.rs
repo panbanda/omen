@@ -35,10 +35,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use tree_sitter::Node;
 
-use super::{Context, Draft, EntryBasis, EntryKind, Route, TreeSource};
+use super::{syntax, Context, Draft, EntryBasis, EntryKind, Route, TreeSource};
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ImportKind, ImportTarget, Reference, Span, Symbol};
@@ -389,8 +390,10 @@ struct Router {
 #[derive(Clone)]
 struct Record {
     router: usize,
-    /// A matcher can reject a request for the route, as `Headers` and `Schemes` can.
-    restricted: bool,
+    /// The route matches every path that starts with its path, as `PathPrefix` does.
+    prefix: bool,
+    /// The registration is one that omen cannot read. It can match any request.
+    opaque: bool,
     /// The number of guards that the router had at the time of the registration.
     limit: usize,
     range: Span,
@@ -1105,6 +1108,81 @@ fn directory_of(file: &str) -> &str {
     file.rsplit_once('/').map_or("", |(directory, _)| directory)
 }
 
+/// The package name of a Go file, from its package clause.
+fn package_name(root: Node<'_>, source: &[u8]) -> String {
+    let mut cursor = root.walk();
+    let name = root
+        .named_children(&mut cursor)
+        .find(|node| node.kind() == "package_clause")
+        .and_then(|clause| clause.named_child(0))
+        .map(|name| syntax::text(name, source).to_string());
+    name.unwrap_or_default()
+}
+
+/// The top-level names of a Go file.
+fn declared_names(root: Node<'_>, source: &[u8], names: &mut HashSet<String>) {
+    let mut cursor = root.walk();
+    for declaration in root.named_children(&mut cursor) {
+        if declaration.kind() == "function_declaration" {
+            if let Some(name) = declaration.child_by_field_name("name") {
+                names.insert(syntax::text(name, source).to_string());
+            }
+            continue;
+        }
+        let mut pending = vec![declaration];
+        while let Some(current) = pending.pop() {
+            if matches!(
+                current.kind(),
+                "type_spec" | "type_alias" | "const_spec" | "var_spec"
+            ) {
+                let mut inner = current.walk();
+                for name in current.children_by_field_name("name", &mut inner) {
+                    names.insert(syntax::text(name, source).to_string());
+                }
+            }
+            let mut inner = current.walk();
+            pending.extend(current.named_children(&mut inner));
+        }
+    }
+}
+
+/// The top-level names of each Go package. A package is the files of one directory that
+/// have the same package clause.
+#[derive(Default)]
+pub(super) struct PackageNames {
+    by_package: HashMap<(String, String), Arc<HashSet<String>>>,
+}
+
+impl PackageNames {
+    pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> Self {
+        let mut sets: HashMap<(String, String), HashSet<String>> = HashMap::new();
+        for (position, file) in files.iter().enumerate() {
+            if file.language != Language::Go {
+                continue;
+            }
+            let Some(tree) = trees.tree(position) else {
+                continue;
+            };
+            let root = tree.root_node();
+            let key = (
+                directory_of(&file.file).to_string(),
+                package_name(root, &tree.source),
+            );
+            declared_names(root, &tree.source, sets.entry(key).or_default());
+        }
+        Self {
+            by_package: sets
+                .into_iter()
+                .map(|(key, names)| (key, Arc::new(names)))
+                .collect(),
+        }
+    }
+
+    fn names(&self, key: &(String, String)) -> Arc<HashSet<String>> {
+        self.by_package.get(key).cloned().unwrap_or_default()
+    }
+}
+
 /// The functions and the methods of the Go files, by package directory and name. The
 /// value has the position of the file and the position of the symbol.
 #[derive(Default)]
@@ -1443,32 +1521,17 @@ impl<'a> Context<'a> {
         }
         self.go_declared
             .get_or_init(|| {
-                let mut names = HashSet::new();
-                let root = self.parsed.root_node();
-                let mut cursor = root.walk();
-                for declaration in root.named_children(&mut cursor) {
-                    if declaration.kind() == "function_declaration" {
-                        if let Some(name) = declaration.child_by_field_name("name") {
-                            names.insert(self.text(name).to_string());
-                        }
-                        continue;
-                    }
-                    let mut pending = vec![declaration];
-                    while let Some(current) = pending.pop() {
-                        if matches!(
-                            current.kind(),
-                            "type_spec" | "type_alias" | "const_spec" | "var_spec"
-                        ) {
-                            let mut inner = current.walk();
-                            for name in current.children_by_field_name("name", &mut inner) {
-                                names.insert(self.text(name).to_string());
-                            }
-                        }
-                        let mut inner = current.walk();
-                        pending.extend(current.named_children(&mut inner));
-                    }
+                let key = (
+                    directory_of(&self.file.file).to_string(),
+                    package_name(self.parsed.root_node(), self.source),
+                );
+                match self.all_parsed.shared() {
+                    Some(shared) => shared
+                        .go_packages
+                        .get_or_init(|| PackageNames::build(self.all, self.all_parsed))
+                        .names(&key),
+                    None => PackageNames::build(self.all, self.all_parsed).names(&key),
                 }
-                names
             })
             .contains(self.text(node))
     }
@@ -2063,7 +2126,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             mounted: HashSet::new(),
             tree: Vec::new(),
             made_cache: HashMap::new(),
-            restricted_next: false,
+            prefix_next: false,
             dry,
             factory_keys: Vec::new(),
         })
@@ -2104,8 +2167,7 @@ struct Routes<'c, 'a, 't> {
     tree: Vec<usize>,
     /// Whether the router and each router above it came from the function that made it.
     made_cache: HashMap<usize, bool>,
-    /// The next registration has a matcher that can reject a request.
-    restricted_next: bool,
+    prefix_next: bool,
     /// The walk only finds the factories. It does not read the calls of the repository.
     dry: bool,
     factory_keys: Vec<(String, Option<String>)>,
@@ -3173,6 +3235,35 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         Some(child)
     }
 
+    /// Tells if a call is a part of a chain that ends in `Subrouter`.
+    fn is_subrouter_operand(&self, call: Node<'t>) -> bool {
+        let mut current = call;
+        loop {
+            let Some(selector) = current.parent().filter(|parent| {
+                parent.kind() == "selector_expression"
+                    && parent.child_by_field_name("operand") == Some(current)
+            }) else {
+                return false;
+            };
+            let Some(outer) = selector
+                .parent()
+                .filter(|parent| parent.kind() == "call_expression")
+            else {
+                return false;
+            };
+            let name = selector
+                .child_by_field_name("field")
+                .map_or("", |field| self.text(field));
+            if name == "Subrouter" {
+                return true;
+            }
+            if !self.is_mux_matcher_call(outer) {
+                return false;
+            }
+            current = outer;
+        }
+    }
+
     fn is_mux_matcher_call(&self, call: Node<'t>) -> bool {
         call.child_by_field_name("function")
             .filter(|function| function.kind() == "selector_expression")
@@ -3184,6 +3275,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                         | "Path"
                         | "PathPrefix"
                         | "Name"
+                        | "BuildVarsFunc"
                         | "Queries"
                         | "Headers"
                         | "Schemes"
@@ -3205,14 +3297,21 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     /// entry. Returns true when the call is a registration of a gorilla router. The call
     /// consumes its chain.
     fn mux_registration(&mut self, outer: Node<'t>) -> bool {
+        if self.is_subrouter_operand(outer) {
+            return false;
+        }
+        let outer_name = outer
+            .child_by_field_name("function")
+            .and_then(|function| function.child_by_field_name("field"));
         let mut chain = Vec::new();
         let mut method_lists: Vec<Option<Vec<String>>> = Vec::new();
         let mut paths: Vec<Option<String>> = Vec::new();
         let mut handler: Option<Node<'t>> = None;
         let mut current = outer;
-        let mut unknown = false;
+        let mut unreadable = false;
+        let mut broken = false;
         let mut name_calls: Vec<Option<String>> = Vec::new();
-        let mut restricted = false;
+        let mut terminal_prefix: Option<bool> = None;
         let base = loop {
             let Some(function) = current
                 .child_by_field_name("function")
@@ -3230,10 +3329,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             chain.push(current.id());
             match self.text(field) {
                 "HandleFunc" | "Handle" if handler.is_none() => {
+                    terminal_prefix.get_or_insert(false);
                     let template = arguments
                         .first()
                         .and_then(|path| self.string_argument(*path));
-                    unknown |= template
+                    broken |= template
                         .as_deref()
                         .is_some_and(|text| !mux_template_valid(text));
                     paths.push(template);
@@ -3254,10 +3354,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     );
                 }
                 "Path" | "PathPrefix" => {
+                    terminal_prefix.get_or_insert(self.text(field) == "PathPrefix");
                     let template = arguments
                         .first()
                         .and_then(|path| self.string_argument(*path));
-                    unknown |= template
+                    broken |= template
                         .as_deref()
                         .is_some_and(|text| !mux_template_valid(text));
                     paths.push(template);
@@ -3265,33 +3366,35 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 // gorilla/mux v1.8.1 sets `Route.err` when the pairs are not even, and the
                 // route never matches.
                 "Headers" => {
-                    restricted = true;
-                    unknown |= !arguments.len().is_multiple_of(2)
-                        || arguments
-                            .iter()
-                            .any(|argument| self.string_argument(*argument).is_none());
+                    if arguments
+                        .iter()
+                        .any(|argument| self.string_argument(*argument).is_none())
+                    {
+                        unreadable = true;
+                    } else {
+                        broken |= !arguments.len().is_multiple_of(2);
+                    }
                 }
                 "Name" => name_calls.push(
                     arguments
                         .first()
                         .and_then(|name| self.string_argument(*name)),
                 ),
-                "Schemes" | "MatcherFunc" => restricted = true,
+                "Schemes" | "MatcherFunc" => {}
                 "BuildVarsFunc" => {}
-                // `BuildOnly` makes a route that never matches. A matcher with a template or
-                // a regular expression can set an error that omen does not check, and another
-                // call is not known.
-                _ => unknown = true,
+                // `BuildOnly` makes a route that never matches.
+                "BuildOnly" => broken = true,
+                // A matcher with a template or a regular expression can set an error that
+                // omen does not check, and another call is not known.
+                _ => unreadable = true,
             }
-            if operand.kind() == "call_expression" && (unknown || self.is_mux_matcher_call(operand))
+            if operand.kind() == "call_expression"
+                && (unreadable || broken || self.is_mux_matcher_call(operand))
             {
                 current = operand;
             } else {
                 break operand;
             }
-        };
-        let Some(handler) = handler else {
-            return false;
         };
         let Some(router) = self.eval(base) else {
             return false;
@@ -3299,6 +3402,25 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         if self.routers[router].framework != Framework::Mux {
             return false;
         }
+        let Some(handler) = handler else {
+            if matches!(
+                outer_name.map(|name| self.text(name)).unwrap_or(""),
+                "Path"
+                    | "PathPrefix"
+                    | "Methods"
+                    | "Host"
+                    | "Headers"
+                    | "Queries"
+                    | "Schemes"
+                    | "MatcherFunc"
+                    | "NewRoute"
+                    | "Name"
+                    | "BuildVarsFunc"
+            ) {
+                self.push_opaque(router, Span::of(&outer));
+            }
+            return false;
+        };
         self.consumed.extend(chain);
         // gorilla/mux v1.8.1 sets an error when a route has a name and gets another name.
         // The error is set only when the current name is not empty.
@@ -3307,18 +3429,22 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         for call in name_calls {
             match call {
                 Some(name) if current_name.is_empty() => current_name = name,
-                _ => unknown = true,
+                Some(_) => broken = true,
+                None => unreadable = true,
             }
         }
-        if unknown {
+        if unreadable {
+            return self.opaque_registration(router, outer);
+        }
+        if broken {
             return true;
         }
         paths.reverse();
         let Some(paths) = paths.into_iter().collect::<Option<Vec<String>>>() else {
-            return true;
+            return self.opaque_registration(router, outer);
         };
         let Some((last, earlier)) = paths.split_last() else {
-            return true;
+            return self.opaque_registration(router, outer);
         };
         let Some(path) = Framework::Mux.compose(earlier, last) else {
             return true;
@@ -3326,7 +3452,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let mut methods: Option<Vec<String>> = None;
         for list in method_lists {
             let Some(list) = list else {
-                return true;
+                return self.opaque_registration(router, outer);
             };
             methods = Some(match methods {
                 None => list,
@@ -3341,7 +3467,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         }
         let methods = methods.unwrap_or_else(|| vec!["ANY".to_string()]);
         let methods: Vec<&str> = methods.iter().map(String::as_str).collect();
-        self.restricted_next = restricted;
+        self.prefix_next = terminal_prefix.unwrap_or(false);
         self.register(
             router,
             &methods,
@@ -3470,9 +3596,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         guard_arguments: &[Node<'t>],
         range: Span,
     ) {
-        let restricted = std::mem::take(&mut self.restricted_next);
+        let prefix = std::mem::take(&mut self.prefix_next);
         if self.has_spread(guard_arguments) || handler.is_some_and(|node| self.has_spread(&[node]))
         {
+            self.push_opaque(router, range);
             return;
         }
         self.touch(router);
@@ -3487,7 +3614,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         for method in methods {
             self.records.push(Record {
                 router,
-                restricted,
+                prefix,
+                opaque: false,
                 limit,
                 range,
                 symbol: symbol.clone().flatten(),
@@ -3496,6 +3624,30 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 guards: guards.clone(),
             });
         }
+    }
+
+    /// Keeps the place of a registration that omen cannot read. A gorilla/mux route that it
+    /// can match is not known, so the routes after it give no entry.
+    fn push_opaque(&mut self, router: usize, range: Span) {
+        if self.routers[router].framework != Framework::Mux {
+            return;
+        }
+        self.records.push(Record {
+            router,
+            prefix: true,
+            opaque: true,
+            limit: 0,
+            range,
+            symbol: None,
+            method: "ANY".to_string(),
+            path: String::new(),
+            guards: Vec::new(),
+        });
+    }
+
+    fn opaque_registration(&mut self, router: usize, outer: Node<'t>) -> bool {
+        self.push_opaque(router, Span::of(&outer));
+        true
     }
 
     /// The number of guards of a router that a route can have. `limit` is the number of
@@ -3627,7 +3779,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let mut drafts: Vec<Option<(Draft, Duplicate)>> = Vec::new();
         for record in &self.records {
             drafts.push(None);
-            if blocked.contains(&record.router) {
+            if record.opaque || blocked.contains(&record.router) {
                 continue;
             }
             let router = &self.routers[record.router];
@@ -3649,10 +3801,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             guards.extend(router.guards[..count].iter().cloned());
             guards.extend(record.guards.iter().cloned());
             let duplicate = match framework {
-                Framework::Chi => Duplicate::Chi(tree_of[record.router], record.path.clone()),
+                Framework::Chi => {
+                    Duplicate::Chi(tree_of[record.router], chi_tree_key(&record.path))
+                }
                 Framework::Echo => Duplicate::Echo(root_of[record.router], echo_shape(&path)),
-                Framework::Mux => Duplicate::Mux(record.router, path.clone()),
-                Framework::Gin => Duplicate::None,
+                Framework::Mux | Framework::Gin => Duplicate::None,
             };
             let draft = Draft {
                 range: record.range,
@@ -3670,7 +3823,16 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             let last = drafts.len() - 1;
             drafts[last] = Some((draft, duplicate));
         }
-        let kept = Self::survivors(&self.records, &drafts);
+        let mut kept = Self::survivors(&self.records, &drafts);
+        let mux_roots: Vec<Option<usize>> = self
+            .records
+            .iter()
+            .map(|record| {
+                (self.routers[record.router].framework == Framework::Mux)
+                    .then_some(root_of[record.router])
+            })
+            .collect();
+        mux_order(&self.records, &drafts, &mux_roots, &mut kept);
         for (index, draft) in drafts.into_iter().enumerate() {
             if let (Some((draft, _)), true) = (draft, kept[index]) {
                 out.push(draft);
@@ -3678,16 +3840,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         }
     }
 
-    /// Tells for each record if a later registration replaces it, or an earlier one hides it.
-    /// chi and echo keep the last registration of a method and a path. gorilla/mux keeps the
-    /// first route that matches, so a later route with the same path is out of reach when
-    /// the earlier one has the same method and no matcher that can reject a request. gin and
-    /// `net/http` panic on a second registration, so the walk does not read such a program.
+    /// Tells for each record if a later registration replaces it. chi and echo keep the last
+    /// registration of a method and a path. gin and `net/http` panic on a second registration,
+    /// so the walk does not read such a program. `mux_order` handles gorilla/mux.
     fn survivors(records: &[Record], drafts: &[Option<(Draft, Duplicate)>]) -> Vec<bool> {
         let mut kept = vec![true; drafts.len()];
         let mut owners: HashMap<(usize, String), HashMap<String, usize>> = HashMap::new();
         let mut last_echo: HashMap<(usize, String, String), usize> = HashMap::new();
-        let mut covered: HashMap<(usize, String), (bool, HashSet<String>)> = HashMap::new();
         for (index, draft) in drafts.iter().enumerate() {
             let Some((_, duplicate)) = draft else {
                 continue;
@@ -3708,18 +3867,6 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 Duplicate::Echo(root, shape) => {
                     if let Some(earlier) = last_echo.insert((*root, method, shape.clone()), index) {
                         kept[earlier] = false;
-                    }
-                }
-                Duplicate::Mux(router, path) => {
-                    let (all, methods) = covered.entry((*router, path.clone())).or_default();
-                    if *all || methods.contains(&method) {
-                        kept[index] = false;
-                    } else if !records[index].restricted {
-                        if method == "ANY" {
-                            *all = true;
-                        } else {
-                            methods.insert(method);
-                        }
                     }
                 }
             }
@@ -3750,8 +3897,57 @@ enum Duplicate {
     Chi(usize, String),
     /// The router of echo, and the path with the names of the parameters removed.
     Echo(usize, String),
-    /// The gorilla/mux router, and the path.
-    Mux(usize, String),
+}
+
+/// The key that the tree of chi gives to a pattern. Two patterns that differ only by the names
+/// of their parameters have one node. This follows `patNextSegment` of chi v5.3.2. A pattern
+/// that chi does not accept keeps its text.
+fn chi_tree_key(pattern: &str) -> String {
+    let mut key = String::with_capacity(pattern.len());
+    let mut rest = pattern;
+    while let Some(start) = rest.find('{') {
+        if rest[..start].contains('*') {
+            return pattern.to_string();
+        }
+        key.push_str(&rest[..start]);
+        let mut depth = 0_usize;
+        let mut end = None;
+        for (offset, character) in rest[start..].char_indices() {
+            match character {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(start + offset);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(end) = end else {
+            return pattern.to_string();
+        };
+        match rest[start + 1..end].split_once(':') {
+            None => key.push_str("{}"),
+            Some((_, expression)) => {
+                key.push_str("{:");
+                if !expression.is_empty() {
+                    if !expression.starts_with('^') {
+                        key.push('^');
+                    }
+                    key.push_str(expression);
+                    if !expression.ends_with('$') {
+                        key.push('$');
+                    }
+                }
+                key.push('}');
+            }
+        }
+        rest = &rest[end + 1..];
+    }
+    key.push_str(rest);
+    key
 }
 
 /// The path of an echo route with the names of the parameters removed. echo uses one node
@@ -3831,6 +4027,197 @@ impl Drop for Chain {
                 Ok(mut inner) => next = inner.parent.take(),
                 Err(_) => break,
             }
+        }
+    }
+}
+
+/// What a route path can match. A variable that has no constraint matches one segment, so a
+/// finite set of paths cannot cover it. A constraint can limit a variable to a few values.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PathKind {
+    Exact,
+    Prefix,
+    Variable,
+    Constrained,
+}
+
+/// A trie of the literal start of path templates. A template is open when it matches more
+/// than one path: it has a variable, or it is a prefix. Otherwise it matches one path.
+#[derive(Default)]
+struct PathTrie {
+    edges: HashMap<(usize, u8), usize>,
+    nodes: Vec<TrieNode>,
+}
+
+#[derive(Default, Clone)]
+struct TrieNode {
+    open: usize,
+    exact: usize,
+    below: usize,
+}
+
+impl PathTrie {
+    fn insert(&mut self, literal: &str, kind: PathKind) {
+        let open = kind != PathKind::Exact;
+        if self.nodes.is_empty() {
+            self.nodes.push(TrieNode::default());
+        }
+        let mut node = 0;
+        for byte in literal.bytes() {
+            self.nodes[node].below += 1;
+            let next = match self.edges.get(&(node, byte)) {
+                Some(next) => *next,
+                None => {
+                    self.nodes.push(TrieNode::default());
+                    let next = self.nodes.len() - 1;
+                    self.edges.insert((node, byte), next);
+                    next
+                }
+            };
+            node = next;
+        }
+        if open {
+            self.nodes[node].open += 1;
+        } else {
+            self.nodes[node].exact += 1;
+        }
+    }
+
+    /// The number of inserted templates that can match a path that the template can match.
+    /// The count is not less than the true number.
+    fn overlaps(&self, literal: &str, kind: PathKind) -> usize {
+        if self.nodes.is_empty() {
+            return 0;
+        }
+        let mut node = 0;
+        let mut count = self.nodes[0].open;
+        for byte in literal.bytes() {
+            let Some(next) = self.edges.get(&(node, byte)) else {
+                return count;
+            };
+            node = *next;
+            count += self.nodes[node].open;
+        }
+        if matches!(kind, PathKind::Exact | PathKind::Constrained) {
+            count += self.nodes[node].exact;
+        }
+        if kind == PathKind::Constrained {
+            count += self.nodes[node].below;
+        }
+        count
+    }
+}
+
+/// The tries of one set of records, one for all methods and one for each method.
+#[derive(Default)]
+struct MethodTries {
+    all: PathTrie,
+    by_method: HashMap<String, PathTrie>,
+}
+
+impl MethodTries {
+    fn insert(&mut self, method: &str, literal: &str, kind: PathKind) {
+        self.all.insert(literal, kind);
+        self.by_method
+            .entry(method.to_string())
+            .or_default()
+            .insert(literal, kind);
+    }
+
+    /// Counts the templates that have a method in common with `method`.
+    fn overlaps(&self, method: &str, literal: &str, kind: PathKind) -> usize {
+        if method == "ANY" {
+            return self.all.overlaps(literal, kind);
+        }
+        [method, "ANY"]
+            .iter()
+            .filter_map(|name| self.by_method.get(*name))
+            .map(|trie| trie.overlaps(literal, kind))
+            .sum()
+    }
+}
+
+/// The literal start of a route path, and if the path matches more than one value.
+fn mux_literal(path: &str, prefix: bool) -> (&str, PathKind) {
+    match path.find('{') {
+        Some(start) if path[start..].contains(':') => (&path[..start], PathKind::Constrained),
+        Some(start) => (&path[..start], PathKind::Variable),
+        None if prefix => (path, PathKind::Prefix),
+        None => (path, PathKind::Exact),
+    }
+}
+
+/// gorilla/mux gives a request to the first route that matches. This clears `kept` for a
+/// route that an earlier route can hide. A route is kept only when no earlier route of its
+/// router, and no route of another router of the same tree, can match a path that it
+/// matches. A registration that omen cannot read can match any path. The order of the
+/// routers of one tree is not known, so a route of another router counts as earlier. The
+/// check does not compare a variable or a matcher, so it can drop a route that is reachable.
+fn mux_order(
+    records: &[Record],
+    drafts: &[Option<(Draft, Duplicate)>],
+    roots: &[Option<usize>],
+    kept: &mut [bool],
+) {
+    let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (index, root) in roots.iter().enumerate() {
+        if let Some(root) = root {
+            members.entry(*root).or_default().push(index);
+        }
+    }
+    for indexes in members.values() {
+        let readable = |index: usize| -> Option<(&str, PathKind, &str)> {
+            let record = &records[index];
+            let (draft, _) = drafts[index].as_ref()?;
+            if record.opaque {
+                return None;
+            }
+            let path = draft.route.as_ref()?.path.as_str();
+            let (literal, kind) = mux_literal(path, record.prefix);
+            Some((literal, kind, record.method.as_str()))
+        };
+        let mut everything = MethodTries::default();
+        let mut by_router: HashMap<usize, MethodTries> = HashMap::new();
+        let mut unreadable: HashMap<usize, usize> = HashMap::new();
+        for &index in indexes {
+            let router = records[index].router;
+            match readable(index) {
+                Some((literal, kind, method)) => {
+                    everything.insert(method, literal, kind);
+                    by_router
+                        .entry(router)
+                        .or_default()
+                        .insert(method, literal, kind);
+                }
+                None => {
+                    unreadable.entry(router).or_insert(index);
+                }
+            }
+        }
+        let mut earlier: HashMap<usize, MethodTries> = HashMap::new();
+        for &index in indexes {
+            let router = records[index].router;
+            let others_unreadable =
+                unreadable.len() - usize::from(unreadable.contains_key(&router));
+            let own_unreadable = unreadable.get(&router).is_some_and(|first| *first < index);
+            let Some((literal, kind, method)) = readable(index) else {
+                kept[index] = false;
+                continue;
+            };
+            let own = by_router
+                .get(&router)
+                .map_or(0, |tries| tries.overlaps(method, literal, kind));
+            let cross = everything.overlaps(method, literal, kind) - own;
+            let before = earlier
+                .get(&router)
+                .map_or(0, |tries| tries.overlaps(method, literal, kind));
+            if others_unreadable > 0 || own_unreadable || cross > 0 || before > 0 {
+                kept[index] = false;
+            }
+            earlier
+                .entry(router)
+                .or_default()
+                .insert(method, literal, kind);
         }
     }
 }

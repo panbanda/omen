@@ -190,6 +190,7 @@ pub struct EntryShared {
     go_call_sites: std::sync::OnceLock<go_routes::CallSites>,
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
     go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
+    go_packages: std::sync::OnceLock<go_routes::PackageNames>,
 }
 
 /// The syntax trees that the entry point rules ask for in other files. The source
@@ -492,7 +493,7 @@ struct Context<'a> {
     /// The names of the variables that hold a `net/http` multiplexer, in a Go file.
     go_servemuxes: std::sync::OnceLock<std::collections::HashSet<String>>,
     /// The names that the package of a Go file declares at the top level.
-    go_declared: std::sync::OnceLock<std::collections::HashSet<String>>,
+    go_declared: std::sync::OnceLock<std::sync::Arc<std::collections::HashSet<String>>>,
 }
 
 struct Draft {
@@ -2680,14 +2681,15 @@ func routes(e store) {
 	r.Path("/y/{id}").Methods("POST", "PUT").Handler(http.HandlerFunc(list))
 	r.PathPrefix("/static/").HandlerFunc(list)
 	r.PathPrefix("/a").Path("/b").HandlerFunc(list)
-	r.Methods("GET").HandlerFunc(list)
 	r.Methods("GET", "POST").Methods("POST", "PUT").Path("/i").HandlerFunc(list)
 	r.Methods("GET").Methods("PUT").Path("/n").HandlerFunc(list)
-	r.Methods(verbs...).Path("/s").HandlerFunc(list)
 	sub := r.PathPrefix("/api/").Subrouter()
 	sub.Methods("GET").Path("/z").HandlerFunc(show)
 	sub.HandleFunc("w", show)
 	r.Use(auth)
+	q := mux.NewRouter()
+	q.Methods("GET").HandlerFunc(list)
+	q.Methods(verbs...).Path("/s").HandlerFunc(list)
 }
 "#,
         );
@@ -3570,9 +3572,9 @@ func serve() {
 	r.HandleFunc("/e/{id", list)
 	r.HandleFunc("/f/{}", list)
 	r.HandleFunc("/g", list).Name("x").Name("y")
+	r.HandleFunc("/j/{id:[0-9]+}", list)
 	r.HandleFunc("/h", list).Queries("a", "{b}")
 	r.HandleFunc("/i", list).Host("example.com")
-	r.HandleFunc("/j/{id:[0-9]+}", list)
 }
 "#,
         );
@@ -4027,7 +4029,6 @@ func serve() {
                 "gorilla/mux GET /n [] list",
                 "gorilla/mux POST /n [] show",
                 "gorilla/mux ANY /o [] list",
-                "gorilla/mux ANY /o [] show",
             ]
         );
     }
@@ -4090,6 +4091,202 @@ func serve() {
         assert_eq!(found.len(), 1);
         assert!(
             started.elapsed() < std::time::Duration::from_secs(6),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_name_that_another_file_of_the_package_declares_hides_the_constant() {
+        let main = go_source(
+            &[CHI],
+            r#"func routes() {
+	r := chi.NewRouter()
+	if true {
+		r.Get("/ghost", list)
+	} else {
+		r.Get("/other", list)
+	}
+}
+"#,
+        );
+        let flags = "package main\n\nconst true = false\n";
+        assert_eq!(
+            go_routes(&[("flags.go", flags), ("main.go", &main)]),
+            ["chi GET /ghost [] list", "chi GET /other [] list"]
+        );
+        let elsewhere = "package flags\n\nconst true = false\n";
+        assert_eq!(
+            go_routes(&[("flags/flags.go", elsewhere), ("main.go", &main)]),
+            ["chi GET /ghost [] list"]
+        );
+        let other_package = "package other\n\nconst true = false\n";
+        assert_eq!(
+            go_routes(&[("other.go", other_package), ("main.go", &main)]),
+            ["chi GET /ghost [] list"]
+        );
+    }
+
+    #[test]
+    fn chi_replaces_a_handler_when_only_the_parameter_name_differs() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	r := chi.NewRouter()
+	r.Get("/a/{id}", list)
+	r.Get("/a/{name}", show)
+	r.Get("/b/{id:[0-9]+}", list)
+	r.Get("/b/{key:[0-9]+}", show)
+	r.Get("/c/{id}", list)
+	r.Get("/c/{id:[0-9]+}", show)
+	r.Get("/d/{x}/e", list)
+	r.Get("/d/{y}/f", show)
+	r.Get("/g/*", list)
+	r.Get("/g/*", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /a/{name} [] show",
+                "chi GET /b/{key:[0-9]+} [] show",
+                "chi GET /c/{id} [] list",
+                "chi GET /c/{id:[0-9]+} [] show",
+                "chi GET /d/{x}/e [] list",
+                "chi GET /d/{y}/f [] show",
+                "chi GET /g/* [] show",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_earlier_gorilla_route_that_can_match_hides_a_later_route() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.PathPrefix("/api/").HandlerFunc(list)
+	r.Path("/api/x").HandlerFunc(show)
+	r.Path("/b/x").HandlerFunc(show)
+	r.PathPrefix("/b/").HandlerFunc(list)
+	r.HandleFunc("/u/me", show)
+	r.HandleFunc("/u/{id}", list)
+	r.HandleFunc("/v/{id}", list)
+	r.HandleFunc("/v/me", show)
+	r.HandleFunc("/w/x", list).Headers("X", "y")
+	r.HandleFunc("/w/x", show).Methods("GET")
+	r.HandleFunc("/z/{id:[a-b]}", list)
+	r.HandleFunc("/z/a", show)
+	r.HandleFunc("/q/a", show)
+	r.HandleFunc("/q/b", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux ANY /api/ [] list",
+                "gorilla/mux ANY /b/x [] show",
+                "gorilla/mux ANY /b/ [] list",
+                "gorilla/mux ANY /u/me [] show",
+                "gorilla/mux ANY /u/{id} [] list",
+                "gorilla/mux ANY /v/{id} [] list",
+                "gorilla/mux ANY /w/x [] list",
+                "gorilla/mux ANY /z/{id:[a-b]} [] list",
+                "gorilla/mux ANY /q/a [] show",
+                "gorilla/mux ANY /q/b [] list",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gorilla_registration_that_omen_cannot_read_hides_the_routes_after_it() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes(path string) {
+	r := mux.NewRouter()
+	r.HandleFunc("/before", list)
+	r.HandleFunc(path, show)
+	r.HandleFunc("/after", list)
+	s := mux.NewRouter()
+	s.HandleFunc("/before", list)
+	s.Path("/p").Host("example.com").HandlerFunc(show)
+	s.HandleFunc("/after", list)
+	t := mux.NewRouter()
+	t.HandleFunc("/before", list)
+	route := t.Path("/p")
+	route.HandlerFunc(show)
+	t.HandleFunc("/after", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux ANY /before [] list",
+                "gorilla/mux ANY /before [] list",
+                "gorilla/mux ANY /before [] list",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gorilla_sub_router_route_can_be_hidden_by_a_route_of_the_parent() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.PathPrefix("/api").HandlerFunc(list)
+	sub := r.PathPrefix("/api").Subrouter()
+	sub.HandleFunc("/x", show)
+	other := r.PathPrefix("/other").Subrouter()
+	other.HandleFunc("/y", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux ANY /api [] list",
+                "gorilla/mux ANY /other/y [] show"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gorilla_chain_may_set_build_vars_and_needs_a_path() {
+        let source = go_source(
+            &[MUX],
+            r#"func vars(values map[string]string) map[string]string { return values }
+
+func routes() {
+	r := mux.NewRouter()
+	r.Path("/x").BuildVarsFunc(vars).HandlerFunc(show)
+	r.Methods("GET").BuildVarsFunc(vars).Path("/y").HandlerFunc(list)
+	r.Methods("GET").HandlerFunc(list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gorilla/mux ANY /x [] show", "gorilla/mux GET /y [] list"]
+        );
+    }
+
+    #[test]
+    fn timing_many_gorilla_routes_are_ordered_in_near_linear_time() {
+        let mut body = String::from("func routes() {\n\tr := mux.NewRouter()\n");
+        for index in 0..60_000 {
+            body.push_str(&format!("\tr.HandleFunc(\"/p{index}/x\", list)\n"));
+        }
+        body.push_str("}\n");
+        let source = go_source(&[MUX], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), 60_000);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(8),
             "took {:?}",
             started.elapsed()
         );

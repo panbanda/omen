@@ -292,10 +292,23 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   registration of a method and a path. A chi router that `With` or `Group` made shares
   the tree of its parent, and `Handle` has all methods. A registration that has only some
   of its methods left gives no entry. echo treats two paths as equal when only the names
-  of the parameters differ. gorilla/mux keeps the first route that matches. A later route
-  with the same path gives no entry for a method that the earlier route has, when the
-  earlier route has no `Headers`, `Schemes`, or `MatcherFunc`. gin and `net/http` panic
-  on a second registration, which is out of scope.
+  of the parameters differ. chi does the same for its own patterns: `/{id}` and `/{name}`
+  have one node, and a regular expression stays part of the node. gin and `net/http`
+  panic on a second registration, which is out of scope.
+- gorilla/mux gives a request to the first route that matches. A route gives no entry when
+  an earlier route of its router can match a path that it matches. Omen compares the
+  literal start of the paths, up to the first variable, and the methods. A route with a
+  variable that has no constraint is not hidden by a route with an exact path, so
+  `/u/me` before `/u/{id}` gives two entries. A matcher such as `Headers` does not make
+  a route safe. The order of the routers of one tree is not known, so a route of another
+  router of the tree counts as earlier. A registration that omen cannot read, as a path
+  that is not a literal or a call such as `Host`, can match any request. Then the routes
+  after it, and the routes of the other routers of the tree, give no entry. A route that
+  never matches, as a route with an error or `BuildOnly`, hides nothing. This check can
+  drop a route that a request reaches.
+- A name that the package declares hides a predeclared name or a qualifier. The package is
+  the files of one directory that have the same package clause, so a declaration in
+  another file of the package counts.
 - A package qualifier counts only when no name hides it. The qualifiers are `http`,
   `chi`, `mux`, `echo`, `gin`, and the aliases that the imports give. A parameter, a
   receiver, a local variable, a range variable, or a declaration of the package with the
@@ -376,7 +389,8 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   writes it.
 - For gorilla/mux, `PathPrefix(...).Subrouter()` gives a prefix. A chain of matchers
   that ends in `HandlerFunc` or `Handler` gives a route, as `r.Methods("GET").Path("/x")
-  .HandlerFunc(show)` does. The path matchers join in the
+  .HandlerFunc(show)` does. A chain without `Path` or `PathPrefix` gives no entry. The
+  path matchers join in the
   order of the calls. Each `Methods` list limits the methods, so the result is the
   common methods of the lists. A route without `Methods` has the method `ANY`. `Use`
   applies to each route of its router and of the sub-routers, as the library does.
