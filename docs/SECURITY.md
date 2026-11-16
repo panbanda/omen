@@ -281,8 +281,21 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   serves the result as the root. Omen compares the name of the type without a pointer,
   a package, and type arguments, so `Server[int]` and `Server[T]` are the type `Server`.
   Omen follows a type alias, as in `type Alias = Server`, and a chain of aliases, to the
-  base type. An alias to a type of another package, or to a type that is not a name, gives
+  base type. A type has the key of its package, which is a directory, and its name. An
+  alias and its base type are in the same package. A key that two declarations have gives
+  no entry. An alias to a type of another package, or to a type that is not a name, gives
   no entry when a factory uses it as a wrapper. A cycle of aliases gives no entry too.
+- A branch that never runs gives no entry. This holds for the body of `if false`, the
+  `else` branch of `if true`, and the body of `for false`. A route under another
+  condition or another loop keeps its entry.
+- A later registration can replace or hide an earlier one. chi and echo keep the last
+  registration of a method and a path. A chi router that `With` or `Group` made shares
+  the tree of its parent, and `Handle` has all methods. A registration that has only some
+  of its methods left gives no entry. echo treats two paths as equal when only the names
+  of the parameters differ. gorilla/mux keeps the first route that matches. A later route
+  with the same path gives no entry for a method that the earlier route has, when the
+  earlier route has no `Headers`, `Schemes`, or `MatcherFunc`. gin and `net/http` panic
+  on a second registration, which is out of scope.
 - A package qualifier counts only when no name hides it. The qualifiers are `http`,
   `chi`, `mux`, `echo`, `gin`, and the aliases that the imports give. A parameter, a
   receiver, a local variable, a range variable, or a declaration of the package with the
@@ -296,8 +309,9 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   literal has no escape. A bad escape, or a value that is not UTF-8, gives no entry.
 - A gorilla/mux route can have an error that stops it from matching. A template with
   unbalanced braces, an empty name or pattern, an odd number of arguments in `Headers`,
-  and a second `Name` set this error. A pattern that Go does not accept as a regular
-  expression sets it too.
+  and a call of `Name` on a route that has a name that is not empty set this error. A call
+  of `Name` with an empty string leaves the name empty, so the next `Name` is valid. A
+  pattern that Go does not accept as a regular expression sets the error too.
 - Omen checks a pattern with a small grammar that Go and Rust read in the same way. It
   has ASCII letters, digits, and escaped punctuation, the dot, classes of letters,
   digits, and ranges, the repetitions `*`, `+`, `?`, `{m}`, `{m,}`, and `{m,n}` with
@@ -361,7 +375,8 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   gin and echo keep a custom method of `Handle`, `Match`, and `Add` as the source
   writes it.
 - For gorilla/mux, `PathPrefix(...).Subrouter()` gives a prefix. A chain of matchers
-  that ends in `HandlerFunc` or `Handler` gives a route. The path matchers join in the
+  that ends in `HandlerFunc` or `Handler` gives a route, as `r.Methods("GET").Path("/x")
+  .HandlerFunc(show)` does. The path matchers join in the
   order of the calls. Each `Methods` list limits the methods, so the result is the
   common methods of the lists. A route without `Methods` has the method `ANY`. `Use`
   applies to each route of its router and of the sub-routers, as the library does.

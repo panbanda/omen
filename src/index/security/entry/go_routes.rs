@@ -155,9 +155,26 @@ impl Framework {
             }
             // gin uses `path.Join`, which cleans the result.
             Self::Gin => {
-                let mut joined = "/".to_string();
-                for part in parts() {
-                    joined = gin_join(&joined, part);
+                // `Clean` of a join of two paths is the `Clean` of the joined text. Thus the
+                // result needs one pass over the parts. Only the last part that is not empty
+                // decides the slash at the end.
+                let mut stack: Vec<&str> = Vec::new();
+                let mut last: Option<&str> = None;
+                for part in parts().filter(|part| !part.is_empty()) {
+                    last = Some(part);
+                    for segment in part.split('/') {
+                        match segment {
+                            "" | "." => {}
+                            ".." => {
+                                stack.pop();
+                            }
+                            _ => stack.push(segment),
+                        }
+                    }
+                }
+                let mut joined = format!("/{}", stack.join("/"));
+                if last.is_some_and(|part| part.ends_with('/')) && !joined.ends_with('/') {
+                    joined.push('/');
                 }
                 Some(joined)
             }
@@ -358,6 +375,8 @@ struct Router {
     retroactive: bool,
     /// The walk does not know the prefix of the router.
     partial: bool,
+    /// A chi router that `With` or `Group` made. It shares the tree of its parent.
+    inline: bool,
     mountable: bool,
     /// The function body that made the router. Zero is the package.
     owner: usize,
@@ -370,6 +389,8 @@ struct Router {
 #[derive(Clone)]
 struct Record {
     router: usize,
+    /// A matcher can reject a request for the route, as `Headers` and `Schemes` can.
+    restricted: bool,
     /// The number of guards that the router had at the time of the registration.
     limit: usize,
     range: Span,
@@ -770,7 +791,7 @@ pub(super) fn net_http_names(file: &FileSymbols) -> Vec<String> {
 
 /// The type aliases of a file: the name, the name of the base type, and whether the base type
 /// is not in the repository or cannot be read as a name.
-fn collect_aliases(root: Node<'_>, source: &[u8]) -> Vec<(String, (String, bool))> {
+fn collect_aliases(root: Node<'_>, source: &[u8]) -> Vec<(String, Option<(String, bool)>)> {
     let text = |node: Node<'_>| std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
     let mut found = Vec::new();
     let mut cursor = root.walk();
@@ -794,47 +815,58 @@ fn collect_aliases(root: Node<'_>, source: &[u8]) -> Vec<(String, (String, bool)
                 continue;
             };
             if !is_alias {
+                found.push((text(name).to_string(), None));
                 continue;
             }
             let target = text(target).trim_start_matches(['*', '&']);
             let base = target.split('[').next().unwrap_or(target);
             let readable =
                 !base.is_empty() && base.chars().all(|c| c.is_alphanumeric() || c == '_');
-            found.push((text(name).to_string(), (base.to_string(), !readable)));
+            found.push((text(name).to_string(), Some((base.to_string(), !readable))));
         }
     }
     found
 }
 
+/// The declarations of the types by package directory and name. Each value has the number
+/// of declarations, and for an alias the base name and a flag for a base that is not a name.
+type TypeTable = HashMap<(String, String), (usize, Option<(String, bool)>)>;
+
 /// The base type of a type name after the aliases, or none for a cycle or for an alias to a
 /// type that is not read as a name. The walk keeps the result of each name.
 fn resolve_alias(
-    aliases: &HashMap<String, (String, bool)>,
-    memo: &mut HashMap<String, Option<String>>,
+    types: &TypeTable,
+    memo: &mut HashMap<(String, String), Option<String>>,
+    package: &str,
     name: &str,
 ) -> Option<String> {
-    if let Some(known) = memo.get(name) {
+    let start = (package.to_string(), name.to_string());
+    if let Some(known) = memo.get(&start) {
         return known.clone();
     }
-    let mut path: Vec<String> = Vec::new();
-    let mut current = name.to_string();
+    let mut path: Vec<(String, String)> = Vec::new();
+    let mut in_path: HashSet<(String, String)> = HashSet::new();
+    let mut current = start.clone();
     let result = loop {
         if let Some(known) = memo.get(&current) {
             break known.clone();
         }
-        match aliases.get(&current) {
-            None => break Some(current.clone()),
-            Some((_, true)) => break None,
-            Some((target, false)) => {
-                if path.contains(&current) {
+        match types.get(&current) {
+            None => break Some(current.1.clone()),
+            Some((count, _)) if *count > 1 => break None,
+            Some((_, None)) => break Some(current.1.clone()),
+            Some((_, Some((_, true)))) => break None,
+            Some((_, Some((target, false)))) => {
+                if !in_path.insert(current.clone()) {
                     break None;
                 }
+                let next = (current.0.clone(), target.clone());
                 path.push(current);
-                current = target.clone();
+                current = next;
             }
         }
     };
-    memo.insert(name.to_string(), result.clone());
+    memo.insert(start, result.clone());
     for node in path {
         memo.insert(node, result.clone());
     }
@@ -1546,7 +1578,10 @@ impl CallSites {
         let mut factories: HashSet<String> = HashSet::new();
         let mut wrappers: HashSet<String> = HashSet::new();
         let mut raw_wrapper_types: Vec<(String, String)> = Vec::new();
-        let mut aliases: HashMap<String, (String, bool)> = HashMap::new();
+        // Each type has its package, the directory, and its name. The count is the number of
+        // declarations of the key. The alias has the name of its base type, and tells if
+        // the base type cannot be read as a name of the same package.
+        let mut types: TypeTable = HashMap::new();
         for (position, file) in files.iter().enumerate() {
             if file.language != Language::Go {
                 continue;
@@ -1555,21 +1590,37 @@ impl CallSites {
                 continue;
             };
             let context = Context::new(&tree, file, files, trees, &[]);
-            aliases.extend(collect_aliases(tree.root_node(), &tree.source));
+            let directory = directory_of(&file.file);
+            for (name, alias) in collect_aliases(tree.root_node(), &tree.source) {
+                let entry = types
+                    .entry((directory.to_string(), name))
+                    .or_insert((0, None));
+                entry.0 += 1;
+                entry.1 = alias;
+            }
             for (key, wrapper) in factory_keys(&context, tree.root_node()) {
                 if let Some(kind) = wrapper {
                     wrappers.insert(key.clone());
-                    raw_wrapper_types.push((key.clone(), type_name(&kind).to_string()));
+                    raw_wrapper_types.push((key.clone(), kind));
                 }
                 factories.insert(key);
             }
         }
         let mut blocked = HashSet::new();
-        let mut memo: HashMap<String, Option<String>> = HashMap::new();
-        let mut wrapper_types: Vec<(String, String)> = Vec::new();
-        for (key, name) in raw_wrapper_types {
-            match resolve_alias(&aliases, &mut memo, &name) {
-                Some(base) => wrapper_types.push((key, base)),
+        let mut memo: HashMap<(String, String), Option<String>> = HashMap::new();
+        let mut wrapper_types: Vec<(String, String, String)> = Vec::new();
+        for (key, kind) in raw_wrapper_types {
+            let directory = directory_of(key.split('#').next().unwrap_or("")).to_string();
+            let bare = kind.trim_start_matches(['*', '&']);
+            let bare = bare.split('[').next().unwrap_or(bare);
+            // A type of another package is not read, so a value of it gives no entry.
+            let resolved = if bare.contains('.') {
+                None
+            } else {
+                resolve_alias(&types, &mut memo, &directory, bare)
+            };
+            match resolved {
+                Some(base) => wrapper_types.push((key, directory, base)),
                 None => {
                     blocked.insert(key);
                 }
@@ -1580,28 +1631,28 @@ impl CallSites {
         }
         // A wrapper type can define a method that hides a method of the router, or that
         // serves the requests in another way. Then its values are not routers.
-        let hiding: HashSet<String> = files
-            .iter()
-            .filter(|file| file.language == Language::Go)
-            .flat_map(|file| &file.symbols)
-            .filter(|symbol| {
+        let mut hiding: HashSet<(String, String)> = HashSet::new();
+        for file in files.iter().filter(|file| file.language == Language::Go) {
+            let directory = directory_of(&file.file);
+            for symbol in file.symbols.iter().filter(|symbol| {
                 symbol.is_callable()
                     && (ROUTER_METHODS.contains(&symbol.name.as_str())
                         || matches!(symbol.name.as_str(), "Use" | "Pre" | "ServeHTTP"))
-            })
-            .filter_map(|symbol| {
-                let kind = symbol
+            }) {
+                let Some(kind) = symbol
                     .receiver_type
                     .as_deref()
-                    .or(symbol.container.as_deref())?;
-                Some(type_name(kind).to_string())
-            })
-            .collect::<Vec<String>>()
-            .into_iter()
-            .filter_map(|name| resolve_alias(&aliases, &mut memo, &name))
-            .collect();
-        for (key, name) in &wrapper_types {
-            if hiding.contains(name) {
+                    .or(symbol.container.as_deref())
+                else {
+                    continue;
+                };
+                if let Some(base) = resolve_alias(&types, &mut memo, directory, type_name(kind)) {
+                    hiding.insert((directory.to_string(), base));
+                }
+            }
+        }
+        for (key, directory, name) in &wrapper_types {
+            if hiding.contains(&(directory.clone(), name.clone())) {
                 blocked.insert(key.clone());
             }
         }
@@ -2012,6 +2063,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             mounted: HashSet::new(),
             tree: Vec::new(),
             made_cache: HashMap::new(),
+            restricted_next: false,
             dry,
             factory_keys: Vec::new(),
         })
@@ -2052,6 +2104,8 @@ struct Routes<'c, 'a, 't> {
     tree: Vec<usize>,
     /// Whether the router and each router above it came from the function that made it.
     made_cache: HashMap<usize, bool>,
+    /// The next registration has a matcher that can reject a request.
+    restricted_next: bool,
     /// The walk only finds the factories. It does not read the calls of the repository.
     dry: bool,
     factory_keys: Vec<(String, Option<String>)>,
@@ -2141,6 +2195,36 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 self.walk_declared(node, name);
                 return;
             }
+            // A branch with a condition that is the word `false`, or the other branch of the
+            // word `true`, never runs.
+            "if_statement" => {
+                let value = node
+                    .child_by_field_name("condition")
+                    .and_then(|condition| self.constant_condition(condition));
+                let dead = match value {
+                    Some(true) => node.child_by_field_name("alternative"),
+                    Some(false) => node.child_by_field_name("consequence"),
+                    None => None,
+                };
+                for child in Self::named_children(node) {
+                    if Some(child) != dead {
+                        self.visit(child);
+                    }
+                }
+                return;
+            }
+            "for_statement" => {
+                let body = node.child_by_field_name("body");
+                let dead = node
+                    .named_child(0)
+                    .is_some_and(|first| self.constant_condition(first) == Some(false));
+                for child in Self::named_children(node) {
+                    if !(dead && Some(child) == body) {
+                        self.visit(child);
+                    }
+                }
+                return;
+            }
             "func_literal" => {
                 if !self.consumed.contains(&node.id()) {
                     self.closure(node, None);
@@ -2161,6 +2245,20 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             _ => {}
         }
         self.visit_children(node);
+    }
+
+    /// The value of a condition that is the word `true` or the word `false`.
+    fn constant_condition(&self, node: Node<'t>) -> Option<bool> {
+        if !matches!(node.kind(), "identifier" | "true" | "false")
+            || self.context.is_go_shadowed(node)
+        {
+            return None;
+        }
+        match self.text(node) {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        }
     }
 
     fn visit_children(&mut self, node: Node<'t>) {
@@ -2612,6 +2710,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             retroactive: matches!(framework, Framework::Chi | Framework::Mux | Framework::Echo),
             partial: false,
             mountable: true,
+            inline: false,
             owner: self.current_owner(),
             external: false,
             base: Vec::new(),
@@ -2639,6 +2738,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             retroactive: matches!(framework, Framework::Chi | Framework::Mux),
             partial: self.routers[parent].partial,
             mountable: false,
+            inline: false,
             owner: self.current_owner(),
             external: false,
             base: Vec::new(),
@@ -2817,6 +2917,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             (Framework::Chi, "With") => {
                 let guards = self.guard_names(&arguments);
                 let child = self.make_child(parent, String::new(), guards);
+                self.routers[child].inline = true;
                 self.routers[child].partial |= self.has_spread(&arguments);
                 Some(child)
             }
@@ -2993,6 +3094,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return None;
         };
         let child = self.make_child(router, String::new(), Vec::new());
+        self.routers[child].inline = true;
         self.route_calls.insert(call.id(), child);
         self.callback(*callback, child);
         Some(child)
@@ -3109,7 +3211,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let mut handler: Option<Node<'t>> = None;
         let mut current = outer;
         let mut unknown = false;
-        let mut names = 0_usize;
+        let mut name_calls: Vec<Option<String>> = Vec::new();
+        let mut restricted = false;
         let base = loop {
             let Some(function) = current
                 .child_by_field_name("function")
@@ -3162,16 +3265,19 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 // gorilla/mux v1.8.1 sets `Route.err` when the pairs are not even, and the
                 // route never matches.
                 "Headers" => {
+                    restricted = true;
                     unknown |= !arguments.len().is_multiple_of(2)
                         || arguments
                             .iter()
                             .any(|argument| self.string_argument(*argument).is_none());
                 }
-                "Name" => {
-                    names += 1;
-                    unknown |= names > 1;
-                }
-                "Schemes" | "MatcherFunc" | "BuildVarsFunc" => {}
+                "Name" => name_calls.push(
+                    arguments
+                        .first()
+                        .and_then(|name| self.string_argument(*name)),
+                ),
+                "Schemes" | "MatcherFunc" => restricted = true,
+                "BuildVarsFunc" => {}
                 // `BuildOnly` makes a route that never matches. A matcher with a template or
                 // a regular expression can set an error that omen does not check, and another
                 // call is not known.
@@ -3194,6 +3300,16 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return false;
         }
         self.consumed.extend(chain);
+        // gorilla/mux v1.8.1 sets an error when a route has a name and gets another name.
+        // The error is set only when the current name is not empty.
+        name_calls.reverse();
+        let mut current_name = String::new();
+        for call in name_calls {
+            match call {
+                Some(name) if current_name.is_empty() => current_name = name,
+                _ => unknown = true,
+            }
+        }
         if unknown {
             return true;
         }
@@ -3225,6 +3341,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         }
         let methods = methods.unwrap_or_else(|| vec!["ANY".to_string()]);
         let methods: Vec<&str> = methods.iter().map(String::as_str).collect();
+        self.restricted_next = restricted;
         self.register(
             router,
             &methods,
@@ -3353,6 +3470,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         guard_arguments: &[Node<'t>],
         range: Span,
     ) {
+        let restricted = std::mem::take(&mut self.restricted_next);
         if self.has_spread(guard_arguments) || handler.is_some_and(|node| self.has_spread(&[node]))
         {
             return;
@@ -3369,6 +3487,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         for method in methods {
             self.records.push(Record {
                 router,
+                restricted,
                 limit,
                 range,
                 symbol: symbol.clone().flatten(),
@@ -3489,11 +3608,28 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             .copied()
             .collect();
         let mut memo: Vec<Option<Up>> = (0..self.routers.len()).map(|_| None).collect();
-        for record in self
-            .records
-            .iter()
-            .filter(|record| !blocked.contains(&record.router))
-        {
+        // The tree of a chi router is the tree of the router that `With` or `Group` came
+        // from. A parent has a lower number than its child.
+        let mut tree_of: Vec<usize> = Vec::with_capacity(self.routers.len());
+        let mut root_of: Vec<usize> = Vec::with_capacity(self.routers.len());
+        for (id, router) in self.routers.iter().enumerate() {
+            let parent = match router.links.as_slice() {
+                [link] if link.parent < id => Some(link.parent),
+                _ => None,
+            };
+            root_of.push(parent.map_or(id, |parent| root_of[parent]));
+            tree_of.push(match parent {
+                Some(parent) if router.inline => tree_of[parent],
+                _ => id,
+            });
+        }
+        // The draft of each record, and the key that decides which records replace each other.
+        let mut drafts: Vec<Option<(Draft, Duplicate)>> = Vec::new();
+        for record in &self.records {
+            drafts.push(None);
+            if blocked.contains(&record.router) {
+                continue;
+            }
             let router = &self.routers[record.router];
             self.up_of(record.router, &mut memo);
             let Some(up) = memo[record.router].as_ref() else {
@@ -3512,7 +3648,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             let count = Self::visible_guards(router, Some(record.limit));
             guards.extend(router.guards[..count].iter().cloned());
             guards.extend(record.guards.iter().cloned());
-            out.push(Draft {
+            let duplicate = match framework {
+                Framework::Chi => Duplicate::Chi(tree_of[record.router], record.path.clone()),
+                Framework::Echo => Duplicate::Echo(root_of[record.router], echo_shape(&path)),
+                Framework::Mux => Duplicate::Mux(record.router, path.clone()),
+                Framework::Gin => Duplicate::None,
+            };
+            let draft = Draft {
                 range: record.range,
                 kind: EntryKind::HttpHandler,
                 symbol: record.symbol.clone(),
@@ -3524,9 +3666,115 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 }),
                 guards,
                 basis: EntryBasis::Registered,
-            });
+            };
+            let last = drafts.len() - 1;
+            drafts[last] = Some((draft, duplicate));
+        }
+        let kept = Self::survivors(&self.records, &drafts);
+        for (index, draft) in drafts.into_iter().enumerate() {
+            if let (Some((draft, _)), true) = (draft, kept[index]) {
+                out.push(draft);
+            }
         }
     }
+
+    /// Tells for each record if a later registration replaces it, or an earlier one hides it.
+    /// chi and echo keep the last registration of a method and a path. gorilla/mux keeps the
+    /// first route that matches, so a later route with the same path is out of reach when
+    /// the earlier one has the same method and no matcher that can reject a request. gin and
+    /// `net/http` panic on a second registration, so the walk does not read such a program.
+    fn survivors(records: &[Record], drafts: &[Option<(Draft, Duplicate)>]) -> Vec<bool> {
+        let mut kept = vec![true; drafts.len()];
+        let mut owners: HashMap<(usize, String), HashMap<String, usize>> = HashMap::new();
+        let mut last_echo: HashMap<(usize, String, String), usize> = HashMap::new();
+        let mut covered: HashMap<(usize, String), (bool, HashSet<String>)> = HashMap::new();
+        for (index, draft) in drafts.iter().enumerate() {
+            let Some((_, duplicate)) = draft else {
+                continue;
+            };
+            let method = records[index].method.clone();
+            match duplicate {
+                Duplicate::None => {}
+                Duplicate::Chi(tree, pattern) => {
+                    let owned = owners.entry((*tree, pattern.clone())).or_default();
+                    if method == "ANY" {
+                        for known in CHI_METHODS {
+                            owned.insert(known.to_string(), index);
+                        }
+                    } else {
+                        owned.insert(method, index);
+                    }
+                }
+                Duplicate::Echo(root, shape) => {
+                    if let Some(earlier) = last_echo.insert((*root, method, shape.clone()), index) {
+                        kept[earlier] = false;
+                    }
+                }
+                Duplicate::Mux(router, path) => {
+                    let (all, methods) = covered.entry((*router, path.clone())).or_default();
+                    if *all || methods.contains(&method) {
+                        kept[index] = false;
+                    } else if !records[index].restricted {
+                        if method == "ANY" {
+                            *all = true;
+                        } else {
+                            methods.insert(method);
+                        }
+                    }
+                }
+            }
+        }
+        for (index, draft) in drafts.iter().enumerate() {
+            if let Some((_, Duplicate::Chi(tree, pattern))) = draft {
+                let Some(owned) = owners.get(&(*tree, pattern.clone())) else {
+                    continue;
+                };
+                let method = &records[index].method;
+                kept[index] = if method == "ANY" {
+                    CHI_METHODS
+                        .iter()
+                        .all(|known| owned.get(*known) == Some(&index))
+                } else {
+                    owned.get(method) == Some(&index)
+                };
+            }
+        }
+        kept
+    }
+}
+
+/// How a record can replace or hide another record.
+enum Duplicate {
+    None,
+    /// The tree of the chi router, and the pattern.
+    Chi(usize, String),
+    /// The router of echo, and the path with the names of the parameters removed.
+    Echo(usize, String),
+    /// The gorilla/mux router, and the path.
+    Mux(usize, String),
+}
+
+/// The path of an echo route with the names of the parameters removed. echo uses one node
+/// for two paths that differ only by these names.
+fn echo_shape(path: &str) -> String {
+    let mut shape = String::with_capacity(path.len());
+    let mut skipping = false;
+    let mut previous = ' ';
+    for character in path.chars() {
+        if skipping {
+            if character == '/' {
+                skipping = false;
+                shape.push(character);
+            }
+        } else if character == ':' && previous != '\\' {
+            skipping = true;
+            shape.push(':');
+        } else {
+            shape.push(character);
+        }
+        previous = character;
+    }
+    shape
 }
 
 /// A list of strings that shares its start with the list of the router above.
@@ -3572,4 +3820,17 @@ fn flatten_chain(chain: &Option<Rc<Chain>>) -> Vec<String> {
         current = node.parent.as_ref();
     }
     segments.into_iter().rev().flatten().cloned().collect()
+}
+
+/// A long list drops one node at a time, so a deep chain does not overflow the stack.
+impl Drop for Chain {
+    fn drop(&mut self) {
+        let mut next = self.parent.take();
+        while let Some(node) = next {
+            match Rc::try_unwrap(node) {
+                Ok(mut inner) => next = inner.parent.take(),
+                Err(_) => break,
+            }
+        }
+    }
 }

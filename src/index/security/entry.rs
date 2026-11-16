@@ -3933,6 +3933,169 @@ func serve() {
     }
 
     #[test]
+    fn a_type_alias_belongs_to_its_package() {
+        let server = "package a\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\ntype Base struct{ *chi.Mux }\n\nfunc (*Base) ServeHTTP(w http.ResponseWriter, r *http.Request) {\n\thttp.NotFound(w, r)\n}\n\ntype Alias = Base\n\nfunc show(http.ResponseWriter, *http.Request) {}\n\nfunc New() *Alias {\n\tr := chi.NewRouter()\n\tr.Get(\"/ghost\", show)\n\treturn &Alias{Mux: r}\n}\n\nfunc Start() {\n\thttp.ListenAndServe(\":8080\", New())\n}\n";
+        let other = "package z\n\ntype Other struct{}\n\ntype Alias = Other\n";
+        let plain = "package b\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\ntype Base struct{ *chi.Mux }\n\ntype Alias = Base\n\nfunc show(http.ResponseWriter, *http.Request) {}\n\nfunc New() *Alias {\n\tr := chi.NewRouter()\n\tr.Get(\"/real\", show)\n\treturn &Alias{Mux: r}\n}\n\nfunc Start() {\n\thttp.ListenAndServe(\":8080\", New())\n}\n";
+        let twice = "package c\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\ntype Base struct{ *chi.Mux }\n\ntype Alias = Base\n\nfunc show(http.ResponseWriter, *http.Request) {}\n\nfunc New() *Alias {\n\tr := chi.NewRouter()\n\tr.Get(\"/twice\", show)\n\treturn &Alias{Mux: r}\n}\n\nfunc Start() {\n\thttp.ListenAndServe(\":8080\", New())\n}\n";
+        let twice_again = "package c\n\ntype Alias = Elsewhere\n";
+        assert_eq!(
+            go_routes(&[
+                ("a/server.go", server),
+                ("z/other.go", other),
+                ("b/plain.go", plain),
+                ("c/twice.go", twice),
+                ("c/again.go", twice_again),
+            ]),
+            ["chi GET /real [] show"]
+        );
+    }
+
+    #[test]
+    fn a_route_in_a_branch_that_never_runs_gives_no_entry() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes(enabled bool) {
+	r := chi.NewRouter()
+	if false {
+		r.Get("/ghost-a", list)
+	}
+	if true {
+		r.Get("/real-a", list)
+	} else {
+		r.Get("/ghost-b", list)
+	}
+	for false {
+		r.Get("/ghost-c", list)
+	}
+	if enabled {
+		r.Get("/real-b", list)
+	} else {
+		r.Get("/real-c", list)
+	}
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /real-a [] list",
+                "chi GET /real-b [] list",
+                "chi GET /real-c [] list"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_registration_that_a_later_one_replaces_or_hides_gives_no_entry() {
+        let source = go_source(
+            &[CHI, ECHO, MUX],
+            r#"func routes() {
+	r := chi.NewRouter()
+	r.Get("/x", list)
+	r.Get("/x", show)
+	r.With(audit).Get("/x", list)
+	r.Handle("/y", list)
+	r.Get("/y", show)
+	r.Get("/z", list)
+	r.Handle("/z", show)
+	r.Route("/p", func(r chi.Router) {
+		r.Get("/x", list)
+	})
+	e := echo.New()
+	e.GET("/e/:id", list)
+	e.GET("/e/:name", show)
+	m := mux.NewRouter()
+	m.HandleFunc("/m", list)
+	m.HandleFunc("/m", show)
+	m.HandleFunc("/n", list).Methods("GET")
+	m.HandleFunc("/n", show).Methods("GET", "POST")
+	m.HandleFunc("/o", list).Headers("X", "y")
+	m.HandleFunc("/o", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /x [audit] list",
+                "chi GET /y [] show",
+                "chi ANY /z [] show",
+                "chi GET /p/x [] list",
+                "echo GET /e/:name [] show",
+                "gorilla/mux ANY /m [] list",
+                "gorilla/mux GET /n [] list",
+                "gorilla/mux POST /n [] show",
+                "gorilla/mux ANY /o [] list",
+                "gorilla/mux ANY /o [] show",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gorilla_route_name_follows_the_current_name_of_the_route() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.HandleFunc("/a", list).Name("").Name("x")
+	r.HandleFunc("/b", list).Name("x").Name("y")
+	r.HandleFunc("/c", list).Name("x").Name("")
+	r.HandleFunc("/d", list).Name("x")
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gorilla/mux ANY /a [] list", "gorilla/mux ANY /d [] list"]
+        );
+    }
+
+    #[test]
+    fn timing_ten_thousand_nested_gin_groups_join_paths_in_linear_time() {
+        let mut body = String::from("func routes() {\n\tr0 := gin.New()\n");
+        for index in 1..=60_000 {
+            body.push_str(&format!(
+                "\tr{index} := r{previous}.Group(\"/x\")\n",
+                previous = index - 1
+            ));
+        }
+        body.push_str("\tr60000.GET(\"/end\", list)\n}\n");
+        let source = go_source(&[GIN], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), 1);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(8),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn timing_a_chain_of_forty_thousand_aliases_is_resolved_in_linear_time() {
+        let mut body = String::from("type Base struct{ *chi.Mux }\n\ntype A00000 = Base\n");
+        for index in 1..=100_000 {
+            body.push_str(&format!(
+                "type A{index:05} = A{previous:05}\n",
+                previous = index - 1
+            ));
+        }
+        body.push_str(
+            "\nfunc New() *A100000 {\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", list)\n\treturn &A100000{Mux: r}\n}\n",
+        );
+        let source = go_source(&[CHI], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), 1);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(6),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
     fn documented_gap_a_caller_in_another_file_that_registers_on_a_factory_result_gives_no_entry() {
         let router = factory_file("NewRouter", "/x");
         let main = go_file(
