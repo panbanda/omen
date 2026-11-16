@@ -4,7 +4,10 @@
 //! methods of the specification are only for syntax that the table cannot
 //! describe.
 
+use std::any::Any;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
 
 use tree_sitter::Node;
 
@@ -302,6 +305,14 @@ pub struct ReturnOwner<'tree> {
     pub return_type: Option<Node<'tree>>,
 }
 
+/// The facts of a node that a language computes once, by node ID and a number
+/// that the language chooses. A language reads the cost of a node that has
+/// many children once, and not for each child.
+pub type Memo = RefCell<HashMap<(usize, u8), Rc<dyn Any>>>;
+
+/// How many of the nearest ancestors `Context::parent` examines.
+const NEAR_ANCESTORS: usize = 8;
+
 pub struct Context<'a, 'tree> {
     /// The path of the file, as the keys have it.
     pub file: &'a str,
@@ -315,15 +326,29 @@ pub struct Context<'a, 'tree> {
     pub members: Option<&'a Recorder>,
     /// The ID of the node at which the walk is, and the parent of that node.
     pub current: Option<(usize, Option<Node<'tree>>)>,
+    /// The facts that a language reads once for a node and uses for many nodes.
+    pub memo: &'a Memo,
 }
 
 impl<'tree> Context<'_, 'tree> {
-    /// The parent of `node`. The walk knows the parent of its current node.
-    /// For a different node, the tree searches from the root, which is slow.
+    /// The parent of `node`. The walk knows the parent of its current node
+    /// and the nearest ancestors. For a different node, the tree searches
+    /// from the root, which costs the depth of the node.
     pub fn parent(&self, node: Node<'tree>) -> Option<Node<'tree>> {
-        match self.current {
-            Some((current, parent)) if current == node.id() => parent,
-            _ => node.parent(),
+        if let Some((current, parent)) = self.current {
+            if current == node.id() {
+                return parent;
+            }
+        }
+        let nearest = self.ancestors.len().saturating_sub(NEAR_ANCESTORS);
+        match self.ancestors[nearest..]
+            .iter()
+            .rposition(|ancestor| ancestor.id() == node.id())
+        {
+            Some(0) if nearest == 0 => None,
+            Some(0) => node.parent(),
+            Some(position) => Some(self.ancestors[nearest + position - 1]),
+            None => node.parent(),
         }
     }
 
@@ -505,7 +530,7 @@ pub trait LanguageSpec: Sync {
 
     /// Tells if the names that the declaration at `node` binds end with the
     /// nearest block.
-    fn is_block_local(&self, _node: Node<'_>) -> bool {
+    fn is_block_local(&self, _parent: Option<Node<'_>>) -> bool {
         true
     }
 
@@ -661,6 +686,7 @@ struct Extractor<'a, 'tree> {
     export_aliases: Vec<(String, String)>,
     language: Language,
     members: Option<Recorder>,
+    memo: Memo,
 }
 
 /// What the walk does for the nodes of one kind.
@@ -717,6 +743,7 @@ impl<'tree> Extractor<'_, 'tree> {
             return_owner: self.return_owners.last().copied(),
             members: self.members.as_ref(),
             current: Some((node.id(), self.ancestors.last().copied())),
+            memo: &self.memo,
         };
         let name_node = match rule.name {
             NameRule::Field(field) => node.child_by_field_name(field),
@@ -816,6 +843,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 return_owner: self.return_owners.last().copied(),
                 members: self.members.as_ref(),
                 current: Some((node.id(), self.ancestors.last().copied())),
+                memo: &self.memo,
             };
             if imports {
                 self.spec.imports(node, &context, &mut self.imports);
@@ -835,6 +863,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 return_owner: self.return_owners.last().copied(),
                 members: self.members.as_ref(),
                 current: Some((node.id(), self.ancestors.last().copied())),
+                memo: &self.memo,
             };
             let owner = self.owner();
             if let Some(call) = call.then(|| self.spec.call(node, &context)).flatten() {
@@ -846,7 +875,7 @@ impl<'tree> Extractor<'_, 'tree> {
             if local {
                 let mut names = Vec::new();
                 self.spec.locals(node, &context, &mut names);
-                let block = self.block_of(node);
+                let block = self.block_of();
                 let parameter_block = self.spec.parameter_block(node, &self.ancestors);
                 self.locals.extend(names.into_iter().map(|name| {
                     let block = if name.is_parameter {
@@ -898,6 +927,7 @@ impl<'tree> Extractor<'_, 'tree> {
                     return_owner: self.return_owners.last().copied(),
                     members: self.members.as_ref(),
                     current: Some((node.id(), self.ancestors.last().copied())),
+                    memo: &self.memo,
                 },
             ),
         };
@@ -919,8 +949,9 @@ impl<'tree> Extractor<'_, 'tree> {
 
     /// The bytes of the nearest block that contains the declaration at
     /// `node`, in a language where a block limits its names.
-    fn block_of(&self, node: Node<'tree>) -> Option<std::ops::Range<usize>> {
-        if self.block_kinds.is_empty() || !self.spec.is_block_local(node) {
+    fn block_of(&self) -> Option<std::ops::Range<usize>> {
+        if self.block_kinds.is_empty() || !self.spec.is_block_local(self.ancestors.last().copied())
+        {
             return None;
         }
         self.ancestors
@@ -1409,6 +1440,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         export_aliases: Vec::new(),
         language: parsed.language,
         members: Recorder::new(parsed.language),
+        memo: Memo::default(),
     };
     extractor.walk(parsed.root_node());
 

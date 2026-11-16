@@ -1,5 +1,7 @@
 //! C++ symbols.
 
+use std::rc::Rc;
+
 use tree_sitter::Node;
 
 use super::c;
@@ -93,19 +95,13 @@ fn is_function(node: Node<'_>) -> bool {
 }
 
 /// Tells if `extern "C"` contains the function, as a block or before it.
-fn has_c_linkage(node: Node<'_>, context: &Context<'_, '_>) -> bool {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if parent.kind() == LINKAGE_SPECIFICATION
+fn has_c_linkage(context: &Context<'_, '_>) -> bool {
+    context.ancestors.iter().rev().any(|parent| {
+        parent.kind() == LINKAGE_SPECIFICATION
             && parent
                 .child_by_field_name("value")
                 .is_some_and(|value| context.text(value) == "\"C\"")
-        {
-            return true;
-        }
-        current = parent.parent();
-    }
-    false
+    })
 }
 
 /// The scope names of a qualified name, and the node of its last name.
@@ -132,32 +128,56 @@ fn split_qualified_name<'tree>(
 }
 
 /// The child of a class body that contains `node`.
-fn class_member<'tree>(node: Node<'tree>, class: Node<'tree>) -> Option<Node<'tree>> {
+fn class_member<'tree>(
+    node: Node<'tree>,
+    class: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Option<Node<'tree>> {
     let body = class.child_by_field_name("body")?;
     let mut member = node;
-    while member.parent()? != body {
-        member = member.parent()?;
+    while context.parent(member)? != body {
+        member = context.parent(member)?;
     }
     Some(member)
 }
 
+/// The start byte and the visibility of each access specifier in a class body.
+struct AccessSections(Vec<(usize, bool)>);
+
 /// The members of a `class` are private until an access specifier. The
 /// members of a `struct` or a `union` are public.
 fn is_public_member(member: Node<'_>, class: Node<'_>, context: &Context<'_, '_>) -> bool {
-    let mut public = class.kind() != CLASS_SPECIFIER;
+    let default = class.kind() != CLASS_SPECIFIER;
     let Some(body) = class.child_by_field_name("body") else {
-        return public;
+        return default;
     };
-    let mut cursor = body.walk();
-    for child in body.children(&mut cursor) {
-        if child == member {
-            break;
+    let key = (body.id(), 0);
+    let cached = context.memo.borrow().get(&key).cloned();
+    let sections = match cached.and_then(|found| found.downcast::<AccessSections>().ok()) {
+        Some(sections) => sections,
+        None => {
+            let mut cursor = body.walk();
+            let found: Vec<(usize, bool)> = body
+                .children(&mut cursor)
+                .filter(|child| child.kind() == ACCESS_SPECIFIER)
+                .map(|child| {
+                    (
+                        child.start_byte(),
+                        context.text(child).starts_with("public"),
+                    )
+                })
+                .collect();
+            let sections = Rc::new(AccessSections(found));
+            context.memo.borrow_mut().insert(key, sections.clone());
+            sections
         }
-        if child.kind() == ACCESS_SPECIFIER {
-            public = context.text(child).starts_with("public");
-        }
-    }
-    public
+    };
+    let before = sections
+        .0
+        .partition_point(|(start, _)| *start < member.start_byte());
+    before
+        .checked_sub(1)
+        .map_or(default, |last| sections.0[last].1)
 }
 
 fn exported_if(condition: bool) -> Exported {
@@ -756,7 +776,7 @@ impl LanguageSpec for Cpp {
         if !is_function(node) {
             return true;
         }
-        draft.c_linkage = has_c_linkage(node, context);
+        draft.c_linkage = has_c_linkage(context);
         draft.parameter_count = draft
             .name_node
             .parent()
@@ -816,7 +836,7 @@ impl LanguageSpec for Cpp {
         };
         match context.scopes.last() {
             Some(scope) if scope.role == ScopeRole::Type => {
-                let public = class_member(holder, scope.node)
+                let public = class_member(holder, scope.node, context)
                     .is_some_and(|member| is_public_member(member, scope.node, context));
                 if public {
                     scope.exported.clone()

@@ -1,5 +1,8 @@
 //! Ruby symbols.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use tree_sitter::Node;
 
 use crate::index::extract::{Context, DefinitionRule, Draft, LanguageSpec, NameRule, ScopeRole};
@@ -127,31 +130,30 @@ fn mixins(definition: Node<'_>, context: &Context<'_, '_>, keywords: &[&str]) ->
     found
 }
 
-/// Tells if a method in the body of a class or a module is public.
-///
-/// A modifier without arguments, such as `private`, changes the methods after
-/// it. A modifier with a symbol, such as `private :name`, changes that method
-/// from each position in the body. `private def name` changes that definition.
-fn is_public_method(definition: Node<'_>, name: &str, context: &Context<'_, '_>) -> bool {
-    let singleton = definition.kind() == SINGLETON_METHOD;
-    let Some(parent) = definition.parent() else {
-        return true;
-    };
-    if parent.kind() == ARGUMENT_LIST {
-        return parent
-            .parent()
-            .and_then(|call| bare_call_name(call, context))
-            .and_then(|modifier_name| modifier(&modifier_name, singleton))
-            .unwrap_or(true);
+/// The visibility modifiers in the body of a class or a module.
+struct BodyModifiers {
+    /// The start byte and the visibility of each modifier that is a bare
+    /// name, in source order.
+    sections: Vec<(usize, bool)>,
+    /// The visibility that the last modifier with a symbol gives to a method name.
+    named: HashMap<String, bool>,
+}
+
+fn body_modifiers(body: Node<'_>, singleton: bool, context: &Context<'_, '_>) -> Rc<BodyModifiers> {
+    let key = (body.id(), u8::from(singleton));
+    if let Some(found) = context.memo.borrow().get(&key) {
+        if let Ok(found) = Rc::clone(found).downcast::<BodyModifiers>() {
+            return found;
+        }
     }
-    let mut section = true;
-    let mut named = None;
-    let mut cursor = parent.walk();
-    for statement in parent.named_children(&mut cursor) {
+    let mut sections = Vec::new();
+    let mut named = HashMap::new();
+    let mut cursor = body.walk();
+    for statement in body.named_children(&mut cursor) {
         match statement.kind() {
-            IDENTIFIER if statement.start_byte() < definition.start_byte() => {
+            IDENTIFIER => {
                 if let Some(public) = modifier(&context.text(statement), singleton) {
-                    section = public;
+                    sections.push((statement.start_byte(), public));
                 }
             }
             CALL => {
@@ -164,18 +166,50 @@ fn is_public_method(definition: Node<'_>, name: &str, context: &Context<'_, '_>)
                     continue;
                 };
                 let mut cursor = arguments.walk();
-                let names_this_method = arguments.named_children(&mut cursor).any(|argument| {
-                    argument.kind() == SIMPLE_SYMBOL
-                        && context.text(argument).trim_start_matches(':') == name
-                });
-                if names_this_method {
-                    named = Some(public);
+                for argument in arguments.named_children(&mut cursor) {
+                    if argument.kind() == SIMPLE_SYMBOL {
+                        let symbol = context.text(argument);
+                        named.insert(symbol.trim_start_matches(':').to_string(), public);
+                    }
                 }
             }
             _ => {}
         }
     }
-    named.unwrap_or(section)
+    let modifiers = Rc::new(BodyModifiers { sections, named });
+    context.memo.borrow_mut().insert(key, modifiers.clone());
+    modifiers
+}
+
+/// Tells if a method in the body of a class or a module is public.
+///
+/// A modifier without arguments, such as `private`, changes the methods after
+/// it. A modifier with a symbol, such as `private :name`, changes that method
+/// from each position in the body. `private def name` changes that definition.
+fn is_public_method<'tree>(
+    definition: Node<'tree>,
+    name: &str,
+    context: &Context<'_, 'tree>,
+) -> bool {
+    let singleton = definition.kind() == SINGLETON_METHOD;
+    let Some(parent) = context.parent(definition) else {
+        return true;
+    };
+    if parent.kind() == ARGUMENT_LIST {
+        return context
+            .parent(parent)
+            .and_then(|call| bare_call_name(call, context))
+            .and_then(|modifier_name| modifier(&modifier_name, singleton))
+            .unwrap_or(true);
+    }
+    let modifiers = body_modifiers(parent, singleton, context);
+    let before = modifiers
+        .sections
+        .partition_point(|(start, _)| *start < definition.start_byte());
+    let section = before
+        .checked_sub(1)
+        .is_none_or(|last| modifiers.sections[last].1);
+    modifiers.named.get(name).copied().unwrap_or(section)
 }
 
 impl LanguageSpec for Ruby {
@@ -219,7 +253,7 @@ impl LanguageSpec for Ruby {
             kind: ReferenceKind::Call,
             arguments: Vec::new(),
         };
-        let parent = node.parent();
+        let parent = context.parent(node);
         let field_of_parent =
             |field: &str| parent.and_then(|parent| parent.child_by_field_name(field)) == Some(node);
         match node.kind() {
@@ -361,7 +395,9 @@ impl LanguageSpec for Ruby {
             }
             node.child_by_field_name("block")?;
         }
-        let assignment = node.parent().filter(|parent| parent.kind() == ASSIGNMENT)?;
+        let assignment = context
+            .parent(node)
+            .filter(|parent| parent.kind() == ASSIGNMENT)?;
         if assignment.child_by_field_name("right") != Some(node) {
             return None;
         }
