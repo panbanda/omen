@@ -106,8 +106,9 @@ impl Analyzer {
         exclude_tests: bool,
         exclude_patterns: &[String],
     ) -> Result<Analysis> {
-        let since_str = format!("{} days", self.config.days);
-        let commits = git_repo.log_with_stats(Some(&since_str), None)?;
+        let since_str =
+            (self.config.days != u32::MAX).then(|| format!("{} days", self.config.days));
+        let commits = git_repo.log_with_stats(since_str.as_deref(), None)?;
         self.analyze_commits_filtered(&commits, exclude_tests, exclude_patterns)
     }
 

@@ -635,38 +635,21 @@ fn test_a_failed_trend_does_not_leave_the_old_trend_beside_new_data() {
 }
 
 #[test]
-fn test_since_wins_over_days_in_the_one_window() {
-    let window = generate_window(Some("6m"), Some(30)).expect("window");
+fn test_since_gives_the_one_window() {
+    let window = generate_window(Some("6m")).expect("window");
     assert_eq!(window.label, "6m");
     assert_eq!(window.since, "6m");
     assert_eq!(window.days, 180);
 }
 
 #[test]
-fn test_days_alone_gives_the_window_for_every_part() {
-    let window = generate_window(None, Some(30)).expect("window");
-    assert_eq!(window.label, "30d");
-    assert_eq!(window.since, "30d");
-    assert_eq!(window.days, 30);
-}
-
-#[test]
 fn test_the_label_is_the_normalised_window() {
+    assert_eq!(generate_window(Some(" 1Y ")).expect("window").label, "1y");
     assert_eq!(
-        generate_window(None, Some(30)).expect("window").label,
-        "30d"
-    );
-    assert_eq!(
-        generate_window(Some(" 1Y "), None).expect("window").label,
-        "1y"
-    );
-    assert_eq!(
-        generate_window(Some(" Forever "), None)
-            .expect("window")
-            .label,
+        generate_window(Some(" Forever ")).expect("window").label,
         "all"
     );
-    assert_eq!(generate_window(None, None).expect("window").label, "1y");
+    assert_eq!(generate_window(None).expect("window").label, "1y");
 }
 
 #[cfg(unix)]
@@ -685,14 +668,14 @@ fn test_a_symlink_at_the_old_temporary_path_is_not_followed() {
 
 #[test]
 fn test_no_flag_gives_the_default_window_of_one_year() {
-    let window = generate_window(None, None).expect("window");
+    let window = generate_window(None).expect("window");
     assert_eq!(window.since, "1y");
     assert_eq!(window.days, 365);
 }
 
 #[test]
 fn test_a_window_of_zero_days_is_an_error() {
-    assert!(generate_window(None, Some(0)).is_err());
+    assert!(generate_window(Some("0d")).is_err());
 }
 
 fn generate_with_data_file_as_directory(name: &str) -> String {
@@ -739,8 +722,6 @@ fn test_generate_writes_the_one_window_into_metadata() {
             data.to_str().expect("utf-8"),
             "--since",
             "6m",
-            "--days",
-            "30",
             "--skip",
             "trend,churn,changes,ownership,temporal,hotspot,defect,tdg",
         ]),

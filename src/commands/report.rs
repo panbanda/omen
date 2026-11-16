@@ -162,14 +162,12 @@ struct GenerateWindow {
     days: u32,
 }
 
-/// `--since` wins over `--days`, which is the alias. Without the two flags, the window is one
-/// year.
-fn generate_window(since: Option<&str>, days: Option<u32>) -> crate::core::Result<GenerateWindow> {
-    let since = match (since, days) {
-        (Some(since), _) if crate::git::is_since_all(since) => "all".to_string(),
-        (Some(since), _) => since.trim().to_lowercase(),
-        (None, Some(days)) => format!("{days}d"),
-        (None, None) => "1y".to_string(),
+/// Without `--since`, the window is one year.
+fn generate_window(since: Option<&str>) -> crate::core::Result<GenerateWindow> {
+    let since = match since {
+        Some(since) if crate::git::is_since_all(since) => "all".to_string(),
+        Some(since) => since.trim().to_lowercase(),
+        None => "1y".to_string(),
     };
     Ok(GenerateWindow {
         days: super::analyzers::since_flag_days(&since)?,
@@ -262,7 +260,7 @@ fn generate_with(
 ) -> crate::core::Result<()> {
     use serde_json::{json, Value};
 
-    let window = generate_window(args.since.as_deref(), args.days)?;
+    let window = generate_window(args.since.as_deref())?;
     // The reference is checked before the first write, so a failed run keeps
     // the files of an earlier run.
     let changes = git_ref

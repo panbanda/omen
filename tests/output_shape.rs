@@ -389,13 +389,9 @@ const MCP_CASES: &[McpCase] = &[
     mcp_keyed("satd", "{}", &["/result/by_category"]),
     mcp_keyed("stubs", "{}", &["/result/by_category"]),
     mcp_keyed("deadcode", "{}", &["/result/summary/by_kind"]),
-    mcp_keyed(
-        "churn",
-        r#"{"days": 36500}"#,
-        &["/result/summary/author_contributions"],
-    ),
+    mcp_keyed("churn", "{}", &["/result/summary/author_contributions"]),
     mcp("clones", "{}"),
-    mcp("defect", r#"{"days": 36500}"#),
+    mcp("defect", "{}"),
     mcp("changes", "{}"),
     mcp("diff", r#"{"base": "main"}"#),
     mcp_keyed(
@@ -407,8 +403,8 @@ const MCP_CASES: &[McpCase] = &[
         ],
     ),
     mcp("graph", "{}"),
-    mcp("hotspot", r#"{"days": 36500}"#),
-    mcp("temporal", r#"{"days": 36500}"#),
+    mcp("hotspot", "{}"),
+    mcp("temporal", "{}"),
     mcp("ownership", "{}"),
     mcp("cohesion", "{}"),
     mcp("repomap", "{}"),
@@ -459,8 +455,8 @@ const MCP_ERROR_CASES: &[McpErrorCase] = &[
     mcp_error(
         "invalid_type",
         "invalid_argument",
-        "churn",
-        r#"{"days": "30"}"#,
+        "impact",
+        r#"{"symbol": "run", "depth": "3"}"#,
     ),
     mcp_error(
         "invalid_enum",

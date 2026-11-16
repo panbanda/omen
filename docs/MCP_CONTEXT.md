@@ -41,12 +41,13 @@ takes: the value in the configuration, or the built-in default.
 
 | Tool | Parameter | Value when the argument is absent |
 |---|---|---|
-| `churn` | `days` | `churn.since` (built-in default `6m`) |
+| `churn` | `since` | `churn.since` (built-in default `6m`) |
 | `clones` | `min_tokens` | `duplicates.min_tokens` (50) |
 | `clones` | `similarity` | `duplicates.min_similarity` (0.9) |
 | `clones` | `include_tests` | `false`; `exclude_tests` then applies |
-| `defect` | `days` | `defect.since` (30d) |
-| `hotspot` | `days` | `hotspot.since` (90d) |
+| `defect` | `since` | `defect.since` (30d) |
+| `hotspot` | `since` | `hotspot.since` (90d) |
+| `temporal` | `since` | `30d` |
 | `flags` | `provider` | `feature_flags.providers` |
 | `flags` | `stale_days` | `feature_flags.stale_days` (90) |
 

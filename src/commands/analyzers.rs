@@ -78,8 +78,8 @@ pub const DEFAULT_TOP: usize = 20;
 
 /// The window of `defect` and `hotspot`. An input that is neither a duration
 /// nor "all" is an error and does not widen to all history.
-pub fn churn_window(since: Option<&str>, days: Option<u32>, configured_days: u32) -> Result<u32> {
-    ChurnWindow::resolve(since, days, configured_days)
+pub fn churn_window(since: Option<&str>, configured_days: u32) -> Result<u32> {
+    ChurnWindow::resolve(since, configured_days)
         .map(|window| window.as_days())
         .map_err(Error::config)
 }
@@ -166,7 +166,6 @@ pub fn run_analyzer_instance<A: Analyzer>(
 pub enum Plain {
     Tdg,
     Graph,
-    Temporal,
     Ownership,
     Cohesion,
     Repomap,
@@ -188,10 +187,6 @@ pub fn run_plain(
         }
         Plain::Graph => {
             run_analyzer::<analyzers::graph::Analyzer>(path, config, format, scope, out).map(drop)
-        }
-        Plain::Temporal => {
-            run_analyzer::<analyzers::temporal::Analyzer>(path, config, format, scope, out)
-                .map(drop)
         }
         Plain::Ownership => {
             run_analyzer::<analyzers::ownership::Analyzer>(path, config, format, scope, out)
@@ -251,11 +246,10 @@ pub fn run_clones(
     .map(drop)
 }
 
-/// A churn window as the flags `--since` and `--days` give it.
+/// A churn window as the flag `--since` gives it.
 #[derive(Clone, Debug, Default)]
 pub struct WindowRequest {
     pub since: Option<String>,
-    pub days: Option<u32>,
 }
 
 pub struct WindowedRequest {
@@ -270,17 +264,35 @@ pub fn run_defect(
     request: &WindowedRequest,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let window = churn_window(
-        request.window.since.as_deref(),
-        request.window.days,
-        config.defect.since.days(),
-    )?;
+    let window = churn_window(request.window.since.as_deref(), config.defect.since.days())?;
     run_analyzer_instance(
         path,
         config,
         format,
         Some(&request.scope),
         defect_analyzer(window),
+        out,
+    )
+    .map(drop)
+}
+
+pub fn run_temporal(
+    path: &PathBuf,
+    config: &Config,
+    format: Format,
+    request: &WindowedRequest,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let days = churn_window(
+        request.window.since.as_deref(),
+        analyzers::temporal::DEFAULT_DAYS,
+    )?;
+    run_analyzer_instance(
+        path,
+        config,
+        format,
+        Some(&request.scope),
+        analyzers::temporal::Analyzer::new().with_days(days),
         out,
     )
     .map(drop)
@@ -293,11 +305,7 @@ pub fn run_hotspot(
     request: &WindowedRequest,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let window = churn_window(
-        request.window.since.as_deref(),
-        request.window.days,
-        config.hotspot.since.days(),
-    )?;
+    let window = churn_window(request.window.since.as_deref(), config.hotspot.since.days())?;
     run_analyzer_instance(
         path,
         config,
@@ -369,16 +377,8 @@ pub fn run_churn(
     request: &ChurnRequest,
     out: &mut dyn Write,
 ) -> Result<()> {
-    // --since is canonical; --days is a documented alias for the same
-    // window. If both are given, --since wins. Note "all"/"forever"
-    // parse to `None` (unlimited), so `--since` must be checked as a
-    // whole branch rather than folded into `--days` via `.or(..)` --
-    // otherwise an explicit `--since all` would fall through to
-    // `--days`/config instead of meaning "no limit".
     let days = if let Some(since) = &request.window.since {
         since_flag_days(since)?
-    } else if let Some(days) = request.window.days {
-        days
     } else {
         configured_churn_days(config)
     };
@@ -463,11 +463,10 @@ mod tests {
     }
 
     #[test]
-    fn test_window_prefers_since_and_rejects_garbage() {
-        assert_eq!(churn_window(Some("30d"), Some(5), 90).unwrap(), 30);
-        assert_eq!(churn_window(None, Some(5), 90).unwrap(), 5);
-        assert_eq!(churn_window(None, None, 90).unwrap(), 90);
-        assert!(churn_window(Some("garbage"), None, 90).is_err());
+    fn test_window_uses_since_over_the_configuration_and_rejects_garbage() {
+        assert_eq!(churn_window(Some("30d"), 90).unwrap(), 30);
+        assert_eq!(churn_window(None, 90).unwrap(), 90);
+        assert!(churn_window(Some("garbage"), 90).is_err());
     }
 
     #[test]

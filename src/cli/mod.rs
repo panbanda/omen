@@ -96,7 +96,7 @@ pub enum Command {
 
     /// Detect temporally coupled files
     #[command(alias = "tc", visible_alias = "temporal-coupling")]
-    Temporal(AnalyzerArgs),
+    Temporal(TemporalArgs),
 
     /// Analyze code ownership and bus factor
     #[command(alias = "own", visible_alias = "bus-factor")]
@@ -357,16 +357,12 @@ pub enum ChurnWindow {
 }
 
 impl ChurnWindow {
-    /// Resolve `--since` (canonical) over `--days` (alias) over the config.
-    pub fn resolve(
-        since: Option<&str>,
-        days: Option<u32>,
-        config_days: u32,
-    ) -> std::result::Result<Self, String> {
+    /// Resolve `--since` over the config.
+    pub fn resolve(since: Option<&str>, config_days: u32) -> std::result::Result<Self, String> {
         if let Some(since) = since {
             return since.parse();
         }
-        match days.unwrap_or(config_days) {
+        match config_days {
             0 => Err("a window of 0 days contains no history".to_string()),
             days => Ok(Self::Days(days)),
         }
@@ -397,18 +393,18 @@ impl std::str::FromStr for ChurnWindow {
     }
 }
 
-/// The `--since`/`--days` pair shared by `defect` and `hotspot`.
+/// Checks a `--since` value with the parser of the MCP tools, and keeps the text.
+fn parse_window(value: &str) -> std::result::Result<String, String> {
+    crate::git::since_to_days(value).map(|_| value.to_string())
+}
+
+/// The `--since` window of `defect` and `hotspot`.
 #[derive(Args)]
 pub struct ChurnWindowArgs {
     /// Time period to measure churn over (e.g. 30d, 3m, 1y, all). The window
     /// ends at the analyzed revision's own date, not at the current time.
-    /// Canonical flag; --days is an alias. If both are given, --since wins.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_window)]
     pub since: Option<String>,
-
-    /// Days of history to measure churn over (alias for --since)
-    #[arg(long)]
-    pub days: Option<u32>,
 }
 
 #[derive(Args)]
@@ -430,19 +426,23 @@ pub struct HotspotArgs {
 }
 
 #[derive(Args)]
+pub struct TemporalArgs {
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+
+    /// Time period to analyze (e.g., 30d, 3m, 1y, all). The default is 30d.
+    #[arg(long, value_parser = parse_window)]
+    pub since: Option<String>,
+}
+
+#[derive(Args)]
 pub struct ChurnArgs {
     #[command(flatten)]
     pub common: AnalyzerArgs,
 
-    /// Time period to analyze (e.g., 3m, 6m, 1y, 2y, all). Canonical time window
-    /// flag; --days is a documented alias for the same window. If both are given,
-    /// --since wins.
-    #[arg(long)]
+    /// Time period to analyze (e.g., 3m, 6m, 1y, 2y, all)
+    #[arg(long, value_parser = parse_window)]
     pub since: Option<String>,
-
-    /// Number of days to analyze (alias for --since)
-    #[arg(long)]
-    pub days: Option<u32>,
 }
 
 #[derive(Args)]
@@ -578,14 +578,9 @@ pub struct ReportGenerateArgs {
     #[arg(long)]
     pub skip: Option<String>,
 
-    /// Time period for analysis (e.g., 1m, 3m, 6m, 1y, 2y, all). The default is 1y. If both
-    /// `--since` and `--days` are given, `--since` wins
+    /// Time period for analysis (e.g., 1m, 3m, 6m, 1y, 2y, all). The default is 1y.
     #[arg(long)]
     pub since: Option<String>,
-
-    /// Number of days for git-based analyzers (alias for --since)
-    #[arg(long)]
-    pub days: Option<u32>,
 
     /// Number of samples for trend analysis (evenly spaced over the time range)
     #[arg(long)]
@@ -1365,22 +1360,6 @@ mod tests {
     // Analyzer-specific option tests
 
     #[test]
-    fn test_churn_days_default() {
-        let cli = parse(&["omen", "churn"]);
-        if let Command::Churn(args) = cli.command {
-            assert_eq!(args.days, None);
-        }
-    }
-
-    #[test]
-    fn test_churn_days_custom() {
-        let cli = parse(&["omen", "churn", "--days", "30"]);
-        if let Command::Churn(args) = cli.command {
-            assert_eq!(args.days, Some(30));
-        }
-    }
-
-    #[test]
     fn test_flags_provider() {
         let cli = parse(&["omen", "flags", "--provider", "launchdarkly"]);
         if let Command::Flags(args) = cli.command {
@@ -1576,15 +1555,6 @@ mod tests {
             parse_report_subcommand(&["omen", "report", "generate", "--since", "6m"])
         {
             assert_eq!(args.since.as_deref(), Some("6m"));
-        }
-    }
-
-    #[test]
-    fn test_report_generate_days() {
-        if let ReportSubcommand::Generate(args) =
-            parse_report_subcommand(&["omen", "report", "generate", "--days", "90"])
-        {
-            assert_eq!(args.days, Some(90));
         }
     }
 
@@ -2629,7 +2599,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Time window: --since canonical, --days alias (churn)
+    // Time window: --since (churn)
     // -----------------------------------------------------------------
 
     #[test]
@@ -2647,17 +2617,6 @@ mod tests {
         let cli = parse(&["omen", "churn"]);
         if let Command::Churn(args) = cli.command {
             assert_eq!(args.since, None);
-        } else {
-            panic!("expected Churn command");
-        }
-    }
-
-    #[test]
-    fn test_churn_days_still_parses_alongside_since() {
-        let cli = parse(&["omen", "churn", "--days", "30", "--since", "6m"]);
-        if let Command::Churn(args) = cli.command {
-            assert_eq!(args.days, Some(30));
-            assert_eq!(args.since, Some("6m".to_string()));
         } else {
             panic!("expected Churn command");
         }
@@ -2724,32 +2683,77 @@ mod tests {
 
     #[test]
     fn test_churn_window_precedence() {
-        // --since wins over --days wins over config.
         assert_eq!(
-            ChurnWindow::resolve(Some("1y"), Some(7), 30),
+            ChurnWindow::resolve(Some("1y"), 30),
             Ok(ChurnWindow::Days(365))
         );
-        assert_eq!(
-            ChurnWindow::resolve(None, Some(7), 30),
-            Ok(ChurnWindow::Days(7))
-        );
-        assert_eq!(
-            ChurnWindow::resolve(None, None, 30),
-            Ok(ChurnWindow::Days(30))
-        );
-        // `--since all` must be a whole branch, not folded into --days.
-        assert_eq!(
-            ChurnWindow::resolve(Some("all"), Some(7), 30),
-            Ok(ChurnWindow::All)
-        );
-        assert!(ChurnWindow::resolve(None, Some(0), 30).is_err());
+        assert_eq!(ChurnWindow::resolve(None, 30), Ok(ChurnWindow::Days(30)));
+        assert_eq!(ChurnWindow::resolve(Some("all"), 30), Ok(ChurnWindow::All));
+        assert!(ChurnWindow::resolve(None, 0).is_err());
+    }
+
+    #[test]
+    fn test_temporal_accepts_since() {
+        let cli = parse(&["omen", "temporal", "--since", "90d"]);
+        let Command::Temporal(args) = cli.command else {
+            panic!("expected Temporal command");
+        };
+        assert_eq!(args.since.as_deref(), Some("90d"));
+        let cli = parse(&["omen", "temporal"]);
+        let Command::Temporal(args) = cli.command else {
+            panic!("expected Temporal command");
+        };
+        assert_eq!(args.since, None);
+    }
+
+    #[test]
+    fn test_a_since_that_is_not_a_window_is_a_usage_error() {
+        for command in ["churn", "defect", "hotspot", "temporal"] {
+            for bad in ["garbage", "0d", "2024-01-01", ""] {
+                let error = Cli::try_parse_from(["omen", command, "--since", bad])
+                    .err()
+                    .unwrap_or_else(|| panic!("expected {command} --since {bad:?} to fail"));
+                assert_eq!(
+                    error.kind(),
+                    clap::error::ErrorKind::ValueValidation,
+                    "{command} {bad:?}"
+                );
+                let message = error.to_string();
+                assert!(message.contains("--since"), "{message}");
+                assert!(message.contains("30d"), "{message}");
+            }
+            for good in ["30d", "6m", "1y", "all"] {
+                assert!(
+                    Cli::try_parse_from(["omen", command, "--since", good]).is_ok(),
+                    "{command} {good}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_the_days_flag_is_rejected() {
+        for args in [
+            ["omen", "churn", "--days", "30"].as_slice(),
+            ["omen", "defect", "--days", "90"].as_slice(),
+            ["omen", "hotspot", "--days", "180"].as_slice(),
+            ["omen", "temporal", "--days", "30"].as_slice(),
+            ["omen", "report", "generate", "--days", "90"].as_slice(),
+        ] {
+            let error = Cli::try_parse_from(args)
+                .err()
+                .unwrap_or_else(|| panic!("expected {args:?} to be rejected"));
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::UnknownArgument,
+                "{args:?}"
+            );
+        }
     }
 
     #[test]
     fn test_defect_and_hotspot_accept_window_flags() {
         assert_parses_to!(&["omen", "defect", "--since", "1y"], Command::Defect(_));
-        assert_parses_to!(&["omen", "defect", "--days", "90"], Command::Defect(_));
         assert_parses_to!(&["omen", "hotspot", "--since", "all"], Command::Hotspot(_));
-        assert_parses_to!(&["omen", "hotspot", "--days", "180"], Command::Hotspot(_));
     }
 }
