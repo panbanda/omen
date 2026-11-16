@@ -22,6 +22,8 @@ use crate::index::extract::FileSymbols;
 use crate::index::model::{Span, Symbol, SymbolKind};
 use crate::parser::{cfg_test_module_ranges, ParseResult};
 
+mod rails;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryKind {
@@ -430,6 +432,8 @@ struct Draft {
     route: Option<Route>,
     guards: Vec<String>,
     basis: EntryBasis,
+    /// Tells apart the entry points that one call registers, as the action of a Rails `resources` call.
+    variant: Option<String>,
 }
 
 impl<'a> Context<'a> {
@@ -636,7 +640,12 @@ impl<'a> Context<'a> {
                     .route
                     .as_ref()
                     .map(|route| format!(":{}", route.method))
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                    + &draft
+                        .variant
+                        .as_ref()
+                        .map(|variant| format!("#{variant}"))
+                        .unwrap_or_default();
                 EntryPoint {
                     key: format!(
                         "{}:{}:{}:{}{}",
@@ -705,6 +714,7 @@ impl<'a> Context<'a> {
                         route: None,
                         guards: Vec::new(),
                         basis: EntryBasis::Convention,
+                        variant: None,
                     });
                 }
             }
@@ -719,6 +729,7 @@ impl<'a> Context<'a> {
                     route: None,
                     guards: Vec::new(),
                     basis: EntryBasis::Convention,
+                    variant: None,
                 });
             }
             return;
@@ -764,6 +775,7 @@ impl<'a> Context<'a> {
                     route: None,
                     guards: Vec::new(),
                     basis: EntryBasis::Convention,
+                    variant: None,
                 });
             }
         }
@@ -812,6 +824,7 @@ impl<'a> Context<'a> {
                     route: Some(route(verb, path.clone())),
                     guards: Vec::new(),
                     basis: EntryBasis::Convention,
+                    variant: None,
                 });
             }
         }
@@ -835,6 +848,7 @@ impl<'a> Context<'a> {
                         route: None,
                         guards: Vec::new(),
                         basis: EntryBasis::Convention,
+                        variant: None,
                     });
                 }
             }
@@ -886,6 +900,7 @@ impl<'a> Context<'a> {
                     route: None,
                     guards: Vec::new(),
                     basis: EntryBasis::Declared,
+                    variant: None,
                 });
                 continue;
             }
@@ -957,6 +972,7 @@ impl<'a> Context<'a> {
                 route: Some(route(&methods.join(","), path)),
                 guards: guards.clone(),
                 basis: EntryBasis::Declared,
+                variant: None,
             });
         }
     }
@@ -989,6 +1005,7 @@ impl<'a> Context<'a> {
             route: Some(route("ANY", join_path("", &self.string_of(*first)))),
             guards: Vec::new(),
             basis: EntryBasis::Registered,
+            variant: None,
         });
     }
 
@@ -1046,6 +1063,7 @@ impl<'a> Context<'a> {
             route: Some(route(if verb == "all" { "ANY" } else { verb }, path)),
             guards,
             basis: EntryBasis::Registered,
+            variant: None,
         });
     }
 
@@ -1173,6 +1191,7 @@ impl<'a> Context<'a> {
                     route: Some(route(&method, join_path(&prefix, &path))),
                     guards: guards.clone(),
                     basis: EntryBasis::Declared,
+                    variant: None,
                 });
             } else if JAVA_CONSUMERS.contains(&name) || name == "Scheduled" {
                 out.push(Draft {
@@ -1187,6 +1206,7 @@ impl<'a> Context<'a> {
                     route: None,
                     guards: guards.clone(),
                     basis: EntryBasis::Declared,
+                    variant: None,
                 });
             }
         }
@@ -1268,6 +1288,7 @@ impl<'a> Context<'a> {
                 route: Some(route(method, join_path(&prefix, &path))),
                 guards: guards.clone(),
                 basis: EntryBasis::Declared,
+                variant: None,
             });
         }
     }
@@ -1304,6 +1325,7 @@ impl<'a> Context<'a> {
             route: Some(route(&method, join_path("", &self.string_of(*path)))),
             guards: Vec::new(),
             basis: EntryBasis::Registered,
+            variant: None,
         });
     }
 
@@ -1373,6 +1395,7 @@ impl<'a> Context<'a> {
             route: Some(route(&method, path)),
             guards,
             basis: EntryBasis::Registered,
+            variant: None,
         });
     }
 
@@ -1418,6 +1441,7 @@ impl<'a> Context<'a> {
                 route: None,
                 guards: Vec::new(),
                 basis: EntryBasis::Declared,
+                variant: None,
             });
         }
         for attribute in attributes.iter().rev() {
@@ -1452,6 +1476,7 @@ impl<'a> Context<'a> {
                 route: Some(route(verb, path.to_string())),
                 guards: Vec::new(),
                 basis: EntryBasis::Declared,
+                variant: None,
             });
         }
     }
@@ -1506,6 +1531,7 @@ impl<'a> Context<'a> {
                 route: Some(route(&verb, path.clone())),
                 guards: Vec::new(),
                 basis: EntryBasis::Registered,
+                variant: None,
             });
         }
     }
@@ -1632,6 +1658,7 @@ impl<'a> Context<'a> {
             )),
             guards,
             basis: EntryBasis::Registered,
+            variant: None,
         });
     }
 
@@ -1647,115 +1674,6 @@ impl<'a> Context<'a> {
             .to_string();
         let method = self.string_of(items.get(1)?.named_child(0)?);
         Some((class, method))
-    }
-
-    fn ruby(&self, node: Node<'_>, out: &mut Vec<Draft>) {
-        if node.kind() != "call" || !self.file.file.ends_with("routes.rb") {
-            return;
-        }
-        let Some(method) = node.child_by_field_name("method") else {
-            return;
-        };
-        let verb = self.text(method);
-        if node.child_by_field_name("receiver").is_some()
-            || !matches!(verb, "get" | "post" | "put" | "patch" | "delete")
-        {
-            return;
-        }
-        let arguments = Self::arguments_of(node);
-        let Some(path) = arguments
-            .iter()
-            .find(|argument| argument.kind() == "string")
-            .map(|argument| self.string_of(*argument))
-        else {
-            return;
-        };
-        let target = arguments
-            .iter()
-            .filter(|argument| argument.kind() == "pair")
-            .find(|pair| {
-                pair.child_by_field_name("key")
-                    .is_some_and(|key| self.text(key).trim_end_matches(':') == "to")
-            })
-            .and_then(|pair| pair.child_by_field_name("value"))
-            .map(|value| self.string_of(value));
-        let mut symbol = None;
-        let mut guards = Vec::new();
-        if let Some((controller, action)) = target.as_deref().and_then(|text| text.split_once('#'))
-        {
-            let class = format!(
-                "{}Controller",
-                controller
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("")
-                    .split('_')
-                    .map(|part| {
-                        let mut characters = part.chars();
-                        characters
-                            .next()
-                            .map(|first| {
-                                first.to_uppercase().collect::<String>() + characters.as_str()
-                            })
-                            .unwrap_or_default()
-                    })
-                    .collect::<String>()
-            );
-            symbol = self.symbol_named(action, Some(&class));
-            guards = self.rails_guards(&class);
-        }
-        out.push(Draft {
-            range: Span::of(&node),
-            kind: EntryKind::HttpHandler,
-            symbol,
-            framework: "rails",
-            route: Some(route(verb, join_path("", &path))),
-            guards,
-            basis: EntryBasis::Registered,
-        });
-    }
-
-    /// The `before_action` callbacks in the body of a controller class, in any file.
-    fn rails_guards(&self, class: &str) -> Vec<String> {
-        let mut guards = Vec::new();
-        for (position, file) in self.all.iter().enumerate() {
-            if file.language != Language::Ruby {
-                continue;
-            }
-            let Some(symbol) = file
-                .symbols
-                .iter()
-                .find(|symbol| symbol.name == class && symbol.kind.is_type())
-            else {
-                continue;
-            };
-            let Some(parsed) = self.all_parsed.tree(position) else {
-                continue;
-            };
-            let source = String::from_utf8_lossy(&parsed.source);
-            for reference in &file.references {
-                let inside = reference.name_range.start_byte >= symbol.range.start_byte
-                    && reference.name_range.end_byte <= symbol.range.end_byte;
-                if !inside || !matches!(reference.name.as_str(), "before_action" | "before_filter")
-                {
-                    continue;
-                }
-                let line = source
-                    .lines()
-                    .nth(reference.name_range.start_line as usize - 1);
-                let rest = line
-                    .and_then(|line| line.trim().split_once(' '))
-                    .map(|pair| pair.1);
-                guards.extend(
-                    rest.unwrap_or("")
-                        .split(',')
-                        .map(str::trim)
-                        .filter_map(|part| part.strip_prefix(':'))
-                        .map(str::to_string),
-                );
-            }
-        }
-        guards
     }
 }
 
@@ -2180,6 +2098,231 @@ mod tests {
         assert_eq!(
             found[0].symbol.as_deref(),
             Some("users_controller.rb#UsersController.show")
+        );
+    }
+
+    fn rails_routes(routes: &str, controllers: &[(&str, &str)]) -> Vec<EntryPoint> {
+        let mut files = vec![("config/routes.rb", routes)];
+        files.extend_from_slice(controllers);
+        entries(Language::Ruby, &files)
+            .into_iter()
+            .filter(|entry| entry.framework == "rails")
+            .collect()
+    }
+
+    fn verbs_and_paths(found: &[EntryPoint]) -> Vec<String> {
+        found
+            .iter()
+            .map(|entry| {
+                let route = entry.route.as_ref().unwrap();
+                format!("{} {}", route.method, route.path)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn resources_register_the_seven_rails_routes() {
+        let routes = "Rails.application.routes.draw do\n  resources :users\nend\n";
+        let controller = "class UsersController\n  def index; end\n  def show; end\nend\n";
+        let found = rails_routes(routes, &[("users_controller.rb", controller)]);
+        let mut routes = verbs_and_paths(&found);
+        routes.sort();
+        assert_eq!(
+            routes,
+            [
+                "DELETE /users/:id",
+                "GET /users",
+                "GET /users/:id",
+                "GET /users/:id/edit",
+                "GET /users/new",
+                "PATCH /users/:id",
+                "POST /users",
+                "PUT /users/:id",
+            ]
+        );
+        let keys: std::collections::BTreeSet<&str> =
+            found.iter().map(|entry| entry.key.as_str()).collect();
+        assert_eq!(keys.len(), found.len());
+        let show = found
+            .iter()
+            .find(|entry| {
+                let route = entry.route.as_ref().unwrap();
+                route.method == "GET" && route.path == "/users/:id"
+            })
+            .unwrap();
+        assert_eq!(
+            show.symbol.as_deref(),
+            Some("users_controller.rb#UsersController.show")
+        );
+        assert_eq!(show.route.as_ref().unwrap().parameters, ["id"]);
+    }
+
+    #[test]
+    fn a_singular_resource_has_no_index_and_no_id() {
+        let routes = "Rails.application.routes.draw do\n  resource :profile\nend\n";
+        let controller = "class ProfilesController\n  def show; end\nend\n";
+        let found = rails_routes(routes, &[("profiles_controller.rb", controller)]);
+        let mut routes = verbs_and_paths(&found);
+        routes.sort();
+        assert_eq!(
+            routes,
+            [
+                "DELETE /profile",
+                "GET /profile",
+                "GET /profile/edit",
+                "GET /profile/new",
+                "PATCH /profile",
+                "POST /profile",
+                "PUT /profile",
+            ]
+        );
+        let show = found
+            .iter()
+            .find(|entry| entry.route.as_ref().unwrap().method == "GET")
+            .unwrap();
+        assert!(found.iter().any(|entry| entry.symbol.as_deref()
+            == Some("profiles_controller.rb#ProfilesController.show")));
+        assert!(show.route.as_ref().unwrap().parameters.is_empty());
+    }
+
+    #[test]
+    fn only_and_except_limit_the_resource_routes() {
+        let routes = "Rails.application.routes.draw do\n  resources :users, only: [:show, :edit]\n  resources :posts, except: %i[destroy new edit]\n  resources :tags, only: :index\n  resources :none, only: []\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut routes = verbs_and_paths(&found);
+        routes.sort();
+        assert_eq!(
+            routes,
+            [
+                "GET /posts",
+                "GET /posts/:id",
+                "GET /tags",
+                "GET /users/:id",
+                "GET /users/:id/edit",
+                "PATCH /posts/:id",
+                "POST /posts",
+                "PUT /posts/:id",
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_resources_member_and_collection_routes_get_their_paths() {
+        let routes = "Rails.application.routes.draw do\n  resources :users, only: [:show] do\n    resources :posts, only: [:show]\n    member do\n      get :preview\n      post \"publish\", to: \"users#publish\"\n    end\n    collection do\n      get :search\n    end\n  end\nend\n";
+        let controller = "class UsersController\n  def preview; end\n  def search; end\nend\n";
+        let found = rails_routes(routes, &[("users_controller.rb", controller)]);
+        let mut routes = verbs_and_paths(&found);
+        routes.sort();
+        assert_eq!(
+            routes,
+            [
+                "GET /users/:id",
+                "GET /users/:id/preview",
+                "GET /users/:user_id/posts/:id",
+                "GET /users/search",
+                "POST /users/:id/publish",
+            ]
+        );
+        let preview = found
+            .iter()
+            .find(|entry| entry.route.as_ref().unwrap().path.ends_with("/preview"))
+            .unwrap();
+        assert_eq!(
+            preview.symbol.as_deref(),
+            Some("users_controller.rb#UsersController.preview")
+        );
+    }
+
+    #[test]
+    fn a_namespace_adds_a_path_prefix_and_a_module_to_the_controller() {
+        let routes = "Rails.application.routes.draw do\n  namespace :admin do\n    resources :users, only: [:show]\n    get \"/stats\", to: \"stats#show\"\n  end\nend\n";
+        let admin = "module Admin\n  class UsersController\n    def show; end\n  end\n  class StatsController\n    def show; end\n  end\nend\n";
+        let other = "class UsersController\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/admin.rb", admin),
+                ("users_controller.rb", other),
+            ],
+        );
+        let mut routes = verbs_and_paths(&found);
+        routes.sort();
+        assert_eq!(routes, ["GET /admin/stats", "GET /admin/users/:id"]);
+        let symbols: Vec<Option<&str>> =
+            found.iter().map(|entry| entry.symbol.as_deref()).collect();
+        assert!(symbols.contains(&Some("controllers/admin.rb#Admin.UsersController.show")));
+        assert!(symbols.contains(&Some("controllers/admin.rb#Admin.StatsController.show")));
+    }
+
+    #[test]
+    fn scope_adds_a_path_and_a_module() {
+        let routes = "Rails.application.routes.draw do\n  scope \"/api\" do\n    get \"/ping\", to: \"health#ping\"\n  end\n  scope module: \"v1\" do\n    get \"/pong\", to: \"health#pong\"\n  end\n  scope \"/api\", module: \"v2\" do\n    resources :items, only: [:index]\n  end\nend\n";
+        let controllers = "module V1\n  class HealthController\n    def pong; end\n  end\nend\nclass HealthController\n  def ping; end\nend\n";
+        let found = rails_routes(routes, &[("health.rb", controllers)]);
+        let mut routes = verbs_and_paths(&found);
+        routes.sort();
+        assert_eq!(routes, ["GET /api/items", "GET /api/ping", "GET /pong"]);
+        let pong = found
+            .iter()
+            .find(|entry| entry.route.as_ref().unwrap().path == "/pong")
+            .unwrap();
+        assert_eq!(
+            pong.symbol.as_deref(),
+            Some("health.rb#V1.HealthController.pong")
+        );
+        let ping = found
+            .iter()
+            .find(|entry| entry.route.as_ref().unwrap().path == "/api/ping")
+            .unwrap();
+        assert_eq!(
+            ping.symbol.as_deref(),
+            Some("health.rb#HealthController.ping")
+        );
+    }
+
+    #[test]
+    fn root_match_and_the_controller_action_form_register_routes() {
+        let routes = "Rails.application.routes.draw do\n  root \"pages#home\"\n  match \"/x\", to: \"pages#x\", via: [:get, :post]\n  get \"/y\", controller: \"pages\", action: \"y\"\n  get \"/z\" => \"pages#z\"\n  match \"/w\", to: \"pages#w\", via: :all\nend\n";
+        let controller = "class PagesController\n  def home; end\n  def x; end\n  def y; end\n  def z; end\nend\n";
+        let found = rails_routes(routes, &[("pages_controller.rb", controller)]);
+        let mut routes = verbs_and_paths(&found);
+        routes.sort();
+        assert_eq!(
+            routes,
+            ["ANY /w", "GET /", "GET /x", "GET /y", "GET /z", "POST /x"]
+        );
+        for entry in &found {
+            let path = &entry.route.as_ref().unwrap().path;
+            let wanted = match path.as_str() {
+                "/" => "home",
+                other => other.trim_start_matches('/'),
+            };
+            if wanted == "w" {
+                continue;
+            }
+            assert_eq!(
+                entry.symbol.as_deref(),
+                Some(format!("pages_controller.rb#PagesController.{wanted}").as_str()),
+                "{path}"
+            );
+        }
+        let rooted = rails_routes(
+            "Rails.application.routes.draw do\n  root to: \"pages#home\"\nend\n",
+            &[],
+        );
+        assert_eq!(verbs_and_paths(&rooted), ["GET /"]);
+    }
+
+    #[test]
+    fn routes_that_omen_cannot_read_exactly_are_skipped() {
+        let routes = "Rails.application.routes.draw do\n  name = \"dynamic\"\n  get \"/#{name}\", to: \"a#b\"\n  %w[a b].each do |part|\n    get \"/#{part}\", to: \"a#b\"\n  end\n  [:c].each do |part|\n    resources part\n  end\n  concern :commentable do\n    get \"/comments\", to: \"comments#index\"\n  end\n  resources :things, concerns: :commentable, only: [:index]\n  draw(:admin)\n  mount Sidekiq::Web => \"/sidekiq\"\n  resources :users, only: only_actions\n  resources :slugs, param: :slug\n  resources name\n  get \"/kept\", to: \"a#b\"\nend\n";
+        let found = rails_routes(routes, &[]);
+        assert_eq!(
+            verbs_and_paths(&found),
+            ["GET /things", "GET /kept"]
+                .iter()
+                .map(|text| text.to_string())
+                .collect::<Vec<_>>()
         );
     }
 
