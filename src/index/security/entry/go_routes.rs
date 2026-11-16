@@ -487,6 +487,8 @@ struct Record {
     prefix: bool,
     /// The registration is one that omen cannot read. It can match any request.
     opaque: bool,
+    /// The registration is real and has a path that omen reads, but omen omits its entry.
+    omitted: bool,
     /// The number of guards that the router had at the time of the registration.
     limit: usize,
     range: Span,
@@ -2220,6 +2222,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             tree: Vec::new(),
             made_cache: HashMap::new(),
             prefix_next: false,
+            omit_next: false,
             dry,
             factory_keys: Vec::new(),
         })
@@ -2261,6 +2264,7 @@ struct Routes<'c, 'a, 't> {
     /// Whether the router and each router above it came from the function that made it.
     made_cache: HashMap<usize, bool>,
     prefix_next: bool,
+    omit_next: bool,
     /// The walk only finds the factories. It does not read the calls of the repository.
     dry: bool,
     factory_keys: Vec<(String, Option<String>)>,
@@ -3298,12 +3302,20 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 }
             }
             ("Route", _, _) => {
-                self.chi_route(router, node, arguments);
+                if self.chi_route(router, node, arguments).is_none() {
+                    self.push_opaque(router, range);
+                }
             }
             ("Group", _, _) => {
                 self.chi_group(router, node, arguments);
             }
             ("Mount", [_, mounted], [Some(prefix), _]) => self.mount(router, prefix, *mounted),
+            (
+                "Get" | "Post" | "Put" | "Patch" | "Delete" | "Head" | "Options" | "Connect"
+                | "Trace" | "Query" | "HandleFunc" | "Handle" | "Method" | "MethodFunc" | "Mount",
+                _,
+                _,
+            ) => self.push_opaque(router, range),
             _ => {}
         }
     }
@@ -3633,26 +3645,29 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             name,
             "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS" | "CONNECT" | "TRACE"
         );
-        let (methods, rest): (Vec<String>, &[Node<'t>]) = match (name, arguments) {
-            (_, [_, ..]) if verb => (vec![name.to_string()], arguments),
-            ("Any", [_, ..]) => (ECHO_ANY.map(String::from).to_vec(), arguments),
+        // Methods that omen cannot read can be any method, so the route replaces the routes of
+        // its path for each method. Omen omits its entry.
+        let (methods, rest, unread): (Vec<String>, &[Node<'t>], bool) = match (name, arguments) {
+            (_, [_, ..]) if verb => (vec![name.to_string()], arguments, false),
+            ("Any", [_, ..]) => (ECHO_ANY.map(String::from).to_vec(), arguments, false),
             ("Match", [methods, rest @ ..]) => match self.string_list(*methods) {
-                Some(methods) => (methods, rest),
-                None => return,
+                Some(methods) => (methods, rest, false),
+                None => (ECHO_ANY.map(String::from).to_vec(), rest, true),
             },
             ("Add", [method, rest @ ..]) => match self.string_argument(*method) {
-                Some(method) => (vec![method], rest),
-                None => return,
+                Some(method) => (vec![method], rest, false),
+                None => (ECHO_ANY.map(String::from).to_vec(), rest, true),
             },
             _ => return,
         };
         let (Some(path), Some(handler)) = (rest.first(), rest.get(1)) else {
-            return;
+            return self.push_opaque(router, range);
         };
         let Some(path) = self.string_argument(*path) else {
-            return;
+            return self.push_opaque(router, range);
         };
         let methods: Vec<&str> = methods.iter().map(String::as_str).collect();
+        self.omit_next = unread;
         self.register(router, &methods, &path, Some(*handler), &rest[2..], range);
     }
 
@@ -3712,14 +3727,18 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         range: Span,
     ) {
         let prefix = std::mem::take(&mut self.prefix_next);
-        if self.has_spread(guard_arguments) || handler.is_some_and(|node| self.has_spread(&[node]))
-        {
+        let omitted = std::mem::take(&mut self.omit_next)
+            || self.has_spread(guard_arguments)
+            || handler.is_some_and(|node| self.has_spread(&[node]));
+        if omitted && self.routers[router].framework == Framework::Mux {
             self.push_opaque(router, range);
             return;
         }
         self.touch(router);
         let kind = self.routers[router].framework.handler_kind();
-        let handler = handler.map(|node| self.context.go_handler(node, kind));
+        let handler = handler
+            .filter(|_| !omitted)
+            .map(|node| self.context.go_handler(node, kind));
         let mut guards = self.guard_names(guard_arguments);
         let symbol = handler.map(|handler| {
             guards.extend(handler.guards);
@@ -3731,6 +3750,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 router,
                 prefix,
                 opaque: false,
+                omitted,
                 limit,
                 range,
                 symbol: symbol.clone().flatten(),
@@ -3744,13 +3764,14 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     /// Keeps the place of a registration that omen cannot read. A gorilla/mux route that it
     /// can match is not known, so the routes after it give no entry.
     fn push_opaque(&mut self, router: usize, range: Span) {
-        if self.routers[router].framework != Framework::Mux {
+        if self.routers[router].framework == Framework::Gin {
             return;
         }
         self.records.push(Record {
             router,
             prefix: true,
             opaque: true,
+            omitted: false,
             limit: 0,
             range,
             symbol: None,
@@ -3896,14 +3917,27 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         // chi's `Mount` registers the pattern, the pattern and a slash, and the pattern and `/*`
         // for all methods. A route that has one of these keys on the same tree replaces the
         // mount, or the mount panics. Then the routers below the mount give no entry.
-        let mut chi_keys: HashMap<usize, HashSet<String>> = HashMap::new();
+        let mut chi_keys: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut chi_opaque: HashSet<usize> = HashSet::new();
+        let mut echo_opaque: HashSet<usize> = HashSet::new();
         for record in &self.records {
-            if self.routers[record.router].framework == Framework::Chi {
+            let framework = self.routers[record.router].framework;
+            if record.opaque {
+                match framework {
+                    Framework::Chi => chi_opaque.insert(tree_of[record.router]),
+                    Framework::Echo => echo_opaque.insert(root_of[record.router]),
+                    _ => false,
+                };
+            } else if framework == Framework::Chi {
                 chi_keys
                     .entry(tree_of[record.router])
                     .or_default()
-                    .insert(chi_tree_key(&record.path));
+                    .push(chi_tree_key(&record.path));
             }
+        }
+        for keys in chi_keys.values_mut() {
+            keys.sort_unstable();
+            keys.dedup();
         }
         let own_replaced: Vec<bool> = self
             .routers
@@ -3913,11 +3947,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     router.framework == Framework::Chi
                         && !router.inline
                         && tree_of.get(link.parent).is_some_and(|tree| {
-                            chi_keys.get(tree).is_some_and(|keys| {
-                                chi_mount_keys(&link.prefix)
-                                    .iter()
-                                    .any(|key| keys.contains(key))
-                            })
+                            chi_opaque.contains(tree)
+                                || chi_keys.get(tree).is_some_and(|keys| {
+                                    chi_mount_keys(&link.prefix)
+                                        .iter()
+                                        .any(|key| keys.binary_search(key).is_ok())
+                                        || has_key_under(keys, &link.prefix)
+                                })
                         })
                 }
                 _ => false,
@@ -4019,7 +4055,18 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     .then_some(tree_of[record.router])
             })
             .collect();
-        chi_precedence(&self.records, &drafts, &chi_trees, &mut kept);
+        chi_precedence(&self.records, &chi_trees, &mut kept);
+        for (index, record) in self.records.iter().enumerate() {
+            let router = record.router;
+            let hidden = match self.routers[router].framework {
+                Framework::Chi => chi_opaque.contains(&tree_of[router]),
+                Framework::Echo => echo_opaque.contains(&root_of[router]),
+                _ => false,
+            };
+            if hidden || record.omitted {
+                kept[index] = false;
+            }
+        }
         for (index, draft) in drafts.into_iter().enumerate() {
             if let (Some((draft, _)), true) = (draft, kept[index]) {
                 out.push(draft);
@@ -4084,6 +4131,18 @@ enum Duplicate {
     Chi(usize, String),
     /// The router of echo, and the path with the names of the parameters removed.
     Echo(usize, String),
+}
+
+/// Tells if a route of the tree has a key below a mount prefix. chi tries the static route
+/// or the parameter route before the catch-all of the mount.
+fn has_key_under(keys: &[String], prefix: &str) -> bool {
+    let start = if prefix.ends_with('/') {
+        chi_tree_key(prefix)
+    } else {
+        chi_tree_key(&format!("{prefix}/"))
+    };
+    let first = keys.partition_point(|key| *key < start);
+    keys.get(first).is_some_and(|key| key.starts_with(&start))
 }
 
 /// The keys of the nodes that `Mount` of chi v5.3.2 registers for a pattern.
@@ -4526,12 +4585,7 @@ fn chi_tokens(pattern: &str) -> Option<Vec<String>> {
 /// a sibling of higher order that takes the request, so its routes give no entry. Two
 /// different regular expressions have an order that omen does not read. Each tree has one
 /// walk over the elements of its patterns.
-fn chi_precedence(
-    records: &[Record],
-    drafts: &[Option<(Draft, Duplicate)>],
-    trees: &[Option<usize>],
-    kept: &mut [bool],
-) {
+fn chi_precedence(records: &[Record], trees: &[Option<usize>], kept: &mut [bool]) {
     let mut edges: HashMap<(usize, String), usize> = HashMap::new();
     let mut counts: Vec<[usize; 3]> = Vec::new();
     let mut roots: HashMap<usize, usize> = HashMap::new();
@@ -4540,7 +4594,7 @@ fn chi_precedence(
         let Some(tree) = trees[index] else {
             continue;
         };
-        if drafts[index].is_none() {
+        if record.opaque {
             continue;
         }
         let Some(tokens) = chi_tokens(&record.path) else {

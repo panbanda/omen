@@ -4380,7 +4380,6 @@ func routes() {
             go_routes(&[("main.go", &source)]),
             [
                 "chi GET /x/* [] show",
-                "chi GET /y/b [] list",
                 "chi GET /y/z [] show",
                 "chi GET /w/ [] show",
                 "chi GET /v/* [] show",
@@ -4465,6 +4464,84 @@ func routes() {
             started.elapsed() < std::time::Duration::from_secs(8),
             "took {:?}",
             started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_chi_route_that_omen_omits_still_hides_the_lower_routes() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes(path string) {
+	mw := []func(http.Handler) http.Handler{}
+	r := chi.NewRouter()
+	r.With(mw...).Get("/a/{id:.+}", list)
+	r.Get("/a/{name}", show)
+	r.Get("/b/{id}", show)
+	s := chi.NewRouter()
+	s.Get(path, list)
+	s.Get("/c", show)
+	sub := chi.NewRouter()
+	sub.Get("/d", show)
+	s.Mount("/m", sub)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /b/{id} [] show"]
+        );
+    }
+
+    #[test]
+    fn an_echo_registration_that_omen_cannot_read_hides_the_routes_of_its_tree() {
+        let source = go_source(
+            &[ECHO],
+            r#"func routes(path string, mw ...echo.MiddlewareFunc) {
+	e := echo.New()
+	e.GET("/a", list)
+	e.GET("/b", list)
+	e.GET("/b", show, mw...)
+	f := echo.New()
+	f.GET("/c", list)
+	f.GET(path, show)
+	g := echo.New()
+	g.GET("/d", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["echo GET /a [] list", "echo GET /d [] list"]
+        );
+    }
+
+    #[test]
+    fn a_route_of_the_parent_below_a_chi_mount_hides_the_mounted_routes() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	sub := chi.NewRouter()
+	sub.Get("/x", list)
+	inner := chi.NewRouter()
+	inner.Get("/z", list)
+	sub.Mount("/in", inner)
+	root := chi.NewRouter()
+	root.Mount("/api", sub)
+	root.Get("/api/x", show)
+	other := chi.NewRouter()
+	other.Get("/y", list)
+	root.Mount("/other", other)
+	root.Get("/outside", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /api/x [] show",
+                "chi GET /other/y [] list",
+                "chi GET /outside [] show"
+            ]
         );
     }
 

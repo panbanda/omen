@@ -312,13 +312,23 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   endpoint `/x/*`, which serves the routes below the mount. Omen gives no entry for the
   routers below the mount in all of these cases. This rule drops more than the library
   replaces.
+- A route of the parent tree whose path is below a mount prefix, as `/api/x` below `Mount("/api")`,
+  takes the request before the catch-all of the mount. Then the routers below the mount
+  give no entry. A route of the parent that is not below the prefix has no effect on them.
 - chi tries the children of a node in the order static, regular expression, parameter, and
   catch-all, and goes back when a child fails. When a node has a regular expression child,
   its parameter child and its catch-all child give no entry. A catch-all child gives no
   entry when the node has a parameter child. A node with two different regular expressions
   gives no entry for either. Omen does not check if a regular expression accepts all that a
   parameter accepts.
-- A name that the package declares hides a predeclared name or a qualifier. The package is
+- A chi registration that omen omits still takes part in the precedence of its tree. It
+  can have a spread middleware list or an unread handler. A chi registration whose path
+  omen cannot read, such as a variable path, hides all routes of its tree and of the
+  routers mounted on it. echo replaces a route that has the same method and path, so an
+  echo registration whose path omen cannot read hides all routes of its echo router. An
+  echo route with methods that omen cannot read replaces the routes of its path for all
+  methods. gin and `net/http` panic on a second registration, and gin lets a static child
+  and a parameter child coexist, so an unread registration hides nothing there.- A name that the package declares hides a predeclared name or a qualifier. The package is
   the files of one directory that have the same package clause, so a declaration in
   another file of the package counts.
 - A package qualifier counts only when no name hides it. The qualifiers are `http`,
@@ -403,9 +413,10 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   that ends in `HandlerFunc` or `Handler` gives a route, as `r.Methods("GET").Path("/x")
   .HandlerFunc(show)` does. A chain without `Path` or `PathPrefix` gives no entry. A chain with more than one
   `Path` or `PathPrefix` call gives no entry, because gorilla/mux needs each matcher to match.
-  A `Schemes` call needs literal values `http` or `https`, in any case, because a request
-  has no other scheme. A `Methods` call needs literal values that are HTTP tokens. Other
-  values give no entry. `PathPrefix("")` matches
+  A `Schemes` call needs literal values `http` or `https`, in any case. A handler that
+  runs before the router can set another value in `URL.Scheme`, so omen gives no entry for
+  other values. A `Methods` call needs literal values that are HTTP tokens. Other values
+  give no entry. `PathPrefix("")` matches
   every path, so it hides the routes after it. The
   path matchers join in the
   order of the calls. Each `Methods` list limits the methods, so the result is the
