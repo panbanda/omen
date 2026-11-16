@@ -177,7 +177,7 @@ fn decode_escape(escape: &str, out: &mut Vec<u8>) -> Option<()> {
             if digits.len() > 3 || !digits.chars().all(|digit| ('0'..='7').contains(&digit)) {
                 return None;
             }
-            out.push(u8::try_from(u32::from_str_radix(&digits, 8).ok()?).ok()?);
+            out.push((u32::from_str_radix(&digits, 8).ok()? & 0xFF) as u8);
         }
         other => {
             if characters.len() != 2 {
@@ -648,55 +648,80 @@ impl<'a> Context<'a> {
             .map(|scope| (*scope).clone())
     }
 
-    /// The scope for the code inside the node, from the scope outside it. A method, a lambda, a
-    /// loop, a class, and a dead branch make the scope not readable. The block of a call enters
-    /// the scope of the call.
+    /// The scope for the code inside the node, from the scope outside it. Only these nodes can hold
+    /// a route: a list of statements, a block, a call with a block, a condition that omen can
+    /// evaluate, and a `case` that omen can evaluate. Any other node, such as an expression, an
+    /// assignment, an argument, a method, or a class, makes the scope not readable. The block of a
+    /// call enters the scope of the call.
     fn scope_inside(&self, node: Node<'_>, outer: Rc<Scope>) -> Option<Rc<Scope>> {
-        if matches!(
+        if !matches!(
             node.kind(),
-            "for"
-                | "while"
-                | "until"
-                | "while_modifier"
-                | "until_modifier"
-                | "method"
-                | "singleton_method"
-                | "lambda"
-                | "class"
-                | "module"
-                | "singleton_class"
+            "program"
+                | "body_statement"
+                | "block_body"
+                | "then"
+                | "else"
+                | "elsif"
+                | "if"
+                | "unless"
+                | "if_modifier"
+                | "unless_modifier"
+                | "conditional"
+                | "case"
+                | "when"
+                | "do_block"
+                | "block"
+                | "call"
         ) {
             return None;
         }
         let Some(parent) = node.parent() else {
             return Some(outer);
         };
-        if matches!(
-            parent.kind(),
-            "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional"
-        ) && Self::is_dead_branch(parent, node)
-        {
-            return None;
-        }
-        if matches!(parent.kind(), "case" | "case_match") {
-            match literal_case_children(parent) {
-                Some(alive) if alive.contains(&node) => {}
+        match parent.kind() {
+            "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
+                if parent.child_by_field_name("condition") == Some(node)
+                    || Self::is_dead_branch(parent, node)
+                {
+                    return None;
+                }
+            }
+            "case" => match self.case_alive(parent) {
+                Some(alive) if alive.contains(&node.id()) => {}
                 _ => return None,
+            },
+            "call" => {
+                if parent.child_by_field_name("block") != Some(node) {
+                    return None;
+                }
+                if matches!(
+                    parent
+                        .child_by_field_name("method")
+                        .map(|method| self.text(method)),
+                    Some("constraints" | "defaults")
+                ) && parent.child_by_field_name("receiver").is_none()
+                {
+                    return Some(outer);
+                }
+                return self.rails_enter(parent, (*outer).clone()).map(Rc::new);
             }
-        }
-        if parent.kind() == "call" && parent.child_by_field_name("block") == Some(node) {
-            if matches!(
-                parent
-                    .child_by_field_name("method")
-                    .map(|method| self.text(method)),
-                Some("constraints" | "defaults")
-            ) && parent.child_by_field_name("receiver").is_none()
-            {
-                return Some(outer);
-            }
-            return self.rails_enter(parent, (*outer).clone()).map(Rc::new);
+            _ => {}
         }
         Some(outer)
+    }
+
+    /// The ids of the children of a `case` that can run, when omen can evaluate the `case`. The
+    /// search keeps the result for each `case`, so each branch does not read all the patterns.
+    fn case_alive(&self, case: Node<'_>) -> Option<Rc<Vec<usize>>> {
+        if let Some(known) = self.rails_cases.borrow().get(&case.id()) {
+            return known.clone();
+        }
+        let alive = literal_case_children(case)
+            .map(|children| Rc::new(children.iter().map(Node::id).collect::<Vec<_>>()));
+        self.rails_cases
+            .borrow_mut()
+            .insert(case.id(), alive.clone());
+        alive
     }
 
     /// Tells if a literal condition makes the branch of `child` dead: `if false`, `if nil`,
@@ -971,7 +996,16 @@ impl<'a> Context<'a> {
             return;
         };
         let positional = Self::rails_positional(&arguments);
-        let rocket = options.0.iter().find(|option| option.string_key);
+        let rocket = options
+            .0
+            .iter()
+            .find(|option| option.string_key)
+            .and_then(|first| {
+                options
+                    .0
+                    .iter()
+                    .rfind(|option| option.string_key && option.key == first.key)
+            });
         let root = name == "root";
         for option in options.0.iter().filter(|option| !option.string_key) {
             let known = match option.key.as_str() {
@@ -1261,7 +1295,10 @@ impl<'a> Context<'a> {
     }
 
     /// Reads the assignments `x.api_only = value`. `names` are the modules and the classes around
-    /// the node, and a flag that tells which of them is a class.
+    /// the node, and a flag that tells which of them is a class. The search goes through the
+    /// statement lists, the literal conditions that it can evaluate, the class bodies, and the
+    /// blocks. An assignment under any other kind of node, such as an expression, an argument, or
+    /// a `begin` block, is not attributed to a route set.
     fn collect_api_only(
         &self,
         node: Node<'_>,
@@ -1283,7 +1320,11 @@ impl<'a> Context<'a> {
                 let literal = condition
                     .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"));
                 for part in children {
-                    if Some(part) == condition || Self::is_dead_branch(node, part) {
+                    if Some(part) == condition {
+                        self.check_api_only_subtree(part, scan, out);
+                        continue;
+                    }
+                    if Self::is_dead_branch(node, part) {
                         continue;
                     }
                     self.collect_api_only(
@@ -1295,20 +1336,17 @@ impl<'a> Context<'a> {
                         out,
                     );
                 }
-                return;
             }
             "case" if literal_case_children(node).is_some() => {
                 for child in literal_case_children(node).unwrap_or_default() {
                     self.collect_api_only(child, scan, depth + 1, conditional, names, out);
                 }
-                return;
             }
             "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
             | "until" | "while_modifier" | "until_modifier" => {
                 for child in children {
                     self.collect_api_only(child, scan, depth + 1, true, names, out);
                 }
-                return;
             }
             "class" | "module" => {
                 let name = node
@@ -1320,7 +1358,6 @@ impl<'a> Context<'a> {
                     self.collect_api_only(child, scan, depth + 1, conditional, names, out);
                 }
                 names.pop();
-                return;
             }
             "assignment" => {
                 let assigns_api_only = node.child_by_field_name("left").is_some_and(|left| {
@@ -1330,88 +1367,108 @@ impl<'a> Context<'a> {
                         })
                 });
                 if assigns_api_only {
-                    let value = match node.child_by_field_name("right").map(|right| right.kind()) {
-                        Some("true") if !conditional => Some(true),
-                        Some("false") if !conditional => Some(false),
-                        _ => None,
-                    };
-                    let receiver = node
-                        .child_by_field_name("left")
-                        .and_then(|left| left.child_by_field_name("receiver"));
-                    let receiver_text =
-                        receiver.map(|receiver| super::syntax::text(receiver, scan.source));
-                    let constant = receiver
-                        .filter(|receiver| {
-                            receiver.kind() == "call"
-                                && receiver
-                                    .child_by_field_name("method")
-                                    .is_some_and(|method| {
-                                        super::syntax::text(method, scan.source) == "config"
-                                    })
-                        })
-                        .and_then(|receiver| receiver.child_by_field_name("receiver"))
-                        .map(|constant| {
-                            super::syntax::text(constant, scan.source)
-                                .trim_start_matches("::")
-                                .to_string()
-                        })
-                        .filter(|path| is_constant_path(path));
-                    if receiver_text == Some("Rails.application.config") {
-                        out.application.push(value);
-                    } else if let Some(path) = constant {
-                        let identity = path.replace("::", ".");
-                        match self.rails_class_kind(&identity) {
-                            ClassKind::Application => out.application.push(value),
-                            ClassKind::Engine => {
-                                out.engines.entry(identity).or_default().push(value)
-                            }
-                            ClassKind::Other => out.unattributed = true,
-                        }
-                    } else if receiver_text == Some("config") {
-                        match names.iter().rposition(|(is_class, _)| *is_class) {
-                            Some(class_depth) => {
-                                let identity = names[..=class_depth]
-                                    .iter()
-                                    .map(|(_, name)| name.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(".");
-                                match self.rails_class_kind(&identity) {
-                                    ClassKind::Application => out.application.push(value),
-                                    ClassKind::Engine => {
-                                        out.engines.entry(identity).or_default().push(value)
-                                    }
-                                    ClassKind::Other => out.unattributed = true,
-                                }
-                            }
-                            None if scan.in_config => out.application.push(value),
-                            None => out.unattributed = true,
-                        }
+                    self.attribute_api_only(node, scan, conditional, names, out);
+                }
+                if let Some(right) = node.child_by_field_name("right") {
+                    self.check_api_only_subtree(right, scan, out);
+                }
+            }
+            "call" => {
+                let configure = node
+                    .child_by_field_name("method")
+                    .is_some_and(|method| super::syntax::text(method, scan.source) == "configure");
+                for child in children {
+                    if matches!(child.kind(), "do_block" | "block") {
+                        self.collect_api_only(
+                            child,
+                            scan,
+                            depth + 1,
+                            conditional || !configure,
+                            names,
+                            out,
+                        );
                     } else {
-                        out.unattributed = true;
+                        self.check_api_only_subtree(child, scan, out);
                     }
                 }
             }
-            _ => {}
+            "program" | "body_statement" | "then" | "else" | "block_body" | "do_block"
+            | "block" => {
+                for child in children {
+                    self.collect_api_only(child, scan, depth + 1, conditional, names, out);
+                }
+            }
+            _ => self.check_api_only_subtree(node, scan, out),
         }
-        let block_conditional = conditional
-            || node.kind() != "call"
-            || node
-                .child_by_field_name("method")
-                .is_none_or(|method| super::syntax::text(method, scan.source) != "configure");
-        for child in children {
-            let is_block = matches!(child.kind(), "do_block" | "block");
-            self.collect_api_only(
-                child,
-                scan,
-                depth + 1,
-                if is_block {
-                    block_conditional
-                } else {
-                    conditional
-                },
-                names,
-                out,
-            );
+    }
+
+    /// Marks an assignment of `api_only` under the node as not attributed to a route set.
+    fn check_api_only_subtree(&self, node: Node<'_>, scan: &ApiScan<'_>, out: &mut ApiOnlySets) {
+        if subtree_assigns_api_only(node, scan.source, 0) {
+            out.unattributed = true;
+        }
+    }
+
+    /// Gives the assignment `x.api_only = value` to a route set, by its receiver.
+    fn attribute_api_only(
+        &self,
+        node: Node<'_>,
+        scan: &ApiScan<'_>,
+        conditional: bool,
+        names: &[(bool, String)],
+        out: &mut ApiOnlySets,
+    ) {
+        let value = match node.child_by_field_name("right").map(|right| right.kind()) {
+            Some("true") if !conditional => Some(true),
+            Some("false") if !conditional => Some(false),
+            _ => None,
+        };
+        let receiver = node
+            .child_by_field_name("left")
+            .and_then(|left| left.child_by_field_name("receiver"));
+        let receiver_text = receiver.map(|receiver| super::syntax::text(receiver, scan.source));
+        let constant = receiver
+            .filter(|receiver| {
+                receiver.kind() == "call"
+                    && receiver
+                        .child_by_field_name("method")
+                        .is_some_and(|method| super::syntax::text(method, scan.source) == "config")
+            })
+            .and_then(|receiver| receiver.child_by_field_name("receiver"))
+            .map(|constant| {
+                super::syntax::text(constant, scan.source)
+                    .trim_start_matches("::")
+                    .to_string()
+            })
+            .filter(|path| is_constant_path(path));
+        if receiver_text == Some("Rails.application.config") {
+            out.application.push(value);
+        } else if let Some(path) = constant {
+            let identity = path.replace("::", ".");
+            match self.rails_class_kind(&identity) {
+                ClassKind::Application => out.application.push(value),
+                ClassKind::Engine => out.engines.entry(identity).or_default().push(value),
+                ClassKind::Other => out.unattributed = true,
+            }
+        } else if receiver_text == Some("config") {
+            match names.iter().rposition(|(is_class, _)| *is_class) {
+                Some(class_depth) => {
+                    let identity = names[..=class_depth]
+                        .iter()
+                        .map(|(_, name)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    match self.rails_class_kind(&identity) {
+                        ClassKind::Application => out.application.push(value),
+                        ClassKind::Engine => out.engines.entry(identity).or_default().push(value),
+                        ClassKind::Other => out.unattributed = true,
+                    }
+                }
+                None if scan.in_config => out.application.push(value),
+                None => out.unattributed = true,
+            }
+        } else {
+            out.unattributed = true;
         }
     }
 
@@ -1599,18 +1656,18 @@ impl<'a> Context<'a> {
             chain.push(parent.clone());
             current = parent.clone();
         }
-        let mut program = program.unwrap_or_else(|| Arc::new(Program::layer(None, Vec::new())));
+        let mut program =
+            program.unwrap_or_else(|| Arc::new(Program::layer(None, Vec::new(), false)));
         for class in chain.iter().rev() {
             let mut own: Vec<Callback> = Vec::new();
+            let mut opaque = false;
             for (position, index) in shared.classes.get(class).into_iter().flatten() {
-                own.extend(
-                    self.rails_callbacks(shared, *position, *index)
-                        .iter()
-                        .cloned(),
-                );
+                let class_callbacks = self.rails_callbacks(shared, *position, *index);
+                own.extend(class_callbacks.list.iter().cloned());
+                opaque |= class_callbacks.opaque;
             }
-            if !own.is_empty() {
-                program = Arc::new(Program::layer(Some(program), own));
+            if !own.is_empty() || opaque {
+                program = Arc::new(Program::layer(Some(program), own, opaque));
             }
             shared
                 .programs
@@ -1627,11 +1684,11 @@ impl<'a> Context<'a> {
         shared: &RailsShared,
         position: usize,
         index: usize,
-    ) -> Arc<Vec<Callback>> {
+    ) -> Arc<ClassCallbacks> {
         if let Some(found) = shared.callbacks.lock().get(&(position, index)) {
             return Arc::clone(found);
         }
-        let mut callbacks = Vec::new();
+        let mut callbacks = ClassCallbacks::default();
         self.with_class_body(position, index, |reader, node| {
             reader.collect_callbacks(node, false, &mut callbacks);
         });
@@ -1815,8 +1872,9 @@ impl<'a> Context<'a> {
 
     /// Reads the callbacks in the children of the node. `conditional` tells that a branch that
     /// omen cannot evaluate holds the node. A callback in such a branch is conditional. A literal
-    /// condition makes a branch dead or live, as it does for a route.
-    fn collect_callbacks(&self, node: Node<'_>, conditional: bool, out: &mut Vec<Callback>) {
+    /// condition makes a branch dead or live, as it does for a route. A callback under any other
+    /// kind of node makes the callbacks of the class opaque: omen reports no guard for it.
+    fn collect_callbacks(&self, node: Node<'_>, conditional: bool, out: &mut ClassCallbacks) {
         let mut cursor = node.walk();
         let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
         for child in children {
@@ -1824,7 +1882,7 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn collect_callback_node(&self, node: Node<'_>, conditional: bool, out: &mut Vec<Callback>) {
+    fn collect_callback_node(&self, node: Node<'_>, conditional: bool, out: &mut ClassCallbacks) {
         match node.kind() {
             "method" | "singleton_method" | "class" | "module" | "singleton_class" => {}
             "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
@@ -1834,7 +1892,13 @@ impl<'a> Context<'a> {
                 let mut cursor = node.walk();
                 let parts: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
                 for part in parts {
-                    if Some(part) == condition || Self::is_dead_branch(node, part) {
+                    if Some(part) == condition {
+                        if subtree_has_callback(part, self.source, 0) {
+                            out.opaque = true;
+                        }
+                        continue;
+                    }
+                    if Self::is_dead_branch(node, part) {
                         continue;
                     }
                     self.collect_callback_node(part, conditional || !literal, out);
@@ -1848,16 +1912,31 @@ impl<'a> Context<'a> {
             "case" | "case_match" | "do_block" | "block" | "lambda" => {
                 self.collect_callbacks(node, true, out)
             }
-            "call" if node.child_by_field_name("receiver").is_none() => {
-                match self.rails_callback(node) {
-                    Some(mut callback) => {
-                        callback.conditional |= conditional;
-                        out.push(callback);
+            "call" => match self.rails_callback(node) {
+                Some(mut callback) if node.child_by_field_name("receiver").is_none() => {
+                    callback.conditional |= conditional;
+                    out.list.push(callback);
+                }
+                _ => {
+                    let mut cursor = node.walk();
+                    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+                    for child in children {
+                        if matches!(child.kind(), "do_block" | "block") {
+                            self.collect_callback_node(child, conditional, out);
+                        } else if subtree_has_callback(child, self.source, 0) {
+                            out.opaque = true;
+                        }
                     }
-                    None => self.collect_callbacks(node, conditional, out),
+                }
+            },
+            "body_statement" | "then" | "else" | "when" | "block_body" => {
+                self.collect_callbacks(node, conditional, out)
+            }
+            _ => {
+                if subtree_has_callback(node, self.source, 0) {
+                    out.opaque = true;
                 }
             }
-            _ => self.collect_callbacks(node, conditional, out),
         }
     }
 
@@ -1966,6 +2045,14 @@ struct DefaultGuards {
     names: Vec<String>,
 }
 
+/// The callbacks of one class: the calls that omen reads, and a flag that tells that a callback
+/// call is in a place that omen cannot read. Then the class has no guard that omen can claim.
+#[derive(Default)]
+struct ClassCallbacks {
+    list: Vec<Callback>,
+    opaque: bool,
+}
+
 /// The callbacks of a chain of classes in the order of Rails, ready to answer for an action.
 ///
 /// A callback replaces the callbacks with its names, and it adds its names when it applies. Thus
@@ -1983,11 +2070,15 @@ struct Program {
     callbacks: Vec<Callback>,
     by_action: HashMap<String, Vec<usize>>,
     by_name: HashMap<String, Vec<usize>>,
-    default: std::sync::OnceLock<DefaultGuards>,
+    /// The actions that a list of a callback of this layer or of a superclass names.
+    listed: Arc<HashSet<String>>,
+    /// A callback of this layer or of a superclass is in a place that omen cannot read.
+    opaque: bool,
+    default: std::sync::OnceLock<Arc<DefaultGuards>>,
 }
 
 impl Program {
-    fn layer(parent: Option<Arc<Program>>, callbacks: Vec<Callback>) -> Self {
+    fn layer(parent: Option<Arc<Program>>, callbacks: Vec<Callback>, opaque: bool) -> Self {
         let offset = parent
             .as_ref()
             .map_or(0, |parent| parent.offset + parent.callbacks.len());
@@ -2004,12 +2095,25 @@ impl Program {
                 by_action.entry(action.clone()).or_default().push(index);
             }
         }
+        let inherited = parent.as_ref().map(|parent| Arc::clone(&parent.listed));
+        let listed = match inherited {
+            Some(listed) if by_action.keys().all(|action| listed.contains(action)) => listed,
+            Some(listed) => {
+                let mut all = (*listed).clone();
+                all.extend(by_action.keys().cloned());
+                Arc::new(all)
+            }
+            None => Arc::new(by_action.keys().cloned().collect()),
+        };
+        let opaque = opaque || parent.as_ref().is_some_and(|parent| parent.opaque);
         Self {
             parent,
             offset,
             callbacks,
             by_action,
             by_name,
+            listed,
+            opaque,
             default: std::sync::OnceLock::new(),
         }
     }
@@ -2051,56 +2155,86 @@ impl Program {
     }
 
     /// The default guards. The search goes up to the nearest layer that has them, and it applies
-    /// the layers below it one time each.
-    fn default_guards(&self) -> &DefaultGuards {
-        self.default.get_or_init(|| {
-            let mut pending = vec![self];
-            let mut slots: HashMap<String, Slot> = HashMap::new();
-            let mut layer = self.parent.as_deref();
-            while let Some(above) = layer {
-                if let Some(found) = above.default.get() {
-                    slots = found.slots.clone();
-                    break;
-                }
-                pending.push(above);
-                layer = above.parent.as_deref();
+    /// the layers below it one time each. A layer that changes no default guard shares the
+    /// result of the layer above it, so a chain of such layers costs one pass.
+    fn default_guards(&self) -> Arc<DefaultGuards> {
+        if let Some(found) = self.default.get() {
+            return Arc::clone(found);
+        }
+        let mut pending = vec![self];
+        let mut shared: Option<Arc<DefaultGuards>> = None;
+        let mut layer = self.parent.as_deref();
+        while let Some(above) = layer {
+            if let Some(found) = above.default.get() {
+                shared = Some(Arc::clone(found));
+                break;
             }
-            for layer in pending.iter().rev() {
-                for name in layer.by_name.keys() {
-                    match layer.decide(name, "") {
-                        Decision::Decided(Some(slot)) => {
-                            slots.insert(name.clone(), slot);
-                        }
-                        Decision::Decided(None) => {
-                            slots.remove(name);
-                        }
-                        Decision::Undecided => {}
+            pending.push(above);
+            layer = above.parent.as_deref();
+        }
+        let mut shared = shared.or_else(|| {
+            Some(Arc::new(DefaultGuards {
+                slots: HashMap::new(),
+                names: Vec::new(),
+            }))
+        });
+        let mut slots: HashMap<String, Slot> = shared
+            .as_ref()
+            .map(|found| found.slots.clone())
+            .unwrap_or_default();
+        let count = pending.len();
+        for (position, layer) in pending.iter().rev().enumerate() {
+            let mut changed = false;
+            for name in layer.by_name.keys() {
+                match layer.decide(name, "") {
+                    Decision::Decided(Some(slot)) => {
+                        changed |= slots.insert(name.clone(), slot) != Some(slot);
                     }
+                    Decision::Decided(None) => changed |= slots.remove(name).is_some(),
+                    Decision::Undecided => {}
                 }
             }
-            let mut ordered: Vec<(&str, Slot)> = slots
-                .iter()
-                .map(|(name, slot)| (name.as_str(), *slot))
-                .collect();
-            order_slots(&mut ordered);
-            let names = ordered
-                .iter()
-                .map(|(name, _)| (*name).to_string())
-                .collect();
-            DefaultGuards { slots, names }
-        })
+            if !changed {
+                if let Some(found) = &shared {
+                    let _ = layer.default.set(Arc::clone(found));
+                    continue;
+                }
+            }
+            if position + 1 == count {
+                let mut ordered: Vec<(&str, Slot)> = slots
+                    .iter()
+                    .map(|(name, slot)| (name.as_str(), *slot))
+                    .collect();
+                order_slots(&mut ordered);
+                let names = ordered
+                    .iter()
+                    .map(|(name, _)| (*name).to_string())
+                    .collect();
+                let built = Arc::new(DefaultGuards {
+                    slots: std::mem::take(&mut slots),
+                    names,
+                });
+                let _ = layer.default.set(Arc::clone(&built));
+                return built;
+            }
+            shared = None;
+        }
+        Arc::clone(self.default.get().expect("the last layer sets the default"))
     }
 
     fn guards_for(&self, action: &str) -> Vec<String> {
+        if self.opaque {
+            return Vec::new();
+        }
         let default = self.default_guards();
+        if !self.listed.contains(action) {
+            return default.names.clone();
+        }
         let mut affected: HashSet<&str> = HashSet::new();
         for layer in self.layers() {
             for index in layer.by_action.get(action).into_iter().flatten() {
                 affected.extend(layer.callbacks[*index].names.iter().map(String::as_str));
             }
-        }
-        if affected.is_empty() {
-            return default.names.clone();
         }
         let mut slots: Vec<(&str, Slot)> = default
             .slots
@@ -2394,11 +2528,148 @@ fn block_parameter_names(call: Node<'_>, source: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// Tells if the code has a call that registers a callback: `before_action`, `prepend_before_action`,
+/// `skip_before_action`, or the `filter` names of these calls, with any receiver.
+fn subtree_has_callback(node: Node<'_>, source: &[u8], depth: usize) -> bool {
+    if depth > MAX_READ_DEPTH {
+        return true;
+    }
+    if node.kind() == "call"
+        && node.child_by_field_name("method").is_some_and(|method| {
+            matches!(
+                super::syntax::text(method, source),
+                "before_action"
+                    | "before_filter"
+                    | "prepend_before_action"
+                    | "prepend_before_filter"
+                    | "skip_before_action"
+                    | "skip_before_filter"
+            )
+        })
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+    children
+        .into_iter()
+        .any(|child| subtree_has_callback(child, source, depth + 1))
+}
+
+/// Tells if the code assigns `api_only` of any receiver.
+fn subtree_assigns_api_only(node: Node<'_>, source: &[u8], depth: usize) -> bool {
+    if depth > MAX_READ_DEPTH {
+        return true;
+    }
+    if node.kind() == "assignment"
+        && node.child_by_field_name("left").is_some_and(|left| {
+            left.kind() == "call"
+                && left
+                    .child_by_field_name("method")
+                    .is_some_and(|method| super::syntax::text(method, source) == "api_only")
+        })
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+    children
+        .into_iter()
+        .any(|child| subtree_assigns_api_only(child, source, depth + 1))
+}
+
+const INFLECTION_METHODS: [&str; 7] = [
+    "acronym",
+    "irregular",
+    "uncountable",
+    "human",
+    "clear",
+    "singular",
+    "plural",
+];
+
+/// Tells if the code has a call of a method that changes the inflections, with any receiver.
+fn subtree_has_inflection_call(node: Node<'_>, source: &[u8], depth: usize) -> bool {
+    if depth > MAX_READ_DEPTH {
+        return true;
+    }
+    if node.kind() == "call"
+        && node
+            .child_by_field_name("method")
+            .is_some_and(|method| INFLECTION_METHODS.contains(&super::syntax::text(method, source)))
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+    children
+        .into_iter()
+        .any(|child| subtree_has_inflection_call(child, source, depth + 1))
+}
+
+/// Tells if the code binds one of the names again: an assignment, a block parameter, a
+/// destructuring, a `for` variable, or a `rescue` variable. The `own` node is the parameter list
+/// of the block that gives the names.
+fn rebinds_name(
+    node: Node<'_>,
+    source: &[u8],
+    names: &[String],
+    own: Option<Node<'_>>,
+    depth: usize,
+) -> bool {
+    if depth > MAX_READ_DEPTH {
+        return true;
+    }
+    let mentions = |target: Node<'_>| {
+        let mut stack = vec![target];
+        while let Some(current) = stack.pop() {
+            if current.kind() == "identifier"
+                && names
+                    .iter()
+                    .any(|name| name == super::syntax::text(current, source))
+            {
+                return true;
+            }
+            let mut cursor = current.walk();
+            stack.extend(current.named_children(&mut cursor));
+        }
+        false
+    };
+    match node.kind() {
+        "assignment" | "operator_assignment" => {
+            if node.child_by_field_name("left").is_some_and(mentions) {
+                return true;
+            }
+        }
+        "left_assignment_list"
+        | "rest_assignment"
+        | "for"
+        | "exception_variable"
+        | "destructured_left_assignment" => {
+            if mentions(node) {
+                return true;
+            }
+        }
+        "block_parameters" | "lambda_parameters" | "method_parameters" | "parameters"
+            if Some(node) != own && mentions(node) =>
+        {
+            return true;
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+    children
+        .into_iter()
+        .any(|child| rebinds_name(child, source, names, own, depth + 1))
+}
+
 /// Reads the inflection calls in the code: `acronym` with a string, and the calls that change
 /// a singular or a plural form. Only a call on the object of the inflections counts: the
 /// parameter of the block of `ActiveSupport::Inflector.inflections`, or the result of that call.
-/// A call in a dead branch has no effect. A call in a conditional, a loop, a method, or a block
-/// other than the block of `inflections` is not known: the inflections are then unreadable.
+/// The search goes through the statement lists, the literal conditions that it can evaluate, and
+/// the blocks. A call under any other kind of node, a call in a branch that omen cannot
+/// evaluate, and a block parameter that the code binds again make the inflections unreadable.
 fn read_inflection_calls(
     node: Node<'_>,
     source: &[u8],
@@ -2407,9 +2678,12 @@ fn read_inflection_calls(
     params: &[String],
     out: &mut Inflections,
 ) {
-    if depth > MAX_READ_DEPTH {
+    let unreadable = |out: &mut Inflections| {
         out.unreadable_acronym = true;
         out.changes_singulars = true;
+    };
+    if depth > MAX_READ_DEPTH {
+        unreadable(out);
         return;
     }
     let mut cursor = node.walk();
@@ -2420,7 +2694,13 @@ fn read_inflection_calls(
             let literal = condition
                 .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"));
             for part in children {
-                if Some(part) == condition || Context::is_dead_branch(node, part) {
+                if Some(part) == condition {
+                    if subtree_has_inflection_call(part, source, 0) {
+                        unreadable(out);
+                    }
+                    continue;
+                }
+                if Context::is_dead_branch(node, part) {
                     continue;
                 }
                 read_inflection_calls(
@@ -2432,92 +2712,105 @@ fn read_inflection_calls(
                     out,
                 );
             }
-            return;
         }
         "case" if literal_case_children(node).is_some() => {
             for child in literal_case_children(node).unwrap_or_default() {
                 read_inflection_calls(child, source, depth + 1, conditional, params, out);
             }
-            return;
         }
         "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
         | "until" | "while_modifier" | "until_modifier" => {
             for child in children {
                 read_inflection_calls(child, source, depth + 1, true, params, out);
             }
-            return;
         }
-        _ => {}
-    }
-    let mut block_conditional = conditional;
-    let mut block_params: Vec<String> = params.to_vec();
-    if node.kind() == "call" {
-        let method = node
-            .child_by_field_name("method")
-            .map_or("", |method| super::syntax::text(method, source));
-        let receiver = node.child_by_field_name("receiver");
-        let opens_inflections = method == "inflections"
-            && receiver.is_some_and(|receiver| {
-                is_inflector_constant(super::syntax::text(receiver, source))
-            });
-        block_conditional = conditional || !opens_inflections;
-        if opens_inflections {
-            block_params.extend(block_parameter_names(node, source));
-        }
-        let on_object =
-            receiver.is_some_and(|receiver| is_inflection_object(receiver, source, params));
-        let affects = on_object
-            && matches!(
-                method,
-                "acronym" | "irregular" | "uncountable" | "human" | "clear" | "singular" | "plural"
-            );
-        if affects && conditional {
-            out.unreadable_acronym = true;
-            out.changes_singulars = true;
-        } else if affects {
-            match method {
-                "acronym" => {
-                    let mut arguments_cursor = node.walk();
-                    let arguments: Vec<Node<'_>> = node
-                        .child_by_field_name("arguments")
-                        .map(|list| list.named_children(&mut arguments_cursor).collect())
-                        .unwrap_or_default();
-                    let words: Vec<String> = arguments
-                        .iter()
-                        .filter_map(|argument| {
-                            (argument.kind() == "string")
-                                .then(|| evaluate_string(*argument, source))
-                                .flatten()
-                        })
-                        .collect();
-                    if words.is_empty() || words.len() != arguments.len() {
-                        out.unreadable_acronym = true;
-                    }
-                    for word in words {
-                        out.acronyms.insert(word.to_lowercase(), word);
-                    }
-                }
-                "clear" => {
-                    out.unreadable_acronym = true;
-                    out.changes_singulars = true;
-                }
-                _ => out.changes_singulars = true,
+        "program" | "body_statement" | "then" | "else" | "block_body" | "do_block" | "block"
+        | "class" | "module" => {
+            for child in children {
+                read_inflection_calls(child, source, depth + 1, conditional, params, out);
             }
         }
-    }
-    for child in children {
-        let is_block = matches!(child.kind(), "do_block" | "block");
-        if is_block {
-            read_inflection_calls(
-                child,
-                source,
-                depth + 1,
-                block_conditional,
-                &block_params,
-                out,
-            );
-        } else {
-            read_inflection_calls(child, source, depth + 1, conditional, params, out);
+        "call" => {
+            let method = node
+                .child_by_field_name("method")
+                .map_or("", |method| super::syntax::text(method, source));
+            let receiver = node.child_by_field_name("receiver");
+            let opens_inflections = method == "inflections"
+                && receiver.is_some_and(|receiver| {
+                    is_inflector_constant(super::syntax::text(receiver, source))
+                });
+            let mut block_params: Vec<String> = params.to_vec();
+            if opens_inflections {
+                let names = block_parameter_names(node, source);
+                let own = node
+                    .child_by_field_name("block")
+                    .and_then(|block| block.child_by_field_name("parameters"));
+                let rebound = node
+                    .child_by_field_name("block")
+                    .is_some_and(|block| rebinds_name(block, source, &names, own, 0));
+                if rebound {
+                    unreadable(out);
+                } else {
+                    block_params.extend(names);
+                }
+            }
+            let on_object =
+                receiver.is_some_and(|receiver| is_inflection_object(receiver, source, params));
+            let affects = on_object && INFLECTION_METHODS.contains(&method);
+            if affects && conditional {
+                unreadable(out);
+            } else if affects {
+                match method {
+                    "acronym" => {
+                        let mut arguments_cursor = node.walk();
+                        let arguments: Vec<Node<'_>> = node
+                            .child_by_field_name("arguments")
+                            .map(|list| list.named_children(&mut arguments_cursor).collect())
+                            .unwrap_or_default();
+                        let words: Vec<String> = arguments
+                            .iter()
+                            .filter_map(|argument| {
+                                (argument.kind() == "string")
+                                    .then(|| evaluate_string(*argument, source))
+                                    .flatten()
+                            })
+                            .collect();
+                        if words.is_empty() || words.len() != arguments.len() {
+                            out.unreadable_acronym = true;
+                        }
+                        for word in words {
+                            out.acronyms.insert(word.to_lowercase(), word);
+                        }
+                    }
+                    "clear" => unreadable(out),
+                    _ => out.changes_singulars = true,
+                }
+            }
+            for child in children {
+                if matches!(child.kind(), "do_block" | "block") {
+                    read_inflection_calls(
+                        child,
+                        source,
+                        depth + 1,
+                        conditional || !opens_inflections,
+                        &block_params,
+                        out,
+                    );
+                } else if affects {
+                    if subtree_has_inflection_call(child, source, 0) {
+                        unreadable(out);
+                    }
+                } else if subtree_has_inflection_call(child, source, 0)
+                    && !is_inflection_object(child, source, params)
+                {
+                    unreadable(out);
+                }
+            }
+        }
+        _ => {
+            if subtree_has_inflection_call(node, source, 0) {
+                unreadable(out);
+            }
         }
     }
 }
@@ -2533,7 +2826,7 @@ pub(super) struct RailsShared {
     parents: HashMap<String, Option<String>>,
     inflections: std::sync::OnceLock<Inflections>,
     api_only: std::sync::OnceLock<ApiOnlySets>,
-    callbacks: Mutex<HashMap<Placed, Arc<Vec<Callback>>>>,
+    callbacks: Mutex<HashMap<Placed, Arc<ClassCallbacks>>>,
     visibility: Mutex<HashMap<String, Arc<Visibility>>>,
     programs: Mutex<HashMap<String, Arc<Program>>>,
     handled: Mutex<HashMap<ActionKey, Handler>>,

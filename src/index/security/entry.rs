@@ -445,6 +445,9 @@ struct Context<'a> {
     /// The scope inside each block call of the routes, by the id of the node.
     rails_scopes:
         std::cell::RefCell<std::collections::HashMap<usize, Option<std::rc::Rc<rails::Scope>>>>,
+    /// The ids of the children of a `case` that can run, by the id of the `case` node.
+    rails_cases:
+        std::cell::RefCell<std::collections::HashMap<usize, Option<std::rc::Rc<Vec<usize>>>>>,
 }
 
 struct Draft {
@@ -482,6 +485,7 @@ impl<'a> Context<'a> {
             source: &parsed.source,
             test_ranges,
             rails_scopes: std::cell::RefCell::new(std::collections::HashMap::new()),
+            rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -2616,7 +2620,7 @@ mod tests {
 
     #[test]
     fn a_conditional_route_is_registered_unless_the_literal_condition_kills_it() {
-        let routes = "Rails.application.routes.draw do\n  if Rails.env.development?\n    get \"/dev\", to: \"users#index\"\n  end\n  unless ENV[\"X\"]\n    get \"/unless_live\", to: \"users#index\"\n  end\n  get \"/modifier_live\", to: \"users#index\" if ready?\n  x = ready? ? get(\"/ternary\", to: \"users#index\") : nil\n  if false\n    get \"/dead_false\", to: \"users#index\"\n  end\n  if nil\n    get \"/dead_nil\", to: \"users#index\"\n  end\n  unless true\n    get \"/dead_unless\", to: \"users#index\"\n  end\n  if true\n    get \"/live_true\", to: \"users#index\"\n  else\n    get \"/dead_else\", to: \"users#index\"\n  end\n  if false\n    get \"/dead_if\", to: \"users#index\"\n  elsif ready?\n    get \"/live_elsif\", to: \"users#index\"\n  else\n    get \"/live_else\", to: \"users#index\"\n  end\n  get \"/dead_modifier\", to: \"users#index\" if false\nend\n";
+        let routes = "Rails.application.routes.draw do\n  if Rails.env.development?\n    get \"/dev\", to: \"users#index\"\n  end\n  unless ENV[\"X\"]\n    get \"/unless_live\", to: \"users#index\"\n  end\n  get \"/modifier_live\", to: \"users#index\" if ready?\n  ready? ? get(\"/ternary\", to: \"users#index\") : nil\n  x = ready? ? get(\"/assigned\", to: \"users#index\") : nil\n  if false\n    get \"/dead_false\", to: \"users#index\"\n  end\n  if nil\n    get \"/dead_nil\", to: \"users#index\"\n  end\n  unless true\n    get \"/dead_unless\", to: \"users#index\"\n  end\n  if true\n    get \"/live_true\", to: \"users#index\"\n  else\n    get \"/dead_else\", to: \"users#index\"\n  end\n  if false\n    get \"/dead_if\", to: \"users#index\"\n  elsif ready?\n    get \"/live_elsif\", to: \"users#index\"\n  else\n    get \"/live_else\", to: \"users#index\"\n  end\n  get \"/dead_modifier\", to: \"users#index\" if false\nend\n";
         let found = rails_routes(routes, &[]);
         let mut paths = verbs_and_paths(&found);
         paths.sort();
@@ -2783,7 +2787,7 @@ mod tests {
     fn a_callback_in_a_block_is_conditional_and_one_in_a_method_is_ignored() {
         let routes = "Rails.application.routes.draw do\n  get \"/u\", to: \"users#show\"\nend\n";
         let base = "class ApplicationController\n  before_action :a\n  before_action :b\nend\n";
-        let users = "class UsersController < ApplicationController\n  0.times do\n    before_action :ghost\n  end\n  [1].each { before_action :ghost_two }\n  handler = -> { before_action :ghost_three }\n  3.times do\n    skip_before_action :a\n  end\n\n  def self.configure\n    skip_before_action :b\n    before_action :in_method\n  end\n\n  def show; end\nend\n";
+        let users = "class UsersController < ApplicationController\n  0.times do\n    before_action :ghost\n  end\n  [1].each { before_action :ghost_two }\n  3.times do\n    skip_before_action :a\n  end\n\n  def self.configure\n    skip_before_action :b\n    before_action :in_method\n  end\n\n  def show; end\nend\n";
         let found = rails_routes(
             routes,
             &[
@@ -3602,6 +3606,139 @@ mod tests {
             ("config/other.rb", unknown),
         ]);
         assert!(found.is_empty());
+    }
+
+    #[test]
+    fn only_a_plain_statement_makes_a_route() {
+        let routes = "Rails.application.routes.draw do\n  false && get(\"/and\", to: \"a#b\")\n  true || get(\"/or\", to: \"a#b\")\n  x = get(\"/assigned\", to: \"a#b\")\n  foo(get(\"/argument\", to: \"a#b\"))\n  begin\n    get \"/begin\", to: \"a#b\"\n  end\n  (get \"/paren\", to: \"a#b\")\n  get \"/live\", to: \"a#b\"\nend\n";
+        let found = rails_routes(routes, &[]);
+        assert_eq!(verbs_and_paths(&found), ["GET /live"]);
+    }
+
+    #[test]
+    fn a_rebound_inflection_parameter_makes_the_inflections_unreadable() {
+        let routes =
+            "Rails.application.routes.draw do\n  get \"/u\", to: \"api/users#show\"\nend\n";
+        let upper = "module API\n  class UsersController\n    before_action :upper\n    def show; end\n  end\nend\n";
+        let lower = "module Api\n  class UsersController\n    before_action :lower\n    def show; end\n  end\nend\n";
+        let reassigned = "ActiveSupport::Inflector.inflections do |inflect|\n  inflect = Fake.new\n  inflect.acronym \"API\"\nend\n";
+        let shadowed = "ActiveSupport::Inflector.inflections do |inflect|\n  [1].each do |inflect|\n    inflect.acronym \"API\"\n  end\nend\n";
+        for source in [reassigned, shadowed] {
+            let found = rails_routes(
+                routes,
+                &[
+                    ("controllers/upper.rb", upper),
+                    ("controllers/lower.rb", lower),
+                    ("config/initializers/inflections.rb", source),
+                ],
+            );
+            assert_eq!(found[0].symbol, None);
+            assert!(found[0].guards.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_callback_that_is_not_a_plain_statement_makes_the_guards_unknown() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"users#show\"\n  get \"/b\", to: \"posts#show\"\nend\n";
+        let base = "class ApplicationController\n  before_action :base\nend\n";
+        let users = "class UsersController < ApplicationController\n  x = (skip_before_action :base)\n  def show; end\nend\n";
+        let posts = "class PostsController < ApplicationController\n  before_action :own\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/a.rb", base),
+                ("controllers/b.rb", users),
+                ("controllers/c.rb", posts),
+            ],
+        );
+        assert_eq!(found[0].guards, Vec::<String>::new());
+        assert_eq!(found[1].guards, ["base", "own"]);
+    }
+
+    #[test]
+    fn a_hash_rocket_key_keeps_its_last_value() {
+        let routes = "Rails.application.routes.draw do\n  get \"/x\" => \"users#show\", \"/x\" => \"posts#show\"\nend\n";
+        let users = "class UsersController\n  before_action :users\n  def show; end\nend\n";
+        let posts = "class PostsController\n  before_action :posts\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[("controllers/u.rb", users), ("controllers/p.rb", posts)],
+        );
+        assert_eq!(found[0].guards, ["posts"]);
+    }
+
+    #[test]
+    fn an_octal_escape_is_a_byte_modulo_256() {
+        let routes = "Rails.application.routes.draw do\n  get \"/\\400\", to: \"a#b\"\n  get \"/b\\177\", to: \"a#b\"\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut paths = verbs_and_paths(&found);
+        paths.sort();
+        assert_eq!(paths, ["GET /%00", "GET /b%7F"]);
+    }
+
+    fn many_literal_when_branches_resolve_in_linear_time_at(count: usize) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n  case true\n");
+        for number in 0..count {
+            routes.push_str(&format!(
+                "  when false\n    get \"/r{number}\", to: \"a#b\"\n"
+            ));
+        }
+        routes.push_str("  when true\n    get \"/live\", to: \"a#b\"\n  end\nend\n");
+        let files = [("config/routes.rb", routes.as_str())];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), 1);
+        elapsed
+    }
+
+    #[test]
+    fn many_literal_when_branches_keep_the_branch_that_runs() {
+        many_literal_when_branches_resolve_in_linear_time_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_literal_when_branches_resolve_in_linear_time() {
+        let elapsed = many_literal_when_branches_resolve_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    fn a_chain_of_never_callbacks_resolves_in_linear_time_at(depth: usize) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut classes = String::new();
+        for number in (0..depth).rev() {
+            routes.push_str(&format!("  get \"/r{number}\", to: \"c{number}#show\"\n"));
+        }
+        for number in 0..depth {
+            let parent = if number == 0 {
+                String::new()
+            } else {
+                format!(" < C{}Controller", number - 1)
+            };
+            classes.push_str(&format!(
+                "class C{number}Controller{parent}\n  before_action :g{number}, only: :never\n  def show; end\nend\n"
+            ));
+        }
+        routes.push_str("end\n");
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), depth);
+        assert!(found.iter().all(|entry| entry.guards.is_empty()));
+        elapsed
+    }
+
+    #[test]
+    fn a_chain_of_never_callbacks_gives_no_guard() {
+        a_chain_of_never_callbacks_resolves_in_linear_time_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_chain_of_never_callbacks_resolves_in_linear_time() {
+        let elapsed = a_chain_of_never_callbacks_resolves_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
     #[test]
