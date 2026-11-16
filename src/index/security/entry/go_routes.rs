@@ -16,15 +16,17 @@ use crate::index::model::{ImportKind, Span};
 enum Framework {
     Chi,
     Echo,
+    Mux,
 }
 
 impl Framework {
-    const ALL: [Self; 2] = [Self::Chi, Self::Echo];
+    const ALL: [Self; 3] = [Self::Chi, Self::Echo, Self::Mux];
 
     fn name(self) -> &'static str {
         match self {
             Self::Chi => "chi",
             Self::Echo => "echo",
+            Self::Mux => "gorilla/mux",
         }
     }
 
@@ -33,6 +35,7 @@ impl Framework {
         match self {
             Self::Chi => "chi",
             Self::Echo => "echo",
+            Self::Mux => "mux",
         }
     }
 
@@ -40,6 +43,7 @@ impl Framework {
         let base = match self {
             Self::Chi => "github.com/go-chi/chi",
             Self::Echo => "github.com/labstack/echo",
+            Self::Mux => "github.com/gorilla/mux",
         };
         module == base
             || module
@@ -54,6 +58,7 @@ impl Framework {
         match self {
             Self::Chi => &["Router", "Mux"],
             Self::Echo => &["Echo", "Group"],
+            Self::Mux => &["Router"],
         }
     }
 }
@@ -421,7 +426,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             parent_len,
             prefix,
             guards,
-            retroactive: framework == Framework::Echo && parent.is_none(),
+            retroactive: framework == Framework::Mux
+                || (framework == Framework::Echo && parent.is_none()),
         });
         self.routers.len() - 1
     }
@@ -511,6 +517,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 return self.construct(framework, name);
             }
         }
+        if name == "Subrouter" {
+            return self.subrouter(operand);
+        }
         let parent = self.eval(operand)?;
         match (self.routers[parent].framework, name) {
             (Framework::Chi, "With") => {
@@ -530,6 +539,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let makes = match framework {
             Framework::Chi => matches!(name, "NewRouter" | "NewMux"),
             Framework::Echo => name == "New",
+            Framework::Mux => name == "NewRouter",
         };
         makes.then(|| self.new_router(framework, None, String::new(), Vec::new()))
     }
@@ -570,6 +580,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return;
         };
         let name = self.text(field);
+        if self.mux_registration(node) {
+            return;
+        }
         let Some(router) = self.eval(operand) else {
             return;
         };
@@ -582,6 +595,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         match self.routers[router].framework {
             Framework::Chi => self.chi_call(router, node, name, &arguments),
             Framework::Echo => self.echo_call(router, node, name, &arguments),
+            Framework::Mux => {}
         }
     }
 
@@ -618,6 +632,91 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             }
             ("Mount", [_, mounted], [Some(prefix), _]) => self.mount(router, prefix, *mounted),
             _ => {}
+        }
+    }
+
+    /// `router.PathPrefix("/api").Subrouter()`: `operand` is the call of `PathPrefix`.
+    fn subrouter(&mut self, operand: Node<'t>) -> Option<usize> {
+        let function = operand.child_by_field_name("function")?;
+        if operand.kind() != "call_expression"
+            || function.kind() != "selector_expression"
+            || self.text(function.child_by_field_name("field")?) != "PathPrefix"
+        {
+            return None;
+        }
+        let parent = self.eval(function.child_by_field_name("operand")?)?;
+        if self.routers[parent].framework != Framework::Mux {
+            return None;
+        }
+        let prefix = self.string_argument(*Context::arguments_of(operand).first()?)?;
+        Some(self.new_router(Framework::Mux, Some(parent), prefix, Vec::new()))
+    }
+
+    /// `router.HandleFunc("/path", handler).Methods("GET")`. The chain can have more
+    /// matchers. Without `Methods`, the route has each method. Returns true when the
+    /// call is a registration of a gorilla router, which the call consumes with its chain.
+    fn mux_registration(&mut self, outer: Node<'t>) -> bool {
+        let mut chain = Vec::new();
+        let mut methods: Option<Vec<String>> = None;
+        let mut current = outer;
+        loop {
+            let Some(function) = current
+                .child_by_field_name("function")
+                .filter(|function| function.kind() == "selector_expression")
+            else {
+                return false;
+            };
+            let (Some(field), Some(operand)) = (
+                function.child_by_field_name("field"),
+                function.child_by_field_name("operand"),
+            ) else {
+                return false;
+            };
+            let arguments = Context::arguments_of(current);
+            chain.push(current.id());
+            match self.text(field) {
+                "HandleFunc" | "Handle" => {
+                    let Some(router) = self.eval(operand) else {
+                        return false;
+                    };
+                    if self.routers[router].framework != Framework::Mux {
+                        return false;
+                    }
+                    self.consumed.extend(chain);
+                    let (Some(path), Some(handler)) = (
+                        arguments
+                            .first()
+                            .and_then(|path| self.string_argument(*path)),
+                        arguments.get(1),
+                    ) else {
+                        return true;
+                    };
+                    let methods = methods.unwrap_or_else(|| vec!["ANY".to_string()]);
+                    let methods: Vec<&str> = methods.iter().map(String::as_str).collect();
+                    let range = Span::of(&outer);
+                    self.register(router, &methods, &path, Some(*handler), &[], range);
+                    return true;
+                }
+                "Methods" => {
+                    let names: Vec<Option<String>> = arguments
+                        .iter()
+                        .map(|argument| self.string_argument(*argument))
+                        .collect();
+                    methods = Some(names.into_iter().flatten().collect());
+                    if methods
+                        .as_ref()
+                        .is_some_and(|found| found.len() != arguments.len())
+                    {
+                        methods = Some(Vec::new());
+                    }
+                }
+                "Name" | "Queries" | "Headers" | "Schemes" | "Host" | "MatcherFunc" => {}
+                _ => return false,
+            }
+            if operand.kind() != "call_expression" {
+                return false;
+            }
+            current = operand;
         }
     }
 

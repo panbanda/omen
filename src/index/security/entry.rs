@@ -2210,6 +2210,49 @@ mod tests {
     }
 
     #[test]
+    fn gorilla_mux_routes_have_methods_prefixes_and_guards() {
+        let source = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gorilla/mux\"\n)\n\n{GO_HANDLERS}func routes() http.Handler {{\n\thttp.HandleFunc(\"/plain\", list)\n\tr := mux.NewRouter()\n\tr.HandleFunc(\"/health\", list)\n\tr.HandleFunc(\"/users/{{id}}\", show).Methods(\"GET\", \"POST\")\n\tr.HandleFunc(\"/items/{{id:[0-9]+}}\", show).Methods(\"DELETE\").Name(\"item\")\n\tr.Handle(\"/handle\", http.HandlerFunc(list))\n\tapi := r.PathPrefix(\"/api\").Subrouter()\n\tapi.Use(auth)\n\tapi.HandleFunc(\"/ping\", list).Methods(\"GET\")\n\tr.Use(logger)\n\treturn r\n}}\n"
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "net/http ANY /plain [] list",
+                "gorilla/mux ANY /health [logger] list",
+                "gorilla/mux GET /users/{id} [logger] show",
+                "gorilla/mux POST /users/{id} [logger] show",
+                "gorilla/mux DELETE /items/{id:[0-9]+} [logger] show",
+                "gorilla/mux ANY /handle [logger] list",
+                "gorilla/mux GET /api/ping [logger,auth] list",
+            ]
+        );
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        let item = found
+            .iter()
+            .find(|entry| entry.route.as_ref().is_some_and(|r| r.method == "DELETE"))
+            .unwrap();
+        assert_eq!(item.route.as_ref().unwrap().parameters, ["id"]);
+    }
+
+    #[test]
+    fn a_gorilla_mux_receiver_must_be_proven_through_the_import() {
+        let aliased = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\tgorilla \"github.com/gorilla/mux\"\n)\n\n{GO_HANDLERS}func routes() {{\n\tr := gorilla.NewRouter()\n\tr.HandleFunc(\"/a\", list).Methods(\"PUT\")\n}}\n\nfunc typed(s *gorilla.Router) {{\n\ts.HandleFunc(\"/b\", show)\n}}\n"
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &aliased)]),
+            ["gorilla/mux PUT /a [] list", "gorilla/mux ANY /b [] show"]
+        );
+        let unproven = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gorilla/mux\"\n)\n\n{GO_HANDLERS}func routes(r thing) {{\n\tr.HandleFunc(\"/a\", list).Methods(\"GET\")\n\tm := http.NewServeMux()\n\tm.HandleFunc(\"/b\", list)\n\tn := mux.Vars(nil)\n\tn.HandleFunc(\"/c\", list)\n}}\n"
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &unproven)]),
+            ["net/http ANY /b [] list"]
+        );
+    }
+
+    #[test]
     fn go_registration_calls_and_main_are_entries() {
         let source = "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc health(w http.ResponseWriter, r *http.Request) {}\n\nfunc show(c *gin.Context) {}\n\nfunc main() {\n\thttp.HandleFunc(\"/health\", health)\n\trouter := gin.Default()\n\trouter.GET(\"/users/:id\", auth, show)\n}\n";
         let found = entries(Language::Go, &[("main.go", source)]);
