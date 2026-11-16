@@ -244,41 +244,48 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   function writes no package-level variable, no parameter, and no router that it did
   not make. The summary has the prefixes and the guards of the returned router. A call
   of the function gives a new router with these prefixes and guards.
-- A function or a method registers routes on the router that it returns. The paths of
-  these routes depend on the call. A call can mount the result at a prefix. Omen
-  reads the calls of the whole repository, in each file of each package, with the
-  references of the index. A call is one of three kinds. The first kind serves the
-  result as the root: `http.ListenAndServe(address, router)`, a literal
-  `http.Server{Handler: router}`, a call that discards the result, and a local variable
-  that only calls methods or serves the result. The second kind attaches the result: it passes the
-  result as an argument, returns it, or stores it in a field, a package variable, or a
-  literal. The third kind is a use that omen cannot classify. If one call of the
-  function is of the second or the third kind, omen gives no entry for these routes.
+- A function or a method can register routes on a router that it makes and returns. This
+  function is a factory. The walk finds a factory from the return statement. The result
+  type does not matter. A literal that holds the router, as in `&Server{Mux: router}`,
+  also counts.
+- The paths of the routes of a factory depend on the call. A call can mount the result
+  at a prefix. Omen reads each use of the factory in the whole repository. It uses the
+  references of the index and the syntax of each file.
+- A use of a factory has one of three kinds. The first kind serves the result as the root.
+  Examples are `http.ListenAndServe(address, router)`, a literal `http.Server{Handler: router}`,
+  and a call that discards the result. A local variable that only calls methods or serves
+  the result is the same kind.
+- The second kind attaches the result. The call passes the result as an argument, returns
+  it, or stores it in a field, a package variable, or a literal. The third kind is a use
+  that omen cannot classify.
+- Any mention of the name of a factory that is not a call is a use of the third kind. A
+  function value, a method value, and an argument that is a function are examples. A
+  mention of another function with the same name also counts.
+- If one use is of the second or the third kind, omen gives no entry for the routes of
+  the factory. A factory that no use in the repository mentions keeps its routes at the
+  paths of the function. The function can be an entry of a library.
 - A function without a summary that returns a router it made gives no entry for these
-  routes. A function that returns a group or a sub-router gives none either. A
-  function or a method that no call in the repository uses keeps its routes at the
-  paths of the function, because the function can be an entry of a library. A call that
-  the index does not resolve to the function, as a call through a function value, is not
-  a call of the function for omen.
-- These values have no proof, and the routes on them give no entry: the result of a
-  function without a summary, the result of a recursive function, a package-level router
-  that a function assigns, and a router that a function receives as a parameter of a
-  type that can be a group or a sub-router, such as `chi.Router`. A function that
-  receives a root router, such as `*gin.Engine`, gives entries. A route callback that a
-  name gives, as in `r.Route("/api", api)`, gives no entry. A function literal gives
-  entries.
-- A handler that a call wraps, as in `http.Handle("/p", auth(http.HandlerFunc(show)))`,
-  has the function `show` as its handler when a conversion proves it, or when the
-  parameter list of `show` is the parameter list of a handler of the framework. For
+  routes. A function that returns a group or a sub-router gives none either.
+- These values have no proof, and the routes on them give no entry:
+  - the result of a function without a summary
+  - the result of a recursive function
+  - a package-level router that a function assigns
+  - a router that a function receives as a parameter of a type that can be a group or
+    a sub-router, such as `chi.Router`
+- A function that receives a root router, such as `*gin.Engine`, gives entries. A route
+  callback that a name gives, as in `r.Route("/api", api)`, gives no entry. A function
+  literal gives entries.
+- A call can wrap a handler, as in `http.Handle("/p", auth(http.HandlerFunc(show)))`.
+  The function `show` is the handler when a conversion proves it. It is also the handler
+  when its parameter list is the parameter list of a handler of the framework. For
   `net/http` it is `(http.ResponseWriter, *http.Request)`. For gin it is
   `(*gin.Context)`. For echo it is `(echo.Context) error`. A wrapper with more than
   one such function gives no handler. A wrapper is a guard only when the repository
   defines it as a function that takes a handler and gives a handler. A conversion such
   as `http.HandlerFunc` or `gin.WrapF` is not a guard.
-- A key of an entry point has the path at its end when one registration gives more than
-  one entry with the same method, as a router that two paths mount does. If the keys are
-  still equal, as for two calls of a function, each key has the number of its entry in
-  the walk.
+- One registration can give more than one entry with the same method. A router that two
+  paths mount does this. Then the key of each entry has the path at its end. If the keys
+  are still equal, each key has the number of its entry in the walk.
 - For chi, a prefix comes from `Route`, which also gives the new router. A guard comes
   from `Use` and `With`. `Use` guards each route of its router and of its sub-routers,
   in any source order. `Mount` joins a router of the same file, at each of its mounts.

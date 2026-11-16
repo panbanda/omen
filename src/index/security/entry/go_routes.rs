@@ -642,34 +642,38 @@ pub(super) struct CallSites {
     blocked: HashSet<String>,
 }
 
-/// The words in the result type of a function that returns a router or a handler.
-const ROUTER_WORDS: [&str; 8] = [
-    "Router", "Mux", "Engine", "Echo", "Group", "Handler", "IRoutes", "IRouter",
-];
-
 impl CallSites {
     pub(super) fn is_blocked(&self, key: &str) -> bool {
         self.blocked.contains(key)
     }
 
+    /// The facts for all Go files. The walk of each file that imports a framework finds the
+    /// factories. Then one pass over the references and one pass over the syntax of each file
+    /// classify each use of a factory.
     pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> Self {
-        let factories: HashSet<&str> = files
-            .iter()
-            .filter(|file| file.language == Language::Go)
-            .flat_map(|file| &file.symbols)
-            .filter(|symbol| symbol.is_callable())
-            .filter(|symbol| {
-                parse_signature(&symbol.signature, &symbol.name).is_some_and(|signature| {
-                    ROUTER_WORDS
-                        .iter()
-                        .any(|word| signature.result.contains(word))
-                })
-            })
-            .map(|symbol| &*symbol.key)
-            .collect();
+        let mut factories: HashSet<String> = HashSet::new();
+        for (position, file) in files.iter().enumerate() {
+            if file.language != Language::Go {
+                continue;
+            }
+            let Some(tree) = trees.tree(position) else {
+                continue;
+            };
+            let context = Context::new(&tree, file, files, trees, &[]);
+            factories.extend(factory_keys(&context, tree.root_node()));
+        }
         let mut blocked = HashSet::new();
         if factories.is_empty() {
             return Self { blocked };
+        }
+        let mut by_name: HashMap<&str, Vec<&str>> = HashMap::new();
+        for symbol in files
+            .iter()
+            .filter(|file| file.language == Language::Go)
+            .flat_map(|file| &file.symbols)
+            .filter(|symbol| factories.contains(&*symbol.key))
+        {
+            by_name.entry(&symbol.name).or_default().push(&symbol.key);
         }
         for (position, file) in files.iter().enumerate() {
             if file.language != Language::Go {
@@ -684,14 +688,11 @@ impl CallSites {
                         .candidates
                         .iter()
                         .map(|key| &**key)
-                        .filter(|key| factories.contains(key))
+                        .filter(|key| factories.contains(*key))
                         .collect();
                     (!keys.is_empty()).then_some((reference, keys))
                 })
                 .collect();
-            if sites.is_empty() {
-                continue;
-            }
             let Some(tree) = trees.tree(position) else {
                 blocked.extend(
                     sites
@@ -701,6 +702,10 @@ impl CallSites {
                 );
                 continue;
             };
+            blocked.extend(Self::mentions(tree.root_node(), &tree.source, &by_name));
+            if sites.is_empty() {
+                continue;
+            }
             let index = FileUses::new(tree.root_node(), &tree.source, file);
             for (reference, keys) in sites {
                 if index.is_blocked(
@@ -712,6 +717,47 @@ impl CallSites {
             }
         }
         Self { blocked }
+    }
+
+    /// The keys of the factories that a name in the file mentions without a call. A function
+    /// value, a method value, and an argument that is a function are such mentions. A
+    /// mention can name another function of the same name, and the result stays safe.
+    fn mentions(root: Node<'_>, source: &[u8], by_name: &HashMap<&str, Vec<&str>>) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            if matches!(node.kind(), "identifier" | "field_identifier") {
+                let name = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
+                if let Some(keys) = by_name.get(name) {
+                    if !Self::is_declaration_or_callee(node) {
+                        found.extend(keys.iter().map(|key| key.to_string()));
+                    }
+                }
+            }
+            let mut cursor = node.walk();
+            pending.extend(node.named_children(&mut cursor));
+        }
+        found
+    }
+
+    fn is_declaration_or_callee(node: Node<'_>) -> bool {
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        match parent.kind() {
+            "function_declaration" | "method_declaration" => {
+                parent.child_by_field_name("name") == Some(node)
+            }
+            "call_expression" => parent.child_by_field_name("function") == Some(node),
+            "selector_expression" => {
+                parent.child_by_field_name("field") == Some(node)
+                    && parent.parent().is_some_and(|call| {
+                        call.kind() == "call_expression"
+                            && call.child_by_field_name("function") == Some(parent)
+                    })
+            }
+            _ => false,
+        }
     }
 }
 
@@ -920,40 +966,61 @@ impl<'t> FileUses<'t> {
     }
 }
 
-pub(super) fn collect(context: &Context<'_>, root: Node<'_>, out: &mut Vec<Draft>) {
-    let packages: Vec<(String, Framework)> = Framework::ALL
-        .into_iter()
-        .flat_map(|framework| {
-            context
-                .go_package_names(framework)
-                .into_iter()
-                .map(move |name| (name, framework))
-        })
-        .collect();
-    if packages.is_empty() {
-        return;
+/// The keys of the functions and the methods of a file that return a router that they made.
+/// The walk does not read the calls of the repository for this result.
+pub(super) fn factory_keys(context: &Context<'_>, root: Node<'_>) -> Vec<String> {
+    match Routes::new(context, true) {
+        Some(mut routes) => {
+            routes.run(root);
+            routes.factory_keys
+        }
+        None => Vec::new(),
     }
-    let mut routes = Routes {
-        context,
-        packages,
-        routers: Vec::new(),
-        records: Vec::new(),
-        scopes: vec![HashMap::new()],
-        consumed: HashSet::new(),
-        route_calls: HashMap::new(),
-        functions: HashMap::new(),
-        walked: HashSet::new(),
-        in_progress: HashSet::new(),
-        cyclic: HashSet::new(),
-        summaries: HashMap::new(),
-        fresh_of: HashMap::new(),
-        components: HashMap::new(),
-        attached: HashSet::new(),
-        owners: 0,
-        frames: Vec::new(),
-    };
-    routes.run(root);
-    routes.finish(out);
+}
+
+pub(super) fn collect(context: &Context<'_>, root: Node<'_>, out: &mut Vec<Draft>) {
+    if let Some(mut routes) = Routes::new(context, false) {
+        routes.run(root);
+        routes.finish(out);
+    }
+}
+
+impl<'c, 'a, 't> Routes<'c, 'a, 't> {
+    fn new(context: &'c Context<'a>, dry: bool) -> Option<Self> {
+        let packages: Vec<(String, Framework)> = Framework::ALL
+            .into_iter()
+            .flat_map(|framework| {
+                context
+                    .go_package_names(framework)
+                    .into_iter()
+                    .map(move |name| (name, framework))
+            })
+            .collect();
+        if packages.is_empty() {
+            return None;
+        }
+        Some(Self {
+            context,
+            packages,
+            routers: Vec::new(),
+            records: Vec::new(),
+            scopes: vec![HashMap::new()],
+            consumed: HashSet::new(),
+            route_calls: HashMap::new(),
+            functions: HashMap::new(),
+            walked: HashSet::new(),
+            in_progress: HashSet::new(),
+            cyclic: HashSet::new(),
+            summaries: HashMap::new(),
+            fresh_of: HashMap::new(),
+            components: HashMap::new(),
+            attached: HashSet::new(),
+            owners: 0,
+            frames: Vec::new(),
+            dry,
+            factory_keys: Vec::new(),
+        })
+    }
 }
 
 struct Routes<'c, 'a, 't> {
@@ -983,6 +1050,9 @@ struct Routes<'c, 'a, 't> {
     attached: HashSet<String>,
     owners: usize,
     frames: Vec<Frame>,
+    /// The walk only finds the factories. It does not read the calls of the repository.
+    dry: bool,
+    factory_keys: Vec<String>,
 }
 
 impl<'c, 'a, 't> Routes<'c, 'a, 't> {
@@ -1148,9 +1218,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 && summary
                     .as_ref()
                     .is_none_or(|summary| !summary.prefixes.is_empty());
-            let attached_in_the_repository = key
-                .as_deref()
-                .is_some_and(|key| self.context.go_factory_blocked(key));
+            if let Some(key) = &key {
+                self.factory_keys.push(key.clone());
+            }
+            let attached_in_the_repository = !self.dry
+                && key
+                    .as_deref()
+                    .is_some_and(|key| self.context.go_factory_blocked(key));
             if needs_a_summary || attached_in_the_repository {
                 self.attached.insert(id.clone());
             }
@@ -1566,9 +1640,25 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         };
         self.escape(*value);
         let router = self.eval(*value);
+        let router = router.or_else(|| self.wrapped_router(*value));
         if let Some(frame) = self.frames.last_mut().filter(|frame| frame.function) {
             frame.returned = frame.returned.or(router);
         }
+    }
+
+    /// The router inside a literal that a function returns, as `&Server{Mux: router}` has.
+    fn wrapped_router(&mut self, value: Node<'t>) -> Option<usize> {
+        let literal = if value.kind() == "unary_expression" {
+            value.named_child(0)?
+        } else {
+            value
+        };
+        if literal.kind() != "composite_literal" {
+            return None;
+        }
+        let mut values = Vec::new();
+        Self::literal_values(literal.child_by_field_name("body")?, &mut values);
+        values.into_iter().find_map(|inner| self.eval(inner))
     }
 
     /// The router that an expression gives, when the syntax proves it.

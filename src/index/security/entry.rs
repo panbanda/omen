@@ -450,6 +450,8 @@ struct Context<'a> {
     /// The ids of the children of a `case` that can run, by the id of the `case` node.
     rails_cases:
         std::cell::RefCell<std::collections::HashMap<usize, Option<std::rc::Rc<Vec<usize>>>>>,
+    /// The position of the first symbol of the file for each start of a name.
+    symbol_starts: std::collections::HashMap<usize, usize>,
 }
 
 struct Draft {
@@ -478,6 +480,12 @@ impl<'a> Context<'a> {
         } else {
             Vec::new()
         };
+        let mut symbol_starts = std::collections::HashMap::new();
+        for (position, symbol) in file.symbols.iter().enumerate() {
+            symbol_starts
+                .entry(symbol.name_range.start_byte)
+                .or_insert(position);
+        }
         Self {
             parsed,
             file,
@@ -488,6 +496,7 @@ impl<'a> Context<'a> {
             test_ranges,
             rails_scopes: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
+            symbol_starts,
         }
     }
 
@@ -600,11 +609,8 @@ impl<'a> Context<'a> {
     }
 
     fn symbol_at(&self, name_node: Node<'_>) -> Option<String> {
-        self.file
-            .symbols
-            .iter()
-            .find(|symbol| symbol.name_range.start_byte == name_node.start_byte())
-            .map(|symbol| symbol.key.to_string())
+        let position = self.symbol_starts.get(&name_node.start_byte())?;
+        Some(self.file.symbols[*position].key.to_string())
     }
 
     /// The one function or method with the name. A definition in the file wins over a definition in another file.
@@ -2942,6 +2948,79 @@ func routes() {
                 ("router.go", &router)
             ]),
             Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_factory_with_a_custom_result_type_follows_the_attach_rule() {
+        let alias = go_source(
+            &[CHI],
+            "type Web = *chi.Mux\n\nfunc NewRouter() Web {\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", list)\n\treturn r\n}\n",
+        );
+        let wrapper = go_source(
+            &[CHI],
+            "type Server struct{ *chi.Mux }\n\nfunc NewServer() *Server {\n\tr := chi.NewRouter()\n\tr.Get(\"/y\", list)\n\treturn &Server{Mux: r}\n}\n",
+        );
+        let main = go_file(
+            &[CHI],
+            "func serve() {\n\troot := chi.NewRouter()\n\troot.Mount(\"/api\", NewRouter())\n\troot.Mount(\"/web\", NewServer())\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[
+                ("a_main.go", &main),
+                ("b_alias.go", &alias),
+                ("c_wrapper.go", &wrapper)
+            ]),
+            Vec::<String>::new()
+        );
+        let served = go_file(
+            &["\"net/http\"", CHI],
+            "func serve() {\n\thttp.ListenAndServe(\":80\", NewRouter())\n\thttp.ListenAndServe(\":81\", NewServer())\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[
+                ("a_main.go", &served),
+                ("b_alias.go", &alias),
+                ("c_wrapper.go", &wrapper)
+            ]),
+            ["chi GET /x [] list", "chi GET /y [] list"]
+        );
+    }
+
+    #[test]
+    fn a_mention_of_a_factory_that_is_not_a_call_blocks_its_routes() {
+        let router = factory_file("NewRouter", "/x");
+        let other = factory_file("OtherRouter", "/z");
+        let main = go_file(
+            &[CHI],
+            "func serve() {\n\tf := NewRouter\n\troot := chi.NewRouter()\n\troot.Mount(\"/api\", f())\n\tregister(OtherRouter)\n}\n\nfunc register(make func() *chi.Mux) {}\n",
+        );
+        assert_eq!(
+            go_routes(&[
+                ("a_main.go", &main),
+                ("b_router.go", &router),
+                ("c_other.go", &other)
+            ]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn timing_ten_thousand_functions_in_one_file_are_read_in_linear_time() {
+        let mut body = String::new();
+        for index in 0..10_000 {
+            body.push_str(&format!(
+                "func make{index}() *chi.Mux {{\n\tr := chi.NewRouter()\n\treturn r\n}}\n\n"
+            ));
+        }
+        let source = go_source(&[CHI], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert!(found.is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "took {:?}",
+            started.elapsed()
         );
     }
 
