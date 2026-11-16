@@ -453,9 +453,10 @@ impl LanguageSpec for CSharp {
     fn name_node<'tree>(
         &self,
         node: Node<'tree>,
-        _context: &Context<'_, 'tree>,
+        context: &Context<'_, 'tree>,
     ) -> Option<Node<'tree>> {
-        node.parent()
+        context
+            .parent(node)
             .filter(|parent| parent.kind() == VARIABLE_DECLARATOR)?
             .child_by_field_name("name")
     }
@@ -467,7 +468,7 @@ impl LanguageSpec for CSharp {
                 .parent(node)
                 .filter(|parent| parent.kind() == VARIABLE_DECLARATION);
             let field = declaration
-                .and_then(|declaration| declaration.parent())
+                .and_then(|declaration| context.parent(declaration))
                 .filter(|field| field.kind() == FIELD_DECLARATION);
             let (Some(declaration), Some(field)) = (declaration, field) else {
                 return false;
@@ -540,17 +541,16 @@ impl LanguageSpec for CSharp {
         }
         let holder = if is_function_value(draft.node) {
             // The modifiers of a field are on the declaration that contains the declarator.
-            let mut holder = draft.node.parent();
+            let mut holder = context.parent(draft.node);
             for _ in 0..2 {
-                holder = holder.and_then(|node| node.parent());
+                holder = holder.and_then(|node| context.parent(node));
             }
             holder
         } else if draft.node.kind() == VARIABLE_DECLARATOR {
             // The declarator of a field is in a variable declaration in the field declaration.
-            draft
-                .node
-                .parent()
-                .and_then(|declaration| declaration.parent())
+            context
+                .parent(draft.node)
+                .and_then(|declaration| context.parent(declaration))
         } else {
             Some(draft.node)
         };

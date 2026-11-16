@@ -237,15 +237,15 @@ struct Binding<'tree> {
     start: Node<'tree>,
 }
 
-fn binding(value: Node<'_>) -> Option<Binding<'_>> {
+fn binding<'tree>(value: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Binding<'tree>> {
     let mut current = value;
-    while let Some(parent) = current.parent() {
+    while let Some(parent) = context.parent(current) {
         if !TRANSPARENT_WRAPPERS.contains(&parent.kind()) {
             break;
         }
         current = parent;
     }
-    let holder = current.parent()?;
+    let holder = context.parent(current)?;
     let name = match holder.kind() {
         VARIABLE_DECLARATOR if has_field(holder, "value", current) => holder
             .child_by_field_name("name")
@@ -391,14 +391,18 @@ fn exported_if(condition: bool) -> Exported {
 
 /// The visibility of a declaration that is not a member: the `export` keyword
 /// on the declaration, or an export statement that names it.
-fn declaration_exported(declaration: Node<'_>, name: &str, context: &Context<'_, '_>) -> Exported {
-    let Some(parent) = declaration.parent() else {
+fn declaration_exported<'tree>(
+    declaration: Node<'tree>,
+    name: &str,
+    context: &Context<'_, 'tree>,
+) -> Exported {
+    let Some(parent) = context.parent(declaration) else {
         return Exported::NotExported;
     };
     if parent.kind() == EXPORT_STATEMENT {
         return Exported::Exported;
     }
-    if parent.parent().is_some() {
+    if context.parent(parent).is_some() {
         // An export statement can name only a declaration at the top level of the module.
         return Exported::NotExported;
     }
@@ -406,14 +410,14 @@ fn declaration_exported(declaration: Node<'_>, name: &str, context: &Context<'_,
 }
 
 /// The visibility of the variable that holds an object literal.
-fn object_exported(object: Node<'_>, context: &Context<'_, '_>) -> Exported {
-    let Some(holder) = object.parent() else {
+fn object_exported<'tree>(object: Node<'tree>, context: &Context<'_, 'tree>) -> Exported {
+    let Some(holder) = context.parent(object) else {
         return Exported::NotExported;
     };
     match holder.kind() {
         VARIABLE_DECLARATOR => match holder.child_by_field_name("name") {
-            Some(name) if name.kind() == IDENTIFIER => holder
-                .parent()
+            Some(name) if name.kind() == IDENTIFIER => context
+                .parent(holder)
                 .map(|statement| declaration_exported(statement, &context.text(name), context))
                 .unwrap_or(Exported::NotExported),
             _ => Exported::NotExported,
@@ -494,9 +498,8 @@ impl LanguageSpec for Ecma {
     }
 
     /// `var` binds a name in the function, not in the block.
-    fn is_block_local(&self, node: Node<'_>) -> bool {
-        node.parent()
-            .is_none_or(|declaration| declaration.kind() != "variable_declaration")
+    fn is_block_local(&self, parent: Option<Node<'_>>) -> bool {
+        parent.is_none_or(|declaration| declaration.kind() != "variable_declaration")
     }
 
     fn call_syntax(&self) -> CallSyntax {
@@ -702,8 +705,8 @@ impl LanguageSpec for Ecma {
                     return;
                 };
                 let path = literal(argument);
-                let pattern = node
-                    .parent()
+                let pattern = context
+                    .parent(node)
                     .filter(|parent| {
                         parent.kind() == VARIABLE_DECLARATOR && has_field(*parent, "value", node)
                     })
@@ -802,11 +805,11 @@ impl LanguageSpec for Ecma {
                 node.child_by_field_name("pattern")
                     .filter(|name| declares && name.kind() == IDENTIFIER)
             }
-            CLASS_EXPRESSION => binding(node)
+            CLASS_EXPRESSION => binding(node, context)
                 .and_then(|binding| binding.name)
                 .or_else(|| node.child_by_field_name("name")),
             _ => {
-                let binding = binding(node)?;
+                let binding = binding(node, context)?;
                 // A pair in an object literal is a name here. `function_binding_name`
                 // gives no name for it, because dead code detection cannot follow it.
                 if binding.holder.kind() != PAIR {
@@ -829,15 +832,15 @@ impl LanguageSpec for Ecma {
                 }),
             };
         }
-        draft.default_export = node.parent().is_some_and(|parent| {
+        draft.default_export = context.parent(node).is_some_and(|parent| {
             parent.kind() == EXPORT_STATEMENT && context.text(parent).starts_with("export default")
         });
         // A member of an object literal has the name of the variable in its key.
-        let member = binding(node).map_or(node, |binding| binding.holder);
-        let variable = member
-            .parent()
+        let member = binding(node, context).map_or(node, |binding| binding.holder);
+        let variable = context
+            .parent(member)
             .filter(|object| object.kind() == OBJECT)
-            .and_then(|object| object.parent())
+            .and_then(|object| context.parent(object))
             .filter(|holder| holder.kind() == VARIABLE_DECLARATOR)
             .and_then(|holder| holder.child_by_field_name("name"))
             .filter(|name| name.kind() == IDENTIFIER);
@@ -845,7 +848,7 @@ impl LanguageSpec for Ecma {
             draft.container_path.push(context.text(variable));
         }
         if FUNCTION_VALUE_KINDS.contains(&kind) || kind == CLASS_EXPRESSION {
-            if let Some(binding) = binding(node) {
+            if let Some(binding) = binding(node, context) {
                 draft.span = Span::between(&binding.start, &node);
                 if binding.name.is_none() {
                     draft.name = "default".to_string();
@@ -887,17 +890,17 @@ impl LanguageSpec for Ecma {
         let node = draft.node;
         let binding = (FUNCTION_VALUE_KINDS.contains(&node.kind())
             || node.kind() == CLASS_EXPRESSION)
-            .then(|| binding(node))
+            .then(|| binding(node, context))
             .flatten();
         // The member is the node that a class body or an object literal contains.
         let member = binding.as_ref().map_or(node, |binding| binding.holder);
 
-        if member
-            .parent()
+        if context
+            .parent(member)
             .is_some_and(|parent| parent.kind() == OBJECT)
         {
-            return member
-                .parent()
+            return context
+                .parent(member)
                 .map(|object| object_exported(object, context))
                 .unwrap_or(Exported::NotExported);
         }
@@ -910,8 +913,8 @@ impl LanguageSpec for Ecma {
                 }
             }
             Some(scope) => {
-                let keyword = member
-                    .parent()
+                let keyword = context
+                    .parent(member)
                     .is_some_and(|parent| parent.kind() == EXPORT_STATEMENT);
                 exported_if(keyword && scope.exported == Exported::Exported)
             }
@@ -919,9 +922,8 @@ impl LanguageSpec for Ecma {
                 None => declaration_exported(node, &draft.name, context),
                 Some(binding) => match binding.holder.kind() {
                     EXPORT_STATEMENT => Exported::Exported,
-                    VARIABLE_DECLARATOR => binding
-                        .holder
-                        .parent()
+                    VARIABLE_DECLARATOR => context
+                        .parent(binding.holder)
                         .map(|statement| declaration_exported(statement, &draft.name, context))
                         .unwrap_or(Exported::NotExported),
                     ASSIGNMENT_EXPRESSION => exported_if(
