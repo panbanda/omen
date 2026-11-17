@@ -268,10 +268,13 @@ files call `clear`, omen does not know the class names. Then no route has a symb
 - A caller can add middleware to the result of a factory with `Use` or `Pre`. This
   changes the guards of the routes of the factory. Such a call is a use of the second
   kind. A call of a method that serves the router is not. A call that registers a route
-  or makes a group on the result is a use of the second kind too, because the route can
-  replace a route of the factory or hide it. The factory and the caller give no entry
-  for these routes. A factory without routes of its own still gives the entries of the
-  caller. This rule holds only when the factory returns the router of the framework.
+  or makes a group on the result adds routes to the router of the factory. When the
+  factory has one call, and the call is in the file of the factory, the routes of the
+  factory come first. The routes of the caller follow, and the rules of the framework for
+  the same key apply to them all. When the factory has more than one call, or a call in
+  another file registers a route, omen cannot order the routes. Then the factory and the
+  callers give no entry for them. A factory without routes of its own gives the entries of
+  the caller. This rule holds only when the factory returns the router of the framework.
 - A factory can return a literal that holds a router, as `&Server{Mux: router}`. The
   type of the literal can define a method that hides a method of the router. Thus each
   use of the result that is not serving is a use of the second kind.

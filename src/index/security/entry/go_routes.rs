@@ -2023,9 +2023,21 @@ impl CallSites {
                 continue;
             }
             let context = Context::new(&tree, file, files, trees, &[]);
-            let index = FileUses::new(tree.root_node(), &tree.source, file, &context);
+            let own_index = FileUses::new(tree.root_node(), &tree.source, file, &context, false);
+            let mut other_index: Option<FileUses<'_, '_>> = None;
             for (reference, keys) in sites {
                 let strict = keys.iter().any(|key| wrappers.contains(*key));
+                // A registration in the file of the factory has an order that the walk reads.
+                let same_file = keys
+                    .iter()
+                    .all(|key| key.split('#').next() == Some(file.file.as_str()));
+                let index = if same_file {
+                    &own_index
+                } else {
+                    &*other_index.get_or_insert_with(|| {
+                        FileUses::new(tree.root_node(), &tree.source, file, &context, true)
+                    })
+                };
                 if index.is_blocked(
                     reference.name_range.start_byte,
                     reference.name_range.end_byte,
@@ -2104,11 +2116,21 @@ struct FileUses<'t, 'c> {
     /// The same, when any method of the router counts as a bad use. A wrapper type can
     /// shadow a method of the router.
     bad_strict: HashMap<String, Vec<usize>>,
+    /// A call that registers a route on the result is a use that the walk cannot order. A
+    /// file that does not declare the factory uses this mode.
+    registrations_block: bool,
 }
 
 impl<'t, 'c> FileUses<'t, 'c> {
-    fn new(root: Node<'t>, source: &'t [u8], file: &FileSymbols, context: &'c Context<'t>) -> Self {
+    fn new(
+        root: Node<'t>,
+        source: &'t [u8],
+        file: &FileSymbols,
+        context: &'c Context<'t>,
+        registrations_block: bool,
+    ) -> Self {
         let mut uses = Self {
+            registrations_block,
             root,
             source,
             context,
@@ -2181,9 +2203,11 @@ impl<'t, 'c> FileUses<'t, 'c> {
                 call.kind() == "call_expression"
                     && call.child_by_field_name("function") == Some(selector)
             })
-            && selector
-                .child_by_field_name("field")
-                .is_some_and(|field| SERVING.contains(&self.text(field)))
+            && selector.child_by_field_name("field").is_some_and(|field| {
+                let name = self.text(field);
+                SERVING.contains(&name)
+                    || (!self.registrations_block && ROUTER_METHODS.contains(&name))
+            })
     }
 
     /// Tells if a literal is an `http.Server`, which serves its handler as the root.
@@ -2394,6 +2418,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             fresh_of: HashMap::new(),
             routed_owners: HashSet::new(),
             routed_factories: HashSet::new(),
+            fresh_calls: HashMap::new(),
+            registered_fresh: HashSet::new(),
+            returned_of: HashMap::new(),
             components: HashMap::new(),
             attached: HashSet::new(),
             owners: 0,
@@ -2439,6 +2466,12 @@ struct Routes<'c, 'a, 't> {
     routed_owners: HashSet<usize>,
     /// The factories that register a route on a router that they make.
     routed_factories: HashSet<String>,
+    /// The number of calls of each factory that the walk read, and the factories that got a
+    /// registration on the result of a call.
+    fresh_calls: HashMap<String, usize>,
+    registered_fresh: HashSet<String>,
+    /// The router that a factory with a summary returns.
+    returned_of: HashMap<String, usize>,
     /// The routers of the returned router of each factory, and the routers that join to it.
     components: HashMap<String, Vec<usize>>,
     /// The factories whose result a call can attach to a parent. Their own routes have
@@ -2697,6 +2730,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     && declared.is_some_and(|name| !self.cyclic.contains(name))
             })
             .and_then(|router| self.summarize(router, owner));
+        if let (Some(name), Some(router), true) = (declared, only_router, summary.is_some()) {
+            self.returned_of.insert(name.to_string(), router);
+        }
         let mut made: Vec<usize> = Vec::new();
         for router in returned {
             if self.made_by(router, owner) {
@@ -2769,9 +2805,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 .is_some_and(|name| self.routed_factories.contains(name))
         });
         if let Some(fresh) = fresh {
-            self.attached.insert(self.fresh_of[&fresh].clone());
-            self.routers[fresh].partial = true;
-            self.routers[router].partial = true;
+            self.registered_fresh.insert(self.fresh_of[&fresh].clone());
         }
     }
 
@@ -2974,6 +3008,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         router.mountable = summary.prefixes.is_empty();
         router.base = summary.prefixes;
         self.fresh_of.insert(id, name.to_string());
+        *self.fresh_calls.entry(name.to_string()).or_default() += 1;
         Some(id)
     }
 
@@ -4370,13 +4405,6 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn finish(self, out: &mut Vec<Draft>) {
-        let blocked: HashSet<usize> = self
-            .attached
-            .iter()
-            .filter_map(|name| self.components.get(name))
-            .flatten()
-            .copied()
-            .collect();
         let mut memo: Vec<Option<Up>> = (0..self.routers.len()).map(|_| None).collect();
         // The tree of a chi router is the tree of the router that `With` or `Group` came
         // from. A parent has a lower number than its child.
@@ -4392,6 +4420,52 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 Some(parent) if router.inline => tree_of[parent],
                 _ => id,
             });
+        }
+        let mut blocked: HashSet<usize> = self
+            .attached
+            .iter()
+            .filter_map(|name| self.components.get(name))
+            .flatten()
+            .copied()
+            .collect();
+        // A caller that registers on the result of a factory adds routes to the router of the
+        // factory. When the factory has one call, the routes of both are in one order, the order
+        // of the registrations, and the rules of the framework apply to them. Otherwise omen
+        // cannot order them, so the routes of both give no entry.
+        let mut mapping: Vec<usize> = (0..self.routers.len()).collect();
+        let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+        if !self.registered_fresh.is_empty() {
+            for (router, root) in root_of.iter().enumerate() {
+                if self.fresh_of.contains_key(root) {
+                    members.entry(*root).or_default().push(router);
+                }
+            }
+        }
+        for (fresh, name) in &self.fresh_of {
+            if !self.registered_fresh.contains(name) {
+                continue;
+            }
+            let own: Vec<usize> = members.get(fresh).cloned().unwrap_or_default();
+            let returned = self.returned_of.get(name).copied();
+            let exact = self.fresh_calls.get(name) == Some(&1)
+                && !self.attached.contains(name)
+                && self.routers[*fresh].base.is_empty()
+                && !self.routers[*fresh].partial;
+            match returned.filter(|_| exact) {
+                Some(returned) => {
+                    mapping[*fresh] = returned;
+                    for router in own {
+                        root_of[router] = root_of[returned];
+                        if tree_of[router] == *fresh {
+                            tree_of[router] = tree_of[returned];
+                        }
+                    }
+                }
+                None => {
+                    blocked.extend(self.components.get(name).into_iter().flatten().copied());
+                    blocked.extend(own);
+                }
+            }
         }
         // chi's `Mount` registers the pattern, the pattern and a slash, and the pattern and `/*`
         // for all methods. A route that has one of these keys on the same tree replaces the
@@ -4549,7 +4623,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     .then_some(root_of[record.router])
             })
             .collect();
-        mux_order(&self.records, &drafts, &mux_roots, &mut kept);
+        mux_order(&self.records, &drafts, &mux_roots, &mapping, &mut kept);
         let chi_trees: Vec<Option<usize>> = self
             .records
             .iter()
@@ -4985,6 +5059,7 @@ fn mux_order(
     records: &[Record],
     drafts: &[Option<(Draft, Duplicate)>],
     roots: &[Option<usize>],
+    mapping: &[usize],
     kept: &mut [bool],
 ) {
     let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -5008,7 +5083,7 @@ fn mux_order(
         let mut by_router: HashMap<usize, MethodTries> = HashMap::new();
         let mut unreadable: HashMap<usize, usize> = HashMap::new();
         for &index in indexes {
-            let router = records[index].router;
+            let router = mapping[records[index].router];
             match readable(index) {
                 Some((literal, kind, method)) => {
                     everything.insert(method, literal, kind);
@@ -5024,7 +5099,7 @@ fn mux_order(
         }
         let mut earlier: HashMap<usize, MethodTries> = HashMap::new();
         for &index in indexes {
-            let router = records[index].router;
+            let router = mapping[records[index].router];
             let others_unreadable =
                 unreadable.len() - usize::from(unreadable.contains_key(&router));
             let own_unreadable = unreadable.get(&router).is_some_and(|first| *first < index);
