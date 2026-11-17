@@ -1371,16 +1371,14 @@ impl<'a> Context<'a> {
                 return Some((&self.file.symbols[*position], self.file));
             }
         }
-        match self.all_parsed.shared() {
-            Some(shared) => self.package_lookup(
-                shared
-                    .go_callables
-                    .get_or_init(|| PackageCallables::build(self.all)),
-                directory,
-                name,
-            ),
-            None => self.package_lookup(&PackageCallables::build(self.all), directory, name),
-        }
+        self.package_lookup(
+            self.all_parsed
+                .shared()
+                .go_callables
+                .get_or_init(|| PackageCallables::build(self.all)),
+            directory,
+            name,
+        )
     }
 
     fn package_lookup(
@@ -1620,13 +1618,11 @@ impl<'a> Context<'a> {
                     directory_of(&self.file.file).to_string(),
                     package_name(self.parsed.root_node(), self.source),
                 );
-                match self.all_parsed.shared() {
-                    Some(shared) => shared
-                        .go_packages
-                        .get_or_init(|| PackageNames::build(self.all, self.all_parsed))
-                        .names(&key),
-                    None => PackageNames::build(self.all, self.all_parsed).names(&key),
-                }
+                self.all_parsed
+                    .shared()
+                    .go_packages
+                    .get_or_init(|| PackageNames::build(self.all, self.all_parsed))
+                    .names(&key)
             })
             .contains(self.text(node))
     }
@@ -4033,6 +4029,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 }),
                 guards,
                 basis: EntryBasis::Registered,
+                variant: None,
             };
             let last = drafts.len() - 1;
             drafts[last] = Some((draft, duplicate));

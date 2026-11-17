@@ -22,8 +22,8 @@ use crate::index::extract::FileSymbols;
 use crate::index::model::{Span, Symbol, SymbolKind};
 use crate::parser::{cfg_test_module_ranges, ParseResult};
 
-mod rails;
 mod go_routes;
+mod rails;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -685,24 +685,17 @@ impl<'a> Context<'a> {
         if here.len() == 1 {
             return Some(here[0].key.to_string());
         }
-        let everywhere: Vec<&Symbol> = match self.all_parsed.shared() {
-            Some(shared) => shared
-                .callables
-                .get_or_init(|| callables_by_name(self.all))
-                .get(name)
-                .into_iter()
-                .flatten()
-                .map(|(file, position)| &self.all[*file].symbols[*position])
-                .filter(|symbol| fits(symbol))
-                .collect(),
-            None => callables_by_name(self.all)
-                .get(name)
-                .into_iter()
-                .flatten()
-                .map(|(file, position)| &self.all[*file].symbols[*position])
-                .filter(|symbol| fits(symbol))
-                .collect(),
-        };
+        let everywhere: Vec<&Symbol> = self
+            .all_parsed
+            .shared()
+            .callables
+            .get_or_init(|| callables_by_name(self.all))
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(|(file, position)| &self.all[*file].symbols[*position])
+            .filter(|symbol| fits(symbol))
+            .collect();
         (everywhere.len() == 1).then(|| everywhere[0].key.to_string())
     }
 
