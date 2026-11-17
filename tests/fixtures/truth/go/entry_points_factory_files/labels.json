@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Go. The chi package is not in the case. The file serve.go serves the router of NewRouter as the root, so its route keeps its path. The file serve.go mounts the router of AdminRouter, so its route has a path that depends on the mount, and omen gives no entry for it. The harness does not build or run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "files_health", "file": "router.go", "line": 13, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/health"}
+  ]
+}

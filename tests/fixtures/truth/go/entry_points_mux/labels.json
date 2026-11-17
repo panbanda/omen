@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed against the gorilla/mux routing rules. The syntax is valid Go. The mux package and the functions auth and logger are not in the case. The harness does not build or run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "mux_health", "file": "main.go", "line": 15, "kind": "http_handler", "framework": "gorilla/mux", "method": "ANY", "path": "/health", "guards": ["logger"]},
+    {"label": "mux_user_get", "file": "main.go", "line": 16, "kind": "http_handler", "framework": "gorilla/mux", "method": "GET", "path": "/users/{id}", "parameters": ["id"], "guards": ["logger"]},
+    {"label": "mux_user_post", "file": "main.go", "line": 16, "kind": "http_handler", "framework": "gorilla/mux", "method": "POST", "path": "/users/{id}", "parameters": ["id"], "guards": ["logger"]},
+    {"label": "mux_item_delete", "file": "main.go", "line": 17, "kind": "http_handler", "framework": "gorilla/mux", "method": "DELETE", "path": "/items/{id:[0-9]+}", "parameters": ["id"], "guards": ["logger"]},
+    {"label": "mux_handle", "file": "main.go", "line": 18, "kind": "http_handler", "framework": "gorilla/mux", "method": "ANY", "path": "/handle", "guards": ["logger"]},
+    {"label": "mux_ping", "file": "main.go", "line": 21, "kind": "http_handler", "framework": "gorilla/mux", "method": "GET", "path": "/api/ping", "guards": ["logger", "auth"]}
+  ]
+}

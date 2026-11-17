@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed against the gin routing rules. The syntax is valid Go. The gin package and the functions logger, auth, audit, and extra are not in the case. The harness does not build or run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "gin_early", "file": "main.go", "line": 13, "kind": "http_handler", "framework": "gin", "method": "GET", "path": "/early"},
+    {"label": "gin_user", "file": "main.go", "line": 16, "kind": "http_handler", "framework": "gin", "method": "GET", "path": "/v1/users/:id", "parameters": ["id"], "guards": ["logger", "auth", "audit"]},
+    {"label": "gin_inner", "file": "main.go", "line": 19, "kind": "http_handler", "framework": "gin", "method": "POST", "path": "/v1/inner/x", "guards": ["logger", "auth", "extra"]},
+    {"label": "gin_chain", "file": "main.go", "line": 20, "kind": "http_handler", "framework": "gin", "method": "DELETE", "path": "/chain/c", "guards": ["logger"]},
+    {"label": "gin_late", "file": "main.go", "line": 21, "kind": "http_handler", "framework": "gin", "method": "PUT", "path": "/v1/late", "guards": ["logger", "auth"]},
+    {"label": "gin_after", "file": "main.go", "line": 22, "kind": "http_handler", "framework": "gin", "method": "GET", "path": "/after", "guards": ["logger"]}
+  ]
+}

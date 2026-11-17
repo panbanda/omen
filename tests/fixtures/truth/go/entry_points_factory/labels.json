@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Go. The chi package is not in the case. The router of rootRouter is only a root, so its route keeps its path. The router of subRouter is mounted, so its route has a path that depends on the mount, and omen gives no entry for it. The harness does not build or run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "factory_root", "file": "main.go", "line": 15, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/root"},
+    {"label": "factory_extra", "file": "main.go", "line": 27, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/extra"}
+  ]
+}

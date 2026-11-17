@@ -231,6 +231,255 @@ files call `clear`, omen does not know the class names. Then no route has a symb
 - A route is an entry point only when its receiver is a framework object. The receiver
   is a framework call, a value that the file binds to one, or an import of a
   constructor of the framework, or of a repository file that binds the name to one.
+- Omen reads the routes of these Go frameworks: `net/http`, gin, chi, echo, and
+  gorilla/mux. Omen models the registrations of a valid program. It does not model a
+  framework panic. A program that panics at start, as chi does when `Use` follows a
+  route in some versions, is out of scope.
+- A router is a value that the import of the framework proves. It is a constructor
+  call, a group or sub-router of a router, or a parameter that has a router type. A
+  variable name alone does not prove a router.
+- Omen reads the body of each function one time. A route call gives its entry at its
+  own place, with the guards that the function knows.
+- A function that makes a router and returns it has a summary when it is pure. A pure
+  function writes no package-level variable, no parameter, and no router that it did
+  not make. The summary has the prefixes and the guards of the returned router. A call
+  of the function gives a new router with these prefixes and guards.
+- A function or a method can register routes on a router that it makes and returns. This
+  function is a factory. The walk finds a factory from the return statement. The result
+  type does not matter. A literal that holds the router, as in `&Server{Mux: router}`,
+  also counts.
+- The paths of the routes of a factory depend on the call. A call can mount the result
+  at a prefix. Omen reads each use of the factory in the whole repository. It uses the
+  references of the index and the syntax of each file.
+- A use of a factory has one of three kinds. The first kind serves the result as the root.
+  Examples are `http.ListenAndServe(address, router)`, a literal `http.Server{Handler: router}`,
+  and a call that discards the result. A local variable that only calls methods or serves
+  the result is the same kind.
+- The second kind attaches the result. The call passes the result as an argument, returns
+  it, or stores it in a field, a package variable, or a literal. The third kind is a use
+  that omen cannot classify.
+- A caller can add middleware to the result of a factory with `Use` or `Pre`. This
+  changes the guards of the routes of the factory. Such a call is a use of the second
+  kind. A call of a method that registers a route, makes a group, or serves the router
+  is not. This rule holds only when the factory returns the router of the framework.
+- A factory can return a literal that holds a router, as `&Server{Mux: router}`. The
+  type of the literal can define a method that hides a method of the router. Thus each
+  use of the result that is not serving is a use of the second kind.
+- A handler name in a Go file has a package. A name with a qualifier, as `dep.Show`,
+  names a function of the package of the import. The index must resolve that import.
+  If it does not, the entry has no handler. A name without a qualifier names a function
+  of the package of the file. A package is the files of one directory.
+- A local binding can hide a name. A parameter, a short variable declaration, a
+  variable, a range variable, and a type switch variable are local bindings. The scope
+  of a parameter is its function. The scope of another binding starts after its
+  declaration and ends with its block, its statement, or its case clause. A handler name
+  that has a local binding in scope has no handler.
+- A value of a type that is not a type of the framework is not a router. This holds for a
+  struct that embeds or holds a router or a multiplexer. A wrapper type can define a
+  method with the name of a method of the framework, or the method `ServeHTTP`. Then its
+  values are not routers, and the routes of its factory give no entry, also when a call
+  serves the result as the root. Omen compares the name of the type without a pointer,
+  a package, and type arguments, so `Server[int]` and `Server[T]` are the type `Server`.
+  Omen follows a type alias, as in `type Alias = Server`, and a chain of aliases, to the
+  base type. A type has the key of its package, which is a directory, and its name. An
+  alias and its base type are in the same package. A key that two declarations have gives
+  no entry. An alias to a type of another package, or to a type that is not a name, gives
+  no entry when a factory uses it as a wrapper. A cycle of aliases gives no entry too.
+- A branch that never runs gives no entry. This holds for the body of `if false`, the
+  `else` branch of `if true`, and the body of `for false`. A route under another
+  condition or another loop keeps its entry.
+- A later registration can replace or hide an earlier one. chi and echo keep the last
+  registration of a method and a path. A chi router that `With` or `Group` made shares
+  the tree of its parent, and `Handle` has all methods. A registration that has only some
+  of its methods left gives no entry. echo treats two paths as equal when only the names
+  of the parameters differ. chi does the same for its own patterns: `/{id}` and `/{name}`
+  have one node, and a regular expression stays part of the node. gin and `net/http`
+  panic on a second registration, which is out of scope.
+- gorilla/mux gives a request to the first route that matches. A route gives no entry when
+  an earlier route of its router can match a path that it matches. Omen compares the
+  literal start of the paths, up to the first variable, and the methods. A route with a
+  variable that has no constraint is not hidden by a route with an exact path, so
+  `/u/me` before `/u/{id}` gives two entries. A matcher such as `Headers` does not make
+  a route safe. The order of the routers of one tree is not known, so a route of another
+  router of the tree counts as earlier. A registration that omen cannot read, as a path
+  that is not a literal or a call such as `Host`, can match any request. Then the routes
+  after it, and the routes of the other routers of the tree, give no entry. A route that
+  never matches, as a route with an error or `BuildOnly`, hides nothing. This check can
+  drop a route that a request reaches.
+- chi `Mount` registers the pattern, the pattern and a slash, and the pattern and `/*` for
+  all methods. A route of the same tree that has one of these keys replaces the mount
+  endpoint of its method on that node only. An exact `/x` route does not replace the
+  endpoint `/x/*`, which serves the routes below the mount. Omen gives no entry for the
+  routers below the mount in all of these cases. This rule drops more than the library
+  replaces.
+- A route of the parent tree whose path is below a mount prefix, as `/api/x` below `Mount("/api")`,
+  takes the request before the catch-all of the mount. Then the routers below the mount
+  give no entry. A route of the parent that is not below the prefix has no effect on them.
+- chi tries the children of a node in the order static, regular expression, parameter, and
+  catch-all, and goes back when a child fails. When a node has a regular expression child,
+  its parameter child and its catch-all child give no entry. A catch-all child gives no
+  entry when the node has a parameter child. A node with two different regular expressions
+  gives no entry for either. Omen does not check if a regular expression accepts all that a
+  parameter accepts.
+- A chi registration that omen omits still takes part in the precedence of its tree. It
+  can have a spread middleware list or an unread handler. A chi registration whose path
+  omen cannot read, such as a variable path, hides all routes of its tree and of the
+  routers mounted on it. echo replaces a route that has the same method and path, so an
+  echo registration whose path omen cannot read hides all routes of its echo router. An
+  echo route with a method that omen cannot read replaces the earlier routes of its path
+  for every method, a custom method too, because echo stores each method separately.
+- echo tries the children of a node in the order static, parameter, and wildcard, and goes
+  back when a child fails. A parameter at the end of a path takes the rest of the path. So
+  an echo wildcard route gives no entry when its node has a parameter child. This rule is
+  over-careful for a parameter that has children, and it drops that wildcard too.
+  gin and `net/http` panic on a second registration, and gin lets a static child and a
+  parameter child coexist, so an unread registration hides nothing there.
+- In the gin tree of the pinned source, a static child and a parameter child coexist, and
+  the static child goes first. A catch-all and a parameter at the same node make gin panic,
+  and so does a catch-all that has a sibling that gin has already stored. A valid program
+  has no gin route that a sibling hides. In `net/http`, patterns that match the same
+  requests conflict and make `ServeMux` panic, so one more specific pattern does not cover
+  a pattern whole. A set of more specific patterns can cover it, as `/x/{$}`, `/x/{a}`, and
+  `/x/{a}/{b...}` cover `/x/{a...}`. Omen checks only one case: a final `{name...}` that
+  has a sibling `{$}` and a sibling `{name}` in the same file gives no entry. It ignores
+  methods and hosts for this check, and it does not check other sets.
+- A router that a call gets, other than a framework call or a server, can get routes that
+  omen does not read. That call is an unread registration at its place, for chi, echo, and
+  gorilla/mux. A function that has a root router as a parameter, as `*echo.Echo`, and that
+  a reference names anywhere in the repository gives no entry, and so does a function
+  literal that has a router parameter. A function that nothing references keeps its entries.
+  `Handle`, `HandleFunc`, and the servers of `net/http` do not count as such a call.
+- echo `File`, `FileFS`, `Static`, and `StaticFS` register a GET route for the path, or for
+  the prefix and `*`. Omen omits the entry, because it has no handler, and the route
+  replaces a route of the same path. A call of `Router().Add` is an unread registration of
+  the echo router. A `*` in the middle of an echo path stores the route on the node of the
+  `*`, so omen reads the path up to the `*` and omits the entry. The method
+  `echo_route_not_found` is not a route, and omen ignores it.
+- A name that the package declares hides a predeclared name or a qualifier. The package is
+  the files of one directory that have the same package clause, so a declaration in
+  another file of the package counts.
+- A package qualifier counts only when no name hides it. The qualifiers are `http`,
+  `chi`, `mux`, `echo`, `gin`, and the aliases that the imports give. A parameter, a
+  receiver, a local variable, a range variable, or a declaration of the package with the
+  same name hides the qualifier. Then the call is not a call of the library, and omen
+  gives no entry. A parameter name is the text that the framework reads, with the
+  spaces that it has.
+  A multiplexer of `net/http` is a variable that has one binding in the file, and the
+  binding is a call of `http.NewServeMux()`.
+- Omen reads a string literal as Go does. An interpreted literal has the escapes `\a`,
+  `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\\`, `\"`, octal, `\x`, `\u`, and `\U`. A raw
+  literal has no escape. A bad escape, or a value that is not UTF-8, gives no entry.
+- A gorilla/mux route can have an error that stops it from matching. A template with
+  unbalanced braces, an empty name or pattern, an odd number of arguments in `Headers`,
+  and a call of `Name` on a route that has a name that is not empty set this error. A call
+  of `Name` with an empty string leaves the name empty, so the next `Name` is valid. A
+  pattern that Go does not accept as a regular expression sets the error too.
+- Omen checks a pattern with a small grammar that Go and Rust read in the same way. It
+  has ASCII letters, digits, and escaped punctuation, the dot, classes of letters,
+  digits, and ranges, the repetitions `*`, `+`, `?`, `{m}`, `{m,}`, and `{m,n}` with
+  numbers up to 1000, a lazy `?`, and `|`. A pattern outside this grammar gives no
+  entry. Thus a group, a flag, an anchor, and a shorthand class such as `\d` give no
+  entry.
+- A capture group in a pattern makes gorilla/mux v1.8.1 panic at start. A program that
+  panics at start is out of scope, and omen gives no entry for a pattern with a group.
+- Omen accepts these calls in a chain of gorilla/mux: `Methods`, `Path`, `PathPrefix`,
+  `Headers`, `Name`, `Schemes`, `MatcherFunc`, and `BuildVarsFunc`. It checks the
+  templates of the paths. A route with `Host`, `Queries`, `HeadersRegexp`, or another
+  call gives no entry.
+- A handler with a qualifier that is not an import has no function. A package variable
+  or a field, as `box.Show`, is an example. The index does not give a function for it.
+- Any mention of the name of a factory that is not a call is a use of the third kind. A
+  function value, a method value, and an argument that is a function are examples. A
+  mention of another function with the same name also counts.
+- If one use is of the second or the third kind, omen gives no entry for the routes of
+  the factory. A factory that no use in the repository mentions keeps its routes at the
+  paths of the function. The function can be an entry of a library.
+- A function without a summary that returns a router it made gives no entry for these
+  routes. A function that returns a group or a sub-router gives none either.
+- These values have no proof, and the routes on them give no entry:
+  - the result of a function without a summary
+  - the result of a recursive function
+  - a package-level router that a function assigns
+  - a router that a function receives as a parameter of a type that can be a group or
+    a sub-router, such as `chi.Router`
+- A function that receives a root router, such as `*gin.Engine`, gives entries. A route
+  callback that a name gives, as in `r.Route("/api", api)`, gives no entry. A function
+  literal gives entries.
+- A call can wrap a handler, as in `http.Handle("/p", auth(http.HandlerFunc(show)))`.
+  The function `show` is the handler when a conversion proves it. It is also the handler
+  when its parameter list is the parameter list of a handler of the framework. For
+  `net/http` it is `(http.ResponseWriter, *http.Request)`. For gin it is
+  `(*gin.Context)`. For echo it is `(echo.Context) error`. A wrapper with more than
+  one such function gives no handler. A wrapper is a guard only when the repository
+  defines it as a function that takes a handler and gives a handler. A conversion such
+  as `http.HandlerFunc` or `gin.WrapF` is not a guard.
+- Two entries can have the same place and the same method. Then the key of each entry
+  has the path at its end. If the keys are still equal, each key has the number of its
+  entry in the walk. A router that two mounts attach does not give such entries,
+  because it gives no entry.
+- For chi, a prefix comes from `Route`, which also gives the new router. A guard comes
+  from `Use` and `With`. `Use` guards each route of its router and of its sub-routers,
+  in any source order. `Mount` joins a router of the same file. A router that two mounts
+  attach gives no entry. A router of another file is not joined. A pattern without a
+  leading slash gives no entry.
+  `Query` gives the method `QUERY`.
+- For echo, a prefix and the guards of `Group` apply to the routes of the group. A
+  group copies the guards of its parent when the group is made. `Use` and `Pre` on the
+  echo value apply to each route. The path is the plain concatenation of the prefixes
+  and the path. `Any` gives one entry for each method in the list of echo v4.13.4.
+  `Match` gives entries only for a literal list of strings.
+- For gin, the guards of a route are the arguments between the path and the last
+  argument. A group has a prefix, and it copies the guards of its parent when the
+  group is made. `Use` gives a guard to the routes that follow it. Each method that adds
+  a route or a guard returns the router, so calls can chain. Paths join as `path.Join`
+  does. `Any` gives one entry for each method in the list of gin v1.11.0. `Handle` gives
+  one entry. `Match` gives entries only for a literal list of strings.
+  gin and echo keep a custom method of `Handle`, `Match`, and `Add` as the source
+  writes it.
+- For gorilla/mux, `PathPrefix(...).Subrouter()` gives a prefix. A chain of matchers
+  that ends in `HandlerFunc` or `Handler` gives a route, as `r.Methods("GET").Path("/x")
+  .HandlerFunc(show)` does. A chain without `Path` or `PathPrefix` gives no entry. A chain with more than one
+  `Path` or `PathPrefix` call gives no entry, because gorilla/mux needs each matcher to match.
+  A `Schemes` call needs literal values `http` or `https`, in any case. A handler that
+  runs before the router can set another value in `URL.Scheme`, so omen gives no entry for
+  other values. A `Methods` call needs literal values that are HTTP tokens. Other values
+  give no entry. `PathPrefix("")` matches
+  every path, so it hides the routes after it. The
+  path matchers join in the
+  order of the calls. Each `Methods` list limits the methods, so the result is the
+  common methods of the lists. A route without `Methods` has the method `ANY`. `Use`
+  applies to each route of its router and of the sub-routers, as the library does.
+  A `Methods` argument that is not a string literal gives no entry.
+  A chain that ends in `BuildOnly()`, or that has another call that omen does not know,
+  gives no entry. A `BuildOnly` route never matches a request.
+- chi v5.3.2 reads a method before a space or a tab in the pattern of `Handle`. It
+  accepts only the methods `CONNECT`, `DELETE`, `GET`, `HEAD`, `OPTIONS`, `PATCH`,
+  `POST`, `PUT`, `QUERY`, and `TRACE`. Another method needs `RegisterMethod`, so it
+  gives no entry.
+- Each framework has its own syntax for the parameters of a path. chi and gorilla/mux
+  read `{name}` and `{name:expression}`, and chi also reads `*`. echo reads `:name` and
+  `*`, and gin reads `:name` and `*name`. A backslash before `:` makes it a letter in
+  echo and gin. A colon is a letter in chi and gorilla/mux. A brace is a letter in
+  echo and gin.
+- net/http follows the syntax of Go 1.24 for `[METHOD ][HOST]/[PATH]`. A method that is
+  not a valid token, a missing slash, a bad wildcard, or a path that the library
+  changes when it cleans the path gives no entry. A method keeps its case, so `get`
+  does not match a request. A host does not change the path. A multiplexer is a
+  variable that has one binding in the file, and the binding is a call of
+  `http.NewServeMux()`.
+- A list with `...` in `Use`, `Pre`, `With`, or `Group`, or in the middleware of a route,
+  is not known. The routes that it changes give no entry. A function literal or another
+  expression in these lists has the label `<function literal>` or `<expression>`.
+- gin `Default()` adds the middleware `Logger` and `Recovery`. The source does not name
+  them, so omen does not list them as guards.
+- A function is a factory if any return statement can return a router that the function
+  made. A bare `return` gives the value of each named result. Each return statement
+  counts, so the walk takes the union of the routers.
+- Omen does not recognise these forms. They are coverage gaps, and they give no entry:
+  - a route that a caller registers on the result of a factory of another file
+  - an echo group that `Host` makes
+  - a gorilla/mux route that `NewRoute()` builds
+  - the gin methods `Static`, `StaticFile`, `StaticFileFS`, and `StaticFS`
 - Deadcode treats an entry point and the entry points of `[[security.entry_points]]`
   as alive, with their callees.
 - Deadcode reads the path in a Rust `#[serde(...)]` string through the module tree of
