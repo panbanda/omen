@@ -2311,11 +2311,17 @@ impl<'a> Context<'a> {
         let conditional = options
             .as_ref()
             .is_some_and(|options| options.get("if").is_some() || options.get("unless").is_some());
+        let places = names
+            .iter()
+            .enumerate()
+            .map(|(place, name)| (name.clone(), place))
+            .collect();
         Some(Callback {
             skip,
             names,
-            only: only.flatten(),
-            except: except.flatten(),
+            places,
+            only: only.flatten().map(|list| list.into_iter().collect()),
+            except: except.flatten().map(|list| list.into_iter().collect()),
             unreadable,
             conditional,
             prepend,
@@ -2327,8 +2333,10 @@ impl<'a> Context<'a> {
 struct Callback {
     skip: bool,
     names: Vec<String>,
-    only: Option<Vec<String>>,
-    except: Option<Vec<String>>,
+    /// The place of the last time that each name is in `names`.
+    places: HashMap<String, usize>,
+    only: Option<HashSet<String>>,
+    except: Option<HashSet<String>>,
     /// An `only:` or `except:` value that is not a literal list.
     unreadable: bool,
     /// An `if:` or `unless:` option, or a branch that omen cannot evaluate. A condition does not
@@ -2348,14 +2356,11 @@ impl Callback {
             return self.skip;
         }
         (self.skip || !self.conditional)
-            && self
-                .only
-                .as_ref()
-                .is_none_or(|only| only.iter().any(|name| name == action))
+            && self.only.as_ref().is_none_or(|only| only.contains(action))
             && self
                 .except
                 .as_ref()
-                .is_none_or(|except| !except.iter().any(|name| name == action))
+                .is_none_or(|except| !except.contains(action))
     }
 }
 
@@ -2408,8 +2413,8 @@ struct ClassCallbacks {
 /// from its default guards. A program with more takes them from the layer above it.
 const RESOLVE_FROM_DEFAULT_LIMIT: usize = if cfg!(test) { 3 } else { 512 };
 
-/// A callback of the chain. A `skip_before_action` call with an `except:` list, or with both lists,
-/// also points to the older calls of the same kind.
+/// A callback of the chain. A skip with an `except:` list, or with an `only:` list, is also in a
+/// chain of the skips of the same kind, newest first.
 struct Link {
     callback: Arc<Callback>,
     index: usize,
@@ -2453,42 +2458,28 @@ impl Link {
     }
 }
 
-/// What the callbacks with one name decide, as a search needs it.
+/// What the callbacks with one name decide for each action, except the skips with an `only:` list.
 #[derive(Clone, Default)]
 struct NameState {
     /// The newest call that decides for each action: a call that is not a skip, and a skip with no
     /// list.
     always: Option<Arc<Link>>,
-    /// The newest skip with an `only:` list, by action, after `always`.
-    only: PersistentMap<String, Arc<Link>>,
-    /// The skips with an `except:` list and no `only:` list, newest first, after `always`. A skip
-    /// with both lists applies to the actions of the `only:` list that the `except:` list does not
-    /// name, so it is in `only`.
+    /// The skips with an `except:` list and no `only:` list, newest first, after `always`.
     others: Option<Arc<Link>>,
 }
 
 impl NameState {
     /// The call that decides the guard for the action.
     fn deciding(&self, action: &str) -> Option<Arc<Link>> {
-        let mut best = self.always.clone();
-        let newer = |best: &Option<Arc<Link>>, link: &Arc<Link>| {
-            best.as_ref().is_none_or(|best| link.index > best.index)
-        };
-        if let Some(link) = self.only.get(&action.to_string()) {
-            if newer(&best, link) {
-                best = Some(Arc::clone(link));
-            }
-        }
-        if let Some(link) = self
+        let others = self
             .others
             .as_ref()
-            .and_then(|start| Link::applying(start, action))
-        {
-            if newer(&best, &link) {
-                best = Some(link);
-            }
+            .and_then(|start| Link::applying(start, action));
+        match (self.always.as_ref(), others) {
+            (Some(always), Some(other)) if other.index > always.index => Some(other),
+            (Some(always), _) => Some(Arc::clone(always)),
+            (None, other) => other,
         }
-        best
     }
 }
 
@@ -2516,7 +2507,9 @@ impl Drop for Link {
 /// the action, and it starts from the guards for the other actions.
 ///
 /// A program is a layer: the callbacks of one class, and the program of its superclass. A layer
-/// shares the indexes of the superclass, and it does not copy them.
+/// shares the indexes of the superclass, and it does not copy them. The index of a callback has one
+/// entry for each action of its lists, and not one for each name: a name is worked out only when a
+/// route of the action asks for the guards.
 struct Program {
     parent: Option<Arc<Program>>,
     /// The number of callbacks in the layers of the superclasses.
@@ -2526,11 +2519,14 @@ struct Program {
     by_name: HashMap<String, Vec<usize>>,
     /// What the callbacks of this layer and of the superclasses decide, by name.
     names: PersistentMap<String, NameState>,
-    /// The names of the callbacks of this layer and of the superclasses that a list names, by
-    /// action. Each name is in the set one time, so a chain that repeats a callback does not make the
-    /// set longer.
-    listed: PersistentMap<String, PersistentMap<String, ()>>,
-    /// A callback of this layer or of a superclass is in a place that omen cannot read.
+    /// The callbacks of this layer and of the superclasses with a list that names the action, by
+    /// the index of the callback.
+    listed: PersistentMap<String, PersistentMap<usize, Arc<Callback>>>,
+    /// The skips with an `only:` list that apply to the action, newest first, in this layer and in
+    /// the superclasses.
+    only_skips: PersistentMap<String, Arc<Link>>,
+    /// A callback of this layer or of a superclass is in a place that omen cannot read. Then the
+    /// layer builds no index.
     opaque: bool,
     default: std::sync::OnceLock<Arc<DefaultGuards>>,
     /// The guards of an action that a list names, as this layer has them, by action.
@@ -2555,56 +2551,67 @@ impl Program {
             .as_ref()
             .map_or(0, |parent| parent.offset + parent.callbacks.len());
         let callbacks: Vec<Arc<Callback>> = callbacks.into_iter().map(Arc::new).collect();
-        let mut names = parent
-            .as_ref()
-            .map(|parent| parent.names.clone())
-            .unwrap_or_default();
-        let mut listed = parent
-            .as_ref()
-            .map(|parent| parent.listed.clone())
-            .unwrap_or_default();
+        let opaque = opaque || parent.as_ref().is_some_and(|parent| parent.opaque);
+        let mut names = PersistentMap::default();
+        let mut listed = PersistentMap::default();
+        let mut only_skips = PersistentMap::default();
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, callback) in callbacks.iter().enumerate() {
-            let link = |older: Option<Arc<Link>>| Link::new(callback, offset + index, older);
-            let decides_always = !callback.skip
-                || callback.unreadable
-                || (callback.only.is_none() && callback.except.is_none());
-            for name in &callback.names {
-                by_name.entry(name.clone()).or_default().push(index);
-                let mut state = names.get(name).cloned().unwrap_or_default();
-                if decides_always {
-                    state = NameState {
-                        always: Some(link(None)),
-                        ..NameState::default()
-                    };
-                } else if let Some(only) = &callback.only {
-                    let only_link = link(None);
-                    for action in only {
+        if !opaque {
+            if let Some(parent) = &parent {
+                names = parent.names.clone();
+                listed = parent.listed.clone();
+                only_skips = parent.only_skips.clone();
+            }
+            for (index, callback) in callbacks.iter().enumerate() {
+                let global = offset + index;
+                let decides_always = !callback.skip
+                    || callback.unreadable
+                    || (callback.only.is_none() && callback.except.is_none());
+                let is_only_skip = callback.skip && !callback.unreadable && callback.only.is_some();
+                for name in &callback.names {
+                    by_name.entry(name.clone()).or_default().push(index);
+                    if is_only_skip {
+                        continue;
+                    }
+                    let mut state: NameState = names.get(name).cloned().unwrap_or_default();
+                    if decides_always {
+                        state = NameState {
+                            always: Some(Link::new(callback, global, None)),
+                            others: None,
+                        };
+                    } else {
+                        state.others = Some(Link::new(callback, global, state.others.take()));
+                    }
+                    names.insert(name.clone(), state);
+                }
+                if callback.unreadable {
+                    continue;
+                }
+                let eligible = callback.only.iter().chain(&callback.except).flatten();
+                let mut seen: HashSet<&String> = HashSet::new();
+                for action in eligible {
+                    if !seen.insert(action) {
+                        continue;
+                    }
+                    let mut set: PersistentMap<usize, Arc<Callback>> =
+                        listed.get(action).cloned().unwrap_or_default();
+                    set.insert(global, Arc::clone(callback));
+                    listed.insert(action.clone(), set);
+                }
+                if is_only_skip {
+                    for action in callback.only.iter().flatten() {
                         let excepted = callback
                             .except
                             .as_ref()
                             .is_some_and(|except| except.contains(action));
                         if !excepted {
-                            state.only.insert(action.clone(), Arc::clone(&only_link));
+                            let older = only_skips.get(action).cloned();
+                            only_skips.insert(action.clone(), Link::new(callback, global, older));
                         }
                     }
-                } else {
-                    state.others = Some(link(state.others.take()));
                 }
-                names.insert(name.clone(), state);
-            }
-            if callback.unreadable {
-                continue;
-            }
-            for action in callback.only.iter().chain(&callback.except).flatten() {
-                let mut set = listed.get(action).cloned().unwrap_or_default();
-                for name in &callback.names {
-                    set.insert(name.clone(), ());
-                }
-                listed.insert(action.clone(), set);
             }
         }
-        let opaque = opaque || parent.as_ref().is_some_and(|parent| parent.opaque);
         Self {
             parent,
             offset,
@@ -2612,6 +2619,7 @@ impl Program {
             by_name,
             names,
             listed,
+            only_skips,
             opaque,
             default: std::sync::OnceLock::new(),
             resolved: Mutex::new(HashMap::new()),
@@ -2631,7 +2639,7 @@ impl Program {
                 }
             } else {
                 return Decision::Decided(applies.then(|| {
-                    let place = callback.names.iter().rposition(|n| n == name).unwrap_or(0);
+                    let place = callback.places.get(name).copied().unwrap_or(0);
                     (self.offset + *index, place, callback.prepend)
                 }));
             }
@@ -2640,15 +2648,22 @@ impl Program {
     }
 
     /// The slot of the guard with the name for the action, from the newest callback that decides.
-    /// The search goes through the callbacks with the name, in this layer and in the superclasses.
-    fn slot_for(&self, name: &str, action: &str) -> Option<Slot> {
-        let link = self.names.get(&name.to_string())?.deciding(action)?;
+    /// `skip` is the newest skip with an `only:` list that applies to the action and has the name.
+    fn slot_for(&self, name: &str, action: &str, skip: Option<&Arc<Link>>) -> Option<Slot> {
+        let state = self.names.get(&name.to_string());
+        let deciding = state.and_then(|state| state.deciding(action));
+        let link = match (deciding, skip) {
+            (Some(link), Some(skip)) if skip.index > link.index => Arc::clone(skip),
+            (Some(link), _) => link,
+            (None, Some(skip)) => Arc::clone(skip),
+            (None, None) => return None,
+        };
         let callback = &link.callback;
         if callback.skip {
             return None;
         }
         callback.applies_to(action).then(|| {
-            let place = callback.names.iter().rposition(|n| n == name).unwrap_or(0);
+            let place = callback.places.get(name).copied().unwrap_or(0);
             (link.index, place, callback.prepend)
         })
     }
@@ -2686,12 +2701,12 @@ impl Program {
     }
 
     /// The guards of an action. An action that no list names has the default guards. For another
-    /// action, the layer has the guards of the layer above it, with the changes of its own callbacks.
-    /// The program keeps the guards of each layer that asks, and the layers share the structure of
-    /// the layers above them, so a chain of classes that repeat one listed action costs one change
-    /// for each class. A layer whose chain names few callbacks for the action works the guards out
-    /// from the default guards instead, so a long chain with one listed callback costs only that
-    /// callback.
+    /// action, the layer has the guards of the layer above it, with the changes of its own
+    /// callbacks. The program keeps the guards of each layer that asks, and the layers share the
+    /// structure of the layers above them, so a chain of classes that repeat one listed action
+    /// costs one change for each class. A layer whose chain has few callbacks for the action works
+    /// the guards out from the default guards instead, so a long chain with one listed callback
+    /// costs only that callback.
     fn guards_for(&self, action: &str) -> Vec<String> {
         if self.opaque {
             return Vec::new();
@@ -2762,11 +2777,29 @@ impl Program {
     /// that name the action, worked out again.
     fn resolve_from_default(&self, action: &str) -> PersistentMap<String, Slot> {
         let mut slots = self.default_guards().slots.clone();
-        if let Some(names) = self.listed.get(&action.to_string()) {
-            for (name, ()) in names.entries() {
-                match self.slot_for(&name, action) {
-                    Some(slot) => slots.insert(name, slot),
-                    None => slots.remove(&name),
+        let Some(listing) = self.listed.get(&action.to_string()) else {
+            return slots;
+        };
+        let mut skips: HashMap<&str, Arc<Link>> = HashMap::new();
+        let mut link = self.only_skips.get(&action.to_string());
+        while let Some(current) = link {
+            for name in &current.callback.names {
+                skips
+                    .entry(name.as_str())
+                    .or_insert_with(|| Arc::clone(current));
+            }
+            link = current.older.as_ref();
+        }
+        let mut seen: HashSet<&str> = HashSet::new();
+        let entries = listing.entries();
+        for (_, callback) in &entries {
+            for name in &callback.names {
+                if !seen.insert(name.as_str()) {
+                    continue;
+                }
+                match self.slot_for(name, action, skips.get(name.as_str())) {
+                    Some(slot) => slots.insert(name.clone(), slot),
+                    None => slots.remove(name),
                 }
             }
         }

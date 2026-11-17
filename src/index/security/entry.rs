@@ -8571,6 +8571,53 @@ func routes() {
         }
     }
 
+    fn one_big_callback_at(size: usize, shape: usize) -> std::time::Duration {
+        let names: Vec<String> = (0..size).map(|number| format!(":n{number}")).collect();
+        let actions: Vec<String> = (0..size).map(|number| format!(":a{number}")).collect();
+        let (names, actions) = (names.join(", "), actions.join(", "));
+        let (include, call) = match shape {
+            0 => (
+                "  include Helpers\n",
+                format!("before_action {names}, only: [{actions}]"),
+            ),
+            1 => ("", format!("before_action {names}, only: [{actions}]")),
+            _ => (
+                "",
+                format!("skip_before_action {names}, only: [{actions}], except: [{actions}]"),
+            ),
+        };
+        let classes = format!(
+            "class C0Controller\n{include}  {call}\n  def a1; end\n  def a2; end\n  def a3; end\nend\n"
+        );
+        let routes = "Rails.application.routes.draw do\n  get \"/x1\", to: \"c0#a1\"\n  get \"/x2\", to: \"c0#a2\"\n  get \"/x3\", to: \"c0#a3\"\nend\n";
+        let files = [
+            ("config/routes.rb", routes),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), 3);
+        let expected = if shape == 1 { size } else { 0 };
+        assert!(found.iter().all(|entry| entry.guards.len() == expected));
+        elapsed
+    }
+
+    #[test]
+    fn one_callback_with_many_names_and_actions_gives_its_guards() {
+        for shape in 0..3 {
+            one_big_callback_at(30, shape);
+        }
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_one_callback_with_many_names_and_actions_resolves_in_linear_time() {
+        for shape in 0..3 {
+            assert_scales_linearly(&format!("shape {shape}"), 10_000, |size| {
+                one_big_callback_at(size, shape)
+            });
+        }
+    }
+
     fn long_names_at(count: usize, length: usize, in_module: bool) -> std::time::Duration {
         let name = "a".repeat(length);
         let open = if in_module {
