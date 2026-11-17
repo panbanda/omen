@@ -113,7 +113,7 @@ each form against the source of Rails 7.2.2.
 | Form | Result |
 | --- | --- |
 | `draw` on `Rails.application.routes` | Read. |
-| `draw` on `Name::Application.routes` or `Name::Engine.routes` | Read only when the repository defines `Name::Application < Rails::Application` or `Name::Engine < Rails::Engine`. The routes of an engine have the path, but no symbol and no guard: an engine can isolate its namespace, and omen does not model it. |
+| `draw` on `Name::Application.routes` or `Name::Engine.routes` | Read only when the repository defines `Name::Application < Rails::Application` or `Name::Engine < Rails::Engine`. A `draw` on `Name::Engine.routes` gives no entry: the path of an engine route is relative to the place where the application mounts the engine, and an engine can isolate its namespace. Omen does not model the mounts. |
 | `draw` on any other receiver | Skipped. |
 | `namespace :x` with `path:`, `module:`, `as:` | Read. |
 | `namespace` with any other option, such as `only:`, `except:`, `constraints:` | The block is skipped. |
@@ -123,7 +123,7 @@ each form against the source of Rails 7.2.2.
 | `constraints do`, `defaults do` | Read. They change no path. |
 | Devise blocks, `concern`, loops, `each`, and any block that omen does not know | The block is skipped. |
 | `get`, `post`, `put`, `patch`, `delete` with a string path or a symbol path | Read, with the options `to`, `controller`, `action`, `on`, `as`, `constraints`, `defaults`, `anchor`, `format: false`, and a constraint with a regular expression. Any other option skips the route. |
-| `match` with `via:` | Read. A call without `via:` is skipped. |
+| `match` with `via:` | Read. A call without `via:` is skipped. Omen knows only symbols: `:all` alone gives `ANY`, and another symbol gives its upper case form with dashes, as `:m_search` gives `M-SEARCH`. A string, such as `"all"`, and `:all` with another value give no entry. |
 | `root` | Read. In a `resources` block the path is the collection path. In a `resource` block it is skipped. |
 | `resources` and `resource` with `only:`, `except:`, `path:`, `controller:`, `module:`, `as:`, `constraints:`, `defaults:`, `concerns:`, `format: false` | Read. The option `as:` gives the name for the nested parameter: `as: :articles` gives `:article_id`. Any other option, such as `param:` or `shallow:`, skips the call. |
 | `config.api_only = true` | Read for each route set. The body of the application class, a file in `config`, and `Rails.application.config` give the value for `Rails.application` and for the application class. The body of an engine class, and `Name::Engine.config`, give a value for an engine. If any engine assigns `api_only`, omen cannot know which route set the value governs, and it skips each `resources` and `resource` call of each route set. Any other receiver gives a value that omen cannot attribute. With the value `true`, the `resources` and `resource` calls have no `new` and no `edit` route, unless `only:` lists them. A value that is not `true` or `false`, an assignment in a branch that omen cannot evaluate, and an assignment that omen cannot give to one route set, skip each `resources` and `resource` call. |
@@ -137,6 +137,10 @@ each form against the source of Rails 7.2.2.
 | A hash-rocket target together with `to:`, `controller:`, or `action:` | The route has no symbol and no guard. Rails lets the hash-rocket value win over `to:`, and it reads a rocket value without `#` as a controller. Omen does not model this. |
 | A target that is not a literal, as `to: TARGET`, `controller: NAME`, or `action: ACTION`, and a `to:` string with more than one `#` | The route has no symbol and no guard. The path stays. |
 | A `before_action` call with a name that is not a literal, a `skip_before_action` call with a name that is not a literal, a callback call with a receiver, `skip_callback`, `set_callback`, and `reset_callbacks` | The guards of the class, and of each class that inherits from it, are unknown. |
+| A key with quotes and a colon, as `"only": :index`, `"if": :ok`, `"module": "admin"` | The key is a symbol, as in Ruby. Only a key with `=>` is a string key. |
+| `include`, `extend`, `prepend`, or `class_eval` in a controller or in a superclass, and a call of a callback method, `include`, `extend`, `prepend`, or `class_eval` with the constant of a class as the receiver, in any file | The guards of that class, and of each class that inherits from it, are unknown. A module can add callbacks with `included do`, and omen does not read them. |
+| `config.api_only ||= true`, `&&=`, and any other operator assignment | The value is unknown, and omen skips each `resources` and `resource` call. |
+| A name that a callback call repeats, as `before_action :a, :b, :a` | The last place of the name counts, as Rails does: the guards are `b`, `a`. |
 | `Inflections.instance`, in any form | The inflections are unreadable. |
 | A `scope` path or a resource `path:` with a parenthesis, as `"/a(:x)"` | The block is skipped. Rails rewrites the optional segments over the whole path, and omen does not model it. |
 | A statement after `next`, `break`, `return`, `redo`, or `retry` in a list of the routes | Ruby does not run it, and omen reads no route from it. |
@@ -155,7 +159,7 @@ report the optional `(.:format)` segment.
 Omen resolves the action to a symbol. The class must be in the same chain of modules as the
 route. For a route in `namespace :admin`, omen matches `Admin::UsersController`. It does not
 match `Other::UsersController`. A route without a module matches only a class that is in no
-module. If no class matches, the entry point has no symbol. A route in the route set of an engine has no symbol, because the engine can isolate its namespace.
+module. If no class matches, the entry point has no symbol.
 
 A route matches only a public instance method. Rails does not run an action when the method is
 not public. If the nearest class that defines the method has it as `private` or `protected`,
@@ -178,8 +182,8 @@ Omen treats the openings of a class with one chain of modules and one name as on
 the callbacks in the order of the files and then of the positions. If a superclass name belongs
 to two different classes, omen reads no guards from the superclass.
 
-A guard never claims more than omen can read. A `before_action` call gives no guard in two
-cases. The first case is an `if:` or `unless:` option. The second case is an `only:` or
+A guard never claims more than omen can read, within the forms in the audit table. A
+`before_action` call gives no guard in two cases. The first case is an `if:` or `unless:` option. The second case is an `only:` or
 `except:` value that is not a literal list, as in `only: ACTIONS`.
 
 A `skip_before_action` call with `if:` or `unless:` removes the guard for the actions that it

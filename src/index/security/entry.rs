@@ -484,6 +484,8 @@ struct Context<'a> {
     /// The ids of the children of a `case` that can run, by the id of the `case` node.
     rails_cases:
         std::cell::RefCell<std::collections::HashMap<usize, Option<std::rc::Rc<Vec<usize>>>>>,
+    /// The result for a chain of modules, a controller, and an action, by the Rails reader.
+    rails_handled: std::cell::RefCell<std::collections::HashMap<rails::HandlerKey, rails::Handler>>,
     /// The position of the first symbol of the file for each start of a name.
     symbol_starts: std::sync::OnceLock<std::collections::HashMap<usize, usize>>,
     /// The positions of the functions, the methods, and the constructors of the file, by name.
@@ -537,6 +539,7 @@ impl<'a> Context<'a> {
             test_ranges,
             rails_jumps: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
+            rails_handled: std::cell::RefCell::new(std::collections::HashMap::new()),
             symbol_starts: std::sync::OnceLock::new(),
             callables_here: std::sync::OnceLock::new(),
             go_locals: std::sync::OnceLock::new(),

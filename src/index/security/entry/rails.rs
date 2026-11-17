@@ -69,7 +69,7 @@ pub(super) struct Scope {
     /// known.
     prefix: Option<Prefix>,
     modules: Modules,
-    controller: Option<String>,
+    controller: Option<ScopedController>,
     /// The resource, when the route is directly in a `resources` or `resource` block.
     resource: Option<ResourceContext>,
     /// The route is in a `member` or `collection` block, or `on:` puts it there. A canonical action
@@ -121,8 +121,61 @@ impl<'t> Options<'t> {
 }
 
 struct Target {
-    controller: Option<String>,
+    controller: Option<ControllerRef>,
     action: Option<String>,
+}
+
+fn next_id() -> usize {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The controller of a `controller` block or a resource block. The text is shared by each route in
+/// the block, and the id stands for it in a key, so a route does not hash or copy a long name.
+#[derive(Clone)]
+pub(super) struct ScopedController {
+    text: Rc<str>,
+    id: usize,
+}
+
+impl ScopedController {
+    fn new(text: String) -> Self {
+        Self {
+            text: Rc::from(text),
+            id: next_id(),
+        }
+    }
+}
+
+/// The controller of one route.
+enum ControllerRef {
+    Scoped(ScopedController),
+    Text(String),
+}
+
+impl ControllerRef {
+    fn text(&self) -> &str {
+        match self {
+            Self::Scoped(controller) => &controller.text,
+            Self::Text(text) => text,
+        }
+    }
+
+    fn key(&self) -> ControllerKey {
+        match self {
+            Self::Scoped(controller) => ControllerKey::Scoped(controller.id),
+            Self::Text(text) => ControllerKey::Text(text.clone()),
+        }
+    }
+}
+
+/// A chain of modules, a controller, and an action.
+pub(super) type HandlerKey = (usize, ControllerKey, String);
+
+#[derive(Hash, PartialEq, Eq)]
+pub(super) enum ControllerKey {
+    Scoped(usize),
+    Text(String),
 }
 
 /// Appends the bytes of an escape sequence of a Ruby string in double quotes. The escapes that omen
@@ -600,10 +653,10 @@ impl<'a> Context<'a> {
         let Some(scope) = scope.filter(|scope| scope.draw) else {
             return;
         };
-        let scope: Scope = (**scope).clone();
+        let scope: &Scope = scope;
         match name {
-            "resources" | "resource" => self.rails_resources(node, name == "resource", &scope, out),
-            _ => self.rails_plain_route(node, name, &scope, out),
+            "resources" | "resource" => self.rails_resources(node, name == "resource", scope, out),
+            _ => self.rails_plain_route(node, name, scope, out),
         }
     }
 
@@ -957,7 +1010,7 @@ impl<'a> Context<'a> {
                         .extend(split_module(&self.rails_literal(value)?));
                 }
                 if let Some(value) = options.get("controller") {
-                    scope.controller = Some(self.rails_literal(value)?);
+                    scope.controller = Some(ScopedController::new(self.rails_literal(value)?));
                 }
                 Some(scope)
             }
@@ -965,7 +1018,7 @@ impl<'a> Context<'a> {
                 if positional.len() != 1 || !options.0.is_empty() {
                     return None;
                 }
-                scope.controller = Some(self.rails_literal(positional[0])?);
+                scope.controller = Some(ScopedController::new(self.rails_literal(positional[0])?));
                 Some(scope)
             }
             "member" | "collection" => {
@@ -995,8 +1048,11 @@ impl<'a> Context<'a> {
                 let naming = definition.as_name.as_deref().unwrap_or(name);
                 let context = definition.context(singular, name, self.rails_singular(naming));
                 scope.prefix = scope.nested_prefix();
-                scope.controller =
-                    Some(definition.controller_for(singular, name, self.rails_plural(name))?);
+                scope.controller = Some(ScopedController::new(definition.controller_for(
+                    singular,
+                    name,
+                    self.rails_plural(name),
+                )?));
                 scope.modules = definition.modules.clone();
                 scope.resource = Some(context);
                 scope.method_scope = false;
@@ -1092,9 +1148,11 @@ impl<'a> Context<'a> {
                 let path = route_path(&base, &format!("{}{suffix}", context.collection));
                 let variant_path = path.clone();
                 let (symbol, guards) = match &controller {
-                    Some(controller) => {
-                        self.rails_handler(&definition.modules.to_vec(), controller, action)
-                    }
+                    Some(controller) => self.rails_handler_cached(
+                        &definition.modules,
+                        &ControllerRef::Text(controller.clone()),
+                        action,
+                    ),
                     None => (None, Vec::new()),
                 };
                 out.push(Draft {
@@ -1237,7 +1295,7 @@ impl<'a> Context<'a> {
                 };
                 match text.split_once('#') {
                     Some((controller, action)) if !action.contains('#') => Target {
-                        controller: Some(controller.to_string()),
+                        controller: Some(ControllerRef::Text(controller.to_string())),
                         action: Some(action.to_string()),
                     },
                     _ => no_target,
@@ -1251,7 +1309,9 @@ impl<'a> Context<'a> {
                 };
                 match (read("controller"), read("action")) {
                     (Some(controller), Some(action)) => {
-                        let controller = controller.or_else(|| scope.controller.clone());
+                        let controller = controller
+                            .map(ControllerRef::Text)
+                            .or_else(|| scope.controller.clone().map(ControllerRef::Scoped));
                         let from_path = (!root
                             && !path_text.is_empty()
                             && path_text
@@ -1278,7 +1338,7 @@ impl<'a> Context<'a> {
         };
         let (symbol, guards) = match (&target.controller, &target.action) {
             (Some(controller), Some(action)) => {
-                self.rails_handler(&scope.modules.to_vec(), controller, action)
+                self.rails_handler_cached(&scope.modules, controller, action)
             }
             _ => (None, Vec::new()),
         };
@@ -1640,6 +1700,24 @@ impl<'a> Context<'a> {
             })
     }
 
+    /// The result of `rails_handler` for a route. The file keeps the result for each chain of
+    /// modules, controller, and action, so a route in a block with a long name does not work out the
+    /// name again.
+    fn rails_handler_cached(
+        &self,
+        modules: &Modules,
+        controller: &ControllerRef,
+        action: &str,
+    ) -> Handler {
+        let key = (modules.id(), controller.key(), action.to_string());
+        if let Some(found) = self.rails_handled.borrow().get(&key) {
+            return found.clone();
+        }
+        let result = self.rails_handler(&modules.to_vec(), controller.text(), action);
+        self.rails_handled.borrow_mut().insert(key, result.clone());
+        result
+    }
+
     /// The action symbol and the guards of a controller. `controller` is `admin/users`, and
     /// `modules` are the modules that `namespace` and `scope module:` add. A controller path
     /// with a leading `/` ignores the modules. The class must have the same chain of modules as its
@@ -1711,46 +1789,12 @@ impl<'a> Context<'a> {
     /// hidden: it has no symbol and no guard. If no class decides, a view can give the action.
     /// The index keeps the decision for each class that the search passes.
     fn rails_action(&self, shared: &RailsShared, identity: &str, action: &str) -> Action {
-        let mut passed: Vec<String> = Vec::new();
-        let mut current = identity.to_string();
-        let reach = loop {
-            if let Some(found) = shared
-                .actions
-                .lock()
-                .get(&(current.clone(), action.to_string()))
-            {
-                break *found;
-            }
-            passed.push(current.clone());
-            let visibility = self.rails_visibility(shared, &current);
-            if visibility.unreadable {
-                break Reach::Hidden;
-            }
-            if visibility.defines.contains(action) {
-                break if visibility.public_names.contains(action) {
-                    Reach::Public
-                } else {
-                    Reach::Hidden
-                };
-            }
-            if let Some(public) = visibility.overrides.get(action) {
-                break if *public {
-                    Reach::Public
-                } else {
-                    Reach::Hidden
-                };
-            }
-            match shared.parents.get(&current) {
-                Some(Some(parent)) => current = parent.clone(),
-                _ => break Reach::Public,
-            }
-        };
-        {
-            let mut memo = shared.actions.lock();
-            for name in passed {
-                memo.insert((name, action.to_string()), reach);
-            }
-        }
+        let state = self.rails_action_state(shared, identity);
+        let reach = state
+            .map
+            .get(&action.to_string())
+            .copied()
+            .unwrap_or(state.floor);
         if matches!(reach, Reach::Hidden) {
             return Action::Hidden;
         }
@@ -1773,6 +1817,59 @@ impl<'a> Context<'a> {
                 .then(|| self.all[found.0].symbols[found.1].key.to_string())
         })();
         Action::Public(symbol)
+    }
+
+    /// The reach of each action name for a class, as the nearest class in the chain that decides it
+    /// gives it. A class adds its definitions and its visibility calls to the state of its
+    /// superclass, and a class with visibility that omen cannot read hides each action that no class
+    /// below it decides. The state shares the structure of the state above it, and the index keeps
+    /// the state of each class, so the cost of an action does not depend on the length of the chain.
+    fn rails_action_state(&self, shared: &RailsShared, identity: &str) -> Arc<ActionState> {
+        if let Some(found) = shared.states.lock().get(identity) {
+            return Arc::clone(found);
+        }
+        let mut chain = vec![identity.to_string()];
+        let mut current = identity.to_string();
+        let mut state = Arc::new(ActionState {
+            floor: Reach::Public,
+            map: PersistentMap::default(),
+        });
+        while let Some(Some(parent)) = shared.parents.get(&current) {
+            if let Some(found) = shared.states.lock().get(parent) {
+                state = Arc::clone(found);
+                break;
+            }
+            chain.push(parent.clone());
+            current = parent.clone();
+        }
+        for class in chain.iter().rev() {
+            let visibility = self.rails_visibility(shared, class);
+            let next = if visibility.unreadable {
+                ActionState {
+                    floor: Reach::Hidden,
+                    map: PersistentMap::default(),
+                }
+            } else {
+                let reach = |public: bool| if public { Reach::Public } else { Reach::Hidden };
+                let mut map = state.map.clone();
+                for (name, public) in &visibility.overrides {
+                    map.insert(name.clone(), reach(*public));
+                }
+                for name in &visibility.defines {
+                    map.insert(name.clone(), reach(visibility.public_names.contains(name)));
+                }
+                ActionState {
+                    floor: state.floor,
+                    map,
+                }
+            };
+            state = Arc::new(next);
+            shared
+                .states
+                .lock()
+                .insert(class.clone(), Arc::clone(&state));
+        }
+        state
     }
 
     /// The callbacks of the chain of a class, in the order of Rails. A class with no callback of
@@ -2262,17 +2359,22 @@ struct DefaultGuards {
 
 impl DefaultGuards {
     fn names(&self) -> Vec<String> {
-        let entries = self.slots.entries();
-        let mut ordered: Vec<(&str, Slot)> = entries
-            .iter()
-            .map(|(name, slot)| (name.as_str(), *slot))
-            .collect();
-        order_slots(&mut ordered);
-        ordered
-            .iter()
-            .map(|(name, _)| (*name).to_string())
-            .collect()
+        ordered_names(&self.slots)
     }
+}
+
+/// The names of the guards in the order of Rails.
+fn ordered_names(slots: &PersistentMap<String, Slot>) -> Vec<String> {
+    let entries = slots.entries();
+    let mut ordered: Vec<(&str, Slot)> = entries
+        .iter()
+        .map(|(name, slot)| (name.as_str(), *slot))
+        .collect();
+    order_slots(&mut ordered);
+    ordered
+        .iter()
+        .map(|(name, _)| (*name).to_string())
+        .collect()
 }
 
 /// The callbacks of one class: the calls that omen reads, and a flag that tells that a callback
@@ -2283,29 +2385,50 @@ struct ClassCallbacks {
     opaque: bool,
 }
 
+/// A callback of the chain, and the callbacks before it with the same key.
+struct Link {
+    callback: Arc<Callback>,
+    index: usize,
+    older: Option<Arc<Link>>,
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        let mut next = self.older.take();
+        while let Some(node) = next {
+            match Arc::try_unwrap(node) {
+                Ok(mut owned) => next = owned.older.take(),
+                Err(_) => break,
+            }
+        }
+    }
+}
+
 /// The callbacks of a chain of classes in the order of Rails, ready to answer for an action.
 ///
 /// A callback replaces the callbacks with its names, and it adds its names when it applies. Thus
 /// the last callback of a name decides the guard of that name. Only the lists `only:` and
-/// `except:` make the result depend on the action. The program keeps the result for an action that
-/// no list names. For another action, it works out again the names of the callbacks that list the
-/// action.
+/// `except:` make the result depend on the action. The program keeps the guards for an action that
+/// no list names. For another action, it works out again only the names of the callbacks that list
+/// the action, and it starts from the guards for the other actions.
 ///
 /// A program is a layer: the callbacks of one class, and the program of its superclass. A layer
-/// does not copy the callbacks of the superclass.
+/// shares the indexes of the superclass, and it does not copy them.
 struct Program {
     parent: Option<Arc<Program>>,
     /// The number of callbacks in the layers of the superclasses.
     offset: usize,
-    callbacks: Vec<Callback>,
+    callbacks: Vec<Arc<Callback>>,
+    /// The callbacks of this layer by name, as indexes.
     by_name: HashMap<String, Vec<usize>>,
-    /// The actions that a list of a callback of this layer or of a superclass names.
-    listed: Arc<HashSet<String>>,
+    /// The callbacks of this layer and of the superclasses by name, the newest first.
+    names: PersistentMap<String, Arc<Link>>,
+    /// The callbacks of this layer and of the superclasses that a list names, by action, the newest
+    /// first.
+    listed: PersistentMap<String, Arc<Link>>,
     /// A callback of this layer or of a superclass is in a place that omen cannot read.
     opaque: bool,
     default: std::sync::OnceLock<Arc<DefaultGuards>>,
-    /// The guards of the actions that a list names, for this layer, by action.
-    memo: Mutex<HashMap<String, ActiveGuards>>,
 }
 
 impl Program {
@@ -2313,39 +2436,47 @@ impl Program {
         let offset = parent
             .as_ref()
             .map_or(0, |parent| parent.offset + parent.callbacks.len());
-        let mut by_action: HashMap<String, Vec<usize>> = HashMap::new();
+        let callbacks: Vec<Arc<Callback>> = callbacks.into_iter().map(Arc::new).collect();
+        let mut names = parent
+            .as_ref()
+            .map(|parent| parent.names.clone())
+            .unwrap_or_default();
+        let mut listed = parent
+            .as_ref()
+            .map(|parent| parent.listed.clone())
+            .unwrap_or_default();
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
         for (index, callback) in callbacks.iter().enumerate() {
+            let link = |older: Option<Arc<Link>>| {
+                Arc::new(Link {
+                    callback: Arc::clone(callback),
+                    index: offset + index,
+                    older,
+                })
+            };
             for name in &callback.names {
                 by_name.entry(name.clone()).or_default().push(index);
+                let older = names.get(name).cloned();
+                names.insert(name.clone(), link(older));
             }
             if callback.unreadable {
                 continue;
             }
             for action in callback.only.iter().chain(&callback.except).flatten() {
-                by_action.entry(action.clone()).or_default().push(index);
+                let older = listed.get(action).cloned();
+                listed.insert(action.clone(), link(older));
             }
         }
-        let inherited = parent.as_ref().map(|parent| Arc::clone(&parent.listed));
-        let listed = match inherited {
-            Some(listed) if by_action.keys().all(|action| listed.contains(action)) => listed,
-            Some(listed) => {
-                let mut all = (*listed).clone();
-                all.extend(by_action.keys().cloned());
-                Arc::new(all)
-            }
-            None => Arc::new(by_action.keys().cloned().collect()),
-        };
         let opaque = opaque || parent.as_ref().is_some_and(|parent| parent.opaque);
         Self {
             parent,
             offset,
             callbacks,
             by_name,
+            names,
             listed,
             opaque,
             default: std::sync::OnceLock::new(),
-            memo: Mutex::new(HashMap::new()),
         }
     }
 
@@ -2370,9 +2501,30 @@ impl Program {
         Decision::Undecided
     }
 
+    /// The slot of the guard with the name for the action, from the newest callback that decides.
+    /// The search goes through the callbacks with the name, in this layer and in the superclasses.
+    fn slot_for(&self, name: &str, action: &str) -> Option<Slot> {
+        let mut link = self.names.get(&name.to_string()).map(Arc::as_ref);
+        while let Some(current) = link {
+            let callback = &current.callback;
+            let applies = callback.applies_to(action);
+            if callback.skip {
+                if applies {
+                    return None;
+                }
+            } else {
+                return applies.then(|| {
+                    let place = callback.names.iter().rposition(|n| n == name).unwrap_or(0);
+                    (current.index, place, callback.prepend)
+                });
+            }
+            link = current.older.as_deref();
+        }
+        None
+    }
+
     /// The default guards. The search goes up to the nearest layer that has them, and it applies
-    /// the layers below it one time each. A layer that changes no default guard shares the
-    /// result of the layer above it, so a chain of such layers costs one pass.
+    /// the layers below it one time each. Each layer shares the structure of the layer above it.
     fn default_guards(&self) -> Arc<DefaultGuards> {
         if let Some(found) = self.default.get() {
             return Arc::clone(found);
@@ -2403,105 +2555,32 @@ impl Program {
         Arc::clone(self.default.get().expect("the last layer sets the default"))
     }
 
+    /// The guards of an action. A list changes the guards of an action only for the names of the
+    /// callbacks that name the action, so the result starts from the default guards, and it works
+    /// out again these names.
     fn guards_for(&self, action: &str) -> Vec<String> {
         if self.opaque {
             return Vec::new();
         }
-        if !self.listed.contains(action) {
-            return self.default_guards().names();
-        }
-        self.listed_guards(action).to_vec()
-    }
-
-    /// The guards of an action that a list of a callback names. The result for a layer comes from
-    /// the result of the layer above it, and the program keeps the result for each layer that it
-    /// visits. A result shares the structure of the result above it, so a chain of layers needs a
-    /// memory in proportion to the number of callbacks. A callback
-    /// removes the guards with its names, and it adds them when it applies, at the back or, with
-    /// `prepend`, at the front.
-    fn listed_guards(&self, action: &str) -> ActiveGuards {
-        if let Some(found) = self.memo.lock().get(action) {
-            return found.clone();
-        }
-        let mut pending = vec![self];
-        let mut current = ActiveGuards::default();
-        let mut layer = self.parent.as_deref();
-        while let Some(above) = layer {
-            if let Some(found) = above.memo.lock().get(action) {
-                current = found.clone();
-                break;
-            }
-            pending.push(above);
-            layer = above.parent.as_deref();
-        }
-        for layer in pending.iter().rev() {
-            for callback in &layer.callbacks {
-                current.apply(callback, action);
-            }
-            layer
-                .memo
-                .lock()
-                .insert(action.to_string(), current.clone());
-        }
-        current
-    }
-}
-
-/// The names of the guards in the order of Rails while a layer applies its callbacks. A new
-/// callback replaces the callback with the same name. A callback goes to the back, or to the front
-/// when it has `prepend`. A copy takes a constant time, and each change takes a time in proportion to
-/// the logarithm of the number of guards.
-#[derive(Clone, Default)]
-struct ActiveGuards {
-    ordered: PersistentMap<i64, String>,
-    at: PersistentMap<String, i64>,
-    front: i64,
-    back: i64,
-}
-
-impl ActiveGuards {
-    fn remove(&mut self, name: &str) {
-        let name = name.to_string();
-        if let Some(slot) = self.at.get(&name).copied() {
-            self.at.remove(&name);
-            self.ordered.remove(&slot);
-        }
-    }
-
-    fn push_back(&mut self, name: &str) {
-        self.remove(name);
-        self.at.insert(name.to_string(), self.back);
-        self.ordered.insert(self.back, name.to_string());
-        self.back += 1;
-    }
-
-    fn push_front(&mut self, name: &str) {
-        self.remove(name);
-        self.front -= 1;
-        self.at.insert(name.to_string(), self.front);
-        self.ordered.insert(self.front, name.to_string());
-    }
-
-    fn apply(&mut self, callback: &Callback, action: &str) {
-        let applies = callback.applies_to(action);
-        for name in &callback.names {
-            if callback.skip {
-                if applies {
-                    self.remove(name);
-                }
-            } else {
-                self.remove(name);
-                if applies && callback.prepend {
-                    self.push_front(name);
-                } else if applies {
-                    self.push_back(name);
+        let default = self.default_guards();
+        let Some(first) = self.listed.get(&action.to_string()) else {
+            return default.names();
+        };
+        let mut slots = default.slots.clone();
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut link = Some(first.as_ref());
+        while let Some(current) = link {
+            for name in &current.callback.names {
+                if seen.insert(name.as_str()) {
+                    match self.slot_for(name, action) {
+                        Some(slot) => slots.insert(name.clone(), slot),
+                        None => slots.remove(name),
+                    }
                 }
             }
+            link = current.older.as_deref();
         }
-    }
-
-    fn to_vec(&self) -> Vec<String> {
-        self.ordered.values()
+        ordered_names(&slots)
     }
 }
 
@@ -2520,7 +2599,7 @@ fn order_slots(slots: &mut [(&str, Slot)]) {
 type ActionKey = (String, String);
 
 /// The symbol and the guards of an action.
-type Handler = (Option<String>, Vec<String>);
+pub(super) type Handler = (Option<String>, Vec<String>);
 
 /// A symbol of the index: the position of the file, and the position in the symbols of the file.
 type Placed = (usize, usize);
@@ -2529,6 +2608,13 @@ type Placed = (usize, usize);
 enum UniqueClass {
     One(String),
     Many,
+}
+
+/// What the chain of a class says about the action names: the reach of a name that a class decides,
+/// and the reach of any other name.
+struct ActionState {
+    floor: Reach,
+    map: PersistentMap<String, Reach>,
 }
 
 /// Whether the nearest class that decides lets Rails run the action.
@@ -3229,7 +3315,7 @@ pub(super) struct RailsShared {
     visibility: Mutex<HashMap<String, Arc<Visibility>>>,
     programs: Mutex<HashMap<String, Arc<Program>>>,
     handled: Mutex<HashMap<ActionKey, Handler>>,
-    actions: Mutex<HashMap<ActionKey, Reach>>,
+    states: Mutex<HashMap<String, Arc<ActionState>>>,
 }
 
 impl RailsShared {
@@ -3283,7 +3369,7 @@ impl RailsShared {
             visibility: Mutex::new(HashMap::new()),
             programs: Mutex::new(HashMap::new()),
             handled: Mutex::new(HashMap::new()),
-            actions: Mutex::new(HashMap::new()),
+            states: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -3363,6 +3449,7 @@ pub(super) struct Modules(Option<Rc<ModuleNode>>);
 struct ModuleNode {
     parent: Option<Rc<ModuleNode>>,
     name: String,
+    id: usize,
 }
 
 impl Drop for ModuleNode {
@@ -3384,9 +3471,15 @@ impl Modules {
             chain = Some(Rc::new(ModuleNode {
                 parent: chain,
                 name,
+                id: next_id(),
             }));
         }
         Self(chain)
+    }
+
+    /// A number that stands for the chain in a key. The empty chain has 0.
+    fn id(&self) -> usize {
+        self.0.as_ref().map_or(0, |node| node.id)
     }
 
     fn to_vec(&self) -> Vec<String> {
