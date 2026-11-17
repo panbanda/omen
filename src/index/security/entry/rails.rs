@@ -78,6 +78,9 @@ pub(super) struct Scope {
     draw: bool,
     /// The value of `config.api_only` for the route set of the `draw` call.
     api_only: ApiOnly,
+    /// The route set is the one of an engine. An engine can isolate its namespace, so omen does not
+    /// know the controller that a route reaches.
+    engine: bool,
 }
 
 impl Scope {
@@ -505,8 +508,9 @@ fn route_path(base: &Prefix, part: &str) -> String {
 }
 
 /// The normalized path of the blocks around a route, as a chain of segments. A new segment does
-/// not copy the earlier segments, so a deep nesting of blocks takes a time in proportion to its
-/// depth. `None` is the root path `/`.
+/// not copy the earlier segments, so each block takes a constant time. The text of a prefix takes a
+/// time in proportion to its depth, and each route asks for it one time. `None` is the root path
+/// `/`.
 #[derive(Clone)]
 pub(super) struct Prefix(Option<Rc<PrefixNode>>);
 
@@ -576,7 +580,7 @@ fn join(prefix: &Option<Prefix>, part: &str) -> Option<Prefix> {
 }
 
 impl<'a> Context<'a> {
-    pub(super) fn ruby(&self, node: Node<'_>, out: &mut Vec<Draft>) {
+    pub(super) fn ruby(&self, node: Node<'_>, scope: Option<&Rc<Scope>>, out: &mut Vec<Draft>) {
         if node.kind() != "call" || !self.file.file.ends_with("routes.rb") {
             return;
         }
@@ -601,9 +605,10 @@ impl<'a> Context<'a> {
         ) {
             return;
         }
-        let Some(scope) = self.rails_scope(node) else {
+        let Some(scope) = scope.filter(|scope| scope.draw) else {
             return;
         };
+        let scope: Scope = (**scope).clone();
         match name {
             "resources" | "resource" => self.rails_resources(node, name == "resource", &scope, out),
             _ => self.rails_plain_route(node, name, &scope, out),
@@ -678,43 +683,17 @@ impl<'a> Context<'a> {
             .collect()
     }
 
-    /// The scope that the blocks around the node give. `None` means that a block is not readable.
-    /// The scope inside each node is kept, so the search goes up only to the nearest node that it
-    /// has already seen, and it does not walk to the `draw` call again.
-    fn rails_scope(&self, node: Node<'_>) -> Option<Scope> {
-        let mut path: Vec<Node<'_>> = Vec::new();
-        let mut current = node.parent();
-        let mut scope: Option<Rc<Scope>> = loop {
-            let Some(above) = current else {
-                break Some(Rc::new(Scope {
-                    prefix: Some(Prefix::root()),
-                    ..Scope::default()
-                }));
-            };
-            if let Some(known) = self.rails_scopes.borrow().get(&above.id()) {
-                break known.clone();
-            }
-            path.push(above);
-            current = above.parent();
-        };
-        for above in path.into_iter().rev() {
-            scope = scope.and_then(|outer| self.scope_inside(above, outer));
-            self.rails_scopes
-                .borrow_mut()
-                .insert(above.id(), scope.clone());
-        }
-        let scope = scope.and_then(|outer| self.scope_inside(node, outer));
-        scope
-            .filter(|scope| scope.draw)
-            .map(|scope| (*scope).clone())
-    }
-
     /// The scope for the code inside the node, from the scope outside it. Only these nodes can hold
     /// a route: a list of statements, a block, a call with a block, a condition that omen can
     /// evaluate, and a `case` that omen can evaluate. Any other node, such as an expression, an
     /// assignment, an argument, a method, or a class, makes the scope not readable. The block of a
     /// call enters the scope of the call.
-    fn scope_inside(&self, node: Node<'_>, outer: Rc<Scope>) -> Option<Rc<Scope>> {
+    pub(super) fn scope_inside(
+        &self,
+        node: Node<'_>,
+        parent: Option<Node<'_>>,
+        outer: Rc<Scope>,
+    ) -> Option<Rc<Scope>> {
         if !matches!(
             node.kind(),
             "program"
@@ -736,9 +715,12 @@ impl<'a> Context<'a> {
         ) {
             return None;
         }
-        let Some(parent) = node.parent() else {
+        let Some(parent) = parent else {
             return Some(outer);
         };
+        if self.follows_jump(parent, node) {
+            return None;
+        }
         match parent.kind() {
             "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
                 if parent.child_by_field_name("condition") == Some(node)
@@ -769,6 +751,39 @@ impl<'a> Context<'a> {
             _ => {}
         }
         Some(outer)
+    }
+
+    /// Tells if the node comes after a statement of the same list that jumps out of the block:
+    /// `next`, `break`, `return`, `redo`, or `retry`. Ruby does not run such a node. The search
+    /// keeps the place of the first jump of each list.
+    fn follows_jump(&self, list: Node<'_>, node: Node<'_>) -> bool {
+        if !matches!(
+            list.kind(),
+            "program" | "body_statement" | "block_body" | "then" | "else"
+        ) {
+            return false;
+        }
+        let first = {
+            let known = self.rails_jumps.borrow().get(&list.id()).copied();
+            match known {
+                Some(first) => first,
+                None => {
+                    let mut cursor = list.walk();
+                    let first = list
+                        .named_children(&mut cursor)
+                        .find(|statement| {
+                            matches!(
+                                statement.kind(),
+                                "next" | "break" | "return" | "redo" | "retry"
+                            )
+                        })
+                        .map(|statement| statement.start_byte());
+                    self.rails_jumps.borrow_mut().insert(list.id(), first);
+                    first
+                }
+            }
+        };
+        first.is_some_and(|start| node.start_byte() > start)
     }
 
     /// The ids of the children of a `case` that can run, when omen can evaluate the `case`. The
@@ -823,6 +838,14 @@ impl<'a> Context<'a> {
         let receiver = call.child_by_field_name("receiver").is_some();
         if self.is_draw_block(call) {
             scope.draw = true;
+            scope.engine = call
+                .child_by_field_name("receiver")
+                .is_some_and(|receiver| {
+                    self.text(receiver)
+                        .trim()
+                        .trim_start_matches("::")
+                        .ends_with("::Engine.routes")
+                });
             scope.api_only = call
                 .child_by_field_name("receiver")
                 .map_or(ApiOnly::Unknown, |receiver| {
@@ -858,8 +881,9 @@ impl<'a> Context<'a> {
                     .map_or(Some(name), |value| self.rails_literal(value))?;
                 scope.prefix = join(&scope.nested_prefix(), &path);
                 scope.modules.extend(split_module(&module));
-                scope.resource = None;
-                scope.method_scope = false;
+                if scope.resource.take().is_some() {
+                    scope.method_scope = false;
+                }
                 Some(scope)
             }
             "scope" => {
@@ -1030,8 +1054,10 @@ impl<'a> Context<'a> {
                 let path = route_path(&base, &format!("{}{suffix}", context.collection));
                 let variant_path = path.clone();
                 let (symbol, guards) = match &controller {
-                    Some(controller) => self.rails_handler(&definition.modules, controller, action),
-                    None => (None, Vec::new()),
+                    Some(controller) if !scope.engine => {
+                        self.rails_handler(&definition.modules, controller, action)
+                    }
+                    None | Some(_) => (None, Vec::new()),
                 };
                 out.push(Draft {
                     range: Span::of(&node),
@@ -1157,39 +1183,48 @@ impl<'a> Context<'a> {
             route_path(&base, &path_text)
         };
 
+        let no_target = Target {
+            controller: None,
+            action: None,
+        };
+        let rocket_with_target = rocket.is_some()
+            && ["to", "controller", "action"]
+                .iter()
+                .any(|key| options.get(key).is_some());
         let target = match target_text {
+            _ if rocket_with_target => no_target,
             Some(node) if node.kind() == "string" => {
                 let Some(text) = self.rails_literal(node) else {
                     return;
                 };
                 match text.split_once('#') {
-                    Some((controller, action)) => Target {
+                    Some((controller, action)) if !action.contains('#') => Target {
                         controller: Some(controller.to_string()),
                         action: Some(action.to_string()),
                     },
-                    None => Target {
-                        controller: None,
-                        action: None,
-                    },
+                    _ => no_target,
                 }
             }
-            _ => {
-                let controller = options
-                    .get("controller")
-                    .and_then(|value| self.rails_literal(value))
-                    .or_else(|| scope.controller.clone());
-                let from_path = (target_text.is_none()
-                    && !root
-                    && !path_text.is_empty()
-                    && path_text
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-                .then(|| path_text.replace('-', "_"));
-                let action = options
-                    .get("action")
-                    .and_then(|value| self.rails_literal(value))
-                    .or(from_path.filter(|_| controller.is_some()));
-                Target { controller, action }
+            Some(_) => no_target,
+            None => {
+                let read = |key: &str| match options.get(key) {
+                    None => Some(None),
+                    Some(value) => self.rails_literal(value).map(Some),
+                };
+                match (read("controller"), read("action")) {
+                    (Some(controller), Some(action)) => {
+                        let controller = controller.or_else(|| scope.controller.clone());
+                        let from_path = (!root
+                            && !path_text.is_empty()
+                            && path_text
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+                        .then(|| path_text.replace('-', "_"));
+                        let action = action.or(from_path.filter(|_| controller.is_some()));
+                        Target { controller, action }
+                    }
+                    _ => no_target,
+                }
             }
         };
 
@@ -1212,7 +1247,7 @@ impl<'a> Context<'a> {
             verb => vec![verb.to_uppercase()],
         };
         let (symbol, guards) = match (&target.controller, &target.action) {
-            (Some(controller), Some(action)) => {
+            (Some(controller), Some(action)) if !scope.engine => {
                 self.rails_handler(&scope.modules, controller, action)
             }
             _ => (None, Vec::new()),
@@ -1764,7 +1799,7 @@ impl<'a> Context<'a> {
         }
         let mut callbacks = ClassCallbacks::default();
         self.with_class_body(position, index, |reader, node| {
-            reader.collect_callbacks(node, false, &mut callbacks);
+            reader.collect_callbacks(node, false, 0, &mut callbacks);
         });
         let callbacks = Arc::new(callbacks);
         shared
@@ -1948,15 +1983,31 @@ impl<'a> Context<'a> {
     /// omen cannot evaluate holds the node. A callback in such a branch is conditional. A literal
     /// condition makes a branch dead or live, as it does for a route. A callback under any other
     /// kind of node makes the callbacks of the class opaque: omen reports no guard for it.
-    fn collect_callbacks(&self, node: Node<'_>, conditional: bool, out: &mut ClassCallbacks) {
+    fn collect_callbacks(
+        &self,
+        node: Node<'_>,
+        conditional: bool,
+        depth: usize,
+        out: &mut ClassCallbacks,
+    ) {
         let mut cursor = node.walk();
         let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
         for child in children {
-            self.collect_callback_node(child, conditional, out);
+            self.collect_callback_node(child, conditional, depth + 1, out);
         }
     }
 
-    fn collect_callback_node(&self, node: Node<'_>, conditional: bool, out: &mut ClassCallbacks) {
+    fn collect_callback_node(
+        &self,
+        node: Node<'_>,
+        conditional: bool,
+        depth: usize,
+        out: &mut ClassCallbacks,
+    ) {
+        if depth > MAX_READ_DEPTH {
+            out.opaque = true;
+            return;
+        }
         match node.kind() {
             "method" | "singleton_method" | "class" | "module" | "singleton_class" => {}
             "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
@@ -1975,16 +2026,16 @@ impl<'a> Context<'a> {
                     if Self::is_dead_branch(node, part) {
                         continue;
                     }
-                    self.collect_callback_node(part, conditional || !literal, out);
+                    self.collect_callback_node(part, conditional || !literal, depth + 1, out);
                 }
             }
             "case" if literal_case_children(node).is_some() => {
                 for child in literal_case_children(node).unwrap_or_default() {
-                    self.collect_callback_node(child, conditional, out);
+                    self.collect_callback_node(child, conditional, depth + 1, out);
                 }
             }
             "case" | "case_match" | "do_block" | "block" | "lambda" => {
-                self.collect_callbacks(node, true, out)
+                self.collect_callbacks(node, true, depth, out)
             }
             "call" => match self.rails_callback(node) {
                 Some(mut callback) if node.child_by_field_name("receiver").is_none() => {
@@ -1992,11 +2043,17 @@ impl<'a> Context<'a> {
                     out.list.push(callback);
                 }
                 _ => {
+                    if node
+                        .child_by_field_name("method")
+                        .is_some_and(|method| is_callback_family(self.text(method)))
+                    {
+                        out.opaque = true;
+                    }
                     let mut cursor = node.walk();
                     let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
                     for child in children {
                         if matches!(child.kind(), "do_block" | "block") {
-                            self.collect_callback_node(child, conditional, out);
+                            self.collect_callback_node(child, conditional, depth + 1, out);
                         } else if subtree_has_callback(child, self.source, 0) {
                             out.opaque = true;
                         }
@@ -2004,7 +2061,7 @@ impl<'a> Context<'a> {
                 }
             },
             "body_statement" | "then" | "else" | "when" | "block_body" => {
-                self.collect_callbacks(node, conditional, out)
+                self.collect_callbacks(node, conditional, depth, out)
             }
             _ => {
                 if subtree_has_callback(node, self.source, 0) {
@@ -2027,8 +2084,8 @@ impl<'a> Context<'a> {
         let options = self.rails_options(&arguments);
         let names = Self::rails_positional(&arguments)
             .into_iter()
-            .filter_map(|argument| self.rails_literal(argument))
-            .collect();
+            .map(|argument| self.rails_literal(argument))
+            .collect::<Option<Vec<String>>>()?;
         let list = |key: &str| {
             options
                 .as_ref()
@@ -2126,6 +2183,11 @@ struct ClassCallbacks {
     list: Vec<Callback>,
     opaque: bool,
 }
+
+/// The number of layers with changed callbacks between two snapshots of the guards. A snapshot
+/// copies all guards, so a snapshot for each layer would take a time in proportion to the square of
+/// the depth of the chain.
+const SNAPSHOT_EVERY: usize = 32;
 
 /// The callbacks of a chain of classes in the order of Rails, ready to answer for an action.
 ///
@@ -2243,6 +2305,7 @@ impl Program {
             .map(|found| found.slots.clone())
             .unwrap_or_default();
         let count = pending.len();
+        let mut changed_layers = 0;
         for (position, layer) in pending.iter().rev().enumerate() {
             let mut changed = false;
             for name in layer.by_name.keys() {
@@ -2260,7 +2323,9 @@ impl Program {
                     continue;
                 }
             }
-            if position + 1 == count {
+            changed_layers += usize::from(changed);
+            let last = position + 1 == count;
+            if last || changed_layers >= SNAPSHOT_EVERY {
                 let mut ordered: Vec<(&str, Slot)> = slots
                     .iter()
                     .map(|(name, slot)| (name.as_str(), *slot))
@@ -2271,13 +2336,18 @@ impl Program {
                     .map(|(name, _)| (*name).to_string())
                     .collect();
                 let built = Arc::new(DefaultGuards {
-                    slots: std::mem::take(&mut slots),
+                    slots: slots.clone(),
                     names,
                 });
                 let _ = layer.default.set(Arc::clone(&built));
-                return built;
+                if last {
+                    return built;
+                }
+                shared = Some(built);
+                changed_layers = 0;
+            } else {
+                shared = None;
             }
-            shared = None;
         }
         Arc::clone(self.default.get().expect("the last layer sets the default"))
     }
@@ -2312,21 +2382,30 @@ impl Program {
             pending.push(above);
             layer = above.parent.as_deref();
         }
-        for layer in pending.iter().rev() {
+        let mut working = ActiveGuards::new(&current);
+        let mut changed_layers = 0;
+        let count = pending.len();
+        for (position, layer) in pending.iter().rev().enumerate() {
             if !layer.callbacks.is_empty() {
-                let mut working = ActiveGuards::new(&current);
                 for callback in &layer.callbacks {
                     working.apply(callback, action);
                 }
-                let next = working.into_vec();
+                changed_layers += 1;
+            }
+            let last = position + 1 == count;
+            if changed_layers > 0 && (last || changed_layers >= SNAPSHOT_EVERY) {
+                let next = working.to_vec();
                 if next != *current {
                     current = Arc::new(next);
                 }
+                changed_layers = 0;
             }
-            layer
-                .memo
-                .lock()
-                .insert(action.to_string(), Arc::clone(&current));
+            if changed_layers == 0 {
+                layer
+                    .memo
+                    .lock()
+                    .insert(action.to_string(), Arc::clone(&current));
+            }
         }
         current
     }
@@ -2395,8 +2474,8 @@ impl ActiveGuards {
         }
     }
 
-    fn into_vec(self) -> Vec<String> {
-        self.ordered.into_values().collect()
+    fn to_vec(&self) -> Vec<String> {
+        self.ordered.values().cloned().collect()
     }
 }
 
@@ -2567,6 +2646,14 @@ pub(super) struct Inflections {
     changes_singulars: bool,
 }
 
+/// The scope outside every block: the root path.
+pub(super) fn root_scope() -> Rc<Scope> {
+    Rc::new(Scope {
+        prefix: Some(Prefix::root()),
+        ..Scope::default()
+    })
+}
+
 /// The deepest syntax node that omen reads with a recursive search of the whole tree. A deeper
 /// tree makes the result unknown, so the search does not overflow the stack of the thread.
 const MAX_READ_DEPTH: usize = 1_000;
@@ -2606,6 +2693,7 @@ struct ApiOnlySets {
 impl ApiOnlySets {
     fn value(&self, values: &[Option<bool>]) -> ApiOnly {
         if self.unattributed
+            || self.engines.values().any(|assigned| !assigned.is_empty())
             || values.iter().any(Option::is_none)
             || (values.contains(&Some(true)) && values.contains(&Some(false)))
         {
@@ -2722,24 +2810,30 @@ fn block_parameter_names(call: Node<'_>, source: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// Tells if the code has a call that registers a callback: `before_action`, `prepend_before_action`,
-/// `skip_before_action`, or the `filter` names of these calls, with any receiver.
+/// Tells if a method name belongs to the callback family of Rails: a call of it changes the guards
+/// of a class, and omen reads only a part of the forms.
+fn is_callback_family(method: &str) -> bool {
+    method.contains("before_action")
+        || method.contains("before_filter")
+        || matches!(
+            method,
+            "skip_callback"
+                | "set_callback"
+                | "reset_callbacks"
+                | "skip_filter"
+                | "skip_action_callback"
+        )
+}
+
+/// Tells if the code has a call of the callback family, with any receiver.
 fn subtree_has_callback(node: Node<'_>, source: &[u8], depth: usize) -> bool {
     if depth > MAX_READ_DEPTH {
         return true;
     }
     if node.kind() == "call"
-        && node.child_by_field_name("method").is_some_and(|method| {
-            matches!(
-                super::syntax::text(method, source),
-                "before_action"
-                    | "before_filter"
-                    | "prepend_before_action"
-                    | "prepend_before_filter"
-                    | "skip_before_action"
-                    | "skip_before_filter"
-            )
-        })
+        && node
+            .child_by_field_name("method")
+            .is_some_and(|method| is_callback_family(super::syntax::text(method, source)))
     {
         return true;
     }
@@ -2787,6 +2881,9 @@ fn subtree_has_inflection_call(node: Node<'_>, source: &[u8], depth: usize) -> b
     if depth > MAX_READ_DEPTH {
         return true;
     }
+    if node.kind() == "constant" && super::syntax::text(node, source) == "Inflections" {
+        return true;
+    }
     if node.kind() == "call"
         && node
             .child_by_field_name("method")
@@ -2808,7 +2905,10 @@ fn subtree_has_inflection_call(node: Node<'_>, source: &[u8], depth: usize) -> b
 /// the inflections, no block, and arguments that are strings, symbols, regular expressions, or
 /// lists of them, without interpolation.
 fn modelled_inflection_call(node: Node<'_>, source: &[u8], params: &[String]) -> bool {
-    fn literal(node: Node<'_>, source: &[u8]) -> bool {
+    fn literal(node: Node<'_>, source: &[u8], depth: usize) -> bool {
+        if depth > MAX_READ_DEPTH {
+            return false;
+        }
         match node.kind() {
             "string" => evaluate_string(node, source).is_some(),
             "simple_symbol" => true,
@@ -2823,7 +2923,7 @@ fn modelled_inflection_call(node: Node<'_>, source: &[u8], params: &[String]) ->
                 let mut cursor = node.walk();
                 let all = node
                     .named_children(&mut cursor)
-                    .all(|child| literal(child, source));
+                    .all(|child| literal(child, source, depth + 1));
                 all
             }
             _ => false,
@@ -2846,7 +2946,7 @@ fn modelled_inflection_call(node: Node<'_>, source: &[u8], params: &[String]) ->
             let mut cursor = arguments.walk();
             let all = arguments
                 .named_children(&mut cursor)
-                .all(|argument| literal(argument, source));
+                .all(|argument| literal(argument, source, 0));
             all
         });
     receiver_ok && method_ok && arguments_ok && node.child_by_field_name("block").is_none()
