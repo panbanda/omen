@@ -2,8 +2,8 @@
 //!
 //! The table in this module names each framework by the syntax that declares a
 //! handler: a decorator, an annotation, a registration call, a file convention,
-//! or the name `main`. A guard is a decorator, an annotation, or a middleware
-//! name that the syntax attaches to the handler. A guard is a declared fact. It
+//! or the name `main`. A guard is a decorator, an annotation, a middleware name, or a
+//! declared dependency that the syntax attaches to the handler. A guard is a declared fact. It
 //! never means that the handler is authenticated.
 //!
 //! The public API is [`find_entry_points`]. A different analyzer can call it
@@ -22,6 +22,7 @@ use crate::index::extract::FileSymbols;
 use crate::index::model::{Span, Symbol, SymbolKind};
 use crate::parser::{cfg_test_module_ranges, ParseResult};
 
+mod fastapi;
 mod go_routes;
 mod persistent;
 mod rails;
@@ -88,7 +89,8 @@ pub struct Route {
     pub method: String,
     /// The path as the source writes it, with a leading `/`.
     pub path: String,
-    /// The names of the parameters in the path, in order.
+    /// The names of the parameters in the path, in order. For FastAPI, the names of the request
+    /// parameters of the handler follow them.
     pub parameters: Vec<String>,
 }
 
@@ -104,7 +106,8 @@ pub struct EntryPoint {
     pub symbol: Option<String>,
     pub framework: String,
     pub route: Option<Route>,
-    /// The decorators, annotations, and middleware names that the syntax attaches to the handler.
+    /// The decorators, annotations, middleware names, and declared dependencies that the syntax
+    /// attaches to the handler.
     pub guards: Vec<String>,
     pub basis: EntryBasis,
     pub in_test: bool,
@@ -400,6 +403,44 @@ fn route(method: &str, path: String) -> Route {
     }
 }
 
+/// Removes each value that is equal to an earlier value.
+fn keep_first(values: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    values.retain(|value| seen.insert(value.clone()));
+}
+
+/// The name of a Python decorator that is a known guard, as `login_required`.
+fn python_guard(decorator: Node<'_>, source: &[u8]) -> Option<String> {
+    let expression = decorator.named_child(0)?;
+    let callee = if expression.kind() == "call" {
+        expression.child_by_field_name("function")?
+    } else {
+        expression
+    };
+    let name = syntax::text(callee, source).rsplit('.').next()?;
+    PYTHON_GUARDS.contains(&name).then(|| name.to_string())
+}
+
+/// The known guards in the decorators of the Python function with the range.
+fn python_function_guards(root: Node<'_>, source: &[u8], range: &Span) -> Vec<String> {
+    let decorated = root
+        .descendant_for_byte_range(range.start_byte, range.end_byte)
+        .and_then(|function| function.parent())
+        .filter(|parent| parent.kind() == "decorated_definition");
+    let Some(decorated) = decorated else {
+        return Vec::new();
+    };
+    let mut cursor = decorated.walk();
+    let decorators: Vec<Node<'_>> = decorated
+        .children(&mut cursor)
+        .filter(|child| child.kind() == "decorator")
+        .collect();
+    decorators
+        .into_iter()
+        .filter_map(|decorator| python_guard(decorator, source))
+        .collect()
+}
+
 /// Tells if a declaration or a typed parameter binds `name` to a text with a marker.
 fn bound_to_marker(node: Node<'_>, source: &[u8], name: &str, markers: &[&str]) -> bool {
     const BINDINGS: [(&str, &[&str], &[&str]); 5] = [
@@ -503,6 +544,10 @@ struct Context<'a> {
     go_dead: std::sync::OnceLock<(Vec<usize>, Vec<usize>)>,
     /// The names that the package of a Go file declares at the top level.
     go_declared: std::sync::OnceLock<std::sync::Arc<std::collections::HashSet<String>>>,
+    /// The bindings of a Python file, by scope. Only a file with a FastAPI route builds them.
+    python_scopes: std::cell::OnceCell<fastapi::Scopes<'a>>,
+    /// Tells for the text of the receiver of a Python route decorator if it is a framework value.
+    python_receivers: std::cell::RefCell<std::collections::HashMap<&'a str, bool>>,
 }
 
 struct Draft {
@@ -550,6 +595,8 @@ impl<'a> Context<'a> {
             go_covered: std::sync::OnceLock::new(),
             go_dead: std::sync::OnceLock::new(),
             go_declared: std::sync::OnceLock::new(),
+            python_scopes: std::cell::OnceCell::new(),
+            python_receivers: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -696,21 +743,33 @@ impl<'a> Context<'a> {
 
     /// The one function or method with the name. A definition in the file wins over a definition in another file.
     fn symbol_named(&self, name: &str, container: Option<&str>) -> Option<String> {
+        let (file, position) = self.callable_named(name, container)?;
+        let file = file.map_or(self.file, |file| &self.all[file]);
+        Some(file.symbols[position].key.to_string())
+    }
+
+    /// The file and the position of the one function or method with the name. The file `None`
+    /// is this file. A definition in this file wins over a definition in another file.
+    fn callable_named(
+        &self,
+        name: &str,
+        container: Option<&str>,
+    ) -> Option<(Option<usize>, usize)> {
         let fits = |symbol: &Symbol| {
             container.is_none_or(|wanted| symbol.container.as_deref() == Some(wanted))
         };
-        let here: Vec<&Symbol> = self
+        let here: Vec<usize> = self
             .callables_here()
             .get(name)
             .into_iter()
             .flatten()
-            .map(|position| &self.file.symbols[*position])
-            .filter(|symbol| fits(symbol))
+            .copied()
+            .filter(|position| fits(&self.file.symbols[*position]))
             .collect();
         if here.len() == 1 {
-            return Some(here[0].key.to_string());
+            return Some((None, here[0]));
         }
-        let everywhere: Vec<&Symbol> = self
+        let everywhere: Vec<(usize, usize)> = self
             .all_parsed
             .shared()
             .callables
@@ -718,10 +777,10 @@ impl<'a> Context<'a> {
             .get(name)
             .into_iter()
             .flatten()
-            .map(|(file, position)| &self.all[*file].symbols[*position])
-            .filter(|symbol| fits(symbol))
+            .copied()
+            .filter(|(file, position)| fits(&self.all[*file].symbols[*position]))
             .collect();
-        (everywhere.len() == 1).then(|| everywhere[0].key.to_string())
+        (everywhere.len() == 1).then(|| (Some(everywhere[0].0), everywhere[0].1))
     }
 
     fn handler_symbol(&self, handler: Node<'_>) -> Option<String> {
@@ -1056,20 +1115,11 @@ impl<'a> Context<'a> {
             .child_by_field_name("definition")
             .and_then(|definition| definition.child_by_field_name("name"))
             .and_then(|name| self.symbol_at(name));
-        let guards: Vec<String> = decorators
+        let decorator_guards: Vec<Option<String>> = decorators
             .iter()
-            .filter_map(|decorator| decorator.named_child(0))
-            .filter_map(|expression| {
-                let callee = if expression.kind() == "call" {
-                    expression.child_by_field_name("function")?
-                } else {
-                    expression
-                };
-                let name = self.text(callee).rsplit('.').next()?.to_string();
-                PYTHON_GUARDS.contains(&name.as_str()).then_some(name)
-            })
+            .map(|decorator| python_guard(*decorator, self.source))
             .collect();
-        for decorator in &decorators {
+        for (position, decorator) in decorators.iter().enumerate() {
             let Some(expression) = decorator.named_child(0) else {
                 continue;
             };
@@ -1118,7 +1168,22 @@ impl<'a> Context<'a> {
             let Some(receiver) = callee.child_by_field_name("object") else {
                 continue;
             };
-            if !self.is_framework_value(receiver, markers, &[(framework_module, exports)]) {
+            // The answer for a receiver needs a search of the file. A file has one framework,
+            // so the text of the receiver gives the answer for each later route.
+            let known = self
+                .python_receivers
+                .borrow()
+                .get(self.text(receiver))
+                .copied();
+            let is_framework_value = known.unwrap_or_else(|| {
+                let answer =
+                    self.is_framework_value(receiver, markers, &[(framework_module, exports)]);
+                self.python_receivers
+                    .borrow_mut()
+                    .insert(self.text(receiver), answer);
+                answer
+            });
+            if !is_framework_value {
                 continue;
             }
             let Some(path) = arguments
@@ -1154,16 +1219,59 @@ impl<'a> Context<'a> {
             } else {
                 vec![name.to_uppercase()]
             };
+            // A decorator above the route decorator wraps the function after the framework
+            // registers it. The framework does not call the wrapper, so it is not a guard.
+            let mut guards: Vec<String> = decorator_guards[position + 1..]
+                .iter()
+                .flatten()
+                .cloned()
+                .collect();
+            let mut route = route(&methods.join(","), path);
+            if framework == "fastapi" {
+                let (dependencies, parameters) =
+                    self.fastapi_declared(node, *decorator, expression, receiver);
+                guards.extend(dependencies);
+                route.parameters.extend(parameters);
+                keep_first(&mut route.parameters);
+            }
+            keep_first(&mut guards);
             out.push(Draft {
                 range: Span::of(decorator),
                 kind: EntryKind::HttpHandler,
                 symbol: symbol.clone(),
                 framework,
-                route: Some(route(&methods.join(","), path)),
-                guards: guards.clone(),
+                route: Some(route),
+                guards,
                 basis: EntryBasis::Declared,
                 variant: None,
             });
+        }
+    }
+
+    /// The known guards in the decorators of the view function of a Django route. The function
+    /// can be in a different file. Each decorator wraps the function before the route gets it.
+    fn python_view_guards(&self, view: Node<'_>) -> Vec<String> {
+        let name = match view.kind() {
+            "identifier" => self.text(view),
+            "attribute" => self.text(view).rsplit('.').next().unwrap_or(""),
+            _ => return Vec::new(),
+        };
+        match self.callable_named(name, None) {
+            Some((None, position)) => python_function_guards(
+                self.parsed.root_node(),
+                self.source,
+                &self.file.symbols[position].range,
+            ),
+            Some((Some(file), position)) => {
+                self.all_parsed.tree(file).map_or_else(Vec::new, |parsed| {
+                    python_function_guards(
+                        parsed.root_node(),
+                        &parsed.source,
+                        &self.all[file].symbols[position].range,
+                    )
+                })
+            }
+            None => Vec::new(),
         }
     }
 
@@ -1193,7 +1301,7 @@ impl<'a> Context<'a> {
             symbol: Some(symbol),
             framework: "django",
             route: Some(route("ANY", join_path("", &self.string_of(*first)))),
-            guards: Vec::new(),
+            guards: self.python_view_guards(*view),
             basis: EntryBasis::Registered,
             variant: None,
         });
@@ -1892,13 +2000,13 @@ mod tests {
         assert_eq!(parses.load(Ordering::SeqCst), 1);
     }
 
-    fn entries(language: Language, files: &[(&str, &str)]) -> Vec<EntryPoint> {
+    pub(super) fn entries(language: Language, files: &[(&str, &str)]) -> Vec<EntryPoint> {
         entries_timed(language, files, true).0
     }
 
     /// Like `entries`, without the resolution of the references. The search for Rails entry points
     /// does not use them, and the resolution of a large input takes much more time than the search.
-    fn entries_lean(
+    pub(super) fn entries_lean(
         language: Language,
         files: &[(&str, &str)],
     ) -> (Vec<EntryPoint>, std::time::Duration) {
@@ -1910,7 +2018,7 @@ mod tests {
     /// check uses the best of two runs for each size, and a floor for a time that is too short to
     /// compare, so the speed of the machine does not change the result. The absolute bound is far
     /// above any speed that a CI machine has.
-    fn assert_scales_linearly(
+    pub(super) fn assert_scales_linearly(
         label: &str,
         size: usize,
         run: impl Fn(usize) -> std::time::Duration,
