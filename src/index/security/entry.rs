@@ -6757,7 +6757,7 @@ func routes() {
         let found = rails_routes(routes, &[("config/application.rb", defined)]);
         let mut paths = verbs_and_paths(&found);
         paths.sort();
-        assert_eq!(paths, ["GET /app", "GET /engine", "GET /namespaced"]);
+        assert_eq!(paths, ["GET /app", "GET /namespaced"]);
     }
 
     #[test]
@@ -6897,15 +6897,12 @@ func routes() {
             .map(|(name, text)| (name.as_str(), text.as_str()))
             .collect();
         let (found, elapsed) = entries_lean(Language::Ruby, &borrowed);
-        assert_eq!(found.len(), count);
-        assert!(found
-            .iter()
-            .all(|entry| entry.symbol.is_none() && entry.guards.is_empty()));
+        assert!(found.is_empty());
         elapsed
     }
 
     #[test]
-    fn many_engines_each_give_their_route_without_a_controller() {
+    fn many_engines_give_no_entry() {
         many_engines_resolve_in_linear_time_at(20);
     }
 
@@ -7005,7 +7002,7 @@ func routes() {
         let found = rails_routes(routes, &[("config/application.rb", classes)]);
         let mut paths = verbs_and_paths(&found);
         paths.sort();
-        assert_eq!(paths, ["GET /app", "GET /compact", "GET /engine"]);
+        assert_eq!(paths, ["GET /app"]);
     }
 
     #[test]
@@ -7435,7 +7432,7 @@ func routes() {
             ("config/application.rb", classes),
             ("config/app.rb", application),
         ]);
-        assert_eq!(found, ["GET /posts/:id/edit", "GET /posts/new"]);
+        assert!(found.is_empty());
         let unknown = "something.config.api_only = true\n";
         let found = paths(&[
             ("config/routes.rb", app_routes),
@@ -7860,28 +7857,6 @@ func routes() {
     }
 
     #[test]
-    fn an_engine_route_set_gives_no_symbol_and_no_guard() {
-        let routes = "Blog::Engine.routes.draw do\n  resources :users, only: :show\nend\n";
-        let engine = "module Blog\n  class Engine < ::Rails::Engine\n    isolate_namespace Blog\n  end\nend\n";
-        let host = "class UsersController\n  before_action :top_auth\n  def show; end\nend\n";
-        let found = entries(
-            Language::Ruby,
-            &[
-                ("blog/config/routes.rb", routes),
-                ("lib/engine.rb", engine),
-                ("app/users.rb", host),
-            ],
-        );
-        let found: Vec<_> = found
-            .into_iter()
-            .filter(|entry| entry.framework == "rails")
-            .collect();
-        assert_eq!(verbs_and_paths(&found), ["GET /users/:id"]);
-        assert_eq!(found[0].symbol, None);
-        assert!(found[0].guards.is_empty());
-    }
-
-    #[test]
     fn a_skip_or_callback_that_omen_cannot_read_makes_the_guards_unknown() {
         let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"a#show\"\n  get \"/b\", to: \"b#show\"\n  get \"/c\", to: \"c#show\"\n  get \"/d\", to: \"d#show\"\n  get \"/e\", to: \"e#show\"\n";
         let routes = format!("{routes}end\n");
@@ -8129,6 +8104,231 @@ func routes() {
         ] {
             let elapsed = deep_blocks_and_chains_resolve_in_linear_time(kind, depth);
             assert!(elapsed.as_secs() < 5, "{kind} {elapsed:?}");
+        }
+    }
+
+    #[test]
+    fn a_quoted_symbol_key_is_a_symbol_key() {
+        let routes = "Rails.application.routes.draw do\n  get \"/x\", to: \"users#show\"\nend\n";
+        let users = "class ApplicationController\n  before_action :auth\nend\nclass UsersController < ApplicationController\n  before_action :extra, \"only\": :index\n  before_action :cond, \"if\": :ok\n  def show; end\nend\n";
+        let found = rails_routes(routes, &[("controllers/u.rb", users)]);
+        assert_eq!(found[0].guards, ["auth"]);
+
+        let scoped = "Rails.application.routes.draw do\n  scope \"module\": \"admin\" do\n    get \"/x\", to: \"users#show\"\n  end\nend\n";
+        let found = rails_routes(scoped, &[("controllers/u.rb", users)]);
+        assert_eq!(found[0].symbol, None);
+        assert!(found[0].guards.is_empty());
+
+        let namespaced = "Rails.application.routes.draw do\n  namespace :admin, \"path\": \"x\" do\n    get \"/y\", to: \"users#show\"\n  end\nend\n";
+        let found = rails_routes(namespaced, &[]);
+        assert_eq!(verbs_and_paths(&found), ["GET /x/y"]);
+    }
+
+    #[test]
+    fn a_module_or_a_call_outside_the_class_makes_the_guards_unknown() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"a#show\"\n  get \"/b\", to: \"b#show\"\n  get \"/c\", to: \"c#show\"\n  get \"/d\", to: \"d#show\"\n  get \"/e\", to: \"e#show\"\nend\n";
+        let base = "class ApplicationController\n  before_action :auth\nend\nmodule PublicAccess\n  extend ActiveSupport::Concern\n  included do\n    skip_before_action :auth\n  end\nend\n";
+        let classes = "class AController < ApplicationController\n  include PublicAccess\n  def show; end\nend\nclass BController < ApplicationController\n  def show; end\nend\nBController.skip_before_action :auth\nclass CController < ApplicationController\n  def show; end\nend\nCController.class_eval do\n  skip_before_action :auth\nend\nclass DController < ApplicationController\n  prepend Wrapper\n  def show; end\nend\nclass EController < ApplicationController\n  def show; end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[("controllers/a.rb", base), ("controllers/b.rb", classes)],
+        );
+        let by_path = |path: &str| {
+            found
+                .iter()
+                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .unwrap()
+                .guards
+                .clone()
+        };
+        for path in ["/a", "/b", "/c", "/d"] {
+            assert!(by_path(path).is_empty(), "{path}");
+        }
+        assert_eq!(by_path("/e"), ["auth"]);
+    }
+
+    #[test]
+    fn an_include_in_the_superclass_makes_the_guards_of_each_child_unknown() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"a#show\"\nend\n";
+        let classes = "class ApplicationController\n  include Pundit\n  before_action :auth\nend\nclass AController < ApplicationController\n  def show; end\nend\n";
+        let found = rails_routes(routes, &[("controllers/a.rb", classes)]);
+        assert!(found[0].symbol.is_some());
+        assert!(found[0].guards.is_empty());
+    }
+
+    #[test]
+    fn an_operator_assignment_of_api_only_makes_the_value_unknown() {
+        let routes = "Rails.application.routes.draw do\n  resources :posts\nend\n";
+        for assignment in [
+            "config.api_only ||= true",
+            "config.api_only &&= true",
+            "config.api_only += 1",
+        ] {
+            let application = format!(
+                "module App\n  class Application < Rails::Application\n    {assignment}\n  end\nend\n"
+            );
+            let found = rails_routes(routes, &[("config/application.rb", application.as_str())]);
+            assert!(found.is_empty(), "{assignment}");
+        }
+    }
+
+    #[test]
+    fn a_repeated_name_in_one_callback_call_follows_the_order_of_rails() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"a#show\"\n  get \"/b\", to: \"b#show\"\nend\n";
+        let classes = "class AController\n  before_action :a, :b, :a\n  def show; end\nend\nclass BController\n  before_action :c\n  prepend_before_action :a, :b, :a\n  def show; end\nend\n";
+        let found = rails_routes(routes, &[("controllers/a.rb", classes)]);
+        let by_path = |path: &str| {
+            found
+                .iter()
+                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .unwrap()
+                .guards
+                .clone()
+        };
+        assert_eq!(by_path("/a"), ["b", "a"]);
+        assert_eq!(by_path("/b"), ["a", "b", "c"]);
+        let listed = "class AController\n  before_action :a, :b, :a, only: :show\n  def show; end\nend\nclass BController\n  before_action :c\n  prepend_before_action :a, :b, :a, only: :show\n  def show; end\nend\n";
+        let found = rails_routes(routes, &[("controllers/a.rb", listed)]);
+        let by_path = |path: &str| {
+            found
+                .iter()
+                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .unwrap()
+                .guards
+                .clone()
+        };
+        assert_eq!(by_path("/a"), ["b", "a"]);
+        assert_eq!(by_path("/b"), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn only_a_symbol_via_has_a_meaning_that_omen_knows() {
+        let routes = "Rails.application.routes.draw do\n  match \"/s\", to: \"a#b\", via: \"all\"\n  match \"/y\", to: \"a#b\", via: :all\n  match \"/m\", to: \"a#b\", via: :m_search\n  match \"/mixed\", to: \"a#b\", via: [:get, \"post\"]\n  match \"/two\", to: \"a#b\", via: [:get, :post]\nend\n";
+        let found = rails_routes(routes, &[]);
+        let mut paths = verbs_and_paths(&found);
+        paths.sort();
+        assert_eq!(paths, ["ANY /y", "GET /two", "M-SEARCH /m", "POST /two"]);
+    }
+
+    #[test]
+    fn an_engine_route_set_gives_no_entry() {
+        let routes = "Blog::Engine.routes.draw do\n  resources :users, only: :show\nend\n";
+        let engine = "module Blog\n  class Engine < ::Rails::Engine\n  end\nend\n";
+        let found = rails_routes(routes, &[("lib/engine.rb", engine)]);
+        assert!(found.is_empty());
+    }
+
+    fn chain_of_empty_classes_with_many_actions(count: usize) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        for number in 0..count {
+            routes.push_str(&format!(
+                "  get \"/a{number}\", to: \"c{}#a{number}\"\n",
+                count - 1
+            ));
+        }
+        routes.push_str("end\n");
+        let mut classes = String::new();
+        for number in 0..count {
+            let parent = if number == 0 {
+                String::new()
+            } else {
+                format!(" < C{}Controller", number - 1)
+            };
+            classes.push_str(&format!("class C{number}Controller{parent}\nend\n"));
+        }
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), count);
+        elapsed
+    }
+
+    fn listed_callbacks_at(count: usize, chained: bool) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut classes = String::new();
+        let leaf = if chained { count - 1 } else { 0 };
+        for number in 0..count {
+            routes.push_str(&format!(
+                "  get \"/a{number}\", to: \"c{leaf}#a{number}\"\n"
+            ));
+        }
+        routes.push_str("end\n");
+        if chained {
+            for number in 0..count {
+                let parent = if number == 0 {
+                    String::new()
+                } else {
+                    format!(" < C{}Controller", number - 1)
+                };
+                classes.push_str(&format!(
+                    "class C{number}Controller{parent}\n  before_action :g{number}, only: :a{number}\n  def a{number}; end\nend\n"
+                ));
+            }
+        } else {
+            classes.push_str("class C0Controller\n");
+            for number in 0..count {
+                classes.push_str(&format!(
+                    "  before_action :g{number}, only: :a{number}\n  def a{number}; end\n"
+                ));
+            }
+            classes.push_str("end\n");
+        }
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), count);
+        assert!(found.iter().all(|entry| entry.guards.len() == 1));
+        elapsed
+    }
+
+    fn long_names_at(count: usize, length: usize, in_module: bool) -> std::time::Duration {
+        let name = "a".repeat(length);
+        let open = if in_module {
+            format!("scope module: \"{name}\" do\n")
+        } else {
+            format!("controller :{name} do\n")
+        };
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        routes.push_str(&open);
+        for number in 0..count {
+            if in_module {
+                routes.push_str(&format!("get \"x{number}\", to: \"u#s\"\n"));
+            } else {
+                routes.push_str(&format!("get \"x{number}\"\n"));
+            }
+        }
+        routes.push_str("end\nend\n");
+        let files = [("config/routes.rb", routes.as_str())];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), count);
+        elapsed
+    }
+
+    #[test]
+    fn many_actions_and_long_names_give_their_routes() {
+        chain_of_empty_classes_with_many_actions(30);
+        listed_callbacks_at(30, true);
+        listed_callbacks_at(30, false);
+        long_names_at(30, 50, true);
+        long_names_at(30, 50, false);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_actions_over_a_chain_resolve_in_linear_time() {
+        let elapsed = chain_of_empty_classes_with_many_actions(8_000);
+        assert!(elapsed.as_secs() < 5, "empty chain {elapsed:?}");
+        let elapsed = listed_callbacks_at(8_000, false);
+        assert!(elapsed.as_secs() < 5, "one class {elapsed:?}");
+        let elapsed = listed_callbacks_at(8_000, true);
+        assert!(elapsed.as_secs() < 5, "chain {elapsed:?}");
+        for in_module in [true, false] {
+            let elapsed = long_names_at(4_000, 400_000, in_module);
+            assert!(elapsed.as_secs() < 5, "long names {in_module} {elapsed:?}");
         }
     }
 

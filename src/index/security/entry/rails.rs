@@ -79,9 +79,6 @@ pub(super) struct Scope {
     draw: bool,
     /// The value of `config.api_only` for the route set of the `draw` call.
     api_only: ApiOnly,
-    /// The route set is the one of an engine. An engine can isolate its namespace, so omen does not
-    /// know the controller that a route reaches.
-    engine: bool,
 }
 
 impl Scope {
@@ -663,11 +660,54 @@ impl<'a> Context<'a> {
     fn rails_pair<'t>(&self, pair: Node<'t>) -> Option<Opt<'t>> {
         let key = pair.child_by_field_name("key")?;
         let value = pair.child_by_field_name("value")?;
+        let mut cursor = pair.walk();
+        let rocket = pair
+            .children(&mut cursor)
+            .any(|child| !child.is_named() && child.kind() == "=>");
         Some(Opt {
             key: self.rails_literal(key)?,
-            string_key: key.kind() == "string",
+            string_key: rocket && key.kind() == "string",
             value,
         })
+    }
+
+    /// The request methods of a `via:` value. Only symbols have a meaning that omen knows: `:all` is
+    /// any method, and another symbol is the dashed upper case form, as `:m_search` is `M-SEARCH`. A
+    /// string, or `:all` with another value, gives `None`.
+    fn rails_via(&self, value: Node<'_>) -> Option<Vec<String>> {
+        let mut cursor = value.walk();
+        let items: Vec<Node<'_>> = if value.kind() == "array" {
+            value.named_children(&mut cursor).collect()
+        } else {
+            vec![value]
+        };
+        let mut verbs = Vec::new();
+        for item in items {
+            if !matches!(item.kind(), "simple_symbol" | "bare_symbol") {
+                return None;
+            }
+            let name = self.text(item).trim_start_matches(':');
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_'))
+            {
+                return None;
+            }
+            verbs.push(name);
+        }
+        if verbs.is_empty() {
+            return None;
+        }
+        if verbs.contains(&"all") {
+            return (verbs.len() == 1).then(|| vec![String::from("ANY")]);
+        }
+        Some(
+            verbs
+                .into_iter()
+                .map(|verb| verb.replace('_', "-").to_uppercase())
+                .collect(),
+        )
     }
 
     fn rails_positional<'t>(arguments: &[Node<'t>]) -> Vec<Node<'t>> {
@@ -832,8 +872,7 @@ impl<'a> Context<'a> {
         let method = self.text(call.child_by_field_name("method")?);
         let receiver = call.child_by_field_name("receiver").is_some();
         if self.is_draw_block(call) {
-            scope.draw = true;
-            scope.engine = call
+            let engine = call
                 .child_by_field_name("receiver")
                 .is_some_and(|receiver| {
                     self.text(receiver)
@@ -841,6 +880,10 @@ impl<'a> Context<'a> {
                         .trim_start_matches("::")
                         .ends_with("::Engine.routes")
                 });
+            if engine {
+                return None;
+            }
+            scope.draw = true;
             scope.api_only = call
                 .child_by_field_name("receiver")
                 .map_or(ApiOnly::Unknown, |receiver| {
@@ -1049,10 +1092,10 @@ impl<'a> Context<'a> {
                 let path = route_path(&base, &format!("{}{suffix}", context.collection));
                 let variant_path = path.clone();
                 let (symbol, guards) = match &controller {
-                    Some(controller) if !scope.engine => {
+                    Some(controller) => {
                         self.rails_handler(&definition.modules.to_vec(), controller, action)
                     }
-                    None | Some(_) => (None, Vec::new()),
+                    None => (None, Vec::new()),
                 };
                 out.push(Draft {
                     range: Span::of(&node),
@@ -1225,24 +1268,16 @@ impl<'a> Context<'a> {
 
         let methods: Vec<String> = match name {
             "match" => {
-                let Some(via) = options.get("via").and_then(|value| self.rails_names(value)) else {
+                let Some(via) = options.get("via").and_then(|value| self.rails_via(value)) else {
                     return;
                 };
-                via.into_iter()
-                    .map(|verb| {
-                        if verb == "all" {
-                            String::from("ANY")
-                        } else {
-                            verb.to_uppercase()
-                        }
-                    })
-                    .collect()
+                via
             }
             "root" => vec![String::from("GET")],
             verb => vec![verb.to_uppercase()],
         };
         let (symbol, guards) = match (&target.controller, &target.action) {
-            (Some(controller), Some(action)) if !scope.engine => {
+            (Some(controller), Some(action)) => {
                 self.rails_handler(&scope.modules.to_vec(), controller, action)
             }
             _ => (None, Vec::new()),
@@ -1770,6 +1805,7 @@ impl<'a> Context<'a> {
                 own.extend(class_callbacks.list.iter().cloned());
                 opaque |= class_callbacks.opaque;
             }
+            opaque |= self.is_named_outside_the_class(class);
             if !own.is_empty() || opaque {
                 program = Arc::new(Program::layer(Some(program), own, opaque));
             }
@@ -1779,6 +1815,60 @@ impl<'a> Context<'a> {
                 .insert(class.clone(), Arc::clone(&program));
         }
         program
+    }
+
+    /// Tells if a call outside the class body names the class and can change its callbacks: a
+    /// callback call, `include`, `extend`, `prepend`, or `class_eval` with the constant of the class
+    /// as its receiver. The constant may have fewer modules than the identity of the class, so omen
+    /// compares each end of the identity.
+    fn is_named_outside_the_class(&self, identity: &str) -> bool {
+        let named = self.rails_shared().external.get_or_init(|| {
+            let mut named = HashSet::new();
+            for (position, file) in self.all.iter().enumerate() {
+                if file.language != Language::Ruby {
+                    continue;
+                }
+                let Some(parsed) = self.all_parsed.tree(position) else {
+                    continue;
+                };
+                let mut stack = vec![parsed.root_node()];
+                while let Some(node) = stack.pop() {
+                    if node.kind() == "call" {
+                        let method = node
+                            .child_by_field_name("method")
+                            .map_or("", |method| super::syntax::text(method, &parsed.source));
+                        let receiver = node.child_by_field_name("receiver");
+                        if let Some(receiver) = receiver.filter(|receiver| {
+                            matches!(receiver.kind(), "constant" | "scope_resolution")
+                        }) {
+                            if is_callback_family(method) || CLASS_CHANGING_CALLS.contains(&method)
+                            {
+                                let text = super::syntax::text(receiver, &parsed.source);
+                                named.insert(
+                                    text.trim().trim_start_matches("::").replace("::", "."),
+                                );
+                            }
+                        }
+                    }
+                    let mut cursor = node.walk();
+                    stack.extend(node.named_children(&mut cursor));
+                }
+            }
+            named
+        });
+        if named.is_empty() {
+            return false;
+        }
+        let mut rest = identity;
+        loop {
+            if named.contains(rest) {
+                return true;
+            }
+            match rest.split_once('.') {
+                Some((_, tail)) => rest = tail,
+                None => return false,
+            }
+        }
     }
 
     /// The callback calls in the body of the class, in source order. A call in a method, or in a
@@ -2038,10 +2128,10 @@ impl<'a> Context<'a> {
                     out.list.push(callback);
                 }
                 _ => {
-                    if node
-                        .child_by_field_name("method")
-                        .is_some_and(|method| is_callback_family(self.text(method)))
-                    {
+                    if node.child_by_field_name("method").is_some_and(|method| {
+                        is_callback_family(self.text(method))
+                            || CLASS_CHANGING_CALLS.contains(&self.text(method))
+                    }) {
                         out.opaque = true;
                     }
                     let mut cursor = node.walk();
@@ -2272,7 +2362,7 @@ impl Program {
                 }
             } else {
                 return Decision::Decided(applies.then(|| {
-                    let place = callback.names.iter().position(|n| n == name).unwrap_or(0);
+                    let place = callback.names.iter().rposition(|n| n == name).unwrap_or(0);
                     (self.offset + *index, place, callback.prepend)
                 }));
             }
@@ -2746,6 +2836,18 @@ fn block_parameter_names(call: Node<'_>, source: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// The calls that change the callbacks of a class without a callback name: they add the callbacks
+/// of a module, or run code in the class.
+const CLASS_CHANGING_CALLS: [&str; 7] = [
+    "include",
+    "extend",
+    "prepend",
+    "class_eval",
+    "class_exec",
+    "module_eval",
+    "instance_eval",
+];
+
 /// Tells if a method name belongs to the callback family of Rails: a call of it changes the guards
 /// of a class, and omen reads only a part of the forms.
 fn is_callback_family(method: &str) -> bool {
@@ -2785,7 +2887,7 @@ fn subtree_assigns_api_only(node: Node<'_>, source: &[u8], depth: usize) -> bool
     if depth > MAX_READ_DEPTH {
         return true;
     }
-    if node.kind() == "assignment"
+    if matches!(node.kind(), "assignment" | "operator_assignment")
         && node.child_by_field_name("left").is_some_and(|left| {
             left.kind() == "call"
                 && left
@@ -3122,6 +3224,7 @@ pub(super) struct RailsShared {
     parents: HashMap<String, Option<String>>,
     inflections: std::sync::OnceLock<Inflections>,
     api_only: std::sync::OnceLock<ApiOnlySets>,
+    external: std::sync::OnceLock<HashSet<String>>,
     callbacks: Mutex<HashMap<Placed, Arc<ClassCallbacks>>>,
     visibility: Mutex<HashMap<String, Arc<Visibility>>>,
     programs: Mutex<HashMap<String, Arc<Program>>>,
@@ -3175,6 +3278,7 @@ impl RailsShared {
             parents,
             inflections: std::sync::OnceLock::new(),
             api_only: std::sync::OnceLock::new(),
+            external: std::sync::OnceLock::new(),
             callbacks: Mutex::new(HashMap::new()),
             visibility: Mutex::new(HashMap::new()),
             programs: Mutex::new(HashMap::new()),
