@@ -8502,6 +8502,75 @@ func routes() {
         }
     }
 
+    fn chain_of_distinct_names_at(
+        count: usize,
+        shape: usize,
+        reversed: bool,
+    ) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut classes = String::new();
+        for number in 0..count {
+            let line = match shape {
+                0 => format!("skip_before_action :g{number}, only: :show"),
+                1 => format!(
+                    "before_action :g{number}, only: :show\n  skip_before_action :g{number}, only: :show"
+                ),
+                _ => format!(
+                    "skip_before_action :g{number}, only: [:show, :other], except: :other"
+                ),
+            };
+            let parent = if number == 0 {
+                String::new()
+            } else {
+                format!(" < C{}Controller", number - 1)
+            };
+            let body = if number == 0 { "  def show; end\n" } else { "" };
+            classes.push_str(&format!(
+                "class C{number}Controller{parent}\n  {line}\n{body}end\n"
+            ));
+        }
+        let order: Vec<usize> = if reversed {
+            (0..count).rev().collect()
+        } else {
+            (0..count).collect()
+        };
+        for number in order {
+            routes.push_str(&format!("  get \"/a{number}\", to: \"c{number}#show\"\n"));
+        }
+        routes.push_str("end\n");
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), count);
+        assert!(found.iter().all(|entry| entry.guards.is_empty()));
+        elapsed
+    }
+
+    #[test]
+    fn a_chain_of_distinct_names_for_one_action_gives_the_guards_of_each_class() {
+        for shape in 0..3 {
+            for reversed in [false, true] {
+                chain_of_distinct_names_at(30, shape, reversed);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_chain_of_distinct_names_for_one_action_resolves_in_linear_time() {
+        for shape in 0..3 {
+            for reversed in [false, true] {
+                assert_scales_linearly(
+                    &format!("shape {shape} reversed {reversed}"),
+                    15_000,
+                    |size| chain_of_distinct_names_at(size, shape, reversed),
+                );
+            }
+        }
+    }
+
     fn long_names_at(count: usize, length: usize, in_module: bool) -> std::time::Duration {
         let name = "a".repeat(length);
         let open = if in_module {

@@ -18,19 +18,21 @@ struct Node<K, V> {
 
 pub(super) struct PersistentMap<K, V> {
     root: Link<K, V>,
+    len: usize,
 }
 
 impl<K, V> Clone for PersistentMap<K, V> {
     fn clone(&self) -> Self {
         Self {
             root: self.root.clone(),
+            len: self.len,
         }
     }
 }
 
 impl<K, V> Default for PersistentMap<K, V> {
     fn default() -> Self {
-        Self { root: None }
+        Self { root: None, len: 0 }
     }
 }
 
@@ -185,11 +187,19 @@ impl<K: Ord + Clone, V: Clone> PersistentMap<K, V> {
     pub(super) fn remove(&mut self, key: &K) {
         if self.get(key).is_some() {
             self.root = remove(&self.root, key);
+            self.len -= 1;
         }
     }
 
     pub(super) fn insert(&mut self, key: K, value: V) {
+        if self.get(&key).is_none() {
+            self.len += 1;
+        }
         self.root = Some(insert(&self.root, key, value));
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.len
     }
 
     /// The keys and the values in the order of the keys.

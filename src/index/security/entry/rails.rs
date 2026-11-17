@@ -2404,6 +2404,10 @@ struct ClassCallbacks {
     opaque: bool,
 }
 
+/// A program with fewer callbacks that list an action than this works out the guards of the action
+/// from its default guards. A program with more takes them from the layer above it.
+const RESOLVE_FROM_DEFAULT_LIMIT: usize = if cfg!(test) { 3 } else { 512 };
+
 /// A callback of the chain. A `skip_before_action` call with an `except:` list, or with both lists,
 /// also points to the older calls of the same kind.
 struct Link {
@@ -2457,7 +2461,9 @@ struct NameState {
     always: Option<Arc<Link>>,
     /// The newest skip with an `only:` list, by action, after `always`.
     only: PersistentMap<String, Arc<Link>>,
-    /// The skips with an `except:` list, or with both lists, newest first, after `always`.
+    /// The skips with an `except:` list and no `only:` list, newest first, after `always`. A skip
+    /// with both lists applies to the actions of the `only:` list that the `except:` list does not
+    /// name, so it is in `only`.
     others: Option<Arc<Link>>,
 }
 
@@ -2527,6 +2533,8 @@ struct Program {
     /// A callback of this layer or of a superclass is in a place that omen cannot read.
     opaque: bool,
     default: std::sync::OnceLock<Arc<DefaultGuards>>,
+    /// The guards of an action that a list names, as this layer has them, by action.
+    resolved: Mutex<HashMap<String, PersistentMap<String, Slot>>>,
 }
 
 impl Drop for Program {
@@ -2569,10 +2577,16 @@ impl Program {
                         always: Some(link(None)),
                         ..NameState::default()
                     };
-                } else if callback.except.is_none() {
+                } else if let Some(only) = &callback.only {
                     let only_link = link(None);
-                    for action in callback.only.iter().flatten() {
-                        state.only.insert(action.clone(), Arc::clone(&only_link));
+                    for action in only {
+                        let excepted = callback
+                            .except
+                            .as_ref()
+                            .is_some_and(|except| except.contains(action));
+                        if !excepted {
+                            state.only.insert(action.clone(), Arc::clone(&only_link));
+                        }
                     }
                 } else {
                     state.others = Some(link(state.others.take()));
@@ -2600,6 +2614,7 @@ impl Program {
             listed,
             opaque,
             default: std::sync::OnceLock::new(),
+            resolved: Mutex::new(HashMap::new()),
         }
     }
 
@@ -2670,25 +2685,92 @@ impl Program {
         Arc::clone(self.default.get().expect("the last layer sets the default"))
     }
 
-    /// The guards of an action. A list changes the guards of an action only for the names of the
-    /// callbacks that name the action, so the result starts from the default guards, and it works
-    /// out again these names.
+    /// The guards of an action. An action that no list names has the default guards. For another
+    /// action, the layer has the guards of the layer above it, with the changes of its own callbacks.
+    /// The program keeps the guards of each layer that asks, and the layers share the structure of
+    /// the layers above them, so a chain of classes that repeat one listed action costs one change
+    /// for each class. A layer whose chain names few callbacks for the action works the guards out
+    /// from the default guards instead, so a long chain with one listed callback costs only that
+    /// callback.
     fn guards_for(&self, action: &str) -> Vec<String> {
         if self.opaque {
             return Vec::new();
         }
-        let default = self.default_guards();
-        let Some(names) = self.listed.get(&action.to_string()) else {
-            return default.names();
+        if self.listed.get(&action.to_string()).is_none() {
+            return self.default_guards().names();
+        }
+        ordered_names(&self.resolved(action))
+    }
+
+    fn resolved(&self, action: &str) -> PersistentMap<String, Slot> {
+        if let Some(found) = self.resolved.lock().get(action) {
+            return found.clone();
+        }
+        let listed_count = self
+            .listed
+            .get(&action.to_string())
+            .map_or(0, PersistentMap::len);
+        if listed_count < RESOLVE_FROM_DEFAULT_LIMIT {
+            let slots = self.resolve_from_default(action);
+            self.resolved
+                .lock()
+                .insert(action.to_string(), slots.clone());
+            return slots;
+        }
+        let mut pending = vec![self];
+        let mut layer = self.parent.as_deref();
+        let mut slots = None;
+        while let Some(above) = layer {
+            if let Some(found) = above.resolved.lock().get(action) {
+                slots = Some(found.clone());
+                break;
+            }
+            pending.push(above);
+            layer = above.parent.as_deref();
+        }
+        let mut slots = match (slots, pending.pop()) {
+            (Some(slots), top) => {
+                pending.extend(top);
+                slots
+            }
+            (None, Some(top)) => {
+                let slots = top.resolve_from_default(action);
+                top.resolved
+                    .lock()
+                    .insert(action.to_string(), slots.clone());
+                slots
+            }
+            (None, None) => PersistentMap::default(),
         };
-        let mut slots = default.slots.clone();
-        for (name, ()) in names.entries() {
-            match self.slot_for(&name, action) {
-                Some(slot) => slots.insert(name, slot),
-                None => slots.remove(&name),
+        for layer in pending.iter().rev() {
+            for name in layer.by_name.keys() {
+                match layer.decide(name, action) {
+                    Decision::Decided(Some(slot)) => slots.insert(name.clone(), slot),
+                    Decision::Decided(None) => slots.remove(name),
+                    Decision::Undecided => {}
+                }
+            }
+            layer
+                .resolved
+                .lock()
+                .insert(action.to_string(), slots.clone());
+        }
+        slots
+    }
+
+    /// The guards of an action that a list names: the default guards, and the names of the callbacks
+    /// that name the action, worked out again.
+    fn resolve_from_default(&self, action: &str) -> PersistentMap<String, Slot> {
+        let mut slots = self.default_guards().slots.clone();
+        if let Some(names) = self.listed.get(&action.to_string()) {
+            for (name, ()) in names.entries() {
+                match self.slot_for(&name, action) {
+                    Some(slot) => slots.insert(name, slot),
+                    None => slots.remove(&name),
+                }
             }
         }
-        ordered_names(&slots)
+        slots
     }
 }
 
