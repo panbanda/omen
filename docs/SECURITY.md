@@ -139,7 +139,7 @@ each form against the source of Rails 7.2.2.
 | A `before_action` call with a name that is not a literal, a `skip_before_action` call with a name that is not a literal, a callback call with a receiver, `skip_callback`, `set_callback`, and `reset_callbacks` | The guards of the class, and of each class that inherits from it, are unknown. |
 | A key with quotes and a colon, as `"only": :index`, `"if": :ok`, `"module": "admin"` | The key is a symbol, as in Ruby. Only a key with `=>` is a string key. |
 | `include`, `extend`, `prepend`, or `class_eval` in a controller or in a superclass, and a call of a callback method, `include`, `extend`, `prepend`, or `class_eval` with the constant of a class as the receiver, in any file | The guards of that class, and of each class that inherits from it, are unknown. A module can add callbacks with `included do`, and omen does not read them. |
-| `config.api_only ||= true`, `&&=`, and any other operator assignment | The value is unknown, and omen skips each `resources` and `resource` call. |
+| `config.api_only \|\|= true`, `&&=`, and any other operator assignment | The value is unknown, and omen skips each `resources` and `resource` call. |
 | A name that a callback call repeats, as `before_action :a, :b, :a` | The last place of the name counts, as Rails does: the guards are `b`, `a`. |
 | `Inflections.instance`, in any form | The inflections are unreadable. |
 | A `scope` path or a resource `path:` with a parenthesis, as `"/a(:x)"` | The block is skipped. Rails rewrites the optional segments over the whole path, and omen does not model it. |

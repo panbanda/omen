@@ -729,7 +729,7 @@ impl<'a> Context<'a> {
     /// string, or `:all` with another value, gives `None`.
     fn rails_via(&self, value: Node<'_>) -> Option<Vec<String>> {
         let mut cursor = value.walk();
-        let items: Vec<Node<'_>> = if value.kind() == "array" {
+        let items: Vec<Node<'_>> = if matches!(value.kind(), "array" | "symbol_array") {
             value.named_children(&mut cursor).collect()
         } else {
             vec![value]
@@ -2423,12 +2423,25 @@ struct Program {
     by_name: HashMap<String, Vec<usize>>,
     /// The callbacks of this layer and of the superclasses by name, the newest first.
     names: PersistentMap<String, Arc<Link>>,
-    /// The callbacks of this layer and of the superclasses that a list names, by action, the newest
-    /// first.
-    listed: PersistentMap<String, Arc<Link>>,
+    /// The names of the callbacks of this layer and of the superclasses that a list names, by
+    /// action. Each name is in the set one time, so a chain that repeats a callback does not make the
+    /// set longer.
+    listed: PersistentMap<String, PersistentMap<String, ()>>,
     /// A callback of this layer or of a superclass is in a place that omen cannot read.
     opaque: bool,
     default: std::sync::OnceLock<Arc<DefaultGuards>>,
+}
+
+impl Drop for Program {
+    fn drop(&mut self) {
+        let mut next = self.parent.take();
+        while let Some(layer) = next {
+            match Arc::try_unwrap(layer) {
+                Ok(mut owned) => next = owned.parent.take(),
+                Err(_) => break,
+            }
+        }
+    }
 }
 
 impl Program {
@@ -2463,8 +2476,11 @@ impl Program {
                 continue;
             }
             for action in callback.only.iter().chain(&callback.except).flatten() {
-                let older = listed.get(action).cloned();
-                listed.insert(action.clone(), link(older));
+                let mut set = listed.get(action).cloned().unwrap_or_default();
+                for name in &callback.names {
+                    set.insert(name.clone(), ());
+                }
+                listed.insert(action.clone(), set);
             }
         }
         let opaque = opaque || parent.as_ref().is_some_and(|parent| parent.opaque);
@@ -2563,22 +2579,15 @@ impl Program {
             return Vec::new();
         }
         let default = self.default_guards();
-        let Some(first) = self.listed.get(&action.to_string()) else {
+        let Some(names) = self.listed.get(&action.to_string()) else {
             return default.names();
         };
         let mut slots = default.slots.clone();
-        let mut seen: HashSet<&str> = HashSet::new();
-        let mut link = Some(first.as_ref());
-        while let Some(current) = link {
-            for name in &current.callback.names {
-                if seen.insert(name.as_str()) {
-                    match self.slot_for(name, action) {
-                        Some(slot) => slots.insert(name.clone(), slot),
-                        None => slots.remove(name),
-                    }
-                }
+        for (name, ()) in names.entries() {
+            match self.slot_for(&name, action) {
+                Some(slot) => slots.insert(name, slot),
+                None => slots.remove(&name),
             }
-            link = current.older.as_deref();
         }
         ordered_names(&slots)
     }

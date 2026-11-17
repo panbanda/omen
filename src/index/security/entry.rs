@@ -8206,11 +8206,21 @@ func routes() {
 
     #[test]
     fn only_a_symbol_via_has_a_meaning_that_omen_knows() {
-        let routes = "Rails.application.routes.draw do\n  match \"/s\", to: \"a#b\", via: \"all\"\n  match \"/y\", to: \"a#b\", via: :all\n  match \"/m\", to: \"a#b\", via: :m_search\n  match \"/mixed\", to: \"a#b\", via: [:get, \"post\"]\n  match \"/two\", to: \"a#b\", via: [:get, :post]\nend\n";
+        let routes = "Rails.application.routes.draw do\n  match \"/s\", to: \"a#b\", via: \"all\"\n  match \"/y\", to: \"a#b\", via: :all\n  match \"/m\", to: \"a#b\", via: :m_search\n  match \"/mixed\", to: \"a#b\", via: [:get, \"post\"]\n  match \"/two\", to: \"a#b\", via: [:get, :post]\n  match \"/pct\", to: \"a#b\", via: %i[get post]\n  match \"/words\", to: \"a#b\", via: %w[get post]\nend\n";
         let found = rails_routes(routes, &[]);
         let mut paths = verbs_and_paths(&found);
         paths.sort();
-        assert_eq!(paths, ["ANY /y", "GET /two", "M-SEARCH /m", "POST /two"]);
+        assert_eq!(
+            paths,
+            [
+                "ANY /y",
+                "GET /pct",
+                "GET /two",
+                "M-SEARCH /m",
+                "POST /pct",
+                "POST /two"
+            ]
+        );
     }
 
     #[test]
@@ -8286,6 +8296,43 @@ func routes() {
         assert_eq!(found.len(), count);
         assert!(found.iter().all(|entry| entry.guards.len() == 1));
         elapsed
+    }
+
+    fn chain_with_one_listed_action_at(count: usize) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut classes = String::new();
+        for number in 0..count {
+            routes.push_str(&format!("  get \"/a{number}\", to: \"c{number}#show\"\n"));
+            let parent = if number == 0 {
+                String::new()
+            } else {
+                format!(" < C{}Controller", number - 1)
+            };
+            classes.push_str(&format!(
+                "class C{number}Controller{parent}\n  before_action :g, only: :show\n  def show; end\nend\n"
+            ));
+        }
+        routes.push_str("end\n");
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), count);
+        assert!(found.iter().all(|entry| entry.guards == ["g"]));
+        elapsed
+    }
+
+    #[test]
+    fn a_chain_with_one_listed_action_gives_the_guard_of_each_class() {
+        chain_with_one_listed_action_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_chain_with_one_listed_action_resolves_in_linear_time() {
+        let elapsed = chain_with_one_listed_action_at(60_000);
+        assert!(elapsed.as_secs() < 5, "{elapsed:?}");
     }
 
     fn long_names_at(count: usize, length: usize, in_module: bool) -> std::time::Duration {
