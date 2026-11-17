@@ -113,7 +113,7 @@ each form against the source of Rails 7.2.2.
 | Form | Result |
 | --- | --- |
 | `draw` on `Rails.application.routes` | Read. |
-| `draw` on `Name::Application.routes` or `Name::Engine.routes` | Read only when the repository defines `Name::Application < Rails::Application` or `Name::Engine < Rails::Engine`. |
+| `draw` on `Name::Application.routes` or `Name::Engine.routes` | Read only when the repository defines `Name::Application < Rails::Application` or `Name::Engine < Rails::Engine`. The routes of an engine have the path, but no symbol and no guard: an engine can isolate its namespace, and omen does not model it. |
 | `draw` on any other receiver | Skipped. |
 | `namespace :x` with `path:`, `module:`, `as:` | Read. |
 | `namespace` with any other option, such as `only:`, `except:`, `constraints:` | The block is skipped. |
@@ -126,7 +126,7 @@ each form against the source of Rails 7.2.2.
 | `match` with `via:` | Read. A call without `via:` is skipped. |
 | `root` | Read. In a `resources` block the path is the collection path. In a `resource` block it is skipped. |
 | `resources` and `resource` with `only:`, `except:`, `path:`, `controller:`, `module:`, `as:`, `constraints:`, `defaults:`, `concerns:`, `format: false` | Read. The option `as:` gives the name for the nested parameter: `as: :articles` gives `:article_id`. Any other option, such as `param:` or `shallow:`, skips the call. |
-| `config.api_only = true` | Read for each route set. The body of the application class, a file in `config`, and `Rails.application.config` give the value for `Rails.application` and for the application class. The body of an engine class, and `Name::Engine.config`, give the value for the routes of that engine. Any other receiver gives a value that omen cannot attribute. With the value `true`, the `resources` and `resource` calls have no `new` and no `edit` route, unless `only:` lists them. A value that is not `true` or `false`, an assignment in a branch that omen cannot evaluate, and an assignment that omen cannot give to one route set, skip each `resources` and `resource` call. |
+| `config.api_only = true` | Read for each route set. The body of the application class, a file in `config`, and `Rails.application.config` give the value for `Rails.application` and for the application class. The body of an engine class, and `Name::Engine.config`, give a value for an engine. If any engine assigns `api_only`, omen cannot know which route set the value governs, and it skips each `resources` and `resource` call of each route set. Any other receiver gives a value that omen cannot attribute. With the value `true`, the `resources` and `resource` calls have no `new` and no `edit` route, unless `only:` lists them. A value that is not `true` or `false`, an assignment in a branch that omen cannot evaluate, and an assignment that omen cannot give to one route set, skip each `resources` and `resource` call. |
 | A string in double quotes or single quotes | Omen evaluates the string as Ruby does, before it escapes the path. The same evaluation reads the string of `inflect.acronym`. It models `\n \t \r \a \b \e \f \v \s`, the octal forms (the value is taken modulo 256, as Ruby does) and the `\x` forms, `\uXXXX`, `\u{...}`, and a backslash before another character. An interpolation, `\c`, `\C-`, `\M-`, a line continuation, and the forms `%q` and `%Q` skip the route. |
 | A route, a callback, an inflection call, or an `api_only` assignment under any node that omen does not model | Omen reads only statement lists, blocks of known calls, and conditions that it can evaluate. A route under an expression such as `false && get(...)`, an assignment, an argument, a `begin` block, or parentheses is skipped. A callback in such a place makes the guards of the class unknown. An inflection call or an `api_only` assignment in such a place makes the inflections or the value unreadable. |
 | The block of `inflections` | Each statement must be a call `param.method(literals)` of a method that changes the inflections, a comment, or a condition or a `case` that omen can evaluate with branches of the same kind. Any other statement, such as `binding`, `eval`, `send`, a definition, or a condition that omen cannot evaluate, makes the inflections unreadable. A stored result of `ActiveSupport::Inflector.inflections` makes them unreadable too. |
@@ -134,7 +134,14 @@ each form against the source of Rails 7.2.2.
 | `ActiveSupport::Inflector.inflections` with a locale | Only the call with no argument, `:en`, or `"en"` counts, because the names of the controller classes use the default locale. A call with another literal locale is ignored. A call with a locale that is not a literal makes the inflections unreadable. |
 | `case` with a literal subject and literal `when` patterns | Omen keeps the branch that runs. A route in any other `case` is skipped. |
 | A repeated option, as `to: "a#b", to: "c#d"`, or a repeated hash-rocket key | The last value wins, as in Ruby. |
-| `member do`, `collection do`, `on: :member`, `on: :collection` | Read. A canonical action name, such as `get :show`, adds no path segment. `on: :new` is skipped. |
+| A hash-rocket target together with `to:`, `controller:`, or `action:` | The route has no symbol and no guard. Rails lets the hash-rocket value win over `to:`, and it reads a rocket value without `#` as a controller. Omen does not model this. |
+| A target that is not a literal, as `to: TARGET`, `controller: NAME`, or `action: ACTION`, and a `to:` string with more than one `#` | The route has no symbol and no guard. The path stays. |
+| A `before_action` call with a name that is not a literal, a `skip_before_action` call with a name that is not a literal, a callback call with a receiver, `skip_callback`, `set_callback`, and `reset_callbacks` | The guards of the class, and of each class that inherits from it, are unknown. |
+| `Inflections.instance`, in any form | The inflections are unreadable. |
+| A `scope` path or a resource `path:` with a parenthesis, as `"/a(:x)"` | The block is skipped. Rails rewrites the optional segments over the whole path, and omen does not model it. |
+| A statement after `next`, `break`, `return`, `redo`, or `retry` in a list of the routes | Ruby does not run it, and omen reads no route from it. |
+| A callback, an inflection literal, or an `api_only` assignment with a nesting deeper than 1,000 levels | The guards, the inflections, or the `api_only` value are unknown. A routes file with such nesting gives no `resources` or `resource` route. |
+| `member do`, `collection do`, `on: :member`, `on: :collection` | Read. A canonical action name, such as `get :show`, adds no path segment. A `namespace` in a `member` or `collection` block keeps this rule. `on: :new` is skipped. |
 | A route in a `scope` in a `resources` block | Read. The nested path follows the path of the scope: `/x/users/:user_id/y`. |
 | `concerns`, `draw(:file)`, `mount`, `devise_for`, `direct`, `resolve` | No route. |
 
@@ -148,7 +155,7 @@ report the optional `(.:format)` segment.
 Omen resolves the action to a symbol. The class must be in the same chain of modules as the
 route. For a route in `namespace :admin`, omen matches `Admin::UsersController`. It does not
 match `Other::UsersController`. A route without a module matches only a class that is in no
-module. If no class matches, the entry point has no symbol.
+module. If no class matches, the entry point has no symbol. A route in the route set of an engine has no symbol, because the engine can isolate its namespace.
 
 A route matches only a public instance method. Rails does not run an action when the method is
 not public. If the nearest class that defines the method has it as `private` or `protected`,
