@@ -7596,7 +7596,7 @@ func routes() {
         }
     }
 
-    fn nested_blocks_with_one_route_at(depth: usize, open: &str) -> std::time::Duration {
+    fn nested_blocks_with_one_route_at(depth: usize, open: &str) -> (usize, std::time::Duration) {
         let mut routes = String::from("Rails.application.routes.draw do\n");
         for _ in 0..depth {
             routes.push_str(open);
@@ -7609,8 +7609,7 @@ func routes() {
         routes.push_str("end\n");
         let files = [("config/routes.rb", routes.as_str())];
         let (found, elapsed) = entries_lean(Language::Ruby, &files);
-        assert_eq!(found.len(), 1);
-        elapsed
+        (found.len(), elapsed)
     }
 
     const NESTING_OPENERS: [&str; 4] = [
@@ -7623,7 +7622,7 @@ func routes() {
     #[test]
     fn nested_blocks_of_each_kind_give_their_route() {
         for open in NESTING_OPENERS {
-            nested_blocks_with_one_route_at(30, open);
+            assert_eq!(nested_blocks_with_one_route_at(30, open).0, 1, "{open}");
         }
     }
 
@@ -7631,7 +7630,7 @@ func routes() {
     #[ignore = "timing: run in release"]
     fn timing_nested_blocks_of_each_kind_resolve_in_linear_time() {
         for open in NESTING_OPENERS {
-            let elapsed = nested_blocks_with_one_route_at(30_000, open);
+            let (_, elapsed) = nested_blocks_with_one_route_at(30_000, open);
             assert!(elapsed.as_secs() < 5, "{open} {elapsed:?}");
         }
     }

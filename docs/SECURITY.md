@@ -140,7 +140,7 @@ each form against the source of Rails 7.2.2.
 | `Inflections.instance`, in any form | The inflections are unreadable. |
 | A `scope` path or a resource `path:` with a parenthesis, as `"/a(:x)"` | The block is skipped. Rails rewrites the optional segments over the whole path, and omen does not model it. |
 | A statement after `next`, `break`, `return`, `redo`, or `retry` in a list of the routes | Ruby does not run it, and omen reads no route from it. |
-| A callback or an inflection literal with a nesting deeper than 1,000 levels | The guards or the inflections are unknown. |
+| A callback, an inflection literal, or an `api_only` assignment with a nesting deeper than 1,000 levels | The guards, the inflections, or the `api_only` value are unknown. A routes file with such nesting gives no `resources` or `resource` route. |
 | `member do`, `collection do`, `on: :member`, `on: :collection` | Read. A canonical action name, such as `get :show`, adds no path segment. A `namespace` in a `member` or `collection` block keeps this rule. `on: :new` is skipped. |
 | A route in a `scope` in a `resources` block | Read. The nested path follows the path of the scope: `/x/users/:user_id/y`. |
 | `concerns`, `draw(:file)`, `mount`, `devise_for`, `direct`, `resolve` | No route. |
