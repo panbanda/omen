@@ -2404,11 +2404,86 @@ struct ClassCallbacks {
     opaque: bool,
 }
 
-/// A callback of the chain, and the callbacks before it with the same key.
+/// A callback of the chain. A `skip_before_action` call with an `except:` list, or with both lists,
+/// also points to the older calls of the same kind.
 struct Link {
     callback: Arc<Callback>,
     index: usize,
     older: Option<Arc<Link>>,
+    /// For an action: the first call at this link or before it that applies to the action. A search
+    /// that passes a call that does not apply keeps the result here, so the next search jumps.
+    jump: Mutex<HashMap<String, Option<Arc<Link>>>>,
+}
+
+impl Link {
+    fn new(callback: &Arc<Callback>, index: usize, older: Option<Arc<Link>>) -> Arc<Self> {
+        Arc::new(Self {
+            callback: Arc::clone(callback),
+            index,
+            older,
+            jump: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// The first call from this link back that applies to the action.
+    fn applying(link: &Arc<Link>, action: &str) -> Option<Arc<Link>> {
+        let mut passed: Vec<Arc<Link>> = Vec::new();
+        let mut current = Some(Arc::clone(link));
+        let found = loop {
+            let Some(candidate) = current else {
+                break None;
+            };
+            if let Some(known) = candidate.jump.lock().get(action) {
+                break known.clone();
+            }
+            if candidate.callback.applies_to(action) {
+                break Some(candidate);
+            }
+            current = candidate.older.clone();
+            passed.push(candidate);
+        };
+        for link in passed {
+            link.jump.lock().insert(action.to_string(), found.clone());
+        }
+        found
+    }
+}
+
+/// What the callbacks with one name decide, as a search needs it.
+#[derive(Clone, Default)]
+struct NameState {
+    /// The newest call that decides for each action: a call that is not a skip, and a skip with no
+    /// list.
+    always: Option<Arc<Link>>,
+    /// The newest skip with an `only:` list, by action, after `always`.
+    only: PersistentMap<String, Arc<Link>>,
+    /// The skips with an `except:` list, or with both lists, newest first, after `always`.
+    others: Option<Arc<Link>>,
+}
+
+impl NameState {
+    /// The call that decides the guard for the action.
+    fn deciding(&self, action: &str) -> Option<Arc<Link>> {
+        let mut best = self.always.clone();
+        let newer = |best: &Option<Arc<Link>>, link: &Arc<Link>| {
+            best.as_ref().is_none_or(|best| link.index > best.index)
+        };
+        if let Some(link) = self.only.get(&action.to_string()) {
+            if newer(&best, link) {
+                best = Some(Arc::clone(link));
+            }
+        }
+        if let Some(link) = self
+            .others
+            .as_ref()
+            .and_then(|start| Link::applying(start, action))
+        {
+            if newer(&best, &link) {
+                best = Some(link);
+            }
+        }
+        best
+    }
 }
 
 impl Drop for Link {
@@ -2416,7 +2491,10 @@ impl Drop for Link {
         let mut next = self.older.take();
         while let Some(node) = next {
             match Arc::try_unwrap(node) {
-                Ok(mut owned) => next = owned.older.take(),
+                Ok(mut owned) => {
+                    owned.jump.get_mut().clear();
+                    next = owned.older.take();
+                }
                 Err(_) => break,
             }
         }
@@ -2440,8 +2518,8 @@ struct Program {
     callbacks: Vec<Arc<Callback>>,
     /// The callbacks of this layer by name, as indexes.
     by_name: HashMap<String, Vec<usize>>,
-    /// The callbacks of this layer and of the superclasses by name, the newest first.
-    names: PersistentMap<String, Arc<Link>>,
+    /// What the callbacks of this layer and of the superclasses decide, by name.
+    names: PersistentMap<String, NameState>,
     /// The names of the callbacks of this layer and of the superclasses that a list names, by
     /// action. Each name is in the set one time, so a chain that repeats a callback does not make the
     /// set longer.
@@ -2479,17 +2557,27 @@ impl Program {
             .unwrap_or_default();
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
         for (index, callback) in callbacks.iter().enumerate() {
-            let link = |older: Option<Arc<Link>>| {
-                Arc::new(Link {
-                    callback: Arc::clone(callback),
-                    index: offset + index,
-                    older,
-                })
-            };
+            let link = |older: Option<Arc<Link>>| Link::new(callback, offset + index, older);
+            let decides_always = !callback.skip
+                || callback.unreadable
+                || (callback.only.is_none() && callback.except.is_none());
             for name in &callback.names {
                 by_name.entry(name.clone()).or_default().push(index);
-                let older = names.get(name).cloned();
-                names.insert(name.clone(), link(older));
+                let mut state = names.get(name).cloned().unwrap_or_default();
+                if decides_always {
+                    state = NameState {
+                        always: Some(link(None)),
+                        ..NameState::default()
+                    };
+                } else if callback.except.is_none() {
+                    let only_link = link(None);
+                    for action in callback.only.iter().flatten() {
+                        state.only.insert(action.clone(), Arc::clone(&only_link));
+                    }
+                } else {
+                    state.others = Some(link(state.others.take()));
+                }
+                names.insert(name.clone(), state);
             }
             if callback.unreadable {
                 continue;
@@ -2539,23 +2627,15 @@ impl Program {
     /// The slot of the guard with the name for the action, from the newest callback that decides.
     /// The search goes through the callbacks with the name, in this layer and in the superclasses.
     fn slot_for(&self, name: &str, action: &str) -> Option<Slot> {
-        let mut link = self.names.get(&name.to_string()).map(Arc::as_ref);
-        while let Some(current) = link {
-            let callback = &current.callback;
-            let applies = callback.applies_to(action);
-            if callback.skip {
-                if applies {
-                    return None;
-                }
-            } else {
-                return applies.then(|| {
-                    let place = callback.names.iter().rposition(|n| n == name).unwrap_or(0);
-                    (current.index, place, callback.prepend)
-                });
-            }
-            link = current.older.as_deref();
+        let link = self.names.get(&name.to_string())?.deciding(action)?;
+        let callback = &link.callback;
+        if callback.skip {
+            return None;
         }
-        None
+        callback.applies_to(action).then(|| {
+            let place = callback.names.iter().rposition(|n| n == name).unwrap_or(0);
+            (link.index, place, callback.prepend)
+        })
     }
 
     /// The default guards. The search goes up to the nearest layer that has them, and it applies

@@ -8362,6 +8362,146 @@ func routes() {
         assert_scales_linearly("one listed action", 30_000, chain_with_one_listed_action_at);
     }
 
+    fn chain_of_skips_that_do_not_apply_at(count: usize, skip: &str) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut classes = String::new();
+        for number in 0..count {
+            routes.push_str(&format!("  get \"/a{number}\", to: \"c{number}#show\"\n"));
+            if number == 0 {
+                classes.push_str(
+                    "class C0Controller\n  before_action :g, only: :show\n  def show; end\nend\n",
+                );
+            } else {
+                classes.push_str(&format!(
+                    "class C{number}Controller < C{}Controller\n  {skip}\nend\n",
+                    number - 1
+                ));
+            }
+        }
+        routes.push_str("end\n");
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), count);
+        assert!(found.iter().all(|entry| entry.guards == ["g"]));
+        elapsed
+    }
+
+    #[test]
+    fn a_skip_that_does_not_apply_leaves_the_guard_of_the_root() {
+        for skip in [
+            "skip_before_action :g, only: :other",
+            "skip_before_action :g, except: :show",
+            "skip_before_action :g, only: :other, except: :show",
+        ] {
+            chain_of_skips_that_do_not_apply_at(30, skip);
+        }
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_chain_of_skips_that_do_not_apply_resolves_in_linear_time() {
+        for skip in [
+            "skip_before_action :g, only: :other",
+            "skip_before_action :g, except: :show",
+            "skip_before_action :g, only: :other, except: :show",
+        ] {
+            assert_scales_linearly(skip, 15_000, |size| {
+                chain_of_skips_that_do_not_apply_at(size, skip)
+            });
+        }
+    }
+
+    #[test]
+    fn the_guards_of_random_chains_match_a_replay_of_the_callbacks() {
+        let kinds = [
+            "before_action",
+            "skip_before_action",
+            "prepend_before_action",
+        ];
+        type List<'a> = (&'a str, Option<&'a [&'a str]>, Option<&'a [&'a str]>);
+        let lists: [List<'_>; 7] = [
+            ("", None, None),
+            (", only: :x", Some(&["x"]), None),
+            (", only: :y", Some(&["y"]), None),
+            (", except: :x", None, Some(&["x"])),
+            (", except: :y", None, Some(&["y"])),
+            (
+                ", only: [:x, :y], except: :y",
+                Some(&["x", "y"]),
+                Some(&["y"]),
+            ),
+            (", except: [:x, :z]", None, Some(&["x", "z"])),
+        ];
+        let names = ["a", "b", "c"];
+        let mut state = 20_241_117_u64;
+        let mut next = |bound: usize| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((state >> 33) as usize) % bound
+        };
+        for round in 0..200 {
+            let mut classes = String::new();
+            let mut replay: Vec<(usize, usize, usize)> = Vec::new();
+            let depth = 1 + next(6);
+            let mut calls: Vec<(usize, usize, usize)> = Vec::new();
+            for level in 0..depth {
+                let parent = if level == 0 {
+                    String::new()
+                } else {
+                    format!(" < C{}Controller", level - 1)
+                };
+                classes.push_str(&format!("class C{level}Controller{parent}\n"));
+                for _ in 0..(1 + next(3)) {
+                    let (kind, list, name) = (next(3), next(lists.len()), next(3));
+                    let skip_only = kind == 1 && list == 0;
+                    let list = if skip_only && next(2) == 0 { 1 } else { list };
+                    classes.push_str(&format!(
+                        "  {} :{}{}\n",
+                        kinds[kind], names[name], lists[list].0
+                    ));
+                    calls.push((kind, list, name));
+                }
+                classes.push_str("  def x; end\n  def y; end\n  def z; end\nend\n");
+            }
+            replay.extend(calls);
+            let leaf = depth - 1;
+            let routes = format!(
+                "Rails.application.routes.draw do\n  get \"/x\", to: \"c{leaf}#x\"\n  get \"/y\", to: \"c{leaf}#y\"\n  get \"/z\", to: \"c{leaf}#z\"\nend\n"
+            );
+            let found = rails_routes(&routes, &[("controllers/chain.rb", classes.as_str())]);
+            for entry in &found {
+                let action = entry.route.as_ref().unwrap().path.trim_start_matches('/');
+                let mut expected: Vec<&str> = Vec::new();
+                for (kind, list, name) in &replay {
+                    let (_, only, except) = lists[*list];
+                    let applies = only.is_none_or(|only| only.contains(&action))
+                        && except.is_none_or(|except| !except.contains(&action));
+                    let name = names[*name];
+                    if *kind == 1 {
+                        if applies {
+                            expected.retain(|existing| *existing != name);
+                        }
+                        continue;
+                    }
+                    expected.retain(|existing| *existing != name);
+                    if applies && *kind == 2 {
+                        expected.insert(0, name);
+                    } else if applies {
+                        expected.push(name);
+                    }
+                }
+                assert_eq!(
+                    entry.guards, expected,
+                    "round {round} action {action}\n{classes}"
+                );
+            }
+        }
+    }
+
     fn long_names_at(count: usize, length: usize, in_module: bool) -> std::time::Duration {
         let name = "a".repeat(length);
         let open = if in_module {
