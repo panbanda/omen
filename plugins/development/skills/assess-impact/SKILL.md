@@ -29,6 +29,14 @@ To inspect a specific symbol first, use this command:
 omen -f json symbol <symbol-name>
 ```
 
+If the change is already on a branch, get the blast radius of each changed symbol in one call:
+
+```bash
+omen -f json diff --target main --top 20
+```
+
+Each entry of `symbols` has `direct_callers`, `direct_caller_count`, `test_caller_count`, and `transitive_callers`. The symbols with the most effect come first. Give a `key` from `symbols` to the `impact` command to get the full list of callers.
+
 ### Step 2: Map the File-Level Dependencies
 
 Run the dependency graph analysis for the coupling between files:
