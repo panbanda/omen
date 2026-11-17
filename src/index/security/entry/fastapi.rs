@@ -71,7 +71,39 @@ struct Outer {
     /// not a part of the call.
     start: usize,
     scope: usize,
+    /// The guards of the router that gets the routes, and then the guards of the call.
     guards: Vec<String>,
+    /// The guards of the routers around the router that gets the routes. The link shares the
+    /// lists of a chain of routers, so a chain costs the sum of its lists and not the square.
+    above: Option<Rc<Outer>>,
+}
+
+impl Outer {
+    /// The guards of each router around the router, from the outer router to the inner one.
+    fn guards(&self) -> Vec<String> {
+        let mut links = vec![self];
+        while let Some(above) = links[links.len() - 1].above.as_deref() {
+            links.push(above);
+        }
+        links
+            .into_iter()
+            .rev()
+            .flat_map(|link| link.guards.iter().cloned())
+            .collect()
+    }
+}
+
+impl Drop for Outer {
+    /// Releases a chain of links in a loop. The default drop calls itself for each link, and
+    /// a long chain can overflow the stack of the thread.
+    fn drop(&mut self) {
+        let mut next = self.above.take();
+        while let Some(link) = next {
+            next = Rc::try_unwrap(link)
+                .ok()
+                .and_then(|mut link| link.above.take());
+        }
+    }
 }
 
 /// The bindings of a Python file, by scope. A scope is the module, a function, a lambda, or a
@@ -539,12 +571,10 @@ impl<'a> Context<'a> {
             let outer = include.map(|(include, parent_name)| {
                 let start = include.call.start_byte();
                 let mut guards = Vec::new();
-                let above = parent.and_then(|parent| scopes.outer.borrow().get(&parent).cloned());
-                if let Some(above) = above.flatten() {
-                    if above.start > start && above.scope == include.scope {
-                        guards.extend(above.guards.iter().cloned());
-                    }
-                }
+                let above = parent
+                    .and_then(|parent| scopes.outer.borrow().get(&parent).cloned())
+                    .flatten()
+                    .filter(|above| above.start > start && above.scope == include.scope);
                 if let Some((owner, call)) = self.router_of(include.scope, parent_name) {
                     guards.extend(self.dependencies_of(owner.0, call));
                 }
@@ -553,6 +583,7 @@ impl<'a> Context<'a> {
                     start,
                     scope: include.scope,
                     guards,
+                    above,
                 })
             });
             scopes.outer.borrow_mut().insert(key, outer);
@@ -683,7 +714,7 @@ impl<'a> Context<'a> {
             if let Some((router, call)) = self.router_of(scope, self.text(receiver)) {
                 if let Some(outer) = self.outer_guards(router) {
                     if outer.start > decorator.start_byte() && outer.scope == scope {
-                        guards.extend(outer.guards.iter().cloned());
+                        guards.extend(outer.guards());
                     }
                 }
                 guards.extend(self.dependencies_of(router.0, call));
@@ -1041,6 +1072,49 @@ mod tests {
     #[test]
     fn a_chain_of_included_routers_gives_each_guard() {
         a_chain_of_included_routers_at(20);
+    }
+
+    /// A chain of routers, each with one dependency and each included in the next one. With
+    /// `with_route`, only the innermost router has a route, so the result is one route with one
+    /// guard for each router.
+    fn a_chain_with_one_route_at(count: usize, with_route: bool) -> std::time::Duration {
+        let mut source = String::from("from fastapi import APIRouter, Depends\n\n");
+        for number in 0..count {
+            source.push_str(&format!(
+                "r{number} = APIRouter(dependencies=[Depends(d{number})])\n"
+            ));
+        }
+        if with_route {
+            source.push_str("\n@r0.get(\"/p\")\nasync def h():\n    return 1\n\n");
+        }
+        for number in 1..count {
+            source.push_str(&format!("r{number}.include_router(r{})\n", number - 1));
+        }
+        let (found, elapsed) = entries_lean(Language::Python, &[("main.py", &source)]);
+        assert_eq!(found.len(), usize::from(with_route));
+        if let Some(entry) = found.first() {
+            assert_eq!(entry.guards.len(), count);
+            assert_eq!(entry.guards[0], format!("d{}", count - 1));
+            assert_eq!(entry.guards[count - 1], "d0");
+        }
+        elapsed
+    }
+
+    #[test]
+    fn a_chain_with_one_route_gives_the_guard_of_each_router() {
+        a_chain_with_one_route_at(30, true);
+        a_chain_with_one_route_at(30, false);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_chain_of_included_routers_resolves_in_linear_time() {
+        assert_scales_linearly("one route", 20_000, |count| {
+            a_chain_with_one_route_at(count, true)
+        });
+        assert_scales_linearly("no route", 20_000, |count| {
+            a_chain_with_one_route_at(count, false)
+        });
     }
 
     fn many_routes_of_one_router_at(count: usize) -> std::time::Duration {
