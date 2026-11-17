@@ -30,6 +30,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use tree_sitter::Node;
 
+use super::persistent::PersistentMap;
 use super::{route, Context, Draft, EntryBasis, EntryKind};
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
@@ -518,18 +519,23 @@ struct PrefixNode {
     parent: Option<Rc<PrefixNode>>,
     /// The segment without a `/` at its start or its end, and with upper case percent codes.
     segment: String,
-    /// This segment, or one before it, has a parenthesis. Rails rewrites the optional segments
-    /// over the whole path, so a later segment takes the full normalization.
-    parens: bool,
+}
+
+impl Drop for PrefixNode {
+    fn drop(&mut self) {
+        let mut next = self.parent.take();
+        while let Some(node) = next {
+            match Rc::try_unwrap(node) {
+                Ok(mut owned) => next = owned.parent.take(),
+                Err(_) => break,
+            }
+        }
+    }
 }
 
 impl Prefix {
     fn root() -> Self {
         Self(None)
-    }
-
-    fn parens(&self) -> bool {
-        self.0.as_ref().is_some_and(|node| node.parens)
     }
 
     /// The text of the path: a `/`, and the segments with a `/` between them.
@@ -544,39 +550,28 @@ impl Prefix {
         format!("/{}", segments.join("/"))
     }
 
-    fn from_text(text: &str) -> Self {
-        let segment = text.trim_start_matches('/');
-        if segment.is_empty() {
-            return Self::root();
-        }
-        Self(Some(Rc::new(PrefixNode {
-            parent: None,
-            segment: segment.to_string(),
-            parens: segment.contains(['(', ')']),
-        })))
-    }
-
     /// The prefix after this prefix and a part of a path, as `merge_path_scope` of Rails gives it.
-    fn push(&self, part: &str) -> Self {
-        if self.parens() || part.contains(['(', ')']) {
-            return Self::from_text(&normalize_path(&format!("{}/{part}", self.text())));
+    /// A part with a parenthesis gives `None`: Rails rewrites the optional segments over the whole
+    /// path, and omen does not model it.
+    fn push(&self, part: &str) -> Option<Self> {
+        if part.contains(['(', ')']) {
+            return None;
         }
         let segment = normalize_path(part);
         let segment = segment.trim_matches('/');
         if segment.is_empty() {
-            return self.clone();
+            return Some(self.clone());
         }
-        Self(Some(Rc::new(PrefixNode {
+        Some(Self(Some(Rc::new(PrefixNode {
             parent: self.0.clone(),
             segment: segment.to_string(),
-            parens: false,
-        })))
+        }))))
     }
 }
 
 /// The prefix after a prefix and a part of a path. A prefix that is not known gives no prefix.
 fn join(prefix: &Option<Prefix>, part: &str) -> Option<Prefix> {
-    prefix.as_ref().map(|prefix| prefix.push(part))
+    prefix.as_ref().and_then(|prefix| prefix.push(part))
 }
 
 impl<'a> Context<'a> {
@@ -2172,8 +2167,22 @@ enum Decision {
 
 /// The guards that an action gets when no `only:` or `except:` list names it.
 struct DefaultGuards {
-    slots: HashMap<String, Slot>,
-    names: Vec<String>,
+    slots: PersistentMap<String, Slot>,
+}
+
+impl DefaultGuards {
+    fn names(&self) -> Vec<String> {
+        let entries = self.slots.entries();
+        let mut ordered: Vec<(&str, Slot)> = entries
+            .iter()
+            .map(|(name, slot)| (name.as_str(), *slot))
+            .collect();
+        order_slots(&mut ordered);
+        ordered
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect()
+    }
 }
 
 /// The callbacks of one class: the calls that omen reads, and a flag that tells that a callback
@@ -2183,11 +2192,6 @@ struct ClassCallbacks {
     list: Vec<Callback>,
     opaque: bool,
 }
-
-/// The number of layers with changed callbacks between two snapshots of the guards. A snapshot
-/// copies all guards, so a snapshot for each layer would take a time in proportion to the square of
-/// the depth of the chain.
-const SNAPSHOT_EVERY: usize = 32;
 
 /// The callbacks of a chain of classes in the order of Rails, ready to answer for an action.
 ///
@@ -2211,7 +2215,7 @@ struct Program {
     opaque: bool,
     default: std::sync::OnceLock<Arc<DefaultGuards>>,
     /// The guards of the actions that a list names, for this layer, by action.
-    memo: Mutex<HashMap<String, Arc<Vec<String>>>>,
+    memo: Mutex<HashMap<String, ActiveGuards>>,
 }
 
 impl Program {
@@ -2284,70 +2288,27 @@ impl Program {
             return Arc::clone(found);
         }
         let mut pending = vec![self];
-        let mut shared: Option<Arc<DefaultGuards>> = None;
+        let mut slots: PersistentMap<String, Slot> = PersistentMap::default();
         let mut layer = self.parent.as_deref();
         while let Some(above) = layer {
             if let Some(found) = above.default.get() {
-                shared = Some(Arc::clone(found));
+                slots = found.slots.clone();
                 break;
             }
             pending.push(above);
             layer = above.parent.as_deref();
         }
-        let mut shared = shared.or_else(|| {
-            Some(Arc::new(DefaultGuards {
-                slots: HashMap::new(),
-                names: Vec::new(),
-            }))
-        });
-        let mut slots: HashMap<String, Slot> = shared
-            .as_ref()
-            .map(|found| found.slots.clone())
-            .unwrap_or_default();
-        let count = pending.len();
-        let mut changed_layers = 0;
-        for (position, layer) in pending.iter().rev().enumerate() {
-            let mut changed = false;
+        for layer in pending.iter().rev() {
             for name in layer.by_name.keys() {
                 match layer.decide(name, "") {
-                    Decision::Decided(Some(slot)) => {
-                        changed |= slots.insert(name.clone(), slot) != Some(slot);
-                    }
-                    Decision::Decided(None) => changed |= slots.remove(name).is_some(),
+                    Decision::Decided(Some(slot)) => slots.insert(name.clone(), slot),
+                    Decision::Decided(None) => slots.remove(name),
                     Decision::Undecided => {}
                 }
             }
-            if !changed {
-                if let Some(found) = &shared {
-                    let _ = layer.default.set(Arc::clone(found));
-                    continue;
-                }
-            }
-            changed_layers += usize::from(changed);
-            let last = position + 1 == count;
-            if last || changed_layers >= SNAPSHOT_EVERY {
-                let mut ordered: Vec<(&str, Slot)> = slots
-                    .iter()
-                    .map(|(name, slot)| (name.as_str(), *slot))
-                    .collect();
-                order_slots(&mut ordered);
-                let names = ordered
-                    .iter()
-                    .map(|(name, _)| (*name).to_string())
-                    .collect();
-                let built = Arc::new(DefaultGuards {
-                    slots: slots.clone(),
-                    names,
-                });
-                let _ = layer.default.set(Arc::clone(&built));
-                if last {
-                    return built;
-                }
-                shared = Some(built);
-                changed_layers = 0;
-            } else {
-                shared = None;
-            }
+            let _ = layer.default.set(Arc::new(DefaultGuards {
+                slots: slots.clone(),
+            }));
         }
         Arc::clone(self.default.get().expect("the last layer sets the default"))
     }
@@ -2357,55 +2318,40 @@ impl Program {
             return Vec::new();
         }
         if !self.listed.contains(action) {
-            return self.default_guards().names.clone();
+            return self.default_guards().names();
         }
-        self.listed_guards(action).as_ref().clone()
+        self.listed_guards(action).to_vec()
     }
 
     /// The guards of an action that a list of a callback names. The result for a layer comes from
-    /// the result of the layer above it, and the program keeps the result for the layer that
-    /// asks, and for a layer above it that the callbacks of the layer do not change. A callback
+    /// the result of the layer above it, and the program keeps the result for each layer that it
+    /// visits. A result shares the structure of the result above it, so a chain of layers needs a
+    /// memory in proportion to the number of callbacks. A callback
     /// removes the guards with its names, and it adds them when it applies, at the back or, with
     /// `prepend`, at the front.
-    fn listed_guards(&self, action: &str) -> Arc<Vec<String>> {
+    fn listed_guards(&self, action: &str) -> ActiveGuards {
         if let Some(found) = self.memo.lock().get(action) {
-            return Arc::clone(found);
+            return found.clone();
         }
         let mut pending = vec![self];
-        let mut current: Arc<Vec<String>> = Arc::new(Vec::new());
+        let mut current = ActiveGuards::default();
         let mut layer = self.parent.as_deref();
         while let Some(above) = layer {
             if let Some(found) = above.memo.lock().get(action) {
-                current = Arc::clone(found);
+                current = found.clone();
                 break;
             }
             pending.push(above);
             layer = above.parent.as_deref();
         }
-        let mut working = ActiveGuards::new(&current);
-        let mut changed_layers = 0;
-        let count = pending.len();
-        for (position, layer) in pending.iter().rev().enumerate() {
-            if !layer.callbacks.is_empty() {
-                for callback in &layer.callbacks {
-                    working.apply(callback, action);
-                }
-                changed_layers += 1;
+        for layer in pending.iter().rev() {
+            for callback in &layer.callbacks {
+                current.apply(callback, action);
             }
-            let last = position + 1 == count;
-            if changed_layers > 0 && (last || changed_layers >= SNAPSHOT_EVERY) {
-                let next = working.to_vec();
-                if next != *current {
-                    current = Arc::new(next);
-                }
-                changed_layers = 0;
-            }
-            if changed_layers == 0 {
-                layer
-                    .memo
-                    .lock()
-                    .insert(action.to_string(), Arc::clone(&current));
-            }
+            layer
+                .memo
+                .lock()
+                .insert(action.to_string(), current.clone());
         }
         current
     }
@@ -2413,31 +2359,21 @@ impl Program {
 
 /// The names of the guards in the order of Rails while a layer applies its callbacks. A new
 /// callback replaces the callback with the same name. A callback goes to the back, or to the front
-/// when it has `prepend`. Each change takes a time in proportion to the logarithm of the number of
-/// guards.
+/// when it has `prepend`. A copy takes a constant time, and each change takes a time in proportion to
+/// the logarithm of the number of guards.
+#[derive(Clone, Default)]
 struct ActiveGuards {
-    ordered: std::collections::BTreeMap<i64, String>,
-    at: HashMap<String, i64>,
+    ordered: PersistentMap<i64, String>,
+    at: PersistentMap<String, i64>,
     front: i64,
     back: i64,
 }
 
 impl ActiveGuards {
-    fn new(names: &[String]) -> Self {
-        let mut active = Self {
-            ordered: std::collections::BTreeMap::new(),
-            at: HashMap::with_capacity(names.len()),
-            front: 0,
-            back: 0,
-        };
-        for name in names {
-            active.push_back(name);
-        }
-        active
-    }
-
     fn remove(&mut self, name: &str) {
-        if let Some(slot) = self.at.remove(name) {
+        let name = name.to_string();
+        if let Some(slot) = self.at.get(&name).copied() {
+            self.at.remove(&name);
             self.ordered.remove(&slot);
         }
     }
@@ -2475,7 +2411,7 @@ impl ActiveGuards {
     }
 
     fn to_vec(&self) -> Vec<String> {
-        self.ordered.values().cloned().collect()
+        self.ordered.values()
     }
 }
 

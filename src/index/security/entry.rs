@@ -23,6 +23,7 @@ use crate::index::model::{Span, Symbol, SymbolKind};
 use crate::parser::{cfg_test_module_ranges, ParseResult};
 
 mod go_routes;
+mod persistent;
 mod rails;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -7540,6 +7541,8 @@ func routes() {
                     };
                     let line = if kind == "unique" {
                         format!("  before_action :g{number}, only: :show\n")
+                    } else if kind == "plain" {
+                        format!("  before_action :g{number}\n")
                     } else if number % 2 == 0 {
                         String::from("  before_action :a\n")
                     } else {
@@ -7555,14 +7558,54 @@ func routes() {
                 ];
                 let (found, elapsed) = entries_lean(Language::Ruby, &files);
                 assert_eq!(found.len(), 1);
+                if kind == "unique" || kind == "plain" {
+                    assert_eq!(found[0].guards.len(), depth);
+                }
                 elapsed
             }
         }
     }
 
+    fn nested_scopes_without_routes_at(depth: usize, segment: &str) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        for _ in 0..depth {
+            routes.push_str(&format!("scope \"{segment}\" do\n"));
+        }
+        for _ in 0..depth {
+            routes.push_str("end\n");
+        }
+        routes.push_str("end\n");
+        let files = [("config/routes.rb", routes.as_str())];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert!(found.is_empty());
+        elapsed
+    }
+
+    #[test]
+    fn nested_scopes_without_routes_give_no_route() {
+        nested_scopes_without_routes_at(30, "/a");
+        nested_scopes_without_routes_at(30, "/a(x)");
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_scopes_without_routes_resolve_in_linear_time() {
+        for segment in ["/a", "/a(x)"] {
+            let elapsed = nested_scopes_without_routes_at(30_000, segment);
+            assert!(elapsed.as_secs() < 2, "{segment} {elapsed:?}");
+        }
+    }
+
+    #[test]
+    fn a_scope_path_with_a_parenthesis_makes_the_block_unknown() {
+        let routes = "Rails.application.routes.draw do\n  scope \"/a(:x)\" do\n    get \"/in\", to: \"a#b\"\n  end\n  get \"/out\", to: \"a#b\"\nend\n";
+        let found = rails_routes(routes, &[]);
+        assert_eq!(verbs_and_paths(&found), ["GET /out"]);
+    }
+
     #[test]
     fn deep_blocks_and_chains_give_their_route() {
-        for kind in ["constraints", "module", "unique", "alternating"] {
+        for kind in ["constraints", "module", "unique", "plain", "alternating"] {
             deep_blocks_and_chains_resolve_in_linear_time(kind, 30);
         }
     }
@@ -7574,6 +7617,7 @@ func routes() {
             ("constraints", 4_000),
             ("module", 4_000),
             ("unique", 8_000),
+            ("plain", 8_000),
             ("alternating", 8_000),
         ] {
             let elapsed = deep_blocks_and_chains_resolve_in_linear_time(kind, depth);

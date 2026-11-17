@@ -138,6 +138,7 @@ each form against the source of Rails 7.2.2.
 | A target that is not a literal, as `to: TARGET`, `controller: NAME`, or `action: ACTION`, and a `to:` string with more than one `#` | The route has no symbol and no guard. The path stays. |
 | A `before_action` call with a name that is not a literal, a `skip_before_action` call with a name that is not a literal, a callback call with a receiver, `skip_callback`, `set_callback`, and `reset_callbacks` | The guards of the class, and of each class that inherits from it, are unknown. |
 | `Inflections.instance`, in any form | The inflections are unreadable. |
+| A `scope` path or a resource `path:` with a parenthesis, as `"/a(:x)"` | The block is skipped. Rails rewrites the optional segments over the whole path, and omen does not model it. |
 | A statement after `next`, `break`, `return`, `redo`, or `retry` in a list of the routes | Ruby does not run it, and omen reads no route from it. |
 | A callback or an inflection literal with a nesting deeper than 1,000 levels | The guards or the inflections are unknown. |
 | `member do`, `collection do`, `on: :member`, `on: :collection` | Read. A canonical action name, such as `get :show`, adds no path segment. A `namespace` in a `member` or `collection` block keeps this rule. `on: :new` is skipped. |
