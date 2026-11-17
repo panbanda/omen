@@ -42,7 +42,7 @@ use tree_sitter::Node;
 use super::{syntax, Context, Draft, EntryBasis, EntryKind, Route, TreeSource};
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
-use crate::index::model::{ImportKind, ImportTarget, Reference, Span, Symbol};
+use crate::index::model::{ImportKind, ImportTarget, Reference, Span, Symbol, SymbolKind};
 
 /// The methods that `Any` registers. gin v1.11.0 `anyMethods`.
 const GIN_ANY: [&str; 9] = [
@@ -50,6 +50,9 @@ const GIN_ANY: [&str; 9] = [
 ];
 
 /// The methods that `Any` registers. echo v4.13.4 `methods`.
+/// The depth of a chain of calls that the walk reads.
+const EVAL_DEPTH_LIMIT: usize = 1000;
+
 const ECHO_ANY: [&str; 11] = [
     "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PROPFIND", "PUT", "TRACE",
     "REPORT",
@@ -455,6 +458,15 @@ struct Link {
     /// The guards of the parent when the link was made.
     parent_len: usize,
     prefix: String,
+    /// The number of records when the link was made. A later route of the parent can replace
+    /// the mount.
+    at: usize,
+}
+
+/// A step of the walk over the syntax tree.
+enum Step<'t> {
+    Read(Node<'t>),
+    LeaveBlock,
 }
 
 #[derive(Clone)]
@@ -489,6 +501,8 @@ struct Record {
     opaque: bool,
     /// The registration is real and has a path that omen reads, but omen omits its entry.
     omitted: bool,
+    /// The record stands for a node that `Mount` of chi registers.
+    mount: bool,
     /// The number of guards that the router had at the time of the registration.
     limit: usize,
     range: Span,
@@ -575,6 +589,7 @@ impl<'a> Context<'a> {
                 if !matches!(self.text(field), "HandleFunc" | "Handle")
                     || !self.imports("net.http")
                     || !self.is_go_http_receiver(receiver)
+                    || self.go_in_dead_branch(node)
                 {
                     continue;
                 }
@@ -614,6 +629,64 @@ impl<'a> Context<'a> {
                 .cloned()
                 .collect()
         })
+    }
+
+    /// Tells if the node is in a branch that never runs: the body of `if false`, the `else`
+    /// branch of `if true`, or the body of `for false`.
+    pub(super) fn go_in_dead_branch(&self, node: Node<'_>) -> bool {
+        // One walk over the tree finds the branches that never run. A parent of a node costs
+        // a walk down from the root, so the check does not climb to the parents.
+        let (starts, ends) = self.go_dead.get_or_init(|| {
+            let literal = |condition: Node<'_>| -> Option<bool> {
+                if !matches!(condition.kind(), "identifier" | "true" | "false")
+                    || self.is_go_shadowed(condition)
+                {
+                    return None;
+                }
+                match self.text(condition) {
+                    "true" => Some(true),
+                    "false" => Some(false),
+                    _ => None,
+                }
+            };
+            let mut ranges: Vec<(usize, usize)> = Vec::new();
+            let mut pending = vec![self.parsed.root_node()];
+            while let Some(current) = pending.pop() {
+                let dead = match current.kind() {
+                    "if_statement" => {
+                        let value = current.child_by_field_name("condition").and_then(literal);
+                        match value {
+                            Some(true) => current.child_by_field_name("alternative"),
+                            Some(false) => current.child_by_field_name("consequence"),
+                            None => None,
+                        }
+                    }
+                    "for_statement" => {
+                        let never = current.named_child(0).and_then(literal) == Some(false);
+                        current.child_by_field_name("body").filter(|_| never)
+                    }
+                    _ => None,
+                };
+                if let Some(dead) = dead {
+                    ranges.push((dead.start_byte(), dead.end_byte()));
+                }
+                let mut cursor = current.walk();
+                pending.extend(current.named_children(&mut cursor));
+            }
+            ranges.sort_unstable();
+            let starts: Vec<usize> = ranges.iter().map(|(start, _)| *start).collect();
+            let mut highest = 0;
+            let ends: Vec<usize> = ranges
+                .iter()
+                .map(|(_, end)| {
+                    highest = highest.max(*end);
+                    highest
+                })
+                .collect();
+            (starts, ends)
+        });
+        let before = starts.partition_point(|start| *start <= node.start_byte());
+        before > 0 && ends[before - 1] >= node.end_byte()
     }
 
     /// Tells if a reference anywhere in the repository names the function.
@@ -1372,7 +1445,7 @@ impl PackageCallables {
             }
             let directory = directory_of(&symbols.file);
             for (position, symbol) in symbols.symbols.iter().enumerate() {
-                if symbol.is_callable() {
+                if symbol.kind == SymbolKind::Function {
                     by_name
                         .entry((directory.to_string(), symbol.name.clone()))
                         .or_default()
@@ -1440,12 +1513,16 @@ impl<'a> Context<'a> {
             _ => return None,
         };
         if directory == own {
-            if let [position] = self
+            // A name without a qualifier, and `package.Name`, never name a method.
+            let functions: Vec<usize> = self
                 .callables_here()
                 .get(name)
-                .map(Vec::as_slice)
-                .unwrap_or(&[])
-            {
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|position| self.file.symbols[*position].kind == SymbolKind::Function)
+                .collect();
+            if let [position] = functions.as_slice() {
                 return Some((&self.file.symbols[*position], self.file));
             }
         }
@@ -1946,9 +2023,21 @@ impl CallSites {
                 continue;
             }
             let context = Context::new(&tree, file, files, trees, &[]);
-            let index = FileUses::new(tree.root_node(), &tree.source, file, &context);
+            let own_index = FileUses::new(tree.root_node(), &tree.source, file, &context, false);
+            let mut other_index: Option<FileUses<'_, '_>> = None;
             for (reference, keys) in sites {
                 let strict = keys.iter().any(|key| wrappers.contains(*key));
+                // A registration in the file of the factory has an order that the walk reads.
+                let same_file = keys
+                    .iter()
+                    .all(|key| key.split('#').next() == Some(file.file.as_str()));
+                let index = if same_file {
+                    &own_index
+                } else {
+                    &*other_index.get_or_insert_with(|| {
+                        FileUses::new(tree.root_node(), &tree.source, file, &context, true)
+                    })
+                };
                 if index.is_blocked(
                     reference.name_range.start_byte,
                     reference.name_range.end_byte,
@@ -2027,11 +2116,21 @@ struct FileUses<'t, 'c> {
     /// The same, when any method of the router counts as a bad use. A wrapper type can
     /// shadow a method of the router.
     bad_strict: HashMap<String, Vec<usize>>,
+    /// A call that registers a route on the result is a use that the walk cannot order. A
+    /// file that does not declare the factory uses this mode.
+    registrations_block: bool,
 }
 
 impl<'t, 'c> FileUses<'t, 'c> {
-    fn new(root: Node<'t>, source: &'t [u8], file: &FileSymbols, context: &'c Context<'t>) -> Self {
+    fn new(
+        root: Node<'t>,
+        source: &'t [u8],
+        file: &FileSymbols,
+        context: &'c Context<'t>,
+        registrations_block: bool,
+    ) -> Self {
         let mut uses = Self {
+            registrations_block,
             root,
             source,
             context,
@@ -2090,14 +2189,25 @@ impl<'t, 'c> FileUses<'t, 'c> {
     /// Tells if a selector is a call of a method that registers a route, or that serves the
     /// router, on the node. A call that adds middleware changes the guards of the routes.
     fn is_router_call(&self, selector: Node<'t>, operand: Node<'t>) -> bool {
+        const SERVING: [&str; 7] = [
+            "Run",
+            "RunTLS",
+            "Start",
+            "StartTLS",
+            "ServeHTTP",
+            "Routes",
+            "Walk",
+        ];
         selector.child_by_field_name("operand") == Some(operand)
             && selector.parent().is_some_and(|call| {
                 call.kind() == "call_expression"
                     && call.child_by_field_name("function") == Some(selector)
             })
-            && selector
-                .child_by_field_name("field")
-                .is_some_and(|field| ROUTER_METHODS.contains(&self.text(field)))
+            && selector.child_by_field_name("field").is_some_and(|field| {
+                let name = self.text(field);
+                SERVING.contains(&name)
+                    || (!self.registrations_block && ROUTER_METHODS.contains(&name))
+            })
     }
 
     /// Tells if a literal is an `http.Server`, which serves its handler as the root.
@@ -2306,6 +2416,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             cyclic: HashSet::new(),
             summaries: HashMap::new(),
             fresh_of: HashMap::new(),
+            routed_owners: HashSet::new(),
+            routed_factories: HashSet::new(),
+            fresh_calls: HashMap::new(),
+            registered_fresh: HashSet::new(),
+            returned_of: HashMap::new(),
             components: HashMap::new(),
             attached: HashSet::new(),
             owners: 0,
@@ -2316,6 +2431,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             made_cache: HashMap::new(),
             prefix_next: false,
             omit_next: false,
+            mount_next: false,
+            eval_depth: 0,
+            eval_memo: HashMap::new(),
+            scanned: HashSet::new(),
             dry,
             function_key: None,
             factory_keys: Vec::new(),
@@ -2343,6 +2462,16 @@ struct Routes<'c, 'a, 't> {
     summaries: HashMap<String, Option<Summary>>,
     /// The factory that made a router for a call, by router.
     fresh_of: HashMap<usize, String>,
+    /// The owners of the routers that have a record.
+    routed_owners: HashSet<usize>,
+    /// The factories that register a route on a router that they make.
+    routed_factories: HashSet<String>,
+    /// The number of calls of each factory that the walk read, and the factories that got a
+    /// registration on the result of a call.
+    fresh_calls: HashMap<String, usize>,
+    registered_fresh: HashSet<String>,
+    /// The router that a factory with a summary returns.
+    returned_of: HashMap<String, usize>,
     /// The routers of the returned router of each factory, and the routers that join to it.
     components: HashMap<String, Vec<usize>>,
     /// The factories whose result a call can attach to a parent. Their own routes have
@@ -2359,6 +2488,12 @@ struct Routes<'c, 'a, 't> {
     made_cache: HashMap<usize, bool>,
     prefix_next: bool,
     omit_next: bool,
+    mount_next: bool,
+    eval_depth: usize,
+    /// The router that each call gave, by the id of the node.
+    eval_memo: HashMap<usize, Option<usize>>,
+    /// The calls of the chains that the walk read from their last call.
+    scanned: HashSet<usize>,
     /// The walk only finds the factories. It does not read the calls of the repository.
     dry: bool,
     /// The key of the function that the walk reads.
@@ -2440,7 +2575,31 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         written
     }
 
-    fn visit(&mut self, node: Node<'t>) {
+    /// Reads a node and its descendants in source order. The walk keeps its own stack, so a
+    /// deep expression or a long chain does not overflow the stack of the thread.
+    fn visit(&mut self, root: Node<'t>) {
+        let mut stack = vec![Step::Read(root)];
+        while let Some(step) = stack.pop() {
+            match step {
+                Step::Read(node) => self.visit_one(node, &mut stack),
+                Step::LeaveBlock => {
+                    self.scopes.pop();
+                }
+            }
+        }
+    }
+
+    fn push_children(node: Node<'t>, skipped: Option<Node<'t>>, stack: &mut Vec<Step<'t>>) {
+        let mut cursor = node.walk();
+        let children: Vec<Node<'t>> = node.named_children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            if Some(child) != skipped {
+                stack.push(Step::Read(child));
+            }
+        }
+    }
+
+    fn visit_one(&mut self, node: Node<'t>, stack: &mut Vec<Step<'t>>) {
         match node.kind() {
             "function_declaration" | "method_declaration" => {
                 let name = node
@@ -2461,11 +2620,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     Some(false) => node.child_by_field_name("consequence"),
                     None => None,
                 };
-                for child in Self::named_children(node) {
-                    if Some(child) != dead {
-                        self.visit(child);
-                    }
-                }
+                Self::push_children(node, dead, stack);
                 return;
             }
             "for_statement" => {
@@ -2473,11 +2628,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 let dead = node
                     .named_child(0)
                     .is_some_and(|first| self.constant_condition(first) == Some(false));
-                for child in Self::named_children(node) {
-                    if !(dead && Some(child) == body) {
-                        self.visit(child);
-                    }
-                }
+                Self::push_children(node, body.filter(|_| dead), stack);
                 return;
             }
             "func_literal" => {
@@ -2488,8 +2639,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             }
             "block" => {
                 self.scopes.push(HashMap::new());
-                self.visit_children(node);
-                self.scopes.pop();
+                stack.push(Step::LeaveBlock);
+                Self::push_children(node, None, stack);
                 return;
             }
             "short_var_declaration" | "assignment_statement" => self.assignment(node),
@@ -2499,7 +2650,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             "call_expression" if !self.consumed.contains(&node.id()) => self.call(node),
             _ => {}
         }
-        self.visit_children(node);
+        Self::push_children(node, None, stack);
     }
 
     /// The value of a condition that is the word `true` or the word `false`.
@@ -2513,12 +2664,6 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             "true" => Some(true),
             "false" => Some(false),
             _ => None,
-        }
-    }
-
-    fn visit_children(&mut self, node: Node<'t>) {
-        for child in Self::named_children(node) {
-            self.visit(child);
         }
     }
 
@@ -2536,8 +2681,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             node.child_by_field_name("name")
                 .and_then(|name| self.context.symbol_at(name)),
         );
-        let globals = self.scopes[0].clone();
-        let saved = std::mem::replace(&mut self.scopes, vec![globals, HashMap::new()]);
+        // The scope of the package stays in place, and the scopes of the caller wait aside.
+        let saved = self.scopes.split_off(1);
+        self.scopes.push(HashMap::new());
         self.owners += 1;
         let owner = self.owners;
         self.frames.push(Frame {
@@ -2562,9 +2708,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         if let Some(name) = declared {
             self.in_progress.remove(name);
         }
-        let globals = self.scopes.swap_remove(0);
-        self.scopes = saved;
-        self.scopes[0] = globals;
+        self.scopes.truncate(1);
+        self.scopes.extend(saved);
         let Some(frame) = frame else {
             return;
         };
@@ -2585,6 +2730,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     && declared.is_some_and(|name| !self.cyclic.contains(name))
             })
             .and_then(|router| self.summarize(router, owner));
+        if let (Some(name), Some(router), true) = (declared, only_router, summary.is_some()) {
+            self.returned_of.insert(name.to_string(), router);
+        }
         let mut made: Vec<usize> = Vec::new();
         for router in returned {
             if self.made_by(router, owner) {
@@ -2614,6 +2762,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             if needs_a_summary || attached_in_the_repository {
                 self.attached.insert(id.clone());
             }
+            if self.routed_owners.contains(&owner) {
+                self.routed_factories.insert(id.clone());
+            }
             self.components.insert(id, comp);
         }
         if let Some(name) = declared {
@@ -2636,9 +2787,25 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     /// Notes that the walk changes a router. A function that changes a router that it did
     /// not make has no summary.
     fn touch(&mut self, router: usize) {
+        self.note_registration(router);
         let router = &self.routers[router];
         if router.external || router.owner != self.current_owner() {
             self.mark_impure();
+        }
+    }
+
+    /// A registration on the router that a call of a factory gave, or on a group of it, can
+    /// replace a route of the factory or be replaced by it. Then the routes of both give no
+    /// entry.
+    fn note_registration(&mut self, router: usize) {
+        let root = self.find(router);
+        let fresh = [root, router].into_iter().find(|id| {
+            self.fresh_of
+                .get(id)
+                .is_some_and(|name| self.routed_factories.contains(name))
+        });
+        if let Some(fresh) = fresh {
+            self.registered_fresh.insert(self.fresh_of[&fresh].clone());
         }
     }
 
@@ -2841,6 +3008,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         router.mountable = summary.prefixes.is_empty();
         router.base = summary.prefixes;
         self.fresh_of.insert(id, name.to_string());
+        *self.fresh_calls.entry(name.to_string()).or_default() += 1;
         Some(id)
     }
 
@@ -2997,11 +3165,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn make_child(&mut self, parent: usize, prefix: String, guards: Vec<String>) -> usize {
+        self.note_registration(parent);
         let framework = self.routers[parent].framework;
         let link = Link {
             parent,
             parent_len: self.routers[parent].guards.len(),
             prefix,
+            at: self.records.len(),
         };
         self.routers.push(Router {
             framework,
@@ -3025,6 +3195,33 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         id
     }
 
+    /// A sub-router of gorilla/mux with a `NotFoundHandler` or a `MethodNotAllowedHandler` takes
+    /// each request that reaches it. Then it is an unread registration of the router.
+    fn note_handler_assignment(&mut self, left: Node<'t>) {
+        for target in Self::named_children(left) {
+            if target.kind() != "selector_expression" {
+                continue;
+            }
+            let (Some(field), Some(operand)) = (
+                target.child_by_field_name("field"),
+                target.child_by_field_name("operand"),
+            ) else {
+                continue;
+            };
+            if !matches!(
+                self.text(field),
+                "NotFoundHandler" | "MethodNotAllowedHandler"
+            ) {
+                continue;
+            }
+            if let Some(router) = self.eval(operand) {
+                if self.routers[router].framework == Framework::Mux {
+                    self.push_opaque(router, Span::of(&target));
+                }
+            }
+        }
+    }
+
     fn assignment(&mut self, node: Node<'t>) {
         let (Some(left), Some(right)) = (
             node.child_by_field_name("left"),
@@ -3033,6 +3230,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return;
         };
         let define = node.kind() == "short_var_declaration";
+        self.note_handler_assignment(left);
         self.bind_all(
             &Self::named_children(left),
             &Self::named_children(right),
@@ -3154,12 +3352,34 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
 
     /// The router that an expression gives, when the syntax proves it.
     fn eval(&mut self, expression: Node<'t>) -> Option<usize> {
-        match expression.kind() {
-            "parenthesized_expression" => self.eval(expression.named_child(0)?),
-            "identifier" => self.lookup(self.text(expression))?,
+        // A call has one result. A chain that is deeper than the limit gives no router, so each
+        // route on it gives no entry, and each call of it is read one time.
+        let is_call = expression.kind() == "call_expression";
+        if is_call {
+            if let Some(known) = self.eval_memo.get(&expression.id()) {
+                return *known;
+            }
+        }
+        if self.eval_depth >= EVAL_DEPTH_LIMIT {
+            if is_call {
+                self.eval_memo.insert(expression.id(), None);
+            }
+            return None;
+        }
+        self.eval_depth += 1;
+        let router = match expression.kind() {
+            "parenthesized_expression" => {
+                expression.named_child(0).and_then(|inner| self.eval(inner))
+            }
+            "identifier" => self.lookup(self.text(expression)).flatten(),
             "call_expression" => self.eval_call(expression),
             _ => None,
+        };
+        self.eval_depth -= 1;
+        if is_call {
+            self.eval_memo.insert(expression.id(), router);
         }
+        router
     }
 
     fn eval_call(&mut self, call: Node<'t>) -> Option<usize> {
@@ -3183,7 +3403,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             }
         }
         if name == "Subrouter" {
-            return self.subrouter(operand);
+            let child = self.subrouter(operand);
+            if child.is_none() {
+                self.push_unread_subrouter(operand, Span::of(&call));
+            }
+            return child;
         }
         let parent = self.eval(operand)?;
         match (self.routers[parent].framework, name) {
@@ -3191,13 +3415,21 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 let guards = self.guard_names(&arguments);
                 let child = self.make_child(parent, String::new(), guards);
                 self.routers[child].inline = true;
+                self.routers[child].retroactive = false;
                 self.routers[child].partial |= self.has_spread(&arguments);
                 Some(child)
             }
             (Framework::Chi, "Route") => self.chi_route(parent, call, &arguments),
             (Framework::Chi, "Group") => self.chi_group(parent, call, &arguments),
             (Framework::Echo | Framework::Gin, "Group") => {
-                let prefix = self.string_argument(*arguments.first()?)?;
+                let prefix = arguments
+                    .first()
+                    .and_then(|prefix| self.string_argument(*prefix));
+                let Some(prefix) = prefix else {
+                    // The routes of the group can have any path, so they replace routes.
+                    self.push_opaque(parent, Span::of(&call));
+                    return None;
+                };
                 let guards = self.guard_names(&arguments[1..]);
                 let child = self.make_child(parent, prefix, guards);
                 self.routers[child].partial |= self.has_spread(&arguments[1..]);
@@ -3398,6 +3630,15 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             (Framework::Echo, "Pre") => self.add_guards(router, &arguments, true),
             (Framework::Chi, _) => self.chi_call(router, node, name, &arguments),
             (Framework::Echo, _) => self.echo_call(router, node, name, &arguments),
+            // With strict slash, a template matches the path with and without a final slash.
+            (Framework::Mux, "StrictSlash") => {
+                if arguments
+                    .first()
+                    .is_none_or(|value| self.text(*value) != "false")
+                {
+                    self.routers[router].partial = true;
+                }
+            }
             (Framework::Mux, _) => {}
         }
     }
@@ -3417,10 +3658,31 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return None;
         };
         let prefix = self.string_argument(*prefix)?;
+        self.chi_mount_records(router, &prefix, Span::of(&call));
         let child = self.make_child(router, prefix, Vec::new());
         self.route_calls.insert(call.id(), child);
         self.callback(*callback, child);
         Some(child)
+    }
+
+    /// `Mount` of chi v5.3.2 registers its handler for all methods on the pattern, on the
+    /// pattern and a slash, and on the pattern and `/*`. Each registration replaces a route
+    /// of the same key, whether or not omen reads the mounted handler.
+    fn chi_mount_records(&mut self, router: usize, prefix: &str, range: Span) {
+        let keys = if prefix.ends_with('/') {
+            vec![format!("{prefix}*")]
+        } else {
+            vec![
+                prefix.to_string(),
+                format!("{prefix}/"),
+                format!("{prefix}/*"),
+            ]
+        };
+        for key in keys {
+            self.omit_next = true;
+            self.mount_next = true;
+            self.register(router, &["ANY"], &key, None, &[], range);
+        }
     }
 
     fn chi_group(
@@ -3437,8 +3699,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         };
         let child = self.make_child(router, String::new(), Vec::new());
         self.routers[child].inline = true;
+        self.routers[child].retroactive = false;
         self.route_calls.insert(call.id(), child);
         self.callback(*callback, child);
+        // A function that a name gives can register routes that omen does not read.
+        if callback.kind() != "func_literal" {
+            self.push_opaque(router, Span::of(&call));
+        }
         Some(child)
     }
 
@@ -3492,7 +3759,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             ("Group", _, _) => {
                 self.chi_group(router, node, arguments);
             }
-            ("Mount", [_, mounted], [Some(prefix), _]) => self.mount(router, prefix, *mounted),
+            ("Mount", [_, mounted], [Some(prefix), _]) => {
+                self.chi_mount_records(router, prefix, range);
+                self.mount(router, prefix, *mounted)
+            }
             (
                 "Get" | "Post" | "Put" | "Patch" | "Delete" | "Head" | "Options" | "Connect"
                 | "Trace" | "Query" | "HandleFunc" | "Handle" | "Method" | "MethodFunc" | "Mount",
@@ -3500,6 +3770,26 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 _,
             ) => self.push_opaque(router, range),
             _ => {}
+        }
+    }
+
+    /// A sub-router that omen cannot read can have routes that match first, so it is an unread
+    /// registration of the router that the chain starts from.
+    fn push_unread_subrouter(&mut self, operand: Node<'t>, range: Span) {
+        let mut current = operand;
+        for _ in 0..EVAL_DEPTH_LIMIT {
+            if let Some(router) = self.eval(current) {
+                self.push_opaque(router, range);
+                return;
+            }
+            let Some(next) = current
+                .child_by_field_name("function")
+                .filter(|function| function.kind() == "selector_expression")
+                .and_then(|function| function.child_by_field_name("operand"))
+            else {
+                return;
+            };
+            current = next;
         }
     }
 
@@ -3585,6 +3875,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     /// entry. Returns true when the call is a registration of a gorilla router. The call
     /// consumes its chain.
     fn mux_registration(&mut self, outer: Node<'t>) -> bool {
+        if self.scanned.contains(&outer.id()) {
+            return false;
+        }
         if self.is_subrouter_operand(outer) {
             return false;
         }
@@ -3671,7 +3964,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                         .and_then(|name| self.string_argument(*name)),
                 ),
                 // A matcher of schemes or methods that has no value rejects each request.
-                // A request has the scheme `http` or `https`, so another value never matches.
+                // A handler that runs before the router can set `URL.Scheme`, so omen accepts only
+                // `http` and `https`.
                 "Schemes" => {
                     unreadable |= arguments.is_empty()
                         || arguments.iter().any(|argument| {
@@ -3696,6 +3990,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 break operand;
             }
         };
+        self.scanned.extend(chain.iter().copied());
         let Some(router) = self.eval(base) else {
             return false;
         };
@@ -3747,6 +4042,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let [last] = paths.as_slice() else {
             return self.opaque_registration(router, outer);
         };
+        // The router cleans the path of a request, so a template that is not clean never matches
+        // unless the router skips the cleaning.
+        if !mux_template_is_clean(last) {
+            return self.opaque_registration(router, outer);
+        }
         let path = if last.is_empty() {
             // The empty prefix matches each path.
             if terminal_prefix != Some(true) {
@@ -3904,6 +4204,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             parent,
             parent_len: self.routers[parent].guards.len(),
             prefix: prefix.to_string(),
+            at: self.records.len(),
         };
         self.touch(parent);
         self.touch(child);
@@ -3935,6 +4236,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         range: Span,
     ) {
         let prefix = std::mem::take(&mut self.prefix_next);
+        let mount = std::mem::take(&mut self.mount_next);
         let omitted = std::mem::take(&mut self.omit_next)
             || self.has_spread(guard_arguments)
             || handler.is_some_and(|node| self.has_spread(&[node]));
@@ -3952,6 +4254,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             guards.extend(handler.guards);
             handler.symbol
         });
+        let owner = self.routers[router].owner;
+        self.routed_owners.insert(owner);
         let limit = self.routers[router].guards.len();
         for method in methods {
             self.records.push(Record {
@@ -3959,6 +4263,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 prefix,
                 opaque: false,
                 omitted,
+                mount,
                 limit,
                 range,
                 symbol: symbol.clone().flatten(),
@@ -3980,6 +4285,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             prefix: true,
             opaque: true,
             omitted: false,
+            mount: false,
             limit: 0,
             range,
             symbol: None,
@@ -4099,13 +4405,6 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn finish(self, out: &mut Vec<Draft>) {
-        let blocked: HashSet<usize> = self
-            .attached
-            .iter()
-            .filter_map(|name| self.components.get(name))
-            .flatten()
-            .copied()
-            .collect();
         let mut memo: Vec<Option<Up>> = (0..self.routers.len()).map(|_| None).collect();
         // The tree of a chi router is the tree of the router that `With` or `Group` came
         // from. A parent has a lower number than its child.
@@ -4122,13 +4421,60 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 _ => id,
             });
         }
+        let mut blocked: HashSet<usize> = self
+            .attached
+            .iter()
+            .filter_map(|name| self.components.get(name))
+            .flatten()
+            .copied()
+            .collect();
+        // A caller that registers on the result of a factory adds routes to the router of the
+        // factory. When the factory has one call, the routes of both are in one order, the order
+        // of the registrations, and the rules of the framework apply to them. Otherwise omen
+        // cannot order them, so the routes of both give no entry.
+        let mut mapping: Vec<usize> = (0..self.routers.len()).collect();
+        let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+        if !self.registered_fresh.is_empty() {
+            for (router, root) in root_of.iter().enumerate() {
+                if self.fresh_of.contains_key(root) {
+                    members.entry(*root).or_default().push(router);
+                }
+            }
+        }
+        for (fresh, name) in &self.fresh_of {
+            if !self.registered_fresh.contains(name) {
+                continue;
+            }
+            let own: Vec<usize> = members.get(fresh).cloned().unwrap_or_default();
+            let returned = self.returned_of.get(name).copied();
+            let exact = self.fresh_calls.get(name) == Some(&1)
+                && !self.attached.contains(name)
+                && self.routers[*fresh].base.is_empty()
+                && !self.routers[*fresh].partial;
+            match returned.filter(|_| exact) {
+                Some(returned) => {
+                    mapping[*fresh] = returned;
+                    for router in own {
+                        root_of[router] = root_of[returned];
+                        if tree_of[router] == *fresh {
+                            tree_of[router] = tree_of[returned];
+                        }
+                    }
+                }
+                None => {
+                    blocked.extend(self.components.get(name).into_iter().flatten().copied());
+                    blocked.extend(own);
+                }
+            }
+        }
         // chi's `Mount` registers the pattern, the pattern and a slash, and the pattern and `/*`
         // for all methods. A route that has one of these keys on the same tree replaces the
         // mount, or the mount panics. Then the routers below the mount give no entry.
         let mut chi_keys: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut chi_latest: HashMap<usize, HashMap<String, usize>> = HashMap::new();
         let mut chi_opaque: HashSet<usize> = HashSet::new();
         let mut echo_opaque: HashSet<usize> = HashSet::new();
-        for record in &self.records {
+        for (index, record) in self.records.iter().enumerate() {
             let framework = self.routers[record.router].framework;
             if record.opaque {
                 match framework {
@@ -4136,11 +4482,16 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     Framework::Echo => echo_opaque.insert(root_of[record.router]),
                     _ => false,
                 };
-            } else if framework == Framework::Chi {
+            } else if framework == Framework::Chi && !record.mount {
+                let key = chi_tree_key(&record.path);
+                chi_latest
+                    .entry(tree_of[record.router])
+                    .or_default()
+                    .insert(key.clone(), index);
                 chi_keys
                     .entry(tree_of[record.router])
                     .or_default()
-                    .push(chi_tree_key(&record.path));
+                    .push(key);
             }
         }
         for keys in chi_keys.values_mut() {
@@ -4156,11 +4507,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                         && !router.inline
                         && tree_of.get(link.parent).is_some_and(|tree| {
                             chi_opaque.contains(tree)
-                                || chi_keys.get(tree).is_some_and(|keys| {
+                                || chi_keys
+                                    .get(tree)
+                                    .is_some_and(|keys| has_key_under(keys, &link.prefix))
+                                || chi_latest.get(tree).is_some_and(|latest| {
                                     chi_mount_keys(&link.prefix)
                                         .iter()
-                                        .any(|key| keys.binary_search(key).is_ok())
-                                        || has_key_under(keys, &link.prefix)
+                                        .any(|key| latest.get(key).is_some_and(|at| *at >= link.at))
                                 })
                         })
                 }
@@ -4195,6 +4548,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             .collect();
         // The draft of each record, and the key that decides which records replace each other.
         let mut drafts: Vec<Option<(Draft, Duplicate)>> = Vec::new();
+        // The records of a router that omen marks partial still replace routes, and omen omits
+        // their entries.
+        let mut forced: HashSet<usize> = HashSet::new();
         for record in &self.records {
             drafts.push(None);
             if record.opaque || blocked.contains(&record.router) || mount_replaced[record.router] {
@@ -4205,18 +4561,30 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             let Some(up) = memo[record.router].as_ref() else {
                 continue;
             };
-            if router.partial || up.dead {
+            let unreadable = router.partial || up.dead;
+            let framework = router.framework;
+            if unreadable && framework == Framework::Mux {
                 continue;
             }
-            let framework = router.framework;
-            let Some(path) = up
+            let composed = up
                 .state
                 .as_ref()
+                .filter(|_| !up.dead)
                 .and_then(|state| framework.extend(state, &record.path))
-                .and_then(|state| framework.materialize(&state))
-            else {
-                continue;
+                .and_then(|state| framework.materialize(&state));
+            let path = match composed {
+                Some(path) => path,
+                None if unreadable => {
+                    if framework == Framework::Echo {
+                        echo_opaque.insert(root_of[record.router]);
+                    }
+                    record.path.clone()
+                }
+                None => continue,
             };
+            if unreadable {
+                forced.insert(drafts.len() - 1);
+            }
             let mut guards = flatten_chain(&up.guards);
             guards.extend(router.pre.iter().cloned());
             let count = Self::visible_guards(router, Some(record.limit));
@@ -4255,7 +4623,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     .then_some(root_of[record.router])
             })
             .collect();
-        mux_order(&self.records, &drafts, &mux_roots, &mut kept);
+        mux_order(&self.records, &drafts, &mux_roots, &mapping, &mut kept);
         let chi_trees: Vec<Option<usize>> = self
             .records
             .iter()
@@ -4281,7 +4649,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 Framework::Echo => echo_opaque.contains(&root_of[router]),
                 _ => false,
             };
-            if hidden || record.omitted {
+            if hidden || record.omitted || forced.contains(&index) {
                 kept[index] = false;
             }
         }
@@ -4552,6 +4920,19 @@ fn is_http_token(text: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
+/// Tells if a template has no empty segment, no `.` and no `..` segment. The router redirects a
+/// request path that is not clean.
+fn mux_template_is_clean(template: &str) -> bool {
+    let mut segments = template.split('/').skip(1).peekable();
+    while let Some(segment) = segments.next() {
+        let last = segments.peek().is_none();
+        if segment == "." || segment == ".." || (segment.is_empty() && !last) {
+            return false;
+        }
+    }
+    true
+}
+
 /// What a route path can match. A variable that has no constraint matches one segment, so a
 /// finite set of paths cannot cover it. A constraint can limit a variable to a few values.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -4678,6 +5059,7 @@ fn mux_order(
     records: &[Record],
     drafts: &[Option<(Draft, Duplicate)>],
     roots: &[Option<usize>],
+    mapping: &[usize],
     kept: &mut [bool],
 ) {
     let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -4701,7 +5083,7 @@ fn mux_order(
         let mut by_router: HashMap<usize, MethodTries> = HashMap::new();
         let mut unreadable: HashMap<usize, usize> = HashMap::new();
         for &index in indexes {
-            let router = records[index].router;
+            let router = mapping[records[index].router];
             match readable(index) {
                 Some((literal, kind, method)) => {
                     everything.insert(method, literal, kind);
@@ -4717,7 +5099,7 @@ fn mux_order(
         }
         let mut earlier: HashMap<usize, MethodTries> = HashMap::new();
         for &index in indexes {
-            let router = records[index].router;
+            let router = mapping[records[index].router];
             let others_unreadable =
                 unreadable.len() - usize::from(unreadable.contains_key(&router));
             let own_unreadable = unreadable.get(&router).is_some_and(|first| *first < index);
@@ -4820,7 +5202,7 @@ fn chi_precedence(records: &[Record], trees: &[Option<usize>], kept: &mut [bool]
         .enumerate()
         .map(|(index, record)| {
             let tree = trees[index]?;
-            if record.opaque {
+            if record.opaque || record.mount {
                 return None;
             }
             Some((tree, chi_tokens(&record.path)?))

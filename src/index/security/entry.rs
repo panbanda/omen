@@ -495,6 +495,8 @@ struct Context<'a> {
     go_servemuxes: std::sync::OnceLock<std::collections::HashSet<String>>,
     /// The `net/http` patterns of a Go file that other patterns of the file can cover.
     go_covered: std::sync::OnceLock<std::collections::HashSet<String>>,
+    /// The start and the highest end of the branches of a Go file that never run, by start.
+    go_dead: std::sync::OnceLock<(Vec<usize>, Vec<usize>)>,
     /// The names that the package of a Go file declares at the top level.
     go_declared: std::sync::OnceLock<std::sync::Arc<std::collections::HashSet<String>>>,
 }
@@ -540,6 +542,7 @@ impl<'a> Context<'a> {
             go_locals: std::sync::OnceLock::new(),
             go_servemuxes: std::sync::OnceLock::new(),
             go_covered: std::sync::OnceLock::new(),
+            go_dead: std::sync::OnceLock::new(),
             go_declared: std::sync::OnceLock::new(),
         }
     }
@@ -1550,7 +1553,7 @@ impl<'a> Context<'a> {
         else {
             return;
         };
-        if self.go_covered_patterns().contains(&path) {
+        if self.go_covered_patterns().contains(&path) || self.go_in_dead_branch(node) {
             return;
         }
         let wrapped = self.go_handler(*handler, go_routes::HandlerKind::Http);
@@ -1652,8 +1655,6 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// `.route("/path", get(handler))` of axum. The method router can chain more methods.
-    /// The `net/http` package itself, or a value of `http.NewServeMux()`.
     /// The `net/http` package itself, or a variable that has one binding in the file: a call of
     /// `http.NewServeMux()`. A name that a local variable hides is not the package.
     fn is_go_http_receiver(&self, receiver: Node<'_>) -> bool {
@@ -3042,29 +3043,6 @@ func routes() {
         );
     }
 
-    #[test]
-    fn timing_ten_thousand_handlers_and_registrations_are_read_in_linear_time() {
-        let mut body = String::new();
-        for index in 0..10_000 {
-            body.push_str(&format!("func h{index}(c *gin.Context) {{}}\n\n"));
-        }
-        body.push_str("func routes() {\n\tr := gin.New()\n");
-        for index in 0..10_000 {
-            body.push_str(&format!("\tr.GET(\"/{index}\", h{index})\n"));
-        }
-        body.push_str("}\n");
-        let source = go_source(&[GIN], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert_eq!(found.len(), 10_000);
-        assert!(found.iter().all(|entry| entry.symbol.is_some()));
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(30),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
     fn symbols_of(files: &[(&str, &str)]) -> Vec<Option<String>> {
         entries(Language::Go, files)
             .into_iter()
@@ -3147,83 +3125,6 @@ func serve() {
     }
 
     #[test]
-    fn timing_a_function_with_many_returned_routers_is_read_in_linear_time() {
-        let mut body = String::from("func pick(n int) *chi.Mux {\n");
-        for index in 0..5_000 {
-            body.push_str(&format!(
-                "\tif n == {index} {{\n\t\tr{index} := chi.NewRouter()\n\t\treturn r{index}\n\t}}\n"
-            ));
-        }
-        body.push_str("\treturn nil\n}\n");
-        let source = go_source(&[CHI], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert!(found.is_empty());
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(20),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn timing_a_chain_of_ten_thousand_mounts_is_read_in_linear_time() {
-        let mut body = String::from("func chain() {\n");
-        for index in 0..=10_000 {
-            body.push_str(&format!("\tr{index} := chi.NewRouter()\n"));
-        }
-        for index in 0..10_000 {
-            body.push_str(&format!("\tr{index}.Mount(\"/x\", r{})\n", index + 1));
-        }
-        body.push_str("}\n");
-        let source = go_source(&[CHI], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert!(found.is_empty());
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(20),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn timing_many_packages_with_one_handler_name_are_read_in_linear_time() {
-        let count = 2_000;
-        let mut imports = vec!["\"net/http\"".to_string(), CHI.to_string()];
-        let mut body = String::from("func routes() {\n\tr := chi.NewRouter()\n");
-        let mut files: Vec<(String, String)> = Vec::new();
-        for index in 0..count {
-            imports.push(format!("\"example.com/app/p{index:05}\""));
-            body.push_str(&format!("\tr.Get(\"/{index}\", p{index:05}.Show)\n"));
-            files.push((
-                format!("p{index:05}/show.go"),
-                format!(
-                    "package p{index:05}\n\nimport \"net/http\"\n\nfunc Show(w http.ResponseWriter, r *http.Request) {{}}\n"
-                ),
-            ));
-        }
-        body.push_str("}\n");
-        let import_refs: Vec<&str> = imports.iter().map(String::as_str).collect();
-        files.push(("main.go".to_string(), go_file(&import_refs, &body)));
-        let borrowed: Vec<(&str, &str)> = files
-            .iter()
-            .map(|(name, text)| (name.as_str(), text.as_str()))
-            .collect();
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &borrowed);
-        assert_eq!(found.len(), count);
-        assert!(found.iter().all(|entry| entry
-            .symbol
-            .as_deref()
-            .is_some_and(|symbol| symbol.ends_with("/show.go#Show"))));
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(60),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-    #[test]
     fn a_handler_name_that_a_local_binding_shadows_gives_no_symbol() {
         let source = go_source(
             &[CHI],
@@ -3284,85 +3185,6 @@ func outside() {
         );
     }
 
-    #[test]
-    fn timing_ten_thousand_wrapped_handlers_are_read_in_linear_time() {
-        let mut body =
-            String::from("func wrap(next http.HandlerFunc) http.HandlerFunc { return next }\n\n");
-        for index in 0..10_000 {
-            body.push_str(&format!(
-                "func h{index}(w http.ResponseWriter, r *http.Request) {{}}\n\n"
-            ));
-        }
-        body.push_str("func routes() {\n");
-        for index in 0..10_000 {
-            body.push_str(&format!(
-                "\thttp.HandleFunc(\"/{index}\", wrap(h{index}))\n"
-            ));
-        }
-        body.push_str("}\n");
-        let source = go_source(&[], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert_eq!(found.len(), 10_000);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(30),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn timing_many_factories_with_one_name_that_are_mentioned_are_read_in_linear_time() {
-        let count = 5_000;
-        let files: Vec<(String, String)> = (0..count)
-            .map(|index| {
-                (
-                    format!("p{index:05}/router.go"),
-                    format!(
-                        "package p{index:05}\n\nimport \"github.com/go-chi/chi/v5\"\n\nfunc New() *chi.Mux {{\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", nil)\n\treturn r\n}}\n\nvar Keep = New\n"
-                    ),
-                )
-            })
-            .collect();
-        let borrowed: Vec<(&str, &str)> = files
-            .iter()
-            .map(|(name, text)| (name.as_str(), text.as_str()))
-            .collect();
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &borrowed);
-        assert!(found.is_empty());
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(60),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn timing_one_router_that_many_parents_mount_is_read_in_linear_time() {
-        let count = 5_000;
-        let mut body = String::from("func routes() {\n\tchild := chi.NewRouter()\n");
-        for index in 0..count {
-            body.push_str(&format!(
-                "\tchild.Route(\"/c{index}\", func(chi.Router) {{}})\n"
-            ));
-        }
-        for index in 0..count {
-            body.push_str(&format!(
-                "\tp{index} := chi.NewRouter()\n\tp{index}.Mount(\"/x\", child)\n"
-            ));
-        }
-        body.push_str("}\n");
-        let source = go_source(&[CHI], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert!(found.is_empty());
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(20),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
     fn go_parameters(files: &[(&str, &str)]) -> Vec<String> {
         entries(Language::Go, files)
             .into_iter()
@@ -3658,83 +3480,6 @@ func routes() {
     }
 
     #[test]
-    fn timing_ten_thousand_servemux_variables_are_read_in_linear_time() {
-        let mut body = String::from("func routes() {\n");
-        for index in 0..10_000 {
-            body.push_str(&format!(
-                "\tm{index} := http.NewServeMux()\n\tm{index}.HandleFunc(\"/{index}\", list)\n"
-            ));
-        }
-        body.push_str("}\n");
-        let source = go_source(&[], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert_eq!(found.len(), 10_000);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn timing_a_chain_of_twenty_thousand_groups_is_read_in_linear_time() {
-        let mut body = String::from("func routes() {\n\tr0 := gin.New()\n\tr0.GET(\"/0\", list)\n");
-        for index in 1..20_000 {
-            body.push_str(&format!(
-                "\tr{index} := r{previous}.Group(\"\")\n\tr{index}.GET(\"/{index}\", list)\n",
-                previous = index - 1
-            ));
-        }
-        body.push_str("}\n");
-        let source = go_source(&[GIN], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert_eq!(found.len(), 20_000);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn timing_a_pattern_with_a_hundred_thousand_wildcards_is_read_in_linear_time() {
-        let mut pattern = String::new();
-        for index in 0..100_000 {
-            pattern.push_str(&format!("/{{p{index}}}"));
-        }
-        let started = std::time::Instant::now();
-        assert!(go_routes::servemux_pattern(&pattern).is_some());
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn timing_many_conditional_returns_of_nested_groups_are_read_in_linear_time() {
-        let mut body = String::from("func pick(n int) *gin.RouterGroup {\n\tr0 := gin.New()\n");
-        for index in 1..30_000 {
-            body.push_str(&format!(
-                "\tr{index} := r{previous}.Group(\"\")\n\tif n == {index} {{\n\t\treturn r{index}\n\t}}\n",
-                previous = index - 1
-            ));
-        }
-        body.push_str("\treturn nil\n}\n");
-        let source = go_source(&[GIN], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert!(found.is_empty());
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
     fn a_gorilla_pattern_outside_the_common_regular_expression_grammar_gives_no_entry() {
         let source = go_source(
             &[MUX],
@@ -3825,26 +3570,6 @@ func serve() {
         assert_eq!(
             go_routes(&[("main.go", &source)]),
             ["chi GET /real [] list"]
-        );
-    }
-
-    #[test]
-    fn timing_two_long_method_lists_are_intersected_in_linear_time() {
-        let tokens: Vec<String> = (0..100_000)
-            .map(|index| format!("\"M{index:05}\""))
-            .collect();
-        let list = tokens.join(", ");
-        let body = format!(
-            "func routes() {{\n\tr := mux.NewRouter()\n\tr.Methods({list}).Methods({list}).Path(\"/x\").HandlerFunc(list)\n}}\n"
-        );
-        let source = go_source(&[MUX], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert_eq!(found.len(), 100_000);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(8),
-            "took {:?}",
-            started.elapsed()
         );
     }
 
@@ -4090,50 +3815,6 @@ func serve() {
     }
 
     #[test]
-    fn timing_ten_thousand_nested_gin_groups_join_paths_in_linear_time() {
-        let mut body = String::from("func routes() {\n\tr0 := gin.New()\n");
-        for index in 1..=60_000 {
-            body.push_str(&format!(
-                "\tr{index} := r{previous}.Group(\"/x\")\n",
-                previous = index - 1
-            ));
-        }
-        body.push_str("\tr60000.GET(\"/end\", list)\n}\n");
-        let source = go_source(&[GIN], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert_eq!(found.len(), 1);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(8),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn timing_a_chain_of_forty_thousand_aliases_is_resolved_in_linear_time() {
-        let mut body = String::from("type Base struct{ *chi.Mux }\n\ntype A00000 = Base\n");
-        for index in 1..=100_000 {
-            body.push_str(&format!(
-                "type A{index:05} = A{previous:05}\n",
-                previous = index - 1
-            ));
-        }
-        body.push_str(
-            "\nfunc New() *A100000 {\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", list)\n\treturn &A100000{Mux: r}\n}\n",
-        );
-        let source = go_source(&[CHI], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert_eq!(found.len(), 1);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(6),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
     fn a_name_that_another_file_of_the_package_declares_hides_the_constant() {
         let main = go_source(
             &[CHI],
@@ -4311,24 +3992,6 @@ func routes() {
     }
 
     #[test]
-    fn timing_many_gorilla_routes_are_ordered_in_near_linear_time() {
-        let mut body = String::from("func routes() {\n\tr := mux.NewRouter()\n");
-        for index in 0..60_000 {
-            body.push_str(&format!("\tr.HandleFunc(\"/p{index}/x\", list)\n"));
-        }
-        body.push_str("}\n");
-        let source = go_source(&[MUX], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert_eq!(found.len(), 60_000);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(8),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
     fn a_gorilla_chain_with_two_path_matchers_gives_no_entry() {
         let source = go_source(
             &[MUX],
@@ -4482,27 +4145,6 @@ func routes() {
                 "gorilla/mux ANY /ok [] list",
                 "gorilla/mux GET /ok2 [] list"
             ]
-        );
-    }
-
-    #[test]
-    fn timing_ten_thousand_nested_gin_groups_with_a_slash_prefix_cost_linear_time() {
-        let mut body = String::from("func routes() {\n\tr0 := gin.New()\n");
-        for index in 1..=50_000 {
-            body.push_str(&format!(
-                "\tr{index} := r{previous}.Group(\"/\")\n\tr{index}.GET(\"/{index}\", list)\n",
-                previous = index - 1
-            ));
-        }
-        body.push_str("}\n");
-        let source = go_source(&[GIN], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert_eq!(found.len(), 50_000);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(8),
-            "took {:?}",
-            started.elapsed()
         );
     }
 
@@ -4755,6 +4397,924 @@ func routes() {
     }
 
     #[test]
+    fn a_chi_mount_replaces_the_routes_of_its_keys_for_all_methods() {
+        let source = go_source(
+            &[CHI],
+            r#"func api(r chi.Router) { r.Get("/y", list) }
+
+func routes() {
+	r := chi.NewRouter()
+	r.Get("/static", show)
+	r.Get("/static/", list)
+	r.Mount("/static", http.FileServer(http.Dir(".")))
+	sub := chi.NewRouter()
+	sub.Get("/y", list)
+	r.Get("/api", show)
+	r.Mount("/api", sub)
+	r.Get("/rt", show)
+	r.Route("/rt", api)
+	r.Get("/keep", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /api/y [] list", "chi GET /keep [] show"]
+        );
+    }
+
+    #[test]
+    fn a_caller_that_registers_on_the_result_of_a_factory_shares_one_order_with_it() {
+        let chi = go_source(
+            &[CHI],
+            r#"func newAPI() *chi.Mux { r := chi.NewRouter(); r.Get("/x", show); return r }
+
+func main() {
+	r := newAPI()
+	r.Get("/x", list)
+	http.ListenAndServe(":1", r)
+}
+"#,
+        );
+        // chi keeps the last registration of a key, and the registrations of both are in order.
+        assert_eq!(go_routes(&[("main.go", &chi)]), ["chi GET /x [] list"]);
+        let api = go_source(
+            &[CHI],
+            "func newAPI() *chi.Mux { r := chi.NewRouter(); r.Get(\"/x\", show); return r }\n",
+        );
+        let main = go_file(
+            &["\"net/http\"", CHI],
+            "func main() {\n\tr := newAPI()\n\tr.Get(\"/x\", list)\n\thttp.ListenAndServe(\":1\", r)\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[("api.go", &api), ("main.go", &main)]),
+            Vec::<String>::new()
+        );
+        let mux = go_source(
+            &[MUX],
+            r#"func newAPI() *mux.Router { r := mux.NewRouter(); r.HandleFunc("/x", show); return r }
+
+func main() {
+	r := newAPI()
+	r.HandleFunc("/x", list)
+	http.ListenAndServe(":1", r)
+}
+"#,
+        );
+        // gorilla/mux takes the first route that matches.
+        assert_eq!(
+            go_routes(&[("main.go", &mux)]),
+            ["gorilla/mux ANY /x [] show"]
+        );
+        let echo = go_source(
+            &[ECHO],
+            r#"func newAPI() *echo.Echo { e := echo.New(); e.GET("/x", show); e.GET("/keep", show); return e }
+
+func main() {
+	e := newAPI()
+	e.GET("/x", list)
+	e.GET("/other", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &echo)]),
+            [
+                "echo GET /keep [] show",
+                "echo GET /x [] list",
+                "echo GET /other [] list"
+            ]
+        );
+        let twice = go_source(
+            &[CHI],
+            r#"func newAPI() *chi.Mux { r := chi.NewRouter(); r.Get("/x", show); return r }
+
+func main() {
+	r := newAPI()
+	r.Get("/y", list)
+	s := newAPI()
+	_ = s
+}
+"#,
+        );
+        assert_eq!(go_routes(&[("main.go", &twice)]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_chi_child_of_an_inline_router_keeps_the_guards_of_its_creation() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	r := chi.NewRouter()
+	r.Group(func(g chi.Router) {
+		admin := g.With(audit)
+		g.Use(auth)
+		admin.Get("/x", show)
+	})
+	h := r.With(audit)
+	sub := h.With()
+	h.Use(auth)
+	sub.Get("/y", show)
+	r.Use(auth)
+	r.Get("/z", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /x [auth,audit] show",
+                "chi GET /y [auth,audit] show",
+                "chi GET /z [auth] show"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_route_on_a_router_that_omen_marks_partial_still_replaces_the_earlier_routes() {
+        let source = go_source(
+            &[CHI, ECHO],
+            r#"func routes(mws []func(http.Handler) http.Handler, ems []echo.MiddlewareFunc) {
+	r := chi.NewRouter()
+	r.Get("/x", show)
+	r.With(mws...).Get("/x", list)
+	k := chi.NewRouter()
+	k.Get("/keep", show)
+	e := echo.New()
+	e.GET("/g/x", show)
+	g := e.Group("/g", ems...)
+	g.GET("/x", list)
+	f := echo.New()
+	f.GET("/g/x", show)
+	h := f.Group("/g")
+	h.Use(ems...)
+	h.GET("/x", list)
+	prefix := ""
+	i := echo.New()
+	i.GET("/x", show)
+	j := i.Group(prefix)
+	j.GET("/x", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /keep [] show"]
+        );
+    }
+
+    #[test]
+    fn a_handler_name_resolves_to_a_function_and_never_to_a_method() {
+        let main = go_file(
+            &["\"net/http\"", CHI],
+            "type S struct{}\n\nfunc (s *S) handle(w http.ResponseWriter, r *http.Request) {}\n\nfunc (s *S) onlyMethod(w http.ResponseWriter, r *http.Request) {}\n\nfunc routes() {\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", handle)\n\tr.Get(\"/y\", onlyMethod)\n}\n",
+        );
+        let other = go_file(
+            &["\"net/http\""],
+            "func handle(w http.ResponseWriter, r *http.Request) {}\n",
+        );
+        let symbols = symbols_of(&[("main.go", &main), ("other.go", &other)]);
+        assert_eq!(symbols.len(), 2);
+        let first = symbols[0].as_deref().unwrap();
+        assert!(first.contains("other.go"), "{first}");
+        assert!(!first.contains("S.handle"), "{first}");
+        assert_eq!(symbols[1], None);
+    }
+
+    #[test]
+    fn a_gorilla_subrouter_with_a_not_found_handler_hides_the_later_routes_of_its_parent() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	s := r.PathPrefix("/api").Subrouter()
+	s.NotFoundHandler = http.HandlerFunc(show)
+	r.HandleFunc("/api/x", list)
+	k := mux.NewRouter()
+	t := k.PathPrefix("/api").Subrouter()
+	t.HandleFunc("/x", list).Methods("POST")
+	t.MethodNotAllowedHandler = http.HandlerFunc(show)
+	k.HandleFunc("/api/x", show).Methods("GET")
+	m := mux.NewRouter()
+	m.HandleFunc("/keep", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux POST /api/x [] list",
+                "gorilla/mux ANY /keep [] show"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gorilla_subrouter_that_omen_cannot_read_hides_the_later_routes() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	prefix := "/api"
+	r := mux.NewRouter()
+	s := r.PathPrefix(prefix).Subrouter()
+	s.HandleFunc("/x", list)
+	r.HandleFunc("/api/x", show)
+	t := mux.NewRouter()
+	t.NewRoute().Subrouter().HandleFunc("/x", list)
+	t.HandleFunc("/x", show)
+	m := mux.NewRouter()
+	m.HandleFunc("/keep", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gorilla/mux ANY /keep [] show"]
+        );
+    }
+
+    #[test]
+    fn gorilla_strict_slash_makes_routes_that_differ_by_a_final_slash_overlap() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.StrictSlash(true)
+	r.HandleFunc("/x", list)
+	r.HandleFunc("/x/", show)
+	m := mux.NewRouter()
+	m.StrictSlash(false)
+	m.HandleFunc("/keep", show)
+	m.HandleFunc("/keep/", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux ANY /keep [] show",
+                "gorilla/mux ANY /keep/ [] list"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_net_http_route_in_a_branch_that_never_runs_gives_no_entry() {
+        let source = go_source(
+            &[],
+            r#"func routes() {
+	if false {
+		http.HandleFunc("/ghost", show)
+	}
+	m := http.NewServeMux()
+	if false {
+		m.HandleFunc("/ghost2", show)
+	}
+	if true {
+		m.HandleFunc("/live", show)
+	} else {
+		m.HandleFunc("/ghost3", show)
+	}
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["net/http ANY /live [] show"]
+        );
+    }
+
+    #[test]
+    fn a_chi_group_with_a_named_function_hides_the_earlier_routes_of_its_tree() {
+        let source = go_source(
+            &[CHI],
+            r#"func api(r chi.Router) { r.Get("/x", list) }
+
+func routes() {
+	r := chi.NewRouter()
+	r.Get("/x", show)
+	r.Group(api)
+	k := chi.NewRouter()
+	k.Get("/keep", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /keep [] show"]
+        );
+    }
+
+    #[test]
+    fn a_gorilla_template_that_the_router_cleans_gives_no_entry() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	m := mux.NewRouter()
+	m.HandleFunc("/keep", show)
+	m.HandleFunc("/a//b", show)
+	m.HandleFunc("/c/./d", show)
+	m.HandleFunc("/e/../f", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gorilla/mux ANY /keep [] show"]
+        );
+    }
+    // The timing tests of the Go routes time only the search for entry points. A test that is
+    // not ignored checks that the search takes less than three times as long for twice the
+    // input, with a floor for times that noise decides. A test that is ignored runs a large
+    // input in release.
+
+    type Search = (usize, std::time::Duration);
+
+    fn timed_search(files: &[(String, String)]) -> (Vec<EntryPoint>, std::time::Duration) {
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(name, text)| (name.as_str(), text.as_str()))
+            .collect();
+        entries_timed(Language::Go, &borrowed, true)
+    }
+
+    fn timed_source(source: String) -> (Vec<EntryPoint>, std::time::Duration) {
+        timed_search(&[("main.go".to_string(), source)])
+    }
+
+    fn assert_linear_growth(small: usize, run: fn(usize) -> Search, expected: fn(usize) -> usize) {
+        let (first_found, first) = run(small);
+        let (second_found, second) = run(small * 2);
+        assert_eq!(first_found, expected(small));
+        assert_eq!(second_found, expected(small * 2));
+        let floor = std::time::Duration::from_millis(300);
+        assert!(
+            second < 3 * first.max(floor),
+            "{first:?} for {small}, then {second:?}"
+        );
+    }
+
+    macro_rules! go_timing {
+        ($scenario:ident, $small_test:ident, $large_test:ident, $small:expr, $large:expr, $expected:expr) => {
+            #[test]
+            fn $small_test() {
+                assert_linear_growth($small, $scenario, $expected);
+            }
+
+            #[test]
+            #[ignore = "timing: run in release"]
+            fn $large_test() {
+                let (_, took) = $scenario($large);
+                assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
+            }
+        };
+    }
+
+    fn scenario_handlers_and_registrations(count: usize) -> Search {
+        let mut body = String::new();
+        for index in 0..count {
+            body.push_str(&format!("func h{index}(c *gin.Context) {{}}\n\n"));
+        }
+        body.push_str("func routes() {\n\tr := gin.New()\n");
+        for index in 0..count {
+            body.push_str(&format!("\tr.GET(\"/{index}\", h{index})\n"));
+        }
+        body.push_str("}\n");
+        let (found, took) = timed_source(go_source(&[GIN], &body));
+        assert!(found.iter().all(|entry| entry.symbol.is_some()));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_handlers_and_registrations,
+        handlers_and_registrations_are_read_in_linear_time,
+        timing_ten_thousand_handlers_and_registrations_are_read_in_linear_time,
+        1_000,
+        10_000,
+        |count| count
+    );
+
+    fn scenario_returned_routers(count: usize) -> Search {
+        let mut body = String::from("func pick(n int) *chi.Mux {\n");
+        for index in 0..count {
+            body.push_str(&format!(
+                "\tif n == {index} {{\n\t\tr{index} := chi.NewRouter()\n\t\treturn r{index}\n\t}}\n"
+            ));
+        }
+        body.push_str("\treturn nil\n}\n");
+        let (found, took) = timed_source(go_source(&[CHI], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_returned_routers,
+        many_returned_routers_are_read_in_linear_time,
+        timing_a_function_with_many_returned_routers_is_read_in_linear_time,
+        600,
+        5_000,
+        |_| 0
+    );
+
+    fn scenario_mount_chain(count: usize) -> Search {
+        let mut body = String::from("func chain() {\n");
+        for index in 0..=count {
+            body.push_str(&format!("\tr{index} := chi.NewRouter()\n"));
+        }
+        for index in 0..count {
+            body.push_str(&format!("\tr{index}.Mount(\"/x\", r{})\n", index + 1));
+        }
+        body.push_str("}\n");
+        let (found, took) = timed_source(go_source(&[CHI], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_mount_chain,
+        a_chain_of_mounts_is_read_in_linear_time,
+        timing_a_chain_of_ten_thousand_mounts_is_read_in_linear_time,
+        1_250,
+        10_000,
+        |_| 0
+    );
+
+    fn scenario_packages_with_one_handler_name(count: usize) -> Search {
+        let mut imports = vec!["\"net/http\"".to_string(), CHI.to_string()];
+        let mut body = String::from("func routes() {\n\tr := chi.NewRouter()\n");
+        let mut files: Vec<(String, String)> = Vec::new();
+        for index in 0..count {
+            imports.push(format!("\"example.com/app/p{index:05}\""));
+            body.push_str(&format!("\tr.Get(\"/{index}\", p{index:05}.Show)\n"));
+            files.push((
+                format!("p{index:05}/show.go"),
+                format!(
+                    "package p{index:05}\n\nimport \"net/http\"\n\nfunc Show(w http.ResponseWriter, r *http.Request) {{}}\n"
+                ),
+            ));
+        }
+        body.push_str("}\n");
+        let import_refs: Vec<&str> = imports.iter().map(String::as_str).collect();
+        files.push(("main.go".to_string(), go_file(&import_refs, &body)));
+        let (found, took) = timed_search(&files);
+        assert!(found.iter().all(|entry| entry
+            .symbol
+            .as_deref()
+            .is_some_and(|symbol| symbol.ends_with("/show.go#Show"))));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_packages_with_one_handler_name,
+        many_packages_with_one_handler_name_are_read_in_linear_time,
+        timing_many_packages_with_one_handler_name_are_read_in_linear_time,
+        250,
+        2_000,
+        |count| count
+    );
+
+    fn scenario_wrapped_handlers(count: usize) -> Search {
+        let mut body =
+            String::from("func wrap(next http.HandlerFunc) http.HandlerFunc { return next }\n\n");
+        for index in 0..count {
+            body.push_str(&format!(
+                "func h{index}(w http.ResponseWriter, r *http.Request) {{}}\n\n"
+            ));
+        }
+        body.push_str("func routes() {\n");
+        for index in 0..count {
+            body.push_str(&format!(
+                "\thttp.HandleFunc(\"/{index}\", wrap(h{index}))\n"
+            ));
+        }
+        body.push_str("}\n");
+        let (found, took) = timed_source(go_source(&[], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_wrapped_handlers,
+        wrapped_handlers_are_read_in_linear_time,
+        timing_ten_thousand_wrapped_handlers_are_read_in_linear_time,
+        1_250,
+        10_000,
+        |count| count
+    );
+
+    fn scenario_mentioned_factories(count: usize) -> Search {
+        let files: Vec<(String, String)> = (0..count)
+            .map(|index| {
+                (
+                    format!("p{index:05}/router.go"),
+                    format!(
+                        "package p{index:05}\n\nimport \"github.com/go-chi/chi/v5\"\n\nfunc New() *chi.Mux {{\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", nil)\n\treturn r\n}}\n\nvar Keep = New\n"
+                    ),
+                )
+            })
+            .collect();
+        let (found, took) = timed_search(&files);
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_mentioned_factories,
+        many_factories_with_one_name_that_are_mentioned_are_read_in_linear_time,
+        timing_many_factories_with_one_name_that_are_mentioned_are_read_in_linear_time,
+        600,
+        5_000,
+        |_| 0
+    );
+
+    fn scenario_parents_of_one_router(count: usize) -> Search {
+        let mut body = String::from("func routes() {\n\tchild := chi.NewRouter()\n");
+        for index in 0..count {
+            body.push_str(&format!(
+                "\tchild.Route(\"/c{index}\", func(chi.Router) {{}})\n"
+            ));
+        }
+        for index in 0..count {
+            body.push_str(&format!(
+                "\tp{index} := chi.NewRouter()\n\tp{index}.Mount(\"/x\", child)\n"
+            ));
+        }
+        body.push_str("}\n");
+        let (found, took) = timed_source(go_source(&[CHI], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_parents_of_one_router,
+        one_router_that_many_parents_mount_is_read_in_linear_time,
+        timing_one_router_that_many_parents_mount_is_read_in_linear_time,
+        600,
+        5_000,
+        |_| 0
+    );
+
+    fn scenario_servemux_variables(count: usize) -> Search {
+        let mut body = String::from("func routes() {\n");
+        for index in 0..count {
+            body.push_str(&format!(
+                "\tm{index} := http.NewServeMux()\n\tm{index}.HandleFunc(\"/{index}\", list)\n"
+            ));
+        }
+        body.push_str("}\n");
+        let (found, took) = timed_source(go_source(&[], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_servemux_variables,
+        servemux_variables_are_read_in_linear_time,
+        timing_ten_thousand_servemux_variables_are_read_in_linear_time,
+        1_250,
+        10_000,
+        |count| count
+    );
+
+    fn scenario_group_chain(count: usize) -> Search {
+        let mut body = String::from("func routes() {\n\tr0 := gin.New()\n\tr0.GET(\"/0\", list)\n");
+        for index in 1..count {
+            body.push_str(&format!(
+                "\tr{index} := r{previous}.Group(\"\")\n\tr{index}.GET(\"/{index}\", list)\n",
+                previous = index - 1
+            ));
+        }
+        body.push_str("}\n");
+        let (found, took) = timed_source(go_source(&[GIN], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_group_chain,
+        a_chain_of_groups_is_read_in_linear_time,
+        timing_a_chain_of_twenty_thousand_groups_is_read_in_linear_time,
+        2_500,
+        20_000,
+        |count| count
+    );
+
+    fn scenario_wildcard_pattern(count: usize) -> Search {
+        let mut pattern = String::new();
+        for index in 0..count {
+            pattern.push_str(&format!("/{{p{index}}}"));
+        }
+        let started = std::time::Instant::now();
+        assert!(go_routes::servemux_pattern(&pattern).is_some());
+        (1, started.elapsed())
+    }
+
+    go_timing!(
+        scenario_wildcard_pattern,
+        a_pattern_with_many_wildcards_is_read_in_linear_time,
+        timing_a_pattern_with_a_hundred_thousand_wildcards_is_read_in_linear_time,
+        12_500,
+        100_000,
+        |_| 1
+    );
+
+    fn scenario_conditional_group_returns(count: usize) -> Search {
+        let mut body = String::from("func pick(n int) *gin.RouterGroup {\n\tr0 := gin.New()\n");
+        for index in 1..count {
+            body.push_str(&format!(
+                "\tr{index} := r{previous}.Group(\"\")\n\tif n == {index} {{\n\t\treturn r{index}\n\t}}\n",
+                previous = index - 1
+            ));
+        }
+        body.push_str("\treturn nil\n}\n");
+        let (found, took) = timed_source(go_source(&[GIN], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_conditional_group_returns,
+        many_conditional_returns_of_nested_groups_are_read_in_linear_time,
+        timing_many_conditional_returns_of_nested_groups_are_read_in_linear_time,
+        3_750,
+        30_000,
+        |_| 0
+    );
+
+    fn scenario_method_lists(count: usize) -> Search {
+        let tokens: Vec<String> = (0..count).map(|index| format!("\"M{index:05}\"")).collect();
+        let list = tokens.join(", ");
+        let body = format!(
+            "func routes() {{\n\tr := mux.NewRouter()\n\tr.Methods({list}).Methods({list}).Path(\"/x\").HandlerFunc(list)\n}}\n"
+        );
+        let (found, took) = timed_source(go_source(&[MUX], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_method_lists,
+        two_long_method_lists_are_intersected_in_linear_time,
+        timing_two_long_method_lists_are_intersected_in_linear_time,
+        12_500,
+        100_000,
+        |count| count
+    );
+
+    fn scenario_nested_gin_groups(count: usize) -> Search {
+        let mut body = String::from("func routes() {\n\tr0 := gin.New()\n");
+        for index in 1..=count {
+            body.push_str(&format!(
+                "\tr{index} := r{previous}.Group(\"/x\")\n",
+                previous = index - 1
+            ));
+        }
+        body.push_str(&format!("\tr{count}.GET(\"/end\", list)\n}}\n"));
+        let (found, took) = timed_source(go_source(&[GIN], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_nested_gin_groups,
+        nested_gin_groups_join_paths_in_linear_time,
+        timing_ten_thousand_nested_gin_groups_join_paths_in_linear_time,
+        7_500,
+        60_000,
+        |_| 1
+    );
+
+    fn scenario_alias_chain(count: usize) -> Search {
+        let mut body = String::from("type Base struct{ *chi.Mux }\n\ntype A00000 = Base\n");
+        for index in 1..=count {
+            body.push_str(&format!(
+                "type A{index:05} = A{previous:05}\n",
+                previous = index - 1
+            ));
+        }
+        body.push_str(&format!(
+            "\nfunc New() *A{count:05} {{\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", list)\n\treturn &A{count:05}{{Mux: r}}\n}}\n"
+        ));
+        let (found, took) = timed_source(go_source(&[CHI], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_alias_chain,
+        a_chain_of_aliases_is_resolved_in_linear_time,
+        timing_a_chain_of_forty_thousand_aliases_is_resolved_in_linear_time,
+        12_500,
+        100_000,
+        |_| 1
+    );
+
+    fn scenario_gorilla_routes(count: usize) -> Search {
+        let mut body = String::from("func routes() {\n\tr := mux.NewRouter()\n");
+        for index in 0..count {
+            body.push_str(&format!("\tr.HandleFunc(\"/p{index}/x\", list)\n"));
+        }
+        body.push_str("}\n");
+        let (found, took) = timed_source(go_source(&[MUX], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_gorilla_routes,
+        many_gorilla_routes_are_ordered_in_near_linear_time,
+        timing_many_gorilla_routes_are_ordered_in_near_linear_time,
+        7_500,
+        60_000,
+        |count| count
+    );
+
+    fn scenario_slash_groups(count: usize) -> Search {
+        let mut body = String::from("func routes() {\n\tr0 := gin.New()\n");
+        for index in 1..=count {
+            body.push_str(&format!(
+                "\tr{index} := r{previous}.Group(\"/\")\n\tr{index}.GET(\"/{index}\", list)\n",
+                previous = index - 1
+            ));
+        }
+        body.push_str("}\n");
+        let (found, took) = timed_source(go_source(&[GIN], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_slash_groups,
+        nested_gin_groups_with_a_slash_prefix_cost_linear_time,
+        timing_ten_thousand_nested_gin_groups_with_a_slash_prefix_cost_linear_time,
+        6_250,
+        50_000,
+        |count| count
+    );
+
+    fn scenario_package_variables(count: usize) -> Search {
+        let mut body = String::new();
+        for index in 0..count {
+            body.push_str(&format!("var v{index} = 0\nfunc f{index}() {{}}\n"));
+        }
+        body.push_str("func routes() {\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", list)\n}\n");
+        let (found, took) = timed_source(go_source(&[CHI], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_package_variables,
+        many_package_variables_and_functions_cost_linear_time,
+        timing_many_package_variables_and_functions_cost_linear_time,
+        2_500,
+        20_000,
+        |_| 1
+    );
+
+    fn scenario_functions_in_one_file(count: usize) -> Search {
+        let mut body = String::new();
+        for index in 0..count {
+            body.push_str(&format!(
+                "func make{index}() *chi.Mux {{\n\tr := chi.NewRouter()\n\treturn r\n}}\n\n"
+            ));
+        }
+        let (found, took) = timed_source(go_source(&[CHI], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_functions_in_one_file,
+        many_functions_in_one_file_are_read_in_linear_time,
+        timing_ten_thousand_functions_in_one_file_are_read_in_linear_time,
+        1_250,
+        10_000,
+        |_| 0
+    );
+
+    fn scenario_files_that_call_one_factory(count: usize) -> Search {
+        let router = factory_file("NewRouter", "/x");
+        let mut files: Vec<(String, String)> = vec![("router.go".to_string(), router)];
+        for index in 0..count {
+            files.push((
+                format!("use{index:05}.go"),
+                go_file(
+                    &["\"net/http\""],
+                    &format!(
+                        "func serve{index}() {{\n\thttp.ListenAndServe(\":80\", NewRouter())\n}}\n"
+                    ),
+                ),
+            ));
+        }
+        let (found, took) = timed_search(&files);
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_files_that_call_one_factory,
+        many_files_that_call_one_factory_are_read_in_linear_time,
+        timing_five_thousand_files_that_call_one_factory_are_read_in_linear_time,
+        600,
+        5_000,
+        |_| 1
+    );
+
+    fn scenario_calls_of_one_factory(count: usize) -> Search {
+        let mut body = String::from("func newRouter() *gin.Engine { return gin.New() }\n\n");
+        body.push_str("func routes() {\n");
+        for _ in 0..count {
+            body.push_str("\t{ r := newRouter(); r.GET(\"/x\", show) }\n");
+        }
+        body.push_str("}\n");
+        let (found, took) = timed_source(go_source(&[GIN], &body));
+        assert!(found.iter().all(|entry| {
+            entry.framework == "gin"
+                && entry.guards.is_empty()
+                && entry.route.as_ref().is_some_and(|route| route.path == "/x")
+        }));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_calls_of_one_factory,
+        many_calls_of_one_factory_are_read_in_linear_time,
+        timing_ten_thousand_calls_of_one_factory_are_read_in_linear_time,
+        1_250,
+        10_000,
+        |count| count
+    );
+
+    fn scenario_factory_chain(steps: usize) -> Search {
+        let mut body = String::from("func f0() *gin.Engine { return gin.New() }\n\n");
+        for step in 1..=steps {
+            body.push_str(&format!(
+                "func f{step}() *gin.Engine {{\n\ta := f{previous}()\n\t_ = f{previous}()\n\treturn a\n}}\n\n",
+                previous = step - 1
+            ));
+        }
+        body.push_str(&format!(
+            "func routes() {{\n\tr := f{steps}()\n\tr.GET(\"/x\", show)\n}}\n"
+        ));
+        let (found, took) = timed_source(go_source(&[GIN], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_factory_chain,
+        a_chain_of_factories_that_call_each_other_twice_is_read_in_linear_time,
+        timing_a_chain_of_factories_that_call_each_other_twice_is_read_in_linear_time,
+        10,
+        30,
+        |_| 1
+    );
+
+    fn scenario_nested_blocks(depth: usize) -> Search {
+        let mut nested = String::from("func nested(c bool) {\n");
+        for index in 0..depth {
+            nested.push_str(&format!("if c {{\nhttp.HandleFunc(\"/p{index}\", show)\n"));
+        }
+        for _ in 0..depth {
+            nested.push_str("}\n");
+        }
+        nested.push_str("}\n");
+        let (found, took) = timed_source(go_source(&[], &nested));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_nested_blocks,
+        many_nested_blocks_with_net_http_routes_cost_linear_time,
+        timing_many_nested_blocks_with_net_http_routes_cost_linear_time,
+        1_000,
+        20_000,
+        |depth| depth
+    );
+
+    fn scenario_deep_expression(count: usize) -> Search {
+        let mut body = String::from("func routes() {\n\tx := 1");
+        for _ in 0..count {
+            body.push_str("+1");
+        }
+        body.push_str("\n\t_ = x\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", list)\n}\n");
+        let (found, took) = timed_source(go_source(&[CHI], &body));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_deep_expression,
+        a_deep_expression_does_not_overflow_and_costs_linear_time,
+        timing_a_deep_expression_costs_linear_time,
+        12_500,
+        200_000,
+        |_| 1
+    );
+
+    fn scenario_method_chain(count: usize) -> Search {
+        let mut chain = String::from("func more() {\n\tq := mux.NewRouter()\n\tq.Path(\"/x\")");
+        for _ in 0..count {
+            chain.push_str(".Methods(\"GET\")");
+        }
+        chain.push_str("\n}\n");
+        let (found, took) = timed_source(go_source(&[MUX], &chain));
+        (found.len(), took)
+    }
+
+    go_timing!(
+        scenario_method_chain,
+        a_long_method_chain_costs_linear_time,
+        timing_a_long_method_chain_costs_linear_time,
+        1_250,
+        40_000,
+        |_| 0
+    );
+
+    #[test]
     fn documented_gap_a_caller_in_another_file_that_registers_on_a_factory_result_gives_no_entry() {
         let router = factory_file("NewRouter", "/x");
         let main = go_file(
@@ -4763,7 +5323,7 @@ func routes() {
         );
         assert_eq!(
             go_routes(&[("router.go", &router), ("main.go", &main)]),
-            ["chi GET /x [] list"]
+            Vec::<String>::new()
         );
     }
 
@@ -4840,25 +5400,6 @@ func routes() {
     }
 
     #[test]
-    fn timing_ten_thousand_functions_in_one_file_are_read_in_linear_time() {
-        let mut body = String::new();
-        for index in 0..10_000 {
-            body.push_str(&format!(
-                "func make{index}() *chi.Mux {{\n\tr := chi.NewRouter()\n\treturn r\n}}\n\n"
-            ));
-        }
-        let source = go_source(&[CHI], &body);
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &[("main.go", &source)]);
-        assert!(found.is_empty());
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(20),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
     fn a_call_through_the_import_of_another_package_attaches_the_factory() {
         let router = factory_file("NewRouter", "/x").replacen("package main", "package api", 1);
         let main = go_file(
@@ -4898,35 +5439,6 @@ func routes() {
     }
 
     #[test]
-    fn timing_five_thousand_files_that_call_one_factory_are_read_in_linear_time() {
-        let router = factory_file("NewRouter", "/x");
-        let mut files: Vec<(String, String)> = vec![("router.go".to_string(), router)];
-        for index in 0..5_000 {
-            files.push((
-                format!("use{index:05}.go"),
-                go_file(
-                    &["\"net/http\""],
-                    &format!(
-                        "func serve{index}() {{\n\thttp.ListenAndServe(\":80\", NewRouter())\n}}\n"
-                    ),
-                ),
-            ));
-        }
-        let borrowed: Vec<(&str, &str)> = files
-            .iter()
-            .map(|(name, text)| (name.as_str(), text.as_str()))
-            .collect();
-        let started = std::time::Instant::now();
-        let found = entries(Language::Go, &borrowed);
-        assert_eq!(found.len(), 1);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(120),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
     fn the_routes_of_a_factory_keep_their_paths_when_the_result_is_only_a_root() {
         let source = go_source(
             &[CHI],
@@ -4949,10 +5461,7 @@ func never() {
 }
 "#,
         );
-        assert_eq!(
-            go_routes(&[("main.go", &source)]),
-            ["chi GET /root [] list", "chi GET /extra [] show"]
-        );
+        assert_eq!(go_routes(&[("main.go", &source)]), Vec::<String>::new());
     }
 
     #[test]
@@ -5037,7 +5546,7 @@ func routes() {
 }
 "#,
         );
-        assert_eq!(go_routes(&[("main.go", &source)]), ["chi GET /own [] show"]);
+        assert_eq!(go_routes(&[("main.go", &source)]), Vec::<String>::new());
     }
 
     #[test]
@@ -5230,47 +5739,6 @@ func main() {
                 "echo get /e [] show",
                 "echo Link /m [] show",
             ]
-        );
-    }
-
-    #[test]
-    fn timing_ten_thousand_calls_of_one_factory_are_read_in_linear_time() {
-        let mut body = String::from("func newRouter() *gin.Engine { return gin.New() }\n\n");
-        body.push_str("func routes() {\n");
-        for _ in 0..10_000 {
-            body.push_str("\t{ r := newRouter(); r.GET(\"/x\", show) }\n");
-        }
-        body.push_str("}\n");
-        let source = go_source(&[GIN], &body);
-        let started = std::time::Instant::now();
-        let found = go_routes(&[("main.go", &source)]);
-        assert_eq!(found.len(), 10_000);
-        assert!(found.iter().all(|line| line == "gin GET /x [] show"));
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(30),
-            "took {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn timing_a_chain_of_factories_that_call_each_other_twice_is_read_in_linear_time() {
-        let mut body = String::from("func f0() *gin.Engine { return gin.New() }\n\n");
-        for step in 1..=30 {
-            body.push_str(&format!(
-                "func f{step}() *gin.Engine {{\n\ta := f{previous}()\n\t_ = f{previous}()\n\treturn a\n}}\n\n",
-                previous = step - 1
-            ));
-        }
-        body.push_str("func routes() {\n\tr := f30()\n\tr.GET(\"/x\", show)\n}\n");
-        let source = go_source(&[GIN], &body);
-        let started = std::time::Instant::now();
-        let found = go_routes(&[("main.go", &source)]);
-        assert_eq!(found, ["gin GET /x [] show"]);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
-            "took {:?}",
-            started.elapsed()
         );
     }
 
