@@ -35,7 +35,7 @@ If the change is already on a branch, get the blast radius of each changed symbo
 omen -f json diff --target main --top 20
 ```
 
-Each entry of `symbols` has `direct_callers`, `direct_caller_count`, `test_caller_count`, and `transitive_callers`. The symbols with the most effect come first. Give a `key` from `symbols` to the `impact` command to get the full list of callers.
+Each entry of `symbols` has `direct_callers`, `direct_caller_count`, `test_caller_count`, and `transitive_callers`. The symbols with the most effect come first. Give a `key` from `symbols` to the `impact` command to get the full list of callers. If the `state` of the entry is `removed`, add `--ref <base>` (for example `--ref main`), because the symbol is only in the base.
 
 ### Step 2: Map the File-Level Dependencies
 
