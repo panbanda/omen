@@ -4056,6 +4056,15 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             })
             .collect();
         chi_precedence(&self.records, &chi_trees, &mut kept);
+        let echo_roots: Vec<Option<usize>> = self
+            .records
+            .iter()
+            .map(|record| {
+                (self.routers[record.router].framework == Framework::Echo)
+                    .then_some(root_of[record.router])
+            })
+            .collect();
+        echo_precedence(&self.records, &drafts, &echo_roots, &mut kept);
         for (index, record) in self.records.iter().enumerate() {
             let router = record.router;
             let hidden = match self.routers[router].framework {
@@ -4597,20 +4606,91 @@ fn chi_tokens(pattern: &str) -> Option<Vec<String>> {
 /// different regular expressions have an order that omen does not read. Each tree has one
 /// walk over the elements of its patterns.
 fn chi_precedence(records: &[Record], trees: &[Option<usize>], kept: &mut [bool]) {
+    let entries: Vec<Option<(usize, Vec<String>)>> = records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            let tree = trees[index]?;
+            if record.opaque {
+                return None;
+            }
+            Some((tree, chi_tokens(&record.path)?))
+        })
+        .collect();
+    precedence(&entries, false, kept);
+}
+
+/// The elements of an echo path: the static text, a parameter, and a wildcard. echo reads
+/// a colon after a backslash as text.
+fn echo_tokens(path: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut text = String::new();
+    let mut previous = ' ';
+    let mut characters = path.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == ':' && previous != '\\' {
+            if !text.is_empty() {
+                tokens.push(format!("s{}", std::mem::take(&mut text)));
+            }
+            tokens.push("p".to_string());
+            while characters.next_if(|next| *next != '/').is_some() {}
+            previous = ' ';
+        } else if character == '*' {
+            if !text.is_empty() {
+                tokens.push(format!("s{}", std::mem::take(&mut text)));
+            }
+            tokens.push("c".to_string());
+            return tokens;
+        } else {
+            text.push(character);
+            previous = character;
+        }
+    }
+    if !text.is_empty() {
+        tokens.push(format!("s{text}"));
+    }
+    tokens
+}
+
+/// echo tries the children of a node in the order static, parameter, and wildcard, and
+/// goes back when a child fails. A parameter at the end of a path takes the rest of the
+/// path. So a wildcard that has a parameter sibling gives no entry.
+fn echo_precedence(
+    records: &[Record],
+    drafts: &[Option<(Draft, Duplicate)>],
+    roots: &[Option<usize>],
+    kept: &mut [bool],
+) {
+    let entries: Vec<Option<(usize, Vec<String>)>> = records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            let root = roots[index]?;
+            if record.opaque {
+                return None;
+            }
+            let (draft, _) = drafts[index].as_ref()?;
+            let path = &draft.route.as_ref()?.path;
+            Some((root, echo_tokens(path)))
+        })
+        .collect();
+    precedence(&entries, true, kept);
+}
+
+/// One walk over the elements of the patterns of each tree. A pattern is a list of
+/// elements. Each element of kind 0, 1, or 2 is a regular expression, a parameter, or a
+/// catch-all.
+fn precedence(entries: &[Option<(usize, Vec<String>)>], echo: bool, kept: &mut [bool]) {
     let mut edges: HashMap<(usize, String), usize> = HashMap::new();
     let mut counts: Vec<[usize; 3]> = Vec::new();
     let mut roots: HashMap<usize, usize> = HashMap::new();
-    let mut walks: Vec<Vec<(usize, Option<usize>)>> = vec![Vec::new(); records.len()];
-    for (index, record) in records.iter().enumerate() {
-        let Some(tree) = trees[index] else {
+    let mut walks: Vec<Vec<(usize, Option<usize>)>> = vec![Vec::new(); entries.len()];
+    for (index, entry) in entries.iter().enumerate() {
+        let Some((tree, tokens)) = entry else {
             continue;
         };
-        if record.opaque {
-            continue;
-        }
-        let Some(tokens) = chi_tokens(&record.path) else {
-            continue;
-        };
+        let tree = *tree;
+        let tokens = tokens.clone();
         let root = *roots.entry(tree).or_insert_with(|| {
             counts.push([0; 3]);
             counts.len() - 1
@@ -4643,6 +4723,8 @@ fn chi_precedence(records: &[Record], trees: &[Option<usize>], kept: &mut [bool]
         for (node, kind) in walk {
             let siblings = counts[*node];
             let hidden = match kind {
+                Some(2) if echo => siblings[1] > 0,
+                _ if echo => false,
                 Some(0) => siblings[0] > 1,
                 Some(1) => siblings[0] > 0,
                 Some(2) => siblings[0] > 0 || siblings[1] > 0,

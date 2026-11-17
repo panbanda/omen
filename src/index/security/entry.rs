@@ -4572,6 +4572,39 @@ func routes() {
             ]
         );
     }
+    #[test]
+    fn an_echo_wildcard_that_has_a_parameter_sibling_gives_no_entry() {
+        let source = go_source(
+            &[ECHO],
+            r#"func routes() {
+	e := echo.New()
+	e.GET("/x/", list)
+	e.GET("/x/:id", show)
+	e.GET("/x/*", list)
+	e.GET("/y/*", list)
+	e.GET("/z/:id/w", show)
+	e.GET("/z/*", list)
+	g := e.Group("/g")
+	g.GET("/:id", show)
+	e.GET("/g/*", list)
+	e.GET("/h/:id", list)
+	e.GET("/h/new", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "echo GET /x/ [] list",
+                "echo GET /x/:id [] show",
+                "echo GET /y/* [] list",
+                "echo GET /z/:id/w [] show",
+                "echo GET /g/:id [] show",
+                "echo GET /h/:id [] list",
+                "echo GET /h/new [] show",
+            ]
+        );
+    }
 
     #[test]
     fn documented_gap_a_caller_in_another_file_that_registers_on_a_factory_result_gives_no_entry() {

@@ -328,8 +328,18 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   echo registration whose path omen cannot read hides all routes of its echo router. An
   echo route with a method that omen cannot read replaces the earlier routes of its path
   for every method, a custom method too, because echo stores each method separately.
+- echo tries the children of a node in the order static, parameter, and wildcard, and goes
+  back when a child fails. A parameter at the end of a path takes the rest of the path. So
+  an echo wildcard route gives no entry when its node has a parameter child. This rule is
+  over-careful for a parameter that has children, and it drops that wildcard too.
   gin and `net/http` panic on a second registration, and gin lets a static child and a
   parameter child coexist, so an unread registration hides nothing there.
+- In the gin tree of the pinned source, a static child and a parameter child coexist, and
+  the static child goes first. A catch-all and a parameter at the same node make gin panic,
+  and so does a catch-all that has a sibling that gin has already stored. A valid program
+  has no gin route that a sibling hides. In `net/http`, patterns that match the same
+  requests conflict and make `ServeMux` panic, so a valid program has no pattern that a
+  more specific pattern covers whole. Omen has no precedence check for them.
 - A name that the package declares hides a predeclared name or a qualifier. The package is
   the files of one directory that have the same package clause, so a declaration in
   another file of the package counts.
