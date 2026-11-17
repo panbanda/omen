@@ -89,6 +89,140 @@ surface" with the coverage statement, a matrix, a Sankey diagram, the entry
 points, and the choke points. A choke point is a symbol that each path to a
 sink goes through.
 
+## Rails routes
+
+Omen reads the routes in each file whose name ends with `routes.rb`. Each route is an
+entry point of the framework `rails`. Omen reads the syntax tree, not the text.
+
+| Form | Entry points |
+| --- | --- |
+| `get`, `post`, `put`, `patch`, `delete "/path", to: "c#a"` | One route. The forms `controller: "c", action: "a"` and `"/path" => "c#a"` also work. |
+| `match "/x", to: "c#a", via: [:get, :post]` | One route for each verb. `via: :all` gives the method `ANY`. |
+| `root "pages#home"` or `root to: "pages#home"` | `GET /`. |
+| `resources :users` | The seven routes of Rails, with `PATCH` and `PUT` for `update`. |
+| `resource :profile` | The routes of a singular resource: no `index` and no `:id`. The controller is `ProfilesController`. |
+| `only:` and `except:` | Limit the actions of a `resources` call or a `resource` call. |
+| Nested `resources` | The path `/users/:user_id/posts/:id`. |
+| `member do` and `collection do` | The paths `/users/:id/x` and `/users/x`. The option `on:` has the same effect. |
+| `namespace :admin do` | The path prefix `/admin`. The controller is `Admin::UsersController`. |
+| `scope "/api" do` and `scope module: "v1"` | A path prefix, and a module for the controller. |
+
+Omen reads these options and blocks, and it skips each other form. The table gives the audit of
+each form against the source of Rails 7.2.2.
+
+| Form | Result |
+| --- | --- |
+| `draw` on `Rails.application.routes` | Read. |
+| `draw` on `Name::Application.routes` or `Name::Engine.routes` | Read only when the repository defines `Name::Application < Rails::Application` or `Name::Engine < Rails::Engine`. |
+| `draw` on any other receiver | Skipped. |
+| `namespace :x` with `path:`, `module:`, `as:` | Read. |
+| `namespace` with any other option, such as `only:`, `except:`, `constraints:` | The block is skipped. |
+| `scope` with `path:`, `module:`, `controller:`, `as:`, `constraints:`, `defaults:` | Read. A second positional path is skipped. |
+| `scope` with any other option | The block is skipped. |
+| `controller :x do` | Read. |
+| `constraints do`, `defaults do` | Read. They change no path. |
+| Devise blocks, `concern`, loops, `each`, and any block that omen does not know | The block is skipped. |
+| `get`, `post`, `put`, `patch`, `delete` with a string path or a symbol path | Read, with the options `to`, `controller`, `action`, `on`, `as`, `constraints`, `defaults`, `anchor`, `format: false`, and a constraint with a regular expression. Any other option skips the route. |
+| `match` with `via:` | Read. A call without `via:` is skipped. |
+| `root` | Read. In a `resources` block the path is the collection path. In a `resource` block it is skipped. |
+| `resources` and `resource` with `only:`, `except:`, `path:`, `controller:`, `module:`, `as:`, `constraints:`, `defaults:`, `concerns:`, `format: false` | Read. The option `as:` gives the name for the nested parameter: `as: :articles` gives `:article_id`. Any other option, such as `param:` or `shallow:`, skips the call. |
+| `config.api_only = true` | Read for each route set. The body of the application class, a file in `config`, and `Rails.application.config` give the value for `Rails.application` and for the application class. The body of an engine class, and `Name::Engine.config`, give the value for the routes of that engine. Any other receiver gives a value that omen cannot attribute. With the value `true`, the `resources` and `resource` calls have no `new` and no `edit` route, unless `only:` lists them. A value that is not `true` or `false`, an assignment in a branch that omen cannot evaluate, and an assignment that omen cannot give to one route set, skip each `resources` and `resource` call. |
+| A string in double quotes or single quotes | Omen evaluates the string as Ruby does, before it escapes the path. The same evaluation reads the string of `inflect.acronym`. It models `\n \t \r \a \b \e \f \v \s`, the octal forms (the value is taken modulo 256, as Ruby does) and the `\x` forms, `\uXXXX`, `\u{...}`, and a backslash before another character. An interpolation, `\c`, `\C-`, `\M-`, a line continuation, and the forms `%q` and `%Q` skip the route. |
+| A route, a callback, an inflection call, or an `api_only` assignment under any node that omen does not model | Omen reads only statement lists, blocks of known calls, and conditions that it can evaluate. A route under an expression such as `false && get(...)`, an assignment, an argument, a `begin` block, or parentheses is skipped. A callback in such a place makes the guards of the class unknown. An inflection call or an `api_only` assignment in such a place makes the inflections or the value unreadable. |
+| The block of `inflections` | Each statement must be a call `param.method(literals)` of a method that changes the inflections, a comment, or a condition or a `case` that omen can evaluate with branches of the same kind. Any other statement, such as `binding`, `eval`, `send`, a definition, or a condition that omen cannot evaluate, makes the inflections unreadable. A stored result of `ActiveSupport::Inflector.inflections` makes them unreadable too. |
+| A controller string with an empty segment, a leading `/` only for the absolute form, or a character other than `a` to `z`, `0` to `9`, and `_` | The route has no symbol and no guard. Rails can build a class from such a string: `users/#show` gives `Users::Controller`. Omen does not model this, so it gives less than Rails does. The path stays. |
+| `ActiveSupport::Inflector.inflections` with a locale | Only the call with no argument, `:en`, or `"en"` counts, because the names of the controller classes use the default locale. A call with another literal locale is ignored. A call with a locale that is not a literal makes the inflections unreadable. |
+| `case` with a literal subject and literal `when` patterns | Omen keeps the branch that runs. A route in any other `case` is skipped. |
+| A repeated option, as `to: "a#b", to: "c#d"`, or a repeated hash-rocket key | The last value wins, as in Ruby. |
+| `member do`, `collection do`, `on: :member`, `on: :collection` | Read. A canonical action name, such as `get :show`, adds no path segment. `on: :new` is skipped. |
+| A route in a `scope` in a `resources` block | Read. The nested path follows the path of the scope: `/x/users/:user_id/y`. |
+| `concerns`, `draw(:file)`, `mount`, `devise_for`, `direct`, `resolve` | No route. |
+
+Omen gives the path as the mapper of Rails gives it. The mapper escapes the path as
+`URI::RFC2396_Parser#escape` does: each byte that is not a letter, a digit, or one of
+`-_.!~*'();/?:@&=+$,[]` becomes `%` and two upper case hexadecimal digits. Thus `%` becomes `%25`
+and a space becomes `%20`. Then `Journey::Router::Utils.normalize_path` and `Mapper.normalize_path`
+act: one leading `/`, no repeated `/`, and no trailing `/` except the root path. Omen does not
+report the optional `(.:format)` segment.
+
+Omen resolves the action to a symbol. The class must be in the same chain of modules as the
+route. For a route in `namespace :admin`, omen matches `Admin::UsersController`. It does not
+match `Other::UsersController`. A route without a module matches only a class that is in no
+module. If no class matches, the entry point has no symbol.
+
+A route matches only a public instance method. Rails does not run an action when the method is
+not public. If the nearest class that defines the method has it as `private` or `protected`,
+the route has no symbol and no guard. A `def self.x` method, a method in `class << self`, a method
+after `private` or `protected`, and a method that `private :x` or `private def x` hides are not
+public. In one file, the visibility calls run in the order of the source. If two files define
+one method, or a `private :x` call in one file names a method of another file, the order of the
+files is not known, and the route has no symbol and no guard. A `private`, `protected`, or
+`public` call for a method that the class inherits changes the action of the class. If a class
+calls `private :show`, the inherited `show` has no symbol and no guard. The same holds for a class with a
+definition in a block, or a visibility call that omen cannot read. If no class defines the
+method, a view can give the action, so the guards stay.
+
+A guard is a `before_action` callback of the action. Omen reads the symbols, `only:`, and
+`except:` of the call from the syntax tree. A `skip_before_action` call removes a guard for
+the actions that it lists. The guards of a superclass in the repository, such as
+`ApplicationController`, come first.
+
+Omen treats the openings of a class with one chain of modules and one name as one class. It reads
+the callbacks in the order of the files and then of the positions. If a superclass name belongs
+to two different classes, omen reads no guards from the superclass.
+
+A guard never claims more than omen can read. A `before_action` call gives no guard in two
+cases. The first case is an `if:` or `unless:` option. The second case is an `only:` or
+`except:` value that is not a literal list, as in `only: ACTIONS`.
+
+A `skip_before_action` call with `if:` or `unless:` removes the guard for the actions that it
+names. A `skip_before_action` call with a value that is not a literal list removes the guard
+for each action.
+
+A `before_action` call replaces an earlier callback with the same name, as Rails does. The
+replaced callback is gone for each action. If `ApplicationController` has `before_action :auth`
+and a child has `before_action :auth, only: :index`, then `auth` guards only `index`.
+
+A callback in a class body follows the same rule for dead branches as a route does. A callback in
+any other `if`, `unless`, or `case` is conditional. A callback in a block, such as `each do` or a
+lambda, is also conditional. It adds no guard. A `skip_before_action` call in it removes the guard
+for the actions that it names. Omen ignores a callback in a method.
+
+A `before_action` call with `prepend: true`, and a `prepend_before_action` call, put the callback
+at the front of the chain. If the `prepend:` value is not a literal, the callback adds no guard.
+
+A controller path with a leading `/`, such as `to: "/users#show"`, ignores the module of the
+`namespace`.
+
+Omen reports a route in any `if`, `unless`, or ternary, except in a branch that a literal condition
+makes dead: `if false`, `if nil`, `unless true`, and the `else` branch of `if true`. The condition
+can be true at run time, as `if Rails.env.development?` can be. A route in a `case` is reported
+only when the subject and each pattern are `true`, `false`, or `nil`. Omen skips a route in any
+other `case`. Omen skips a route
+in a method, a lambda, a loop, a class body, and outside a `draw` block.
+
+A nested route needs the singular name of the parent resource. Omen uses the default
+inflections of Rails 7.2.2. For `categories`, the parameter is `:category_id`. For `jeans`,
+the word is uncountable, and the parameter is `:jeans_id`. A `resource` call uses the plural
+of its name for the controller: `resource :wife` gives `WivesController`. Omen uses the plural
+rules of Rails 7.2.2 with their irregular words and uncountable words.
+
+An application can change the inflections. Omen checks the files in `config/initializers`
+and the files with `inflect` in the name. If one of them calls `irregular`, `uncountable`,
+`clear`, `inflect.singular`, or `inflect.plural`, omen skips the nested routes. It also gives no
+controller for a `resource` call. The `member` routes and the `collection` routes stay. Comments
+do not change the inflections. Omen does not find a change in a different file.
+
+Omen reads a literal `inflect.acronym "API"` call in the same files. The receiver must be the
+parameter of the block of `ActiveSupport::Inflector.inflections`, or the result of that call. The
+constant must be exactly `ActiveSupport::Inflector`, with or without a leading `::`. If the
+repository defines a module or a class with that name, omen does not trust it, and the class
+names are not known. A call on another receiver has no effect. It builds the class name as
+`camelize` of ActiveSupport does, so `api/users` gives `API::UsersController`. A call in a dead
+branch has no effect. A call in any other `if`, `case`, loop, method, or block, except the block of
+`inflections`, makes the inflections unreadable. If an `acronym` argument is not a string, or the
+files call `clear`, omen does not know the class names. Then no route has a symbol or a guard.
+
 ## Limits
 
 - Omen does not follow data. A path is a chain of calls that the index resolves.

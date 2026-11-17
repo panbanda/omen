@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "language": "ruby",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Ruby. The case needs the Rails framework that it does not include. The harness does not run the code. The labels follow the routing guide of Rails.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "root", "file": "config/routes.rb", "line": 2, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/", "parameters": [], "guards": []},
+    {"label": "users_show", "file": "config/routes.rb", "line": 3, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/users/:id", "parameters": ["id"], "guards": []},
+    {"label": "users_update_patch", "file": "config/routes.rb", "line": 3, "kind": "http_handler", "framework": "rails", "method": "PATCH", "path": "/users/:id", "parameters": ["id"], "guards": ["require_login", "authorize_owner"]},
+    {"label": "users_update_put", "file": "config/routes.rb", "line": 3, "kind": "http_handler", "framework": "rails", "method": "PUT", "path": "/users/:id", "parameters": ["id"], "guards": ["require_login", "authorize_owner"]},
+    {"label": "profile_show", "file": "config/routes.rb", "line": 4, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/profile", "parameters": [], "guards": ["require_login"]},
+    {"label": "admin_reports_index", "file": "config/routes.rb", "line": 6, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/admin/reports", "parameters": [], "guards": ["require_login", "require_admin"]},
+    {"label": "admin_reports_download", "file": "config/routes.rb", "line": 8, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/admin/reports/:id/download", "parameters": ["id"], "guards": ["require_login"]},
+    {"label": "api_status", "file": "config/routes.rb", "line": 13, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/api/status", "parameters": [], "guards": []},
+    {"label": "hook_get", "file": "config/routes.rb", "line": 15, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/hook", "parameters": [], "guards": []},
+    {"label": "hook_post", "file": "config/routes.rb", "line": 15, "kind": "http_handler", "framework": "rails", "method": "POST", "path": "/hook", "parameters": [], "guards": []},
+    {"label": "legacy", "file": "config/routes.rb", "line": 16, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/legacy", "parameters": [], "guards": ["require_login"]}
+  ]
+}
