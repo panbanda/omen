@@ -547,6 +547,84 @@ impl<'a> Context<'a> {
         )
     }
 
+    /// The patterns of the file with a final `{name...}` that have a sibling `{$}` and a sibling
+    /// `{name}` at the same prefix. Together the siblings can take each request of the pattern,
+    /// so the pattern gives no entry. Omen ignores the methods and the hosts here.
+    pub(super) fn go_covered_patterns(&self) -> &HashSet<String> {
+        self.go_covered.get_or_init(|| {
+            let mut paths: HashSet<String> = HashSet::new();
+            let mut pending = vec![self.parsed.root_node()];
+            while let Some(node) = pending.pop() {
+                let mut cursor = node.walk();
+                pending.extend(node.named_children(&mut cursor));
+                if node.kind() != "call_expression" {
+                    continue;
+                }
+                let Some(function) = node
+                    .child_by_field_name("function")
+                    .filter(|function| function.kind() == "selector_expression")
+                else {
+                    continue;
+                };
+                let (Some(field), Some(receiver)) = (
+                    function.child_by_field_name("field"),
+                    function.child_by_field_name("operand"),
+                ) else {
+                    continue;
+                };
+                if !matches!(self.text(field), "HandleFunc" | "Handle")
+                    || !self.imports("net.http")
+                    || !self.is_go_http_receiver(receiver)
+                {
+                    continue;
+                }
+                let Some(first) = Self::arguments_of(node).first().copied() else {
+                    continue;
+                };
+                if let Some((_, path)) = self
+                    .go_string(first)
+                    .and_then(|pattern| servemux_pattern(&pattern))
+                {
+                    paths.insert(path);
+                }
+            }
+            let is_single = |segment: &str| {
+                segment.starts_with('{')
+                    && segment.ends_with('}')
+                    && !segment.ends_with("...}")
+                    && segment != "{$}"
+            };
+            let singles: HashSet<&str> = paths
+                .iter()
+                .filter_map(|other| other.rsplit_once('/'))
+                .filter(|(_, tail)| is_single(tail))
+                .map(|(head, _)| head)
+                .collect();
+            paths
+                .iter()
+                .filter(|path| {
+                    let Some((prefix, last)) = path.rsplit_once('/') else {
+                        return false;
+                    };
+                    last.starts_with('{')
+                        && last.ends_with("...}")
+                        && singles.contains(prefix)
+                        && paths.contains(&format!("{prefix}/{{$}}"))
+                })
+                .cloned()
+                .collect()
+        })
+    }
+
+    /// Tells if a reference anywhere in the repository names the function.
+    fn go_function_referenced(&self, key: &str) -> bool {
+        self.all_parsed
+            .shared()
+            .go_call_sites
+            .get_or_init(|| CallSites::build(self.all, self.all_parsed))
+            .is_referenced(key)
+    }
+
     /// Tells if a call anywhere in the repository attaches the result of the function, or
     /// uses it in a way that the walk cannot classify. The analysis computes the facts
     /// one time for all files.
@@ -1718,6 +1796,8 @@ const ROUTER_METHODS: [&str; 52] = [
 pub(super) struct CallSites {
     /// The keys of the symbols of the factories.
     blocked: HashSet<String>,
+    /// The keys of the functions that a reference names anywhere in the repository.
+    referenced: HashSet<String>,
 }
 
 impl CallSites {
@@ -1725,10 +1805,21 @@ impl CallSites {
         self.blocked.contains(key)
     }
 
+    pub(super) fn is_referenced(&self, key: &str) -> bool {
+        self.referenced.contains(key)
+    }
+
     /// The facts for all Go files. The walk of each file that imports a framework finds the
     /// factories. Then one pass over the references and one pass over the syntax of each file
     /// classify each use of a factory.
     pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> Self {
+        let referenced: HashSet<String> = files
+            .iter()
+            .filter(|file| file.language == Language::Go)
+            .flat_map(|file| &file.references)
+            .flat_map(|reference| reference.resolution.candidates.iter())
+            .map(|key| key.to_string())
+            .collect();
         let mut factories: HashSet<String> = HashSet::new();
         let mut wrappers: HashSet<String> = HashSet::new();
         let mut raw_wrapper_types: Vec<(String, String)> = Vec::new();
@@ -1781,7 +1872,10 @@ impl CallSites {
             }
         }
         if factories.is_empty() {
-            return Self { blocked };
+            return Self {
+                blocked,
+                referenced,
+            };
         }
         // A wrapper type can define a method that hides a method of the router, or that
         // serves the requests in another way. Then its values are not routers.
@@ -1869,7 +1963,10 @@ impl CallSites {
                 blocked.extend(keys.iter().map(|key| key.to_string()));
             }
         }
-        Self { blocked }
+        Self {
+            blocked,
+            referenced,
+        }
     }
 
     /// The keys of the factories that a name in the file mentions without a call. A function
@@ -2220,6 +2317,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             prefix_next: false,
             omit_next: false,
             dry,
+            function_key: None,
             factory_keys: Vec::new(),
         })
     }
@@ -2263,6 +2361,8 @@ struct Routes<'c, 'a, 't> {
     omit_next: bool,
     /// The walk only finds the factories. It does not read the calls of the repository.
     dry: bool,
+    /// The key of the function that the walk reads.
+    function_key: Option<String>,
     factory_keys: Vec<(String, Option<String>)>,
 }
 
@@ -2431,6 +2531,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             }
             self.in_progress.insert(name.to_string());
         }
+        let saved_key = std::mem::replace(
+            &mut self.function_key,
+            node.child_by_field_name("name")
+                .and_then(|name| self.context.symbol_at(name)),
+        );
         let globals = self.scopes[0].clone();
         let saved = std::mem::replace(&mut self.scopes, vec![globals, HashMap::new()]);
         self.owners += 1;
@@ -2452,6 +2557,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         if let Some(body) = node.child_by_field_name("body") {
             self.visit(body);
         }
+        self.function_key = saved_key;
         let frame = self.frames.pop();
         if let Some(name) = declared {
             self.in_progress.remove(name);
@@ -2753,7 +2859,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             pure: true,
             created: Vec::new(),
         });
+        let before = self.routers.len();
         self.bind_parameters(literal.child_by_field_name("parameters"), bound);
+        if bound.is_none() {
+            for router in before..self.routers.len() {
+                self.routers[router].partial = true;
+            }
+        }
         if let Some(body) = literal.child_by_field_name("body") {
             self.visit(body);
         }
@@ -2808,7 +2920,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         }
         let router = self.make_root(framework);
         self.routers[router].external = true;
-        if !framework.is_root_type(name) {
+        // A caller can pass its router, and then the function registers on it.
+        let called = !self.dry
+            && self
+                .function_key
+                .as_deref()
+                .is_some_and(|key| self.context.go_function_referenced(key));
+        if !framework.is_root_type(name) || called {
             self.routers[router].partial = true;
             self.routers[router].mountable = false;
         }
@@ -3178,6 +3296,73 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             .collect()
     }
 
+    /// Tells if the call is `Router().Add` of an echo value. It registers a route that omen
+    /// cannot read, and the call is then an unread registration of the echo router.
+    fn is_router_add(&mut self, function: Node<'t>) -> bool {
+        let (Some(field), Some(operand)) = (
+            function.child_by_field_name("field"),
+            function.child_by_field_name("operand"),
+        ) else {
+            return false;
+        };
+        if self.text(field) != "Add" || operand.kind() != "call_expression" {
+            return false;
+        }
+        let Some(inner) = operand
+            .child_by_field_name("function")
+            .filter(|inner| inner.kind() == "selector_expression")
+        else {
+            return false;
+        };
+        let (Some(name), Some(base)) = (
+            inner.child_by_field_name("field"),
+            inner.child_by_field_name("operand"),
+        ) else {
+            return false;
+        };
+        if !matches!(self.text(name), "Router" | "Routers") {
+            return false;
+        }
+        match self.eval(base) {
+            Some(router) if self.routers[router].framework == Framework::Echo => {
+                self.push_opaque(router, Span::of(&operand));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// A router that a call that is not a framework call or a server gets can get routes
+    /// that omen does not read. Such a call is a registration that omen cannot read, at
+    /// this place.
+    fn escape_to_call(&mut self, node: Node<'t>, function: Node<'t>) {
+        if self.is_root_sink(node) {
+            return;
+        }
+        if self.is_router_add(function) {
+            return;
+        }
+        if function.kind() == "selector_expression" {
+            let Some(field) = function.child_by_field_name("field") else {
+                return;
+            };
+            if matches!(self.text(field), "Handle" | "HandleFunc") {
+                return;
+            }
+        }
+        for argument in Context::arguments_of(node) {
+            if !matches!(
+                argument.kind(),
+                "identifier" | "call_expression" | "parenthesized_expression"
+            ) {
+                continue;
+            }
+            if let Some(router) = self.eval(argument) {
+                self.push_opaque(router, Span::of(&node));
+            }
+        }
+    }
+
     fn call(&mut self, node: Node<'t>) {
         if !self.is_root_sink(node) {
             for argument in Context::arguments_of(node) {
@@ -3188,6 +3373,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return;
         };
         if function.kind() != "selector_expression" {
+            self.escape_to_call(node, function);
             return;
         }
         let (Some(field), Some(operand)) = (
@@ -3201,6 +3387,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return;
         }
         let Some(router) = self.eval(operand) else {
+            self.escape_to_call(node, function);
             return;
         };
         let arguments = Context::arguments_of(node);
@@ -3641,6 +3828,27 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             name,
             "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS" | "CONNECT" | "TRACE"
         );
+        // These calls register a GET route for a file, or for the files below a prefix. Omen
+        // does not read their handler, but they replace a route of the same path.
+        if matches!(name, "File" | "FileFS" | "Static" | "StaticFS") {
+            let suffix = if name.starts_with("Static") { "*" } else { "" };
+            let Some(path) = arguments
+                .first()
+                .and_then(|path| self.string_argument(*path))
+            else {
+                return self.push_opaque(router, range);
+            };
+            self.omit_next = true;
+            self.register(
+                router,
+                &["GET"],
+                &format!("{path}{suffix}"),
+                None,
+                &[],
+                range,
+            );
+            return;
+        }
         // A method that omen cannot read can be any method, a custom method too, so the route
         // replaces the routes of its path for each method. Omen omits its entry.
         let (methods, rest, unread): (Vec<String>, &[Node<'t>], bool) = match (name, arguments) {
@@ -3651,6 +3859,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 None => (vec![UNREAD_METHOD.to_string()], rest, true),
             },
             ("Add", [method, rest @ ..]) => match self.string_argument(*method) {
+                // echo keeps this method as the handler for a path that has no route.
+                Some(method) if method == "echo_route_not_found" => return,
                 Some(method) => (vec![method], rest, false),
                 None => (vec![UNREAD_METHOD.to_string()], rest, true),
             },
@@ -3662,9 +3872,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let Some(path) = self.string_argument(*path) else {
             return self.push_opaque(router, range);
         };
+        // echo stores a route that has `*` in the middle of its path on the node of the `*`.
+        let (path, cut) = echo_cut_at_star(&path);
         let methods: Vec<&str> = methods.iter().map(String::as_str).collect();
-        self.omit_next = unread;
-        self.register(router, &methods, &path, Some(*handler), &rest[2..], range);
+        self.omit_next = unread || cut;
+        self.register(router, &methods, path, Some(*handler), &rest[2..], range);
     }
 
     /// Joins a router that the file makes to the router that mounts it. A router can have
@@ -4615,6 +4827,24 @@ fn chi_precedence(records: &[Record], trees: &[Option<usize>], kept: &mut [bool]
         })
         .collect();
     precedence(&entries, false, kept);
+}
+
+/// The path of an echo route up to its first wildcard, and if text follows the wildcard. The
+/// router stores such a route on the node of the wildcard. A colon after a backslash is text.
+fn echo_cut_at_star(path: &str) -> (&str, bool) {
+    let mut previous = ' ';
+    let mut in_parameter = false;
+    for (index, character) in path.char_indices() {
+        if in_parameter {
+            in_parameter = character != '/';
+        } else if character == ':' && previous != '\\' {
+            in_parameter = true;
+        } else if character == '*' {
+            return (&path[..=index], index + 1 != path.len());
+        }
+        previous = character;
+    }
+    (path, false)
 }
 
 /// The elements of an echo path: the static text, a parameter, and a wildcard. echo reads

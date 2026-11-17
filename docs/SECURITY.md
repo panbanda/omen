@@ -338,8 +338,23 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   the static child goes first. A catch-all and a parameter at the same node make gin panic,
   and so does a catch-all that has a sibling that gin has already stored. A valid program
   has no gin route that a sibling hides. In `net/http`, patterns that match the same
-  requests conflict and make `ServeMux` panic, so a valid program has no pattern that a
-  more specific pattern covers whole. Omen has no precedence check for them.
+  requests conflict and make `ServeMux` panic, so one more specific pattern does not cover
+  a pattern whole. A set of more specific patterns can cover it, as `/x/{$}`, `/x/{a}`, and
+  `/x/{a}/{b...}` cover `/x/{a...}`. Omen checks only one case: a final `{name...}` that
+  has a sibling `{$}` and a sibling `{name}` in the same file gives no entry. It ignores
+  methods and hosts for this check, and it does not check other sets.
+- A router that a call gets, other than a framework call or a server, can get routes that
+  omen does not read. That call is an unread registration at its place, for chi, echo, and
+  gorilla/mux. A function that has a root router as a parameter, as `*echo.Echo`, and that
+  a reference names anywhere in the repository gives no entry, and so does a function
+  literal that has a router parameter. A function that nothing references keeps its entries.
+  `Handle`, `HandleFunc`, and the servers of `net/http` do not count as such a call.
+- echo `File`, `FileFS`, `Static`, and `StaticFS` register a GET route for the path, or for
+  the prefix and `*`. Omen omits the entry, because it has no handler, and the route
+  replaces a route of the same path. A call of `Router().Add` is an unread registration of
+  the echo router. A `*` in the middle of an echo path stores the route on the node of the
+  `*`, so omen reads the path up to the `*` and omits the entry. The method
+  `echo_route_not_found` is not a route, and omen ignores it.
 - A name that the package declares hides a predeclared name or a qualifier. The package is
   the files of one directory that have the same package clause, so a declaration in
   another file of the package counts.

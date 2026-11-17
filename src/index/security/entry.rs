@@ -492,6 +492,8 @@ struct Context<'a> {
     go_locals: std::sync::OnceLock<GoLocals>,
     /// The names of the variables that hold a `net/http` multiplexer, in a Go file.
     go_servemuxes: std::sync::OnceLock<std::collections::HashSet<String>>,
+    /// The `net/http` patterns of a Go file that other patterns of the file can cover.
+    go_covered: std::sync::OnceLock<std::collections::HashSet<String>>,
     /// The names that the package of a Go file declares at the top level.
     go_declared: std::sync::OnceLock<std::sync::Arc<std::collections::HashSet<String>>>,
 }
@@ -552,6 +554,7 @@ impl<'a> Context<'a> {
             callables_here,
             go_locals: std::sync::OnceLock::new(),
             go_servemuxes: std::sync::OnceLock::new(),
+            go_covered: std::sync::OnceLock::new(),
             go_declared: std::sync::OnceLock::new(),
         }
     }
@@ -1507,6 +1510,9 @@ impl<'a> Context<'a> {
         else {
             return;
         };
+        if self.go_covered_patterns().contains(&path) {
+            return;
+        }
         let wrapped = self.go_handler(*handler, go_routes::HandlerKind::Http);
         out.push(Draft {
             range: Span::of(&node),
@@ -4596,6 +4602,115 @@ func routes() {
                 "echo GET /h/:id [] list",
                 "echo GET /h/new [] show",
             ]
+        );
+    }
+
+    #[test]
+    fn a_router_that_a_call_gets_can_get_routes_that_omen_does_not_read() {
+        let source = go_source(
+            &[ECHO, CHI, MUX],
+            r#"func api(e *echo.Echo) { e.GET("/x", list) }
+func unused(e *echo.Echo) { e.GET("/u", list) }
+func chiApi(r chi.Router) { r.Get("/x", list) }
+func muxApi(r *mux.Router) { r.HandleFunc("/x", list) }
+
+func routes() {
+	e := echo.New()
+	e.GET("/x", show)
+	api(e)
+
+	r := chi.NewRouter()
+	r.Get("/x", show)
+	chiApi(r)
+
+	add := func(r chi.Router) { r.Get("/c", list) }
+	s := chi.NewRouter()
+	s.Get("/s", show)
+	add(s)
+
+	m := mux.NewRouter()
+	m.HandleFunc("/before", show)
+	muxApi(m)
+	m.HandleFunc("/x", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["echo GET /u [] list", "gorilla/mux ANY /before [] show"]
+        );
+    }
+
+    #[test]
+    fn echo_file_and_static_calls_replace_the_routes_of_their_paths() {
+        let source = go_source(
+            &[ECHO],
+            r#"func routes(h echo.HandlerFunc) {
+	e := echo.New()
+	e.GET("/robots.txt", show)
+	e.File("/robots.txt", "public/robots.txt")
+	e.GET("/assets/*", show)
+	e.Static("/assets/", "public")
+	g := e.Group("/g")
+	g.GET("/f", show)
+	g.File("/f", "x")
+	e.GET("/ok", list)
+	f := echo.New()
+	f.GET("/a", show)
+	f.Router().Add("GET", "/a", h)
+}
+"#,
+        );
+        assert_eq!(go_routes(&[("main.go", &source)]), ["echo GET /ok [] list"]);
+    }
+
+    #[test]
+    fn an_echo_wildcard_in_the_middle_of_a_path_takes_the_node_of_the_wildcard() {
+        let source = go_source(
+            &[ECHO],
+            r#"func routes() {
+	e := echo.New()
+	e.GET("/x/*", list)
+	e.GET("/x/*/y", show)
+	e.GET("/z/*/y", show)
+	e.GET("/z/*", list)
+	e.GET("/f", show)
+	e.Add("echo_route_not_found", "/f", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["echo GET /z/* [] list", "echo GET /f [] show"]
+        );
+    }
+
+    #[test]
+    fn a_net_http_pattern_that_other_patterns_of_the_file_cover_gives_no_entry() {
+        let source = go_source(
+            &["\"net/http\""],
+            r#"func routes() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/x/{a...}", list)
+	mux.HandleFunc("/x/{$}", show)
+	mux.HandleFunc("/x/{a}", show)
+	mux.HandleFunc("/y/{a...}", list)
+	mux.HandleFunc("/y/{$}", show)
+}
+"#,
+        );
+        let found = go_routes(&[("main.go", &source)]);
+        assert!(
+            !found.iter().any(|line| line.ends_with("/x/{a...} [] list")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|line| line.ends_with("/y/{a...} [] list")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|line| line.ends_with("/x/{a} [] show")),
+            "{found:?}"
         );
     }
 
