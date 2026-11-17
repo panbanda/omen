@@ -66,7 +66,7 @@ const HARMLESS_OPTIONS: [&str; 3] = ["constraints", "defaults", "concerns"];
 pub(super) struct Scope {
     /// The path of the blocks, as `@scope[:path]` of Rails. `None` means that the path is not
     /// known.
-    prefix: Option<String>,
+    prefix: Option<Prefix>,
     modules: Vec<String>,
     controller: Option<String>,
     /// The resource, when the route is directly in a `resources` or `resource` block.
@@ -83,7 +83,7 @@ pub(super) struct Scope {
 impl Scope {
     /// The path of a route in a block of `resources`: the path of the blocks, and the nested path of
     /// the resource.
-    fn nested_prefix(&self) -> Option<String> {
+    fn nested_prefix(&self) -> Option<Prefix> {
         match &self.resource {
             Some(context) => join(&self.prefix, context.nested.as_ref()?),
             None => self.prefix.clone(),
@@ -500,18 +500,79 @@ fn escape_route_path(path: &str) -> String {
 
 /// The path of a route, as `add_route` of the mapper gives it: the path of the blocks, a `/`, and
 /// the path of the route, escaped and then normalized.
-fn route_path(base: &str, part: &str) -> String {
-    normalize_path(&escape_route_path(&format!("{base}/{part}")))
+fn route_path(base: &Prefix, part: &str) -> String {
+    normalize_path(&escape_route_path(&format!("{}/{part}", base.text())))
 }
 
-/// The path of a part of a path after a prefix, as `merge_path_scope` of Rails does. A prefix that
-/// is not known gives no path.
-fn join(prefix: &Option<String>, part: &str) -> Option<String> {
-    join_str(prefix.as_ref()?, part)
+/// The normalized path of the blocks around a route, as a chain of segments. A new segment does
+/// not copy the earlier segments, so a deep nesting of blocks takes a time in proportion to its
+/// depth. `None` is the root path `/`.
+#[derive(Clone)]
+pub(super) struct Prefix(Option<Rc<PrefixNode>>);
+
+struct PrefixNode {
+    parent: Option<Rc<PrefixNode>>,
+    /// The segment without a `/` at its start or its end, and with upper case percent codes.
+    segment: String,
+    /// This segment, or one before it, has a parenthesis. Rails rewrites the optional segments
+    /// over the whole path, so a later segment takes the full normalization.
+    parens: bool,
 }
 
-fn join_str(prefix: &str, part: &str) -> Option<String> {
-    Some(normalize_path(&format!("{prefix}/{part}")))
+impl Prefix {
+    fn root() -> Self {
+        Self(None)
+    }
+
+    fn parens(&self) -> bool {
+        self.0.as_ref().is_some_and(|node| node.parens)
+    }
+
+    /// The text of the path: a `/`, and the segments with a `/` between them.
+    fn text(&self) -> String {
+        let mut segments: Vec<&str> = Vec::new();
+        let mut node = self.0.as_deref();
+        while let Some(current) = node {
+            segments.push(current.segment.as_str());
+            node = current.parent.as_deref();
+        }
+        segments.reverse();
+        format!("/{}", segments.join("/"))
+    }
+
+    fn from_text(text: &str) -> Self {
+        let segment = text.trim_start_matches('/');
+        if segment.is_empty() {
+            return Self::root();
+        }
+        Self(Some(Rc::new(PrefixNode {
+            parent: None,
+            segment: segment.to_string(),
+            parens: segment.contains(['(', ')']),
+        })))
+    }
+
+    /// The prefix after this prefix and a part of a path, as `merge_path_scope` of Rails gives it.
+    fn push(&self, part: &str) -> Self {
+        if self.parens() || part.contains(['(', ')']) {
+            return Self::from_text(&normalize_path(&format!("{}/{part}", self.text())));
+        }
+        let segment = normalize_path(part);
+        let segment = segment.trim_matches('/');
+        if segment.is_empty() {
+            return self.clone();
+        }
+        Self(Some(Rc::new(PrefixNode {
+            parent: self.0.clone(),
+            segment: segment.to_string(),
+            parens: false,
+        })))
+    }
+}
+
+/// The prefix after a prefix and a part of a path. A prefix that is not known gives no prefix.
+fn join(prefix: &Option<Prefix>, part: &str) -> Option<Prefix> {
+    prefix.as_ref().map(|prefix| prefix.push(part))
 }
 
 impl<'a> Context<'a> {
@@ -626,7 +687,7 @@ impl<'a> Context<'a> {
         let mut scope: Option<Rc<Scope>> = loop {
             let Some(above) = current else {
                 break Some(Rc::new(Scope {
-                    prefix: Some(String::from("/")),
+                    prefix: Some(Prefix::root()),
                     ..Scope::default()
                 }));
             };
@@ -2251,8 +2312,7 @@ impl Program {
             pending.push(above);
             layer = above.parent.as_deref();
         }
-        let count = pending.len();
-        for (position, layer) in pending.iter().rev().enumerate() {
+        for layer in pending.iter().rev() {
             if !layer.callbacks.is_empty() {
                 let mut working = ActiveGuards::new(&current);
                 for callback in &layer.callbacks {
@@ -2261,9 +2321,6 @@ impl Program {
                 let next = working.into_vec();
                 if next != *current {
                     current = Arc::new(next);
-                    if position + 1 < count {
-                        continue;
-                    }
                 }
             }
             layer
@@ -2584,6 +2641,55 @@ fn is_inflector_constant(text: &str) -> bool {
     text.trim().trim_start_matches("::") == "ActiveSupport::Inflector"
 }
 
+/// Tells if the node is a call of `ActiveSupport::Inflector.inflections`.
+fn is_inflections_call(node: Node<'_>, source: &[u8]) -> bool {
+    node.kind() == "call"
+        && node
+            .child_by_field_name("method")
+            .is_some_and(|method| super::syntax::text(method, source) == "inflections")
+        && node
+            .child_by_field_name("receiver")
+            .is_some_and(|receiver| is_inflector_constant(super::syntax::text(receiver, source)))
+}
+
+/// The locale of a call of `inflections`.
+enum Locale {
+    /// No argument, `:en`, or `"en"`: the locale that the names of the classes use.
+    English,
+    /// Another symbol or string.
+    Other,
+    /// An argument that omen cannot read.
+    Unknown,
+}
+
+fn inflections_locale(call: Node<'_>, source: &[u8]) -> Locale {
+    let mut cursor = call.walk();
+    let arguments: Vec<Node<'_>> = call
+        .child_by_field_name("arguments")
+        .map(|list| list.named_children(&mut cursor).collect())
+        .unwrap_or_default();
+    match arguments.as_slice() {
+        [] => Locale::English,
+        [one] => {
+            let name = match one.kind() {
+                "simple_symbol" => Some(
+                    super::syntax::text(*one, source)
+                        .trim_start_matches(':')
+                        .to_string(),
+                ),
+                "string" => evaluate_string(*one, source),
+                _ => None,
+            };
+            match name.as_deref() {
+                Some("en") => Locale::English,
+                Some(_) => Locale::Other,
+                None => Locale::Unknown,
+            }
+        }
+        _ => Locale::Unknown,
+    }
+}
+
 /// Tells if the node is the object of the inflections: a block parameter of
 /// `ActiveSupport::Inflector.inflections`, or the call `ActiveSupport::Inflector.inflections`.
 fn is_inflection_object(node: Node<'_>, source: &[u8], params: &[String]) -> bool {
@@ -2871,6 +2977,19 @@ fn read_inflection_calls(
                 && receiver.is_some_and(|receiver| {
                     is_inflector_constant(super::syntax::text(receiver, source))
                 });
+            let governing = if opens_inflections {
+                Some(node)
+            } else {
+                receiver.filter(|receiver| is_inflections_call(*receiver, source))
+            };
+            match governing.map(|call| inflections_locale(call, source)) {
+                Some(Locale::Other) => return,
+                Some(Locale::Unknown) => {
+                    unreadable(out);
+                    return;
+                }
+                _ => {}
+            }
             let mut block_params: Vec<String> = params.to_vec();
             if opens_inflections {
                 let names = block_parameter_names(node, source);

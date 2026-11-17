@@ -3883,6 +3883,109 @@ mod tests {
     }
 
     #[test]
+    fn only_the_default_locale_of_the_inflections_gives_class_names() {
+        let routes =
+            "Rails.application.routes.draw do\n  get \"/u\", to: \"api/users#show\"\nend\n";
+        let upper = "module API\n  class UsersController\n    before_action :upper\n    def show; end\n  end\nend\n";
+        let lower = "module Api\n  class UsersController\n    before_action :lower\n    def show; end\n  end\nend\n";
+        let guards_of = |source: &str| {
+            rails_routes(
+                routes,
+                &[
+                    ("controllers/upper.rb", upper),
+                    ("controllers/lower.rb", lower),
+                    ("config/initializers/inflections.rb", source),
+                ],
+            )
+            .remove(0)
+        };
+        let other = "ActiveSupport::Inflector.inflections(:es) do |i|\n  i.acronym \"API\"\nend\n";
+        assert_eq!(guards_of(other).guards, ["lower"]);
+        let chained = "ActiveSupport::Inflector.inflections(:es).acronym \"API\"\n";
+        assert_eq!(guards_of(chained).guards, ["lower"]);
+        for locale in ["", "(:en)", "(\"en\")"] {
+            let source = format!(
+                "ActiveSupport::Inflector.inflections{locale} do |i|\n  i.acronym \"API\"\nend\n"
+            );
+            assert_eq!(guards_of(&source).guards, ["upper"], "{locale}");
+        }
+        let unknown =
+            "ActiveSupport::Inflector.inflections(LOCALE) do |i|\n  i.acronym \"API\"\nend\n";
+        assert_eq!(guards_of(unknown).symbol, None);
+    }
+
+    fn an_alternating_chain_resolves_in_linear_time_at(depth: usize) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut classes = String::new();
+        for number in (0..depth).rev() {
+            routes.push_str(&format!("  get \"/r{number}\", to: \"c{number}#show\"\n"));
+        }
+        for number in 0..depth {
+            let parent = if number == 0 {
+                String::new()
+            } else {
+                format!(" < C{}Controller", number - 1)
+            };
+            let name = if number % 2 == 0 { "a" } else { "b" };
+            classes.push_str(&format!(
+                "class C{number}Controller{parent}\n  before_action :{name}, only: :show\n  def show; end\nend\n"
+            ));
+        }
+        routes.push_str("end\n");
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), depth);
+        assert!(found.iter().all(|entry| entry.guards.len() <= 2));
+        elapsed
+    }
+
+    #[test]
+    fn an_alternating_chain_gives_at_most_two_guards() {
+        an_alternating_chain_resolves_in_linear_time_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_an_alternating_chain_resolves_in_linear_time() {
+        let elapsed = an_alternating_chain_resolves_in_linear_time_at(10_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    fn nested_scopes_resolve_in_linear_time_at(depth: usize) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        for _ in 0..depth {
+            routes.push_str("scope \"/a\" do\n");
+        }
+        routes.push_str("get \"/x\", to: \"a#b\"\n");
+        for _ in 0..depth {
+            routes.push_str("end\n");
+        }
+        routes.push_str("end\n");
+        let files = [("config/routes.rb", routes.as_str())];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), 1);
+        let path = &found[0].route.as_ref().unwrap().path;
+        assert_eq!(path.len(), 2 * depth + 2);
+        assert!(path.ends_with("/a/x"));
+        elapsed
+    }
+
+    #[test]
+    fn nested_scopes_give_the_whole_path() {
+        nested_scopes_resolve_in_linear_time_at(30);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_scopes_resolve_in_linear_time() {
+        let elapsed = nested_scopes_resolve_in_linear_time_at(2_000);
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    #[test]
     fn a_literal_case_keeps_only_the_branch_that_runs() {
         let routes = "Rails.application.routes.draw do\n  case false\n  when true\n    get \"/ghost\", to: \"a#b\"\n  when false\n    get \"/live\", to: \"a#b\"\n  else\n    get \"/else\", to: \"a#b\"\n  end\n  case nil\n  when true, false\n    get \"/ghost_two\", to: \"a#b\"\n  else\n    get \"/else_two\", to: \"a#b\"\n  end\n  case name\n  when :x\n    get \"/unknown\", to: \"a#b\"\n  end\n  case true\n  when name\n    get \"/pattern\", to: \"a#b\"\n  end\nend\n";
         let found = rails_routes(routes, &[]);
