@@ -267,15 +267,19 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   that omen cannot classify.
 - A caller can add middleware to the result of a factory with `Use` or `Pre`. This
   changes the guards of the routes of the factory. Such a call is a use of the second
-  kind. A call of a method that registers a route, makes a group, or serves the router
-  is not. This rule holds only when the factory returns the router of the framework.
+  kind. A call of a method that serves the router is not. A call that registers a route
+  or makes a group on the result is a use of the second kind too, because the route can
+  replace a route of the factory or hide it. The factory and the caller give no entry
+  for these routes. A factory without routes of its own still gives the entries of the
+  caller. This rule holds only when the factory returns the router of the framework.
 - A factory can return a literal that holds a router, as `&Server{Mux: router}`. The
   type of the literal can define a method that hides a method of the router. Thus each
   use of the result that is not serving is a use of the second kind.
 - A handler name in a Go file has a package. A name with a qualifier, as `dep.Show`,
   names a function of the package of the import. The index must resolve that import.
   If it does not, the entry has no handler. A name without a qualifier names a function
-  of the package of the file. A package is the files of one directory.
+  of the package of the file. A package is the files of one directory. A name never
+  names a method, so a method that has the name is not the handler.
 - A local binding can hide a name. A parameter, a short variable declaration, a
   variable, a range variable, and a type switch variable are local bindings. The scope
   of a parameter is its function. The scope of another binding starts after its
@@ -293,8 +297,17 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   no entry. An alias to a type of another package, or to a type that is not a name, gives
   no entry when a factory uses it as a wrapper. A cycle of aliases gives no entry too.
 - A branch that never runs gives no entry. This holds for the body of `if false`, the
-  `else` branch of `if true`, and the body of `for false`. A route under another
-  condition or another loop keeps its entry.
+  `else` branch of `if true`, and the body of `for false`. This holds for the routes of
+  `net/http` too. A route under another condition or another loop keeps its entry.
+- chi `Mount` and `Route` register their handler for all methods on the pattern and on the
+  pattern and a slash, and on the pattern and `/*`. These registrations replace the routes
+  of the same keys that come before them, also when omen cannot read the mounted handler.
+  A `Group` with a function that a name gives is an unread registration of the tree.
+- A gorilla/mux sub-router that omen cannot read, a sub-router with a `NotFoundHandler` or a
+  `MethodNotAllowedHandler`, and a router with `StrictSlash(true)` give no entry. The first
+  two hide the later routes of the parent too. A template that the router would clean,
+  as `/a//b` or `/a/../b`, gives no entry. An echo or gin `Group` with a prefix that omen
+  cannot read is an unread registration of the router.
 - A later registration can replace or hide an earlier one. chi and echo keep the last
   registration of a method and a path. A chi router that `With` or `Group` made shares
   the tree of its parent, and `Handle` has all methods. A registration that has only some
@@ -426,7 +439,9 @@ files call `clear`, omen does not know the class names. Then no route has a symb
   because it gives no entry.
 - For chi, a prefix comes from `Route`, which also gives the new router. A guard comes
   from `Use` and `With`. `Use` guards each route of its router and of its sub-routers,
-  in any source order. `Mount` joins a router of the same file. A router that two mounts
+  in any source order. This holds for a router that `New` or `NewMux` makes. A router that
+  `With` or `Group` makes has the guards of its parent at its creation, and a later `Use`
+  of the parent does not guard its routes. `Mount` joins a router of the same file. A router that two mounts
   attach gives no entry. A router of another file is not joined. A pattern without a
   leading slash gives no entry.
   `Query` gives the method `QUERY`.

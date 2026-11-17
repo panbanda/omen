@@ -1550,7 +1550,7 @@ impl<'a> Context<'a> {
         else {
             return;
         };
-        if self.go_covered_patterns().contains(&path) {
+        if self.go_covered_patterns().contains(&path) || self.go_in_dead_branch(node) {
             return;
         }
         let wrapped = self.go_handler(*handler, go_routes::HandlerKind::Http);
@@ -1652,8 +1652,6 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// `.route("/path", get(handler))` of axum. The method router can chain more methods.
-    /// The `net/http` package itself, or a value of `http.NewServeMux()`.
     /// The `net/http` package itself, or a variable that has one binding in the file: a call of
     /// `http.NewServeMux()`. A name that a local variable hides is not the package.
     fn is_go_http_receiver(&self, receiver: Node<'_>) -> bool {
@@ -4755,6 +4753,340 @@ func routes() {
     }
 
     #[test]
+    fn a_chi_mount_replaces_the_routes_of_its_keys_for_all_methods() {
+        let source = go_source(
+            &[CHI],
+            r#"func api(r chi.Router) { r.Get("/y", list) }
+
+func routes() {
+	r := chi.NewRouter()
+	r.Get("/static", show)
+	r.Get("/static/", list)
+	r.Mount("/static", http.FileServer(http.Dir(".")))
+	sub := chi.NewRouter()
+	sub.Get("/y", list)
+	r.Get("/api", show)
+	r.Mount("/api", sub)
+	r.Get("/rt", show)
+	r.Route("/rt", api)
+	r.Get("/keep", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /api/y [] list", "chi GET /keep [] show"]
+        );
+    }
+
+    #[test]
+    fn a_caller_that_registers_on_the_result_of_a_factory_hides_both_routes() {
+        let chi = go_source(
+            &[CHI],
+            r#"func newAPI() *chi.Mux { r := chi.NewRouter(); r.Get("/x", show); return r }
+
+func main() {
+	r := newAPI()
+	r.Get("/x", list)
+	http.ListenAndServe(":1", r)
+}
+"#,
+        );
+        assert_eq!(go_routes(&[("main.go", &chi)]), Vec::<String>::new());
+        let api = go_source(
+            &[CHI],
+            "func newAPI() *chi.Mux { r := chi.NewRouter(); r.Get(\"/x\", show); return r }\n",
+        );
+        let main = go_file(
+            &["\"net/http\"", CHI],
+            "func main() {\n\tr := newAPI()\n\tr.Get(\"/x\", list)\n\thttp.ListenAndServe(\":1\", r)\n}\n",
+        );
+        assert_eq!(
+            go_routes(&[("api.go", &api), ("main.go", &main)]),
+            Vec::<String>::new()
+        );
+        let mux = go_source(
+            &[MUX],
+            r#"func newAPI() *mux.Router { r := mux.NewRouter(); r.HandleFunc("/x", show); return r }
+
+func main() {
+	r := newAPI()
+	r.HandleFunc("/x", list)
+	http.ListenAndServe(":1", r)
+}
+"#,
+        );
+        assert_eq!(go_routes(&[("main.go", &mux)]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_chi_child_of_an_inline_router_keeps_the_guards_of_its_creation() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	r := chi.NewRouter()
+	r.Group(func(g chi.Router) {
+		admin := g.With(audit)
+		g.Use(auth)
+		admin.Get("/x", show)
+	})
+	h := r.With(audit)
+	sub := h.With()
+	h.Use(auth)
+	sub.Get("/y", show)
+	r.Use(auth)
+	r.Get("/z", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "chi GET /x [auth,audit] show",
+                "chi GET /y [auth,audit] show",
+                "chi GET /z [auth] show"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_route_on_a_router_that_omen_marks_partial_still_replaces_the_earlier_routes() {
+        let source = go_source(
+            &[CHI, ECHO],
+            r#"func routes(mws []func(http.Handler) http.Handler, ems []echo.MiddlewareFunc) {
+	r := chi.NewRouter()
+	r.Get("/x", show)
+	r.With(mws...).Get("/x", list)
+	k := chi.NewRouter()
+	k.Get("/keep", show)
+	e := echo.New()
+	e.GET("/g/x", show)
+	g := e.Group("/g", ems...)
+	g.GET("/x", list)
+	f := echo.New()
+	f.GET("/g/x", show)
+	h := f.Group("/g")
+	h.Use(ems...)
+	h.GET("/x", list)
+	prefix := ""
+	i := echo.New()
+	i.GET("/x", show)
+	j := i.Group(prefix)
+	j.GET("/x", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /keep [] show"]
+        );
+    }
+
+    #[test]
+    fn a_handler_name_resolves_to_a_function_and_never_to_a_method() {
+        let main = go_file(
+            &["\"net/http\"", CHI],
+            "type S struct{}\n\nfunc (s *S) handle(w http.ResponseWriter, r *http.Request) {}\n\nfunc (s *S) onlyMethod(w http.ResponseWriter, r *http.Request) {}\n\nfunc routes() {\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", handle)\n\tr.Get(\"/y\", onlyMethod)\n}\n",
+        );
+        let other = go_file(
+            &["\"net/http\""],
+            "func handle(w http.ResponseWriter, r *http.Request) {}\n",
+        );
+        let symbols = symbols_of(&[("main.go", &main), ("other.go", &other)]);
+        assert_eq!(symbols.len(), 2);
+        let first = symbols[0].as_deref().unwrap();
+        assert!(first.contains("other.go"), "{first}");
+        assert!(!first.contains("S.handle"), "{first}");
+        assert_eq!(symbols[1], None);
+    }
+
+    #[test]
+    fn a_gorilla_subrouter_with_a_not_found_handler_hides_the_later_routes_of_its_parent() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	s := r.PathPrefix("/api").Subrouter()
+	s.NotFoundHandler = http.HandlerFunc(show)
+	r.HandleFunc("/api/x", list)
+	k := mux.NewRouter()
+	t := k.PathPrefix("/api").Subrouter()
+	t.HandleFunc("/x", list).Methods("POST")
+	t.MethodNotAllowedHandler = http.HandlerFunc(show)
+	k.HandleFunc("/api/x", show).Methods("GET")
+	m := mux.NewRouter()
+	m.HandleFunc("/keep", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux POST /api/x [] list",
+                "gorilla/mux ANY /keep [] show"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gorilla_subrouter_that_omen_cannot_read_hides_the_later_routes() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	prefix := "/api"
+	r := mux.NewRouter()
+	s := r.PathPrefix(prefix).Subrouter()
+	s.HandleFunc("/x", list)
+	r.HandleFunc("/api/x", show)
+	t := mux.NewRouter()
+	t.NewRoute().Subrouter().HandleFunc("/x", list)
+	t.HandleFunc("/x", show)
+	m := mux.NewRouter()
+	m.HandleFunc("/keep", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gorilla/mux ANY /keep [] show"]
+        );
+    }
+
+    #[test]
+    fn gorilla_strict_slash_makes_routes_that_differ_by_a_final_slash_overlap() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	r := mux.NewRouter()
+	r.StrictSlash(true)
+	r.HandleFunc("/x", list)
+	r.HandleFunc("/x/", show)
+	m := mux.NewRouter()
+	m.StrictSlash(false)
+	m.HandleFunc("/keep", show)
+	m.HandleFunc("/keep/", list)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            [
+                "gorilla/mux ANY /keep [] show",
+                "gorilla/mux ANY /keep/ [] list"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_net_http_route_in_a_branch_that_never_runs_gives_no_entry() {
+        let source = go_source(
+            &[],
+            r#"func routes() {
+	if false {
+		http.HandleFunc("/ghost", show)
+	}
+	m := http.NewServeMux()
+	if false {
+		m.HandleFunc("/ghost2", show)
+	}
+	if true {
+		m.HandleFunc("/live", show)
+	} else {
+		m.HandleFunc("/ghost3", show)
+	}
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["net/http ANY /live [] show"]
+        );
+    }
+
+    #[test]
+    fn a_chi_group_with_a_named_function_hides_the_earlier_routes_of_its_tree() {
+        let source = go_source(
+            &[CHI],
+            r#"func api(r chi.Router) { r.Get("/x", list) }
+
+func routes() {
+	r := chi.NewRouter()
+	r.Get("/x", show)
+	r.Group(api)
+	k := chi.NewRouter()
+	k.Get("/keep", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["chi GET /keep [] show"]
+        );
+    }
+
+    #[test]
+    fn timing_many_package_variables_and_functions_cost_linear_time() {
+        let mut body = String::new();
+        for index in 0..20_000 {
+            body.push_str(&format!("var v{index} = 0\nfunc f{index}() {{}}\n"));
+        }
+        body.push_str("func routes() {\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", list)\n}\n");
+        let source = go_source(&[CHI], &body);
+        let started = std::time::Instant::now();
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), 1);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(4),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_very_deep_expression_and_a_very_long_chain_do_not_overflow_the_stack() {
+        let mut body = String::from("func routes() {\n\tx := 1");
+        for _ in 0..100_000 {
+            body.push_str("+1");
+        }
+        body.push_str("\n\t_ = x\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", list)\n}\n");
+        let source = go_source(&[CHI], &body);
+        let found = entries(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), 1);
+        let mut chain = String::from("func more() {\n\tq := mux.NewRouter()\n\tq.Path(\"/x\")");
+        for _ in 0..5_000 {
+            chain.push_str(".Methods(\"GET\")");
+        }
+        chain.push_str("\n}\n");
+        let source = go_source(&[MUX], &chain);
+        let started = std::time::Instant::now();
+        let _ = entries(Language::Go, &[("main.go", &source)]);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(4),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_gorilla_template_that_the_router_cleans_gives_no_entry() {
+        let source = go_source(
+            &[MUX],
+            r#"func routes() {
+	m := mux.NewRouter()
+	m.HandleFunc("/keep", show)
+	m.HandleFunc("/a//b", show)
+	m.HandleFunc("/c/./d", show)
+	m.HandleFunc("/e/../f", show)
+}
+"#,
+        );
+        assert_eq!(
+            go_routes(&[("main.go", &source)]),
+            ["gorilla/mux ANY /keep [] show"]
+        );
+    }
+
+    #[test]
     fn documented_gap_a_caller_in_another_file_that_registers_on_a_factory_result_gives_no_entry() {
         let router = factory_file("NewRouter", "/x");
         let main = go_file(
@@ -4763,7 +5095,7 @@ func routes() {
         );
         assert_eq!(
             go_routes(&[("router.go", &router), ("main.go", &main)]),
-            ["chi GET /x [] list"]
+            Vec::<String>::new()
         );
     }
 
@@ -4949,10 +5281,7 @@ func never() {
 }
 "#,
         );
-        assert_eq!(
-            go_routes(&[("main.go", &source)]),
-            ["chi GET /root [] list", "chi GET /extra [] show"]
-        );
+        assert_eq!(go_routes(&[("main.go", &source)]), Vec::<String>::new());
     }
 
     #[test]
@@ -5037,7 +5366,7 @@ func routes() {
 }
 "#,
         );
-        assert_eq!(go_routes(&[("main.go", &source)]), ["chi GET /own [] show"]);
+        assert_eq!(go_routes(&[("main.go", &source)]), Vec::<String>::new());
     }
 
     #[test]
