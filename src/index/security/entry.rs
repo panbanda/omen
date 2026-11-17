@@ -486,6 +486,8 @@ struct Context<'a> {
         std::cell::RefCell<std::collections::HashMap<usize, Option<std::rc::Rc<Vec<usize>>>>>,
     /// The result for a chain of modules, a controller, and an action, by the Rails reader.
     rails_handled: std::cell::RefCell<std::collections::HashMap<rails::HandlerKey, rails::Handler>>,
+    /// Tells for a chain of modules and a controller if the repository has the class.
+    rails_known: std::cell::RefCell<std::collections::HashMap<(usize, rails::ControllerKey), bool>>,
     /// The position of the first symbol of the file for each start of a name.
     symbol_starts: std::sync::OnceLock<std::collections::HashMap<usize, usize>>,
     /// The positions of the functions, the methods, and the constructors of the file, by name.
@@ -540,6 +542,7 @@ impl<'a> Context<'a> {
             rails_jumps: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_handled: std::cell::RefCell::new(std::collections::HashMap::new()),
+            rails_known: std::cell::RefCell::new(std::collections::HashMap::new()),
             symbol_starts: std::sync::OnceLock::new(),
             callables_here: std::sync::OnceLock::new(),
             go_locals: std::sync::OnceLock::new(),
@@ -1900,6 +1903,28 @@ mod tests {
         files: &[(&str, &str)],
     ) -> (Vec<EntryPoint>, std::time::Duration) {
         entries_timed(language, files, false)
+    }
+
+    /// Runs a timing case at `size` and at twice that size, and checks that the time grows in
+    /// proportion to the size. A quadratic search takes four times as long for twice the input. The
+    /// check uses the best of two runs for each size, and a floor for a time that is too short to
+    /// compare, so the speed of the machine does not change the result. The absolute bound is far
+    /// above any speed that a CI machine has.
+    fn assert_scales_linearly(
+        label: &str,
+        size: usize,
+        run: impl Fn(usize) -> std::time::Duration,
+    ) {
+        let best = |size: usize| (0..2).map(|_| run(size)).min().expect("two runs");
+        let small = best(size);
+        let large = best(size * 2);
+        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
+        assert!(
+            large < allowed,
+            "{label}: {small:?} at {size}, {large:?} at {}",
+            size * 2
+        );
+        assert!(large.as_secs() < 60, "{label}: {large:?}");
     }
 
     /// The entry points, and the time of the search for entry points alone.
@@ -8037,8 +8062,9 @@ func routes() {
     #[ignore = "timing: run in release"]
     fn timing_nested_scopes_without_routes_resolve_in_linear_time() {
         for segment in ["/a", "/a(x)"] {
-            let elapsed = nested_scopes_without_routes_at(30_000, segment);
-            assert!(elapsed.as_secs() < 2, "{segment} {elapsed:?}");
+            assert_scales_linearly(segment, 15_000, |size| {
+                nested_scopes_without_routes_at(size, segment)
+            });
         }
     }
 
@@ -8076,8 +8102,9 @@ func routes() {
     #[ignore = "timing: run in release"]
     fn timing_nested_blocks_of_each_kind_resolve_in_linear_time() {
         for open in NESTING_OPENERS {
-            let (_, elapsed) = nested_blocks_with_one_route_at(30_000, open);
-            assert!(elapsed.as_secs() < 5, "{open} {elapsed:?}");
+            assert_scales_linearly(open, 15_000, |size| {
+                nested_blocks_with_one_route_at(size, open).1
+            });
         }
     }
 
@@ -8099,14 +8126,15 @@ func routes() {
     #[ignore = "timing: run in release"]
     fn timing_deep_blocks_and_chains_resolve_in_linear_time() {
         for (kind, depth) in [
-            ("constraints", 4_000),
-            ("module", 4_000),
-            ("unique", 8_000),
-            ("plain", 8_000),
-            ("alternating", 8_000),
+            ("constraints", 2_000),
+            ("module", 2_000),
+            ("unique", 4_000),
+            ("plain", 4_000),
+            ("alternating", 4_000),
         ] {
-            let elapsed = deep_blocks_and_chains_resolve_in_linear_time(kind, depth);
-            assert!(elapsed.as_secs() < 5, "{kind} {elapsed:?}");
+            assert_scales_linearly(kind, depth, |size| {
+                deep_blocks_and_chains_resolve_in_linear_time(kind, size)
+            });
         }
     }
 
@@ -8331,8 +8359,7 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_chain_with_one_listed_action_resolves_in_linear_time() {
-        let elapsed = chain_with_one_listed_action_at(60_000);
-        assert!(elapsed.as_secs() < 5, "{elapsed:?}");
+        assert_scales_linearly("one listed action", 30_000, chain_with_one_listed_action_at);
     }
 
     fn long_names_at(count: usize, length: usize, in_module: bool) -> std::time::Duration {
@@ -8370,15 +8397,17 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_actions_over_a_chain_resolve_in_linear_time() {
-        let elapsed = chain_of_empty_classes_with_many_actions(8_000);
-        assert!(elapsed.as_secs() < 5, "empty chain {elapsed:?}");
-        let elapsed = listed_callbacks_at(8_000, false);
-        assert!(elapsed.as_secs() < 5, "one class {elapsed:?}");
-        let elapsed = listed_callbacks_at(8_000, true);
-        assert!(elapsed.as_secs() < 5, "chain {elapsed:?}");
+        assert_scales_linearly(
+            "empty chain",
+            4_000,
+            chain_of_empty_classes_with_many_actions,
+        );
+        assert_scales_linearly("one class", 4_000, |size| listed_callbacks_at(size, false));
+        assert_scales_linearly("chain", 4_000, |size| listed_callbacks_at(size, true));
         for in_module in [true, false] {
-            let elapsed = long_names_at(4_000, 400_000, in_module);
-            assert!(elapsed.as_secs() < 5, "long names {in_module} {elapsed:?}");
+            assert_scales_linearly("long names", 2_000, |size| {
+                long_names_at(size, 400_000, in_module)
+            });
         }
     }
 

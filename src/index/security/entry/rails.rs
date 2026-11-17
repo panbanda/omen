@@ -1709,6 +1709,18 @@ impl<'a> Context<'a> {
         controller: &ControllerRef,
         action: &str,
     ) -> Handler {
+        let known_key = (modules.id(), controller.key());
+        let known = self.rails_known.borrow().get(&known_key).copied();
+        let known = known.unwrap_or_else(|| {
+            let known = self
+                .rails_identity(&modules.to_vec(), controller.text())
+                .is_some_and(|identity| self.rails_shared().classes.contains_key(&identity));
+            self.rails_known.borrow_mut().insert(known_key, known);
+            known
+        });
+        if !known {
+            return (None, Vec::new());
+        }
         let key = (modules.id(), controller.key(), action.to_string());
         if let Some(found) = self.rails_handled.borrow().get(&key) {
             return found.clone();
@@ -1725,9 +1737,26 @@ impl<'a> Context<'a> {
     /// index keeps the result for each class and action. If the inflections of the application
     /// have an acronym that omen cannot read, the controller is not known.
     fn rails_handler(&self, modules: &[String], controller: &str, action: &str) -> Handler {
+        let Some(identity) = self.rails_identity(modules, controller) else {
+            return (None, Vec::new());
+        };
+        let shared = self.rails_shared();
+        let key = (identity.clone(), action.to_string());
+        if let Some(found) = shared.handled.lock().get(&key) {
+            return found.clone();
+        }
+        let result = self.rails_resolve(shared, &identity, action);
+        shared.handled.lock().insert(key, result.clone());
+        result
+    }
+
+    /// The identity of the controller class, as the index keys it: the camelized modules and name
+    /// with a `.` between them. A name that Rails cannot build from a valid path, and a controller
+    /// that an acronym that omen cannot read may change, give `None`.
+    fn rails_identity(&self, modules: &[String], controller: &str) -> Option<String> {
         let inflections = self.rails_inflections();
         if inflections.unreadable_acronym {
-            return (None, Vec::new());
+            return None;
         }
         let relative = controller.strip_prefix('/');
         let own: Vec<&str> = relative.unwrap_or(controller).split('/').collect();
@@ -1740,7 +1769,7 @@ impl<'a> Context<'a> {
         if !own.iter().all(|part| valid(part))
             || (relative.is_none() && !modules.iter().all(|module| valid(module)))
         {
-            return (None, Vec::new());
+            return None;
         }
         let mut segments: Vec<String> = if relative.is_some() {
             Vec::new()
@@ -1748,9 +1777,7 @@ impl<'a> Context<'a> {
             modules.to_vec()
         };
         segments.extend(own.iter().map(|part| part.to_string()));
-        let Some(last) = segments.pop() else {
-            return (None, Vec::new());
-        };
+        let last = segments.pop()?;
         let mut qualified: Vec<String> = segments
             .iter()
             .map(|module| camelize(module, &inflections.acronyms))
@@ -1759,15 +1786,7 @@ impl<'a> Context<'a> {
             &format!("{last}_controller"),
             &inflections.acronyms,
         ));
-        let identity = qualified.join(".");
-        let shared = self.rails_shared();
-        let key = (identity.clone(), action.to_string());
-        if let Some(found) = shared.handled.lock().get(&key) {
-            return found.clone();
-        }
-        let result = self.rails_resolve(shared, &identity, action);
-        shared.handled.lock().insert(key, result.clone());
-        result
+        Some(qualified.join("."))
     }
 
     fn rails_resolve(&self, shared: &RailsShared, identity: &str, action: &str) -> Handler {
