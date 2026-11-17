@@ -198,6 +198,7 @@ impl<K: Ord + Clone, V: Clone> PersistentMap<K, V> {
     }
 
     /// The values in the order of the keys.
+    #[cfg(test)]
     pub(super) fn values(&self) -> Vec<V> {
         self.walk(|node| node.value.clone())
     }

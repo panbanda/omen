@@ -69,7 +69,7 @@ pub(super) struct Scope {
     /// known.
     prefix: Option<Prefix>,
     modules: Modules,
-    controller: Option<String>,
+    controller: Option<ScopedController>,
     /// The resource, when the route is directly in a `resources` or `resource` block.
     resource: Option<ResourceContext>,
     /// The route is in a `member` or `collection` block, or `on:` puts it there. A canonical action
@@ -79,9 +79,6 @@ pub(super) struct Scope {
     draw: bool,
     /// The value of `config.api_only` for the route set of the `draw` call.
     api_only: ApiOnly,
-    /// The route set is the one of an engine. An engine can isolate its namespace, so omen does not
-    /// know the controller that a route reaches.
-    engine: bool,
 }
 
 impl Scope {
@@ -124,8 +121,61 @@ impl<'t> Options<'t> {
 }
 
 struct Target {
-    controller: Option<String>,
+    controller: Option<ControllerRef>,
     action: Option<String>,
+}
+
+fn next_id() -> usize {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The controller of a `controller` block or a resource block. The text is shared by each route in
+/// the block, and the id stands for it in a key, so a route does not hash or copy a long name.
+#[derive(Clone)]
+pub(super) struct ScopedController {
+    text: Rc<str>,
+    id: usize,
+}
+
+impl ScopedController {
+    fn new(text: String) -> Self {
+        Self {
+            text: Rc::from(text),
+            id: next_id(),
+        }
+    }
+}
+
+/// The controller of one route.
+enum ControllerRef {
+    Scoped(ScopedController),
+    Text(String),
+}
+
+impl ControllerRef {
+    fn text(&self) -> &str {
+        match self {
+            Self::Scoped(controller) => &controller.text,
+            Self::Text(text) => text,
+        }
+    }
+
+    fn key(&self) -> ControllerKey {
+        match self {
+            Self::Scoped(controller) => ControllerKey::Scoped(controller.id),
+            Self::Text(text) => ControllerKey::Text(text.clone()),
+        }
+    }
+}
+
+/// A chain of modules, a controller, and an action.
+pub(super) type HandlerKey = (usize, ControllerKey, String);
+
+#[derive(Hash, PartialEq, Eq)]
+pub(super) enum ControllerKey {
+    Scoped(usize),
+    Text(String),
 }
 
 /// Appends the bytes of an escape sequence of a Ruby string in double quotes. The escapes that omen
@@ -603,10 +653,10 @@ impl<'a> Context<'a> {
         let Some(scope) = scope.filter(|scope| scope.draw) else {
             return;
         };
-        let scope: Scope = (**scope).clone();
+        let scope: &Scope = scope;
         match name {
-            "resources" | "resource" => self.rails_resources(node, name == "resource", &scope, out),
-            _ => self.rails_plain_route(node, name, &scope, out),
+            "resources" | "resource" => self.rails_resources(node, name == "resource", scope, out),
+            _ => self.rails_plain_route(node, name, scope, out),
         }
     }
 
@@ -663,11 +713,54 @@ impl<'a> Context<'a> {
     fn rails_pair<'t>(&self, pair: Node<'t>) -> Option<Opt<'t>> {
         let key = pair.child_by_field_name("key")?;
         let value = pair.child_by_field_name("value")?;
+        let mut cursor = pair.walk();
+        let rocket = pair
+            .children(&mut cursor)
+            .any(|child| !child.is_named() && child.kind() == "=>");
         Some(Opt {
             key: self.rails_literal(key)?,
-            string_key: key.kind() == "string",
+            string_key: rocket && key.kind() == "string",
             value,
         })
+    }
+
+    /// The request methods of a `via:` value. Only symbols have a meaning that omen knows: `:all` is
+    /// any method, and another symbol is the dashed upper case form, as `:m_search` is `M-SEARCH`. A
+    /// string, or `:all` with another value, gives `None`.
+    fn rails_via(&self, value: Node<'_>) -> Option<Vec<String>> {
+        let mut cursor = value.walk();
+        let items: Vec<Node<'_>> = if matches!(value.kind(), "array" | "symbol_array") {
+            value.named_children(&mut cursor).collect()
+        } else {
+            vec![value]
+        };
+        let mut verbs = Vec::new();
+        for item in items {
+            if !matches!(item.kind(), "simple_symbol" | "bare_symbol") {
+                return None;
+            }
+            let name = self.text(item).trim_start_matches(':');
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_'))
+            {
+                return None;
+            }
+            verbs.push(name);
+        }
+        if verbs.is_empty() {
+            return None;
+        }
+        if verbs.contains(&"all") {
+            return (verbs.len() == 1).then(|| vec![String::from("ANY")]);
+        }
+        Some(
+            verbs
+                .into_iter()
+                .map(|verb| verb.replace('_', "-").to_uppercase())
+                .collect(),
+        )
     }
 
     fn rails_positional<'t>(arguments: &[Node<'t>]) -> Vec<Node<'t>> {
@@ -832,8 +925,7 @@ impl<'a> Context<'a> {
         let method = self.text(call.child_by_field_name("method")?);
         let receiver = call.child_by_field_name("receiver").is_some();
         if self.is_draw_block(call) {
-            scope.draw = true;
-            scope.engine = call
+            let engine = call
                 .child_by_field_name("receiver")
                 .is_some_and(|receiver| {
                     self.text(receiver)
@@ -841,6 +933,10 @@ impl<'a> Context<'a> {
                         .trim_start_matches("::")
                         .ends_with("::Engine.routes")
                 });
+            if engine {
+                return None;
+            }
+            scope.draw = true;
             scope.api_only = call
                 .child_by_field_name("receiver")
                 .map_or(ApiOnly::Unknown, |receiver| {
@@ -914,7 +1010,7 @@ impl<'a> Context<'a> {
                         .extend(split_module(&self.rails_literal(value)?));
                 }
                 if let Some(value) = options.get("controller") {
-                    scope.controller = Some(self.rails_literal(value)?);
+                    scope.controller = Some(ScopedController::new(self.rails_literal(value)?));
                 }
                 Some(scope)
             }
@@ -922,7 +1018,7 @@ impl<'a> Context<'a> {
                 if positional.len() != 1 || !options.0.is_empty() {
                     return None;
                 }
-                scope.controller = Some(self.rails_literal(positional[0])?);
+                scope.controller = Some(ScopedController::new(self.rails_literal(positional[0])?));
                 Some(scope)
             }
             "member" | "collection" => {
@@ -952,8 +1048,11 @@ impl<'a> Context<'a> {
                 let naming = definition.as_name.as_deref().unwrap_or(name);
                 let context = definition.context(singular, name, self.rails_singular(naming));
                 scope.prefix = scope.nested_prefix();
-                scope.controller =
-                    Some(definition.controller_for(singular, name, self.rails_plural(name))?);
+                scope.controller = Some(ScopedController::new(definition.controller_for(
+                    singular,
+                    name,
+                    self.rails_plural(name),
+                )?));
                 scope.modules = definition.modules.clone();
                 scope.resource = Some(context);
                 scope.method_scope = false;
@@ -1049,10 +1148,12 @@ impl<'a> Context<'a> {
                 let path = route_path(&base, &format!("{}{suffix}", context.collection));
                 let variant_path = path.clone();
                 let (symbol, guards) = match &controller {
-                    Some(controller) if !scope.engine => {
-                        self.rails_handler(&definition.modules.to_vec(), controller, action)
-                    }
-                    None | Some(_) => (None, Vec::new()),
+                    Some(controller) => self.rails_handler_cached(
+                        &definition.modules,
+                        &ControllerRef::Text(controller.clone()),
+                        action,
+                    ),
+                    None => (None, Vec::new()),
                 };
                 out.push(Draft {
                     range: Span::of(&node),
@@ -1194,7 +1295,7 @@ impl<'a> Context<'a> {
                 };
                 match text.split_once('#') {
                     Some((controller, action)) if !action.contains('#') => Target {
-                        controller: Some(controller.to_string()),
+                        controller: Some(ControllerRef::Text(controller.to_string())),
                         action: Some(action.to_string()),
                     },
                     _ => no_target,
@@ -1208,7 +1309,9 @@ impl<'a> Context<'a> {
                 };
                 match (read("controller"), read("action")) {
                     (Some(controller), Some(action)) => {
-                        let controller = controller.or_else(|| scope.controller.clone());
+                        let controller = controller
+                            .map(ControllerRef::Text)
+                            .or_else(|| scope.controller.clone().map(ControllerRef::Scoped));
                         let from_path = (!root
                             && !path_text.is_empty()
                             && path_text
@@ -1225,25 +1328,17 @@ impl<'a> Context<'a> {
 
         let methods: Vec<String> = match name {
             "match" => {
-                let Some(via) = options.get("via").and_then(|value| self.rails_names(value)) else {
+                let Some(via) = options.get("via").and_then(|value| self.rails_via(value)) else {
                     return;
                 };
-                via.into_iter()
-                    .map(|verb| {
-                        if verb == "all" {
-                            String::from("ANY")
-                        } else {
-                            verb.to_uppercase()
-                        }
-                    })
-                    .collect()
+                via
             }
             "root" => vec![String::from("GET")],
             verb => vec![verb.to_uppercase()],
         };
         let (symbol, guards) = match (&target.controller, &target.action) {
-            (Some(controller), Some(action)) if !scope.engine => {
-                self.rails_handler(&scope.modules.to_vec(), controller, action)
+            (Some(controller), Some(action)) => {
+                self.rails_handler_cached(&scope.modules, controller, action)
             }
             _ => (None, Vec::new()),
         };
@@ -1605,6 +1700,36 @@ impl<'a> Context<'a> {
             })
     }
 
+    /// The result of `rails_handler` for a route. The file keeps the result for each chain of
+    /// modules, controller, and action, so a route in a block with a long name does not work out the
+    /// name again.
+    fn rails_handler_cached(
+        &self,
+        modules: &Modules,
+        controller: &ControllerRef,
+        action: &str,
+    ) -> Handler {
+        let known_key = (modules.id(), controller.key());
+        let known = self.rails_known.borrow().get(&known_key).copied();
+        let known = known.unwrap_or_else(|| {
+            let known = self
+                .rails_identity(&modules.to_vec(), controller.text())
+                .is_some_and(|identity| self.rails_shared().classes.contains_key(&identity));
+            self.rails_known.borrow_mut().insert(known_key, known);
+            known
+        });
+        if !known {
+            return (None, Vec::new());
+        }
+        let key = (modules.id(), controller.key(), action.to_string());
+        if let Some(found) = self.rails_handled.borrow().get(&key) {
+            return found.clone();
+        }
+        let result = self.rails_handler(&modules.to_vec(), controller.text(), action);
+        self.rails_handled.borrow_mut().insert(key, result.clone());
+        result
+    }
+
     /// The action symbol and the guards of a controller. `controller` is `admin/users`, and
     /// `modules` are the modules that `namespace` and `scope module:` add. A controller path
     /// with a leading `/` ignores the modules. The class must have the same chain of modules as its
@@ -1612,9 +1737,26 @@ impl<'a> Context<'a> {
     /// index keeps the result for each class and action. If the inflections of the application
     /// have an acronym that omen cannot read, the controller is not known.
     fn rails_handler(&self, modules: &[String], controller: &str, action: &str) -> Handler {
+        let Some(identity) = self.rails_identity(modules, controller) else {
+            return (None, Vec::new());
+        };
+        let shared = self.rails_shared();
+        let key = (identity.clone(), action.to_string());
+        if let Some(found) = shared.handled.lock().get(&key) {
+            return found.clone();
+        }
+        let result = self.rails_resolve(shared, &identity, action);
+        shared.handled.lock().insert(key, result.clone());
+        result
+    }
+
+    /// The identity of the controller class, as the index keys it: the camelized modules and name
+    /// with a `.` between them. A name that Rails cannot build from a valid path, and a controller
+    /// that an acronym that omen cannot read may change, give `None`.
+    fn rails_identity(&self, modules: &[String], controller: &str) -> Option<String> {
         let inflections = self.rails_inflections();
         if inflections.unreadable_acronym {
-            return (None, Vec::new());
+            return None;
         }
         let relative = controller.strip_prefix('/');
         let own: Vec<&str> = relative.unwrap_or(controller).split('/').collect();
@@ -1627,7 +1769,7 @@ impl<'a> Context<'a> {
         if !own.iter().all(|part| valid(part))
             || (relative.is_none() && !modules.iter().all(|module| valid(module)))
         {
-            return (None, Vec::new());
+            return None;
         }
         let mut segments: Vec<String> = if relative.is_some() {
             Vec::new()
@@ -1635,9 +1777,7 @@ impl<'a> Context<'a> {
             modules.to_vec()
         };
         segments.extend(own.iter().map(|part| part.to_string()));
-        let Some(last) = segments.pop() else {
-            return (None, Vec::new());
-        };
+        let last = segments.pop()?;
         let mut qualified: Vec<String> = segments
             .iter()
             .map(|module| camelize(module, &inflections.acronyms))
@@ -1646,15 +1786,7 @@ impl<'a> Context<'a> {
             &format!("{last}_controller"),
             &inflections.acronyms,
         ));
-        let identity = qualified.join(".");
-        let shared = self.rails_shared();
-        let key = (identity.clone(), action.to_string());
-        if let Some(found) = shared.handled.lock().get(&key) {
-            return found.clone();
-        }
-        let result = self.rails_resolve(shared, &identity, action);
-        shared.handled.lock().insert(key, result.clone());
-        result
+        Some(qualified.join("."))
     }
 
     fn rails_resolve(&self, shared: &RailsShared, identity: &str, action: &str) -> Handler {
@@ -1676,46 +1808,12 @@ impl<'a> Context<'a> {
     /// hidden: it has no symbol and no guard. If no class decides, a view can give the action.
     /// The index keeps the decision for each class that the search passes.
     fn rails_action(&self, shared: &RailsShared, identity: &str, action: &str) -> Action {
-        let mut passed: Vec<String> = Vec::new();
-        let mut current = identity.to_string();
-        let reach = loop {
-            if let Some(found) = shared
-                .actions
-                .lock()
-                .get(&(current.clone(), action.to_string()))
-            {
-                break *found;
-            }
-            passed.push(current.clone());
-            let visibility = self.rails_visibility(shared, &current);
-            if visibility.unreadable {
-                break Reach::Hidden;
-            }
-            if visibility.defines.contains(action) {
-                break if visibility.public_names.contains(action) {
-                    Reach::Public
-                } else {
-                    Reach::Hidden
-                };
-            }
-            if let Some(public) = visibility.overrides.get(action) {
-                break if *public {
-                    Reach::Public
-                } else {
-                    Reach::Hidden
-                };
-            }
-            match shared.parents.get(&current) {
-                Some(Some(parent)) => current = parent.clone(),
-                _ => break Reach::Public,
-            }
-        };
-        {
-            let mut memo = shared.actions.lock();
-            for name in passed {
-                memo.insert((name, action.to_string()), reach);
-            }
-        }
+        let state = self.rails_action_state(shared, identity);
+        let reach = state
+            .map
+            .get(&action.to_string())
+            .copied()
+            .unwrap_or(state.floor);
         if matches!(reach, Reach::Hidden) {
             return Action::Hidden;
         }
@@ -1738,6 +1836,59 @@ impl<'a> Context<'a> {
                 .then(|| self.all[found.0].symbols[found.1].key.to_string())
         })();
         Action::Public(symbol)
+    }
+
+    /// The reach of each action name for a class, as the nearest class in the chain that decides it
+    /// gives it. A class adds its definitions and its visibility calls to the state of its
+    /// superclass, and a class with visibility that omen cannot read hides each action that no class
+    /// below it decides. The state shares the structure of the state above it, and the index keeps
+    /// the state of each class, so the cost of an action does not depend on the length of the chain.
+    fn rails_action_state(&self, shared: &RailsShared, identity: &str) -> Arc<ActionState> {
+        if let Some(found) = shared.states.lock().get(identity) {
+            return Arc::clone(found);
+        }
+        let mut chain = vec![identity.to_string()];
+        let mut current = identity.to_string();
+        let mut state = Arc::new(ActionState {
+            floor: Reach::Public,
+            map: PersistentMap::default(),
+        });
+        while let Some(Some(parent)) = shared.parents.get(&current) {
+            if let Some(found) = shared.states.lock().get(parent) {
+                state = Arc::clone(found);
+                break;
+            }
+            chain.push(parent.clone());
+            current = parent.clone();
+        }
+        for class in chain.iter().rev() {
+            let visibility = self.rails_visibility(shared, class);
+            let next = if visibility.unreadable {
+                ActionState {
+                    floor: Reach::Hidden,
+                    map: PersistentMap::default(),
+                }
+            } else {
+                let reach = |public: bool| if public { Reach::Public } else { Reach::Hidden };
+                let mut map = state.map.clone();
+                for (name, public) in &visibility.overrides {
+                    map.insert(name.clone(), reach(*public));
+                }
+                for name in &visibility.defines {
+                    map.insert(name.clone(), reach(visibility.public_names.contains(name)));
+                }
+                ActionState {
+                    floor: state.floor,
+                    map,
+                }
+            };
+            state = Arc::new(next);
+            shared
+                .states
+                .lock()
+                .insert(class.clone(), Arc::clone(&state));
+        }
+        state
     }
 
     /// The callbacks of the chain of a class, in the order of Rails. A class with no callback of
@@ -1770,6 +1921,7 @@ impl<'a> Context<'a> {
                 own.extend(class_callbacks.list.iter().cloned());
                 opaque |= class_callbacks.opaque;
             }
+            opaque |= self.is_named_outside_the_class(class);
             if !own.is_empty() || opaque {
                 program = Arc::new(Program::layer(Some(program), own, opaque));
             }
@@ -1779,6 +1931,60 @@ impl<'a> Context<'a> {
                 .insert(class.clone(), Arc::clone(&program));
         }
         program
+    }
+
+    /// Tells if a call outside the class body names the class and can change its callbacks: a
+    /// callback call, `include`, `extend`, `prepend`, or `class_eval` with the constant of the class
+    /// as its receiver. The constant may have fewer modules than the identity of the class, so omen
+    /// compares each end of the identity.
+    fn is_named_outside_the_class(&self, identity: &str) -> bool {
+        let named = self.rails_shared().external.get_or_init(|| {
+            let mut named = HashSet::new();
+            for (position, file) in self.all.iter().enumerate() {
+                if file.language != Language::Ruby {
+                    continue;
+                }
+                let Some(parsed) = self.all_parsed.tree(position) else {
+                    continue;
+                };
+                let mut stack = vec![parsed.root_node()];
+                while let Some(node) = stack.pop() {
+                    if node.kind() == "call" {
+                        let method = node
+                            .child_by_field_name("method")
+                            .map_or("", |method| super::syntax::text(method, &parsed.source));
+                        let receiver = node.child_by_field_name("receiver");
+                        if let Some(receiver) = receiver.filter(|receiver| {
+                            matches!(receiver.kind(), "constant" | "scope_resolution")
+                        }) {
+                            if is_callback_family(method) || CLASS_CHANGING_CALLS.contains(&method)
+                            {
+                                let text = super::syntax::text(receiver, &parsed.source);
+                                named.insert(
+                                    text.trim().trim_start_matches("::").replace("::", "."),
+                                );
+                            }
+                        }
+                    }
+                    let mut cursor = node.walk();
+                    stack.extend(node.named_children(&mut cursor));
+                }
+            }
+            named
+        });
+        if named.is_empty() {
+            return false;
+        }
+        let mut rest = identity;
+        loop {
+            if named.contains(rest) {
+                return true;
+            }
+            match rest.split_once('.') {
+                Some((_, tail)) => rest = tail,
+                None => return false,
+            }
+        }
     }
 
     /// The callback calls in the body of the class, in source order. A call in a method, or in a
@@ -2038,10 +2244,10 @@ impl<'a> Context<'a> {
                     out.list.push(callback);
                 }
                 _ => {
-                    if node
-                        .child_by_field_name("method")
-                        .is_some_and(|method| is_callback_family(self.text(method)))
-                    {
+                    if node.child_by_field_name("method").is_some_and(|method| {
+                        is_callback_family(self.text(method))
+                            || CLASS_CHANGING_CALLS.contains(&self.text(method))
+                    }) {
                         out.opaque = true;
                     }
                     let mut cursor = node.walk();
@@ -2105,11 +2311,17 @@ impl<'a> Context<'a> {
         let conditional = options
             .as_ref()
             .is_some_and(|options| options.get("if").is_some() || options.get("unless").is_some());
+        let places = names
+            .iter()
+            .enumerate()
+            .map(|(place, name)| (name.clone(), place))
+            .collect();
         Some(Callback {
             skip,
             names,
-            only: only.flatten(),
-            except: except.flatten(),
+            places,
+            only: only.flatten().map(|list| list.into_iter().collect()),
+            except: except.flatten().map(|list| list.into_iter().collect()),
             unreadable,
             conditional,
             prepend,
@@ -2121,8 +2333,10 @@ impl<'a> Context<'a> {
 struct Callback {
     skip: bool,
     names: Vec<String>,
-    only: Option<Vec<String>>,
-    except: Option<Vec<String>>,
+    /// The place of the last time that each name is in `names`.
+    places: HashMap<String, usize>,
+    only: Option<HashSet<String>>,
+    except: Option<HashSet<String>>,
     /// An `only:` or `except:` value that is not a literal list.
     unreadable: bool,
     /// An `if:` or `unless:` option, or a branch that omen cannot evaluate. A condition does not
@@ -2142,14 +2356,11 @@ impl Callback {
             return self.skip;
         }
         (self.skip || !self.conditional)
-            && self
-                .only
-                .as_ref()
-                .is_none_or(|only| only.iter().any(|name| name == action))
+            && self.only.as_ref().is_none_or(|only| only.contains(action))
             && self
                 .except
                 .as_ref()
-                .is_none_or(|except| !except.iter().any(|name| name == action))
+                .is_none_or(|except| !except.contains(action))
     }
 }
 
@@ -2172,17 +2383,22 @@ struct DefaultGuards {
 
 impl DefaultGuards {
     fn names(&self) -> Vec<String> {
-        let entries = self.slots.entries();
-        let mut ordered: Vec<(&str, Slot)> = entries
-            .iter()
-            .map(|(name, slot)| (name.as_str(), *slot))
-            .collect();
-        order_slots(&mut ordered);
-        ordered
-            .iter()
-            .map(|(name, _)| (*name).to_string())
-            .collect()
+        ordered_names(&self.slots)
     }
+}
+
+/// The names of the guards in the order of Rails.
+fn ordered_names(slots: &PersistentMap<String, Slot>) -> Vec<String> {
+    let entries = slots.entries();
+    let mut ordered: Vec<(&str, Slot)> = entries
+        .iter()
+        .map(|(name, slot)| (name.as_str(), *slot))
+        .collect();
+    order_slots(&mut ordered);
+    ordered
+        .iter()
+        .map(|(name, _)| (*name).to_string())
+        .collect()
 }
 
 /// The callbacks of one class: the calls that omen reads, and a flag that tells that a callback
@@ -2193,29 +2409,151 @@ struct ClassCallbacks {
     opaque: bool,
 }
 
+/// A program works out the guards of an action from its default guards when the callbacks that list
+/// the action have fewer names than this, and callbacks. A program with more takes the guards from
+/// the layer above it, so a layer costs its own callbacks.
+const RESOLVE_FROM_DEFAULT_LIMIT: usize = if cfg!(test) { 6 } else { 512 };
+
+/// A callback of the chain. A skip with an `except:` list, or with an `only:` list, is also in a
+/// chain of the skips of the same kind, newest first.
+struct Link {
+    callback: Arc<Callback>,
+    index: usize,
+    older: Option<Arc<Link>>,
+    /// For an action: the first call at this link or before it that applies to the action. A search
+    /// that passes a call that does not apply keeps the result here, so the next search jumps.
+    jump: Mutex<HashMap<String, Option<Arc<Link>>>>,
+}
+
+impl Link {
+    fn new(callback: &Arc<Callback>, index: usize, older: Option<Arc<Link>>) -> Arc<Self> {
+        Arc::new(Self {
+            callback: Arc::clone(callback),
+            index,
+            older,
+            jump: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// The first call from this link back that applies to the action.
+    fn applying(link: &Arc<Link>, action: &str) -> Option<Arc<Link>> {
+        let mut passed: Vec<Arc<Link>> = Vec::new();
+        let mut current = Some(Arc::clone(link));
+        let found = loop {
+            let Some(candidate) = current else {
+                break None;
+            };
+            if let Some(known) = candidate.jump.lock().get(action) {
+                break known.clone();
+            }
+            if candidate.callback.applies_to(action) {
+                break Some(candidate);
+            }
+            current = candidate.older.clone();
+            passed.push(candidate);
+        };
+        for link in passed {
+            link.jump.lock().insert(action.to_string(), found.clone());
+        }
+        found
+    }
+}
+
+/// The callbacks of a chain with a list that names an action.
+#[derive(Clone, Default)]
+struct Listing {
+    /// The callbacks by their index.
+    callbacks: PersistentMap<usize, Arc<Callback>>,
+    /// The number of names in the callbacks, and of callbacks. A search for the guards of the action
+    /// costs this much when it starts from the default guards.
+    weight: usize,
+}
+
+/// What the callbacks with one name decide for each action, except the skips with an `only:` list.
+#[derive(Clone, Default)]
+struct NameState {
+    /// The newest call that decides for each action: a call that is not a skip, and a skip with no
+    /// list.
+    always: Option<Arc<Link>>,
+    /// The skips with an `except:` list and no `only:` list, newest first, after `always`.
+    others: Option<Arc<Link>>,
+}
+
+impl NameState {
+    /// The call that decides the guard for the action.
+    fn deciding(&self, action: &str) -> Option<Arc<Link>> {
+        let others = self
+            .others
+            .as_ref()
+            .and_then(|start| Link::applying(start, action));
+        match (self.always.as_ref(), others) {
+            (Some(always), Some(other)) if other.index > always.index => Some(other),
+            (Some(always), _) => Some(Arc::clone(always)),
+            (None, other) => other,
+        }
+    }
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        let mut next = self.older.take();
+        while let Some(node) = next {
+            match Arc::try_unwrap(node) {
+                Ok(mut owned) => {
+                    owned.jump.get_mut().clear();
+                    next = owned.older.take();
+                }
+                Err(_) => break,
+            }
+        }
+    }
+}
+
 /// The callbacks of a chain of classes in the order of Rails, ready to answer for an action.
 ///
 /// A callback replaces the callbacks with its names, and it adds its names when it applies. Thus
 /// the last callback of a name decides the guard of that name. Only the lists `only:` and
-/// `except:` make the result depend on the action. The program keeps the result for an action that
-/// no list names. For another action, it works out again the names of the callbacks that list the
-/// action.
+/// `except:` make the result depend on the action. The program keeps the guards for an action that
+/// no list names. For another action, it works out again only the names of the callbacks that list
+/// the action, and it starts from the guards for the other actions.
 ///
 /// A program is a layer: the callbacks of one class, and the program of its superclass. A layer
-/// does not copy the callbacks of the superclass.
+/// shares the indexes of the superclass, and it does not copy them. The index of a callback has one
+/// entry for each action of its lists, and not one for each name: a name is worked out only when a
+/// route of the action asks for the guards.
 struct Program {
     parent: Option<Arc<Program>>,
     /// The number of callbacks in the layers of the superclasses.
     offset: usize,
-    callbacks: Vec<Callback>,
+    callbacks: Vec<Arc<Callback>>,
+    /// The callbacks of this layer by name, as indexes.
     by_name: HashMap<String, Vec<usize>>,
-    /// The actions that a list of a callback of this layer or of a superclass names.
-    listed: Arc<HashSet<String>>,
-    /// A callback of this layer or of a superclass is in a place that omen cannot read.
+    /// What the callbacks of this layer and of the superclasses decide, by name.
+    names: PersistentMap<String, NameState>,
+    /// The callbacks of this layer and of the superclasses with a list that names the action, by
+    /// the index of the callback.
+    listed: PersistentMap<String, Listing>,
+    /// The skips with an `only:` list that apply to the action, newest first, in this layer and in
+    /// the superclasses.
+    only_skips: PersistentMap<String, Arc<Link>>,
+    /// A callback of this layer or of a superclass is in a place that omen cannot read. Then the
+    /// layer builds no index.
     opaque: bool,
     default: std::sync::OnceLock<Arc<DefaultGuards>>,
-    /// The guards of the actions that a list names, for this layer, by action.
-    memo: Mutex<HashMap<String, ActiveGuards>>,
+    /// The guards of an action that a list names, as this layer has them, by action.
+    resolved: Mutex<HashMap<String, PersistentMap<String, Slot>>>,
+}
+
+impl Drop for Program {
+    fn drop(&mut self) {
+        let mut next = self.parent.take();
+        while let Some(layer) = next {
+            match Arc::try_unwrap(layer) {
+                Ok(mut owned) => next = owned.parent.take(),
+                Err(_) => break,
+            }
+        }
+    }
 }
 
 impl Program {
@@ -2223,39 +2561,79 @@ impl Program {
         let offset = parent
             .as_ref()
             .map_or(0, |parent| parent.offset + parent.callbacks.len());
-        let mut by_action: HashMap<String, Vec<usize>> = HashMap::new();
+        let callbacks: Vec<Arc<Callback>> = callbacks.into_iter().map(Arc::new).collect();
+        let opaque = opaque || parent.as_ref().is_some_and(|parent| parent.opaque);
+        let mut names = PersistentMap::default();
+        let mut listed = PersistentMap::default();
+        let mut only_skips = PersistentMap::default();
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, callback) in callbacks.iter().enumerate() {
-            for name in &callback.names {
-                by_name.entry(name.clone()).or_default().push(index);
+        if !opaque {
+            if let Some(parent) = &parent {
+                names = parent.names.clone();
+                listed = parent.listed.clone();
+                only_skips = parent.only_skips.clone();
             }
-            if callback.unreadable {
-                continue;
-            }
-            for action in callback.only.iter().chain(&callback.except).flatten() {
-                by_action.entry(action.clone()).or_default().push(index);
+            for (index, callback) in callbacks.iter().enumerate() {
+                let global = offset + index;
+                let decides_always = !callback.skip
+                    || callback.unreadable
+                    || (callback.only.is_none() && callback.except.is_none());
+                let is_only_skip = callback.skip && !callback.unreadable && callback.only.is_some();
+                for name in &callback.names {
+                    by_name.entry(name.clone()).or_default().push(index);
+                    if is_only_skip {
+                        continue;
+                    }
+                    let mut state: NameState = names.get(name).cloned().unwrap_or_default();
+                    if decides_always {
+                        state = NameState {
+                            always: Some(Link::new(callback, global, None)),
+                            others: None,
+                        };
+                    } else {
+                        state.others = Some(Link::new(callback, global, state.others.take()));
+                    }
+                    names.insert(name.clone(), state);
+                }
+                if callback.unreadable {
+                    continue;
+                }
+                let eligible = callback.only.iter().chain(&callback.except).flatten();
+                let mut seen: HashSet<&String> = HashSet::new();
+                for action in eligible {
+                    if !seen.insert(action) {
+                        continue;
+                    }
+                    let mut set: Listing = listed.get(action).cloned().unwrap_or_default();
+                    set.callbacks.insert(global, Arc::clone(callback));
+                    set.weight += callback.names.len() + 1;
+                    listed.insert(action.clone(), set);
+                }
+                if is_only_skip {
+                    for action in callback.only.iter().flatten() {
+                        let excepted = callback
+                            .except
+                            .as_ref()
+                            .is_some_and(|except| except.contains(action));
+                        if !excepted {
+                            let older = only_skips.get(action).cloned();
+                            only_skips.insert(action.clone(), Link::new(callback, global, older));
+                        }
+                    }
+                }
             }
         }
-        let inherited = parent.as_ref().map(|parent| Arc::clone(&parent.listed));
-        let listed = match inherited {
-            Some(listed) if by_action.keys().all(|action| listed.contains(action)) => listed,
-            Some(listed) => {
-                let mut all = (*listed).clone();
-                all.extend(by_action.keys().cloned());
-                Arc::new(all)
-            }
-            None => Arc::new(by_action.keys().cloned().collect()),
-        };
-        let opaque = opaque || parent.as_ref().is_some_and(|parent| parent.opaque);
         Self {
             parent,
             offset,
             callbacks,
             by_name,
+            names,
             listed,
+            only_skips,
             opaque,
             default: std::sync::OnceLock::new(),
-            memo: Mutex::new(HashMap::new()),
+            resolved: Mutex::new(HashMap::new()),
         }
     }
 
@@ -2272,7 +2650,7 @@ impl Program {
                 }
             } else {
                 return Decision::Decided(applies.then(|| {
-                    let place = callback.names.iter().position(|n| n == name).unwrap_or(0);
+                    let place = callback.places.get(name).copied().unwrap_or(0);
                     (self.offset + *index, place, callback.prepend)
                 }));
             }
@@ -2280,9 +2658,29 @@ impl Program {
         Decision::Undecided
     }
 
+    /// The slot of the guard with the name for the action, from the newest callback that decides.
+    /// `skip` is the newest skip with an `only:` list that applies to the action and has the name.
+    fn slot_for(&self, name: &str, action: &str, skip: Option<&Arc<Link>>) -> Option<Slot> {
+        let state = self.names.get(&name.to_string());
+        let deciding = state.and_then(|state| state.deciding(action));
+        let link = match (deciding, skip) {
+            (Some(link), Some(skip)) if skip.index > link.index => Arc::clone(skip),
+            (Some(link), _) => link,
+            (None, Some(skip)) => Arc::clone(skip),
+            (None, None) => return None,
+        };
+        let callback = &link.callback;
+        if callback.skip {
+            return None;
+        }
+        callback.applies_to(action).then(|| {
+            let place = callback.places.get(name).copied().unwrap_or(0);
+            (link.index, place, callback.prepend)
+        })
+    }
+
     /// The default guards. The search goes up to the nearest layer that has them, and it applies
-    /// the layers below it one time each. A layer that changes no default guard shares the
-    /// result of the layer above it, so a chain of such layers costs one pass.
+    /// the layers below it one time each. Each layer shares the structure of the layer above it.
     fn default_guards(&self) -> Arc<DefaultGuards> {
         if let Some(found) = self.default.get() {
             return Arc::clone(found);
@@ -2313,105 +2711,110 @@ impl Program {
         Arc::clone(self.default.get().expect("the last layer sets the default"))
     }
 
+    /// The guards of an action. An action that no list names has the default guards. For another
+    /// action, the layer has the guards of the layer above it, with the changes of its own
+    /// callbacks. The program keeps the guards of each layer that asks, and the layers share the
+    /// structure of the layers above them, so a chain of classes that repeat one listed action
+    /// costs one change for each class. A layer whose chain has few callbacks for the action works
+    /// the guards out from the default guards instead, so a long chain with one listed callback
+    /// costs only that callback.
     fn guards_for(&self, action: &str) -> Vec<String> {
         if self.opaque {
             return Vec::new();
         }
-        if !self.listed.contains(action) {
+        if self.listed.get(&action.to_string()).is_none() {
             return self.default_guards().names();
         }
-        self.listed_guards(action).to_vec()
+        ordered_names(&self.resolved(action))
     }
 
-    /// The guards of an action that a list of a callback names. The result for a layer comes from
-    /// the result of the layer above it, and the program keeps the result for each layer that it
-    /// visits. A result shares the structure of the result above it, so a chain of layers needs a
-    /// memory in proportion to the number of callbacks. A callback
-    /// removes the guards with its names, and it adds them when it applies, at the back or, with
-    /// `prepend`, at the front.
-    fn listed_guards(&self, action: &str) -> ActiveGuards {
-        if let Some(found) = self.memo.lock().get(action) {
+    fn resolved(&self, action: &str) -> PersistentMap<String, Slot> {
+        if let Some(found) = self.resolved.lock().get(action) {
             return found.clone();
         }
+        let weight = self
+            .listed
+            .get(&action.to_string())
+            .map_or(0, |listing| listing.weight);
+        if weight < RESOLVE_FROM_DEFAULT_LIMIT {
+            let slots = self.resolve_from_default(action);
+            self.resolved
+                .lock()
+                .insert(action.to_string(), slots.clone());
+            return slots;
+        }
         let mut pending = vec![self];
-        let mut current = ActiveGuards::default();
         let mut layer = self.parent.as_deref();
+        let mut slots = None;
         while let Some(above) = layer {
-            if let Some(found) = above.memo.lock().get(action) {
-                current = found.clone();
+            if let Some(found) = above.resolved.lock().get(action) {
+                slots = Some(found.clone());
                 break;
             }
             pending.push(above);
             layer = above.parent.as_deref();
         }
+        let mut slots = match (slots, pending.pop()) {
+            (Some(slots), top) => {
+                pending.extend(top);
+                slots
+            }
+            (None, Some(top)) => {
+                let slots = top.resolve_from_default(action);
+                top.resolved
+                    .lock()
+                    .insert(action.to_string(), slots.clone());
+                slots
+            }
+            (None, None) => PersistentMap::default(),
+        };
         for layer in pending.iter().rev() {
-            for callback in &layer.callbacks {
-                current.apply(callback, action);
+            for name in layer.by_name.keys() {
+                match layer.decide(name, action) {
+                    Decision::Decided(Some(slot)) => slots.insert(name.clone(), slot),
+                    Decision::Decided(None) => slots.remove(name),
+                    Decision::Undecided => {}
+                }
             }
             layer
-                .memo
+                .resolved
                 .lock()
-                .insert(action.to_string(), current.clone());
+                .insert(action.to_string(), slots.clone());
         }
-        current
+        slots
     }
-}
 
-/// The names of the guards in the order of Rails while a layer applies its callbacks. A new
-/// callback replaces the callback with the same name. A callback goes to the back, or to the front
-/// when it has `prepend`. A copy takes a constant time, and each change takes a time in proportion to
-/// the logarithm of the number of guards.
-#[derive(Clone, Default)]
-struct ActiveGuards {
-    ordered: PersistentMap<i64, String>,
-    at: PersistentMap<String, i64>,
-    front: i64,
-    back: i64,
-}
-
-impl ActiveGuards {
-    fn remove(&mut self, name: &str) {
-        let name = name.to_string();
-        if let Some(slot) = self.at.get(&name).copied() {
-            self.at.remove(&name);
-            self.ordered.remove(&slot);
+    /// The guards of an action that a list names: the default guards, and the names of the callbacks
+    /// that name the action, worked out again.
+    fn resolve_from_default(&self, action: &str) -> PersistentMap<String, Slot> {
+        let mut slots = self.default_guards().slots.clone();
+        let Some(listing) = self.listed.get(&action.to_string()) else {
+            return slots;
+        };
+        let mut skips: HashMap<&str, Arc<Link>> = HashMap::new();
+        let mut link = self.only_skips.get(&action.to_string());
+        while let Some(current) = link {
+            for name in &current.callback.names {
+                skips
+                    .entry(name.as_str())
+                    .or_insert_with(|| Arc::clone(current));
+            }
+            link = current.older.as_ref();
         }
-    }
-
-    fn push_back(&mut self, name: &str) {
-        self.remove(name);
-        self.at.insert(name.to_string(), self.back);
-        self.ordered.insert(self.back, name.to_string());
-        self.back += 1;
-    }
-
-    fn push_front(&mut self, name: &str) {
-        self.remove(name);
-        self.front -= 1;
-        self.at.insert(name.to_string(), self.front);
-        self.ordered.insert(self.front, name.to_string());
-    }
-
-    fn apply(&mut self, callback: &Callback, action: &str) {
-        let applies = callback.applies_to(action);
-        for name in &callback.names {
-            if callback.skip {
-                if applies {
-                    self.remove(name);
+        let mut seen: HashSet<&str> = HashSet::new();
+        let entries = listing.callbacks.entries();
+        for (_, callback) in &entries {
+            for name in &callback.names {
+                if !seen.insert(name.as_str()) {
+                    continue;
                 }
-            } else {
-                self.remove(name);
-                if applies && callback.prepend {
-                    self.push_front(name);
-                } else if applies {
-                    self.push_back(name);
+                match self.slot_for(name, action, skips.get(name.as_str())) {
+                    Some(slot) => slots.insert(name.clone(), slot),
+                    None => slots.remove(name),
                 }
             }
         }
-    }
-
-    fn to_vec(&self) -> Vec<String> {
-        self.ordered.values()
+        slots
     }
 }
 
@@ -2430,7 +2833,7 @@ fn order_slots(slots: &mut [(&str, Slot)]) {
 type ActionKey = (String, String);
 
 /// The symbol and the guards of an action.
-type Handler = (Option<String>, Vec<String>);
+pub(super) type Handler = (Option<String>, Vec<String>);
 
 /// A symbol of the index: the position of the file, and the position in the symbols of the file.
 type Placed = (usize, usize);
@@ -2439,6 +2842,13 @@ type Placed = (usize, usize);
 enum UniqueClass {
     One(String),
     Many,
+}
+
+/// What the chain of a class says about the action names: the reach of a name that a class decides,
+/// and the reach of any other name.
+struct ActionState {
+    floor: Reach,
+    map: PersistentMap<String, Reach>,
 }
 
 /// Whether the nearest class that decides lets Rails run the action.
@@ -2746,6 +3156,18 @@ fn block_parameter_names(call: Node<'_>, source: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// The calls that change the callbacks of a class without a callback name: they add the callbacks
+/// of a module, or run code in the class.
+const CLASS_CHANGING_CALLS: [&str; 7] = [
+    "include",
+    "extend",
+    "prepend",
+    "class_eval",
+    "class_exec",
+    "module_eval",
+    "instance_eval",
+];
+
 /// Tells if a method name belongs to the callback family of Rails: a call of it changes the guards
 /// of a class, and omen reads only a part of the forms.
 fn is_callback_family(method: &str) -> bool {
@@ -2785,7 +3207,7 @@ fn subtree_assigns_api_only(node: Node<'_>, source: &[u8], depth: usize) -> bool
     if depth > MAX_READ_DEPTH {
         return true;
     }
-    if node.kind() == "assignment"
+    if matches!(node.kind(), "assignment" | "operator_assignment")
         && node.child_by_field_name("left").is_some_and(|left| {
             left.kind() == "call"
                 && left
@@ -3122,11 +3544,12 @@ pub(super) struct RailsShared {
     parents: HashMap<String, Option<String>>,
     inflections: std::sync::OnceLock<Inflections>,
     api_only: std::sync::OnceLock<ApiOnlySets>,
+    external: std::sync::OnceLock<HashSet<String>>,
     callbacks: Mutex<HashMap<Placed, Arc<ClassCallbacks>>>,
     visibility: Mutex<HashMap<String, Arc<Visibility>>>,
     programs: Mutex<HashMap<String, Arc<Program>>>,
     handled: Mutex<HashMap<ActionKey, Handler>>,
-    actions: Mutex<HashMap<ActionKey, Reach>>,
+    states: Mutex<HashMap<String, Arc<ActionState>>>,
 }
 
 impl RailsShared {
@@ -3175,11 +3598,12 @@ impl RailsShared {
             parents,
             inflections: std::sync::OnceLock::new(),
             api_only: std::sync::OnceLock::new(),
+            external: std::sync::OnceLock::new(),
             callbacks: Mutex::new(HashMap::new()),
             visibility: Mutex::new(HashMap::new()),
             programs: Mutex::new(HashMap::new()),
             handled: Mutex::new(HashMap::new()),
-            actions: Mutex::new(HashMap::new()),
+            states: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -3259,6 +3683,7 @@ pub(super) struct Modules(Option<Rc<ModuleNode>>);
 struct ModuleNode {
     parent: Option<Rc<ModuleNode>>,
     name: String,
+    id: usize,
 }
 
 impl Drop for ModuleNode {
@@ -3280,9 +3705,15 @@ impl Modules {
             chain = Some(Rc::new(ModuleNode {
                 parent: chain,
                 name,
+                id: next_id(),
             }));
         }
         Self(chain)
+    }
+
+    /// A number that stands for the chain in a key. The empty chain has 0.
+    fn id(&self) -> usize {
+        self.0.as_ref().map_or(0, |node| node.id)
     }
 
     fn to_vec(&self) -> Vec<String> {
