@@ -8618,6 +8618,70 @@ func routes() {
         }
     }
 
+    fn chain_under_a_heavy_callback_at(
+        size: usize,
+        middle: bool,
+        form: usize,
+    ) -> std::time::Duration {
+        let names: Vec<String> = (0..size).map(|number| format!(":n{number}")).collect();
+        let names = names.join(", ");
+        let call = match form {
+            0 => format!("skip_before_action {names}, only: :show"),
+            _ => format!("skip_before_action {names}, only: :other, except: :show"),
+        };
+        let heavy = if middle { size / 2 } else { 0 };
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        let mut classes = String::new();
+        for number in 0..size {
+            routes.push_str(&format!("  get \"/a{number}\", to: \"c{number}#show\"\n"));
+            let parent = if number == 0 {
+                String::new()
+            } else {
+                format!(" < C{}Controller", number - 1)
+            };
+            let own = format!("before_action :own{number}, only: :other");
+            let line = if number == heavy {
+                call.as_str()
+            } else {
+                own.as_str()
+            };
+            let body = if number == 0 { "  def show; end\n" } else { "" };
+            classes.push_str(&format!(
+                "class C{number}Controller{parent}\n  {line}\n{body}end\n"
+            ));
+        }
+        routes.push_str("end\n");
+        let files = [
+            ("config/routes.rb", routes.as_str()),
+            ("controllers/chain.rb", classes.as_str()),
+        ];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), size);
+        assert!(found.iter().all(|entry| entry.guards.is_empty()));
+        elapsed
+    }
+
+    #[test]
+    fn a_chain_under_a_callback_with_many_names_gives_the_guards_of_each_class() {
+        for middle in [false, true] {
+            for form in 0..2 {
+                chain_under_a_heavy_callback_at(30, middle, form);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_chain_under_a_callback_with_many_names_resolves_in_linear_time() {
+        for middle in [false, true] {
+            for form in 0..2 {
+                assert_scales_linearly(&format!("middle {middle} form {form}"), 4_000, |size| {
+                    chain_under_a_heavy_callback_at(size, middle, form)
+                });
+            }
+        }
+    }
+
     fn long_names_at(count: usize, length: usize, in_module: bool) -> std::time::Duration {
         let name = "a".repeat(length);
         let open = if in_module {

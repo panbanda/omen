@@ -2409,9 +2409,10 @@ struct ClassCallbacks {
     opaque: bool,
 }
 
-/// A program with fewer callbacks that list an action than this works out the guards of the action
-/// from its default guards. A program with more takes them from the layer above it.
-const RESOLVE_FROM_DEFAULT_LIMIT: usize = if cfg!(test) { 3 } else { 512 };
+/// A program works out the guards of an action from its default guards when the callbacks that list
+/// the action have fewer names than this, and callbacks. A program with more takes the guards from
+/// the layer above it, so a layer costs its own callbacks.
+const RESOLVE_FROM_DEFAULT_LIMIT: usize = if cfg!(test) { 6 } else { 512 };
 
 /// A callback of the chain. A skip with an `except:` list, or with an `only:` list, is also in a
 /// chain of the skips of the same kind, newest first.
@@ -2456,6 +2457,16 @@ impl Link {
         }
         found
     }
+}
+
+/// The callbacks of a chain with a list that names an action.
+#[derive(Clone, Default)]
+struct Listing {
+    /// The callbacks by their index.
+    callbacks: PersistentMap<usize, Arc<Callback>>,
+    /// The number of names in the callbacks, and of callbacks. A search for the guards of the action
+    /// costs this much when it starts from the default guards.
+    weight: usize,
 }
 
 /// What the callbacks with one name decide for each action, except the skips with an `only:` list.
@@ -2521,7 +2532,7 @@ struct Program {
     names: PersistentMap<String, NameState>,
     /// The callbacks of this layer and of the superclasses with a list that names the action, by
     /// the index of the callback.
-    listed: PersistentMap<String, PersistentMap<usize, Arc<Callback>>>,
+    listed: PersistentMap<String, Listing>,
     /// The skips with an `only:` list that apply to the action, newest first, in this layer and in
     /// the superclasses.
     only_skips: PersistentMap<String, Arc<Link>>,
@@ -2593,9 +2604,9 @@ impl Program {
                     if !seen.insert(action) {
                         continue;
                     }
-                    let mut set: PersistentMap<usize, Arc<Callback>> =
-                        listed.get(action).cloned().unwrap_or_default();
-                    set.insert(global, Arc::clone(callback));
+                    let mut set: Listing = listed.get(action).cloned().unwrap_or_default();
+                    set.callbacks.insert(global, Arc::clone(callback));
+                    set.weight += callback.names.len() + 1;
                     listed.insert(action.clone(), set);
                 }
                 if is_only_skip {
@@ -2721,11 +2732,11 @@ impl Program {
         if let Some(found) = self.resolved.lock().get(action) {
             return found.clone();
         }
-        let listed_count = self
+        let weight = self
             .listed
             .get(&action.to_string())
-            .map_or(0, PersistentMap::len);
-        if listed_count < RESOLVE_FROM_DEFAULT_LIMIT {
+            .map_or(0, |listing| listing.weight);
+        if weight < RESOLVE_FROM_DEFAULT_LIMIT {
             let slots = self.resolve_from_default(action);
             self.resolved
                 .lock()
@@ -2791,7 +2802,7 @@ impl Program {
             link = current.older.as_ref();
         }
         let mut seen: HashSet<&str> = HashSet::new();
-        let entries = listing.entries();
+        let entries = listing.callbacks.entries();
         for (_, callback) in &entries {
             for name in &callback.names {
                 if !seen.insert(name.as_str()) {
