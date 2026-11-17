@@ -1441,7 +1441,7 @@ impl<'a> Context<'a> {
         };
         if directory == own {
             if let [position] = self
-                .callables_here
+                .callables_here()
                 .get(name)
                 .map(Vec::as_slice)
                 .unwrap_or(&[])

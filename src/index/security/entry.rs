@@ -484,9 +484,9 @@ struct Context<'a> {
     rails_cases:
         std::cell::RefCell<std::collections::HashMap<usize, Option<std::rc::Rc<Vec<usize>>>>>,
     /// The position of the first symbol of the file for each start of a name.
-    symbol_starts: std::collections::HashMap<usize, usize>,
+    symbol_starts: std::sync::OnceLock<std::collections::HashMap<usize, usize>>,
     /// The positions of the functions, the methods, and the constructors of the file, by name.
-    callables_here: std::collections::HashMap<String, Vec<usize>>,
+    callables_here: std::sync::OnceLock<std::collections::HashMap<String, Vec<usize>>>,
     /// The local bindings of a Go file, by name: the starts of the bindings in order, and
     /// for each the highest end of a function that has a binding up to it.
     go_locals: std::sync::OnceLock<GoLocals>,
@@ -524,22 +524,6 @@ impl<'a> Context<'a> {
         } else {
             Vec::new()
         };
-        let mut callables_here: std::collections::HashMap<String, Vec<usize>> =
-            std::collections::HashMap::new();
-        for (position, symbol) in file.symbols.iter().enumerate() {
-            if is_callable_kind(symbol) {
-                callables_here
-                    .entry(symbol.name.clone())
-                    .or_default()
-                    .push(position);
-            }
-        }
-        let mut symbol_starts = std::collections::HashMap::new();
-        for (position, symbol) in file.symbols.iter().enumerate() {
-            symbol_starts
-                .entry(symbol.name_range.start_byte)
-                .or_insert(position);
-        }
         Self {
             parsed,
             file,
@@ -550,8 +534,8 @@ impl<'a> Context<'a> {
             test_ranges,
             rails_scopes: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
-            symbol_starts,
-            callables_here,
+            symbol_starts: std::sync::OnceLock::new(),
+            callables_here: std::sync::OnceLock::new(),
             go_locals: std::sync::OnceLock::new(),
             go_servemuxes: std::sync::OnceLock::new(),
             go_covered: std::sync::OnceLock::new(),
@@ -667,8 +651,36 @@ impl<'a> Context<'a> {
         })
     }
 
+    /// The position of the first symbol of the file for each start of a name. A reader that
+    /// does not look up a symbol does not build the table.
+    fn symbol_starts(&self) -> &std::collections::HashMap<usize, usize> {
+        self.symbol_starts.get_or_init(|| {
+            let mut starts = std::collections::HashMap::new();
+            for (position, symbol) in self.file.symbols.iter().enumerate() {
+                starts
+                    .entry(symbol.name_range.start_byte)
+                    .or_insert(position);
+            }
+            starts
+        })
+    }
+
+    /// The positions of the functions, the methods, and the constructors of the file, by name.
+    fn callables_here(&self) -> &std::collections::HashMap<String, Vec<usize>> {
+        self.callables_here.get_or_init(|| {
+            let mut names: std::collections::HashMap<String, Vec<usize>> =
+                std::collections::HashMap::new();
+            for (position, symbol) in self.file.symbols.iter().enumerate() {
+                if is_callable_kind(symbol) {
+                    names.entry(symbol.name.clone()).or_default().push(position);
+                }
+            }
+            names
+        })
+    }
+
     fn symbol_at(&self, name_node: Node<'_>) -> Option<String> {
-        let position = self.symbol_starts.get(&name_node.start_byte())?;
+        let position = self.symbol_starts().get(&name_node.start_byte())?;
         Some(self.file.symbols[*position].key.to_string())
     }
 
@@ -678,7 +690,7 @@ impl<'a> Context<'a> {
             container.is_none_or(|wanted| symbol.container.as_deref() == Some(wanted))
         };
         let here: Vec<&Symbol> = self
-            .callables_here
+            .callables_here()
             .get(name)
             .into_iter()
             .flatten()
