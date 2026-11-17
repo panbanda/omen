@@ -1,5 +1,18 @@
 # Changelog
 
+## [5.1.0](https://github.com/panbanda/omen/compare/omen-v5.0.0...omen-v5.1.0) (2026-11-17)
+
+
+### Features
+
+* **security:** chi, echo, gorilla/mux and gin route entry points ([#567](https://github.com/panbanda/omen/issues/567)) ([abd96c2](https://github.com/panbanda/omen/commit/abd96c2f5e07f609da7c742e25438a262f526d37))
+* **security:** Rails resourceful route entry points ([#568](https://github.com/panbanda/omen/issues/568)) ([fbced40](https://github.com/panbanda/omen/commit/fbced40337e98ca316ee1ec0fb350b62c6fdb7d8))
+
+
+### Bug Fixes
+
+* **security:** close the Rails route review findings ([#570](https://github.com/panbanda/omen/issues/570)) ([f312aee](https://github.com/panbanda/omen/commit/f312aeeabfd4cb90cf108c3e8a39e5fe563308ab))
+
 ## [5.0.0](https://github.com/panbanda/omen/compare/omen-v4.30.0...omen-v5.0.0) (2026-11-16)
 
 
