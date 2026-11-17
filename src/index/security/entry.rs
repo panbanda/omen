@@ -495,6 +495,8 @@ struct Context<'a> {
     go_servemuxes: std::sync::OnceLock<std::collections::HashSet<String>>,
     /// The `net/http` patterns of a Go file that other patterns of the file can cover.
     go_covered: std::sync::OnceLock<std::collections::HashSet<String>>,
+    /// The start and the highest end of the branches of a Go file that never run, by start.
+    go_dead: std::sync::OnceLock<(Vec<usize>, Vec<usize>)>,
     /// The names that the package of a Go file declares at the top level.
     go_declared: std::sync::OnceLock<std::sync::Arc<std::collections::HashSet<String>>>,
 }
@@ -540,6 +542,7 @@ impl<'a> Context<'a> {
             go_locals: std::sync::OnceLock::new(),
             go_servemuxes: std::sync::OnceLock::new(),
             go_covered: std::sync::OnceLock::new(),
+            go_dead: std::sync::OnceLock::new(),
             go_declared: std::sync::OnceLock::new(),
         }
     }
@@ -5050,21 +5053,60 @@ func routes() {
         }
         body.push_str("\n\t_ = x\n\tr := chi.NewRouter()\n\tr.Get(\"/x\", list)\n}\n");
         let source = go_source(&[CHI], &body);
-        let found = entries(Language::Go, &[("main.go", &source)]);
+        let (found, took) = entries_lean(Language::Go, &[("main.go", &source)]);
         assert_eq!(found.len(), 1);
+        assert!(took < std::time::Duration::from_secs(5), "took {took:?}");
         let mut chain = String::from("func more() {\n\tq := mux.NewRouter()\n\tq.Path(\"/x\")");
-        for _ in 0..5_000 {
+        for _ in 0..2_000 {
             chain.push_str(".Methods(\"GET\")");
         }
         chain.push_str("\n}\n");
         let source = go_source(&[MUX], &chain);
-        let started = std::time::Instant::now();
-        let _ = entries(Language::Go, &[("main.go", &source)]);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(4),
-            "took {:?}",
-            started.elapsed()
-        );
+        let (_, took) = entries_lean(Language::Go, &[("main.go", &source)]);
+        assert!(took < std::time::Duration::from_secs(5), "took {took:?}");
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_long_chain_and_many_nested_blocks_cost_linear_time() {
+        let mut chain = String::from("func more() {\n\tq := mux.NewRouter()\n\tq.Path(\"/x\")");
+        for _ in 0..40_000 {
+            chain.push_str(".Methods(\"GET\")");
+        }
+        chain.push_str("\n}\n");
+        let source = go_source(&[MUX], &chain);
+        let (_, took) = entries_lean(Language::Go, &[("main.go", &source)]);
+        assert!(took < std::time::Duration::from_secs(5), "took {took:?}");
+        let mut nested = String::from("func nested(c bool) {\n");
+        let depth = 20_000;
+        for index in 0..depth {
+            nested.push_str(&format!("if c {{\nhttp.HandleFunc(\"/p{index}\", show)\n"));
+        }
+        for _ in 0..depth {
+            nested.push_str("}\n");
+        }
+        nested.push_str("}\n");
+        let source = go_source(&[], &nested);
+        let (found, took) = entries_lean(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), depth);
+        assert!(took < std::time::Duration::from_secs(5), "took {took:?}");
+    }
+
+    #[test]
+    fn many_nested_blocks_with_net_http_routes_cost_linear_time() {
+        let depth = 4_000;
+        let mut nested = String::from("func nested(c bool) {\n");
+        for index in 0..depth {
+            nested.push_str(&format!("if c {{\nhttp.HandleFunc(\"/p{index}\", show)\n"));
+        }
+        for _ in 0..depth {
+            nested.push_str("}\n");
+        }
+        nested.push_str("}\n");
+        let source = go_source(&[], &nested);
+        let (found, took) = entries_lean(Language::Go, &[("main.go", &source)]);
+        assert_eq!(found.len(), depth);
+        assert!(took < std::time::Duration::from_secs(2), "took {took:?}");
     }
 
     #[test]

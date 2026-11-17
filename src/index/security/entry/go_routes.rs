@@ -634,44 +634,59 @@ impl<'a> Context<'a> {
     /// Tells if the node is in a branch that never runs: the body of `if false`, the `else`
     /// branch of `if true`, or the body of `for false`.
     pub(super) fn go_in_dead_branch(&self, node: Node<'_>) -> bool {
-        let literal = |condition: Node<'_>| -> Option<bool> {
-            if !matches!(condition.kind(), "identifier" | "true" | "false")
-                || self.is_go_shadowed(condition)
-            {
-                return None;
-            }
-            match self.text(condition) {
-                "true" => Some(true),
-                "false" => Some(false),
-                _ => None,
-            }
-        };
-        let mut child = node;
-        while let Some(parent) = child.parent() {
-            match parent.kind() {
-                "if_statement" => {
-                    let value = parent.child_by_field_name("condition").and_then(literal);
-                    let dead = match value {
-                        Some(true) => parent.child_by_field_name("alternative"),
-                        Some(false) => parent.child_by_field_name("consequence"),
-                        None => None,
-                    };
-                    if dead == Some(child) {
-                        return true;
-                    }
+        // One walk over the tree finds the branches that never run. A parent of a node costs
+        // a walk down from the root, so the check does not climb to the parents.
+        let (starts, ends) = self.go_dead.get_or_init(|| {
+            let literal = |condition: Node<'_>| -> Option<bool> {
+                if !matches!(condition.kind(), "identifier" | "true" | "false")
+                    || self.is_go_shadowed(condition)
+                {
+                    return None;
                 }
-                "for_statement" => {
-                    let never = parent.named_child(0).and_then(literal) == Some(false);
-                    if never && parent.child_by_field_name("body") == Some(child) {
-                        return true;
-                    }
+                match self.text(condition) {
+                    "true" => Some(true),
+                    "false" => Some(false),
+                    _ => None,
                 }
-                "function_declaration" | "method_declaration" => return false,
-                _ => {}
+            };
+            let mut ranges: Vec<(usize, usize)> = Vec::new();
+            let mut pending = vec![self.parsed.root_node()];
+            while let Some(current) = pending.pop() {
+                let dead = match current.kind() {
+                    "if_statement" => {
+                        let value = current.child_by_field_name("condition").and_then(literal);
+                        match value {
+                            Some(true) => current.child_by_field_name("alternative"),
+                            Some(false) => current.child_by_field_name("consequence"),
+                            None => None,
+                        }
+                    }
+                    "for_statement" => {
+                        let never = current.named_child(0).and_then(literal) == Some(false);
+                        current.child_by_field_name("body").filter(|_| never)
+                    }
+                    _ => None,
+                };
+                if let Some(dead) = dead {
+                    ranges.push((dead.start_byte(), dead.end_byte()));
+                }
+                let mut cursor = current.walk();
+                pending.extend(current.named_children(&mut cursor));
             }
-            child = parent;
-        }
-        false
+            ranges.sort_unstable();
+            let starts: Vec<usize> = ranges.iter().map(|(start, _)| *start).collect();
+            let mut highest = 0;
+            let ends: Vec<usize> = ranges
+                .iter()
+                .map(|(_, end)| {
+                    highest = highest.max(*end);
+                    highest
+                })
+                .collect();
+            (starts, ends)
+        });
+        let before = starts.partition_point(|start| *start <= node.start_byte());
+        before > 0 && ends[before - 1] >= node.end_byte()
     }
 
     /// Tells if a reference anywhere in the repository names the function.
@@ -2391,6 +2406,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             omit_next: false,
             mount_next: false,
             eval_depth: 0,
+            eval_memo: HashMap::new(),
             scanned: HashSet::new(),
             dry,
             function_key: None,
@@ -2441,6 +2457,8 @@ struct Routes<'c, 'a, 't> {
     omit_next: bool,
     mount_next: bool,
     eval_depth: usize,
+    /// The router that each call gave, by the id of the node.
+    eval_memo: HashMap<usize, Option<usize>>,
     /// The calls of the chains that the walk read from their last call.
     scanned: HashSet<usize>,
     /// The walk only finds the factories. It does not read the calls of the repository.
@@ -3299,8 +3317,18 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
 
     /// The router that an expression gives, when the syntax proves it.
     fn eval(&mut self, expression: Node<'t>) -> Option<usize> {
-        // A chain that is deeper than the limit gives no router, so each route on it gives no entry.
+        // A call has one result. A chain that is deeper than the limit gives no router, so each
+        // route on it gives no entry, and each call of it is read one time.
+        let is_call = expression.kind() == "call_expression";
+        if is_call {
+            if let Some(known) = self.eval_memo.get(&expression.id()) {
+                return *known;
+            }
+        }
         if self.eval_depth >= EVAL_DEPTH_LIMIT {
+            if is_call {
+                self.eval_memo.insert(expression.id(), None);
+            }
             return None;
         }
         self.eval_depth += 1;
@@ -3313,6 +3341,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             _ => None,
         };
         self.eval_depth -= 1;
+        if is_call {
+            self.eval_memo.insert(expression.id(), router);
+        }
         router
     }
 
