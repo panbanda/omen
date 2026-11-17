@@ -68,7 +68,7 @@ pub(super) struct Scope {
     /// The path of the blocks, as `@scope[:path]` of Rails. `None` means that the path is not
     /// known.
     prefix: Option<Prefix>,
-    modules: Vec<String>,
+    modules: Modules,
     controller: Option<String>,
     /// The resource, when the route is directly in a `resources` or `resource` block.
     resource: Option<ResourceContext>,
@@ -875,7 +875,7 @@ impl<'a> Context<'a> {
                     .get("module")
                     .map_or(Some(name), |value| self.rails_literal(value))?;
                 scope.prefix = join(&scope.nested_prefix(), &path);
-                scope.modules.extend(split_module(&module));
+                scope.modules = scope.modules.extend(split_module(&module));
                 if scope.resource.take().is_some() {
                     scope.method_scope = false;
                 }
@@ -909,7 +909,7 @@ impl<'a> Context<'a> {
                     scope.prefix = join(&scope.prefix, &path);
                 }
                 if let Some(value) = options.get("module") {
-                    scope
+                    scope.modules = scope
                         .modules
                         .extend(split_module(&self.rails_literal(value)?));
                 }
@@ -1001,7 +1001,7 @@ impl<'a> Context<'a> {
             }
         }
         if let Some(module) = module {
-            modules.extend(split_module(&module));
+            modules = modules.extend(split_module(&module));
         }
         Some(ResourceDefinition {
             names,
@@ -1050,7 +1050,7 @@ impl<'a> Context<'a> {
                 let variant_path = path.clone();
                 let (symbol, guards) = match &controller {
                     Some(controller) if !scope.engine => {
-                        self.rails_handler(&definition.modules, controller, action)
+                        self.rails_handler(&definition.modules.to_vec(), controller, action)
                     }
                     None | Some(_) => (None, Vec::new()),
                 };
@@ -1243,7 +1243,7 @@ impl<'a> Context<'a> {
         };
         let (symbol, guards) = match (&target.controller, &target.action) {
             (Some(controller), Some(action)) if !scope.engine => {
-                self.rails_handler(&scope.modules, controller, action)
+                self.rails_handler(&scope.modules.to_vec(), controller, action)
             }
             _ => (None, Vec::new()),
         };
@@ -3250,6 +3250,53 @@ fn qualified_name(file: &FileSymbols, symbol: &Symbol) -> String {
     chain.replace("::", ".")
 }
 
+/// The modules of the blocks around a route, as a chain. A new module does not copy the earlier
+/// modules, so each block takes a time in proportion to its own modules. The list is built at a
+/// route.
+#[derive(Clone, Default)]
+pub(super) struct Modules(Option<Rc<ModuleNode>>);
+
+struct ModuleNode {
+    parent: Option<Rc<ModuleNode>>,
+    name: String,
+}
+
+impl Drop for ModuleNode {
+    fn drop(&mut self) {
+        let mut next = self.parent.take();
+        while let Some(node) = next {
+            match Rc::try_unwrap(node) {
+                Ok(mut owned) => next = owned.parent.take(),
+                Err(_) => break,
+            }
+        }
+    }
+}
+
+impl Modules {
+    fn extend(&self, names: Vec<String>) -> Self {
+        let mut chain = self.0.clone();
+        for name in names {
+            chain = Some(Rc::new(ModuleNode {
+                parent: chain,
+                name,
+            }));
+        }
+        Self(chain)
+    }
+
+    fn to_vec(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut node = self.0.as_deref();
+        while let Some(current) = node {
+            names.push(current.name.clone());
+            node = current.parent.as_deref();
+        }
+        names.reverse();
+        names
+    }
+}
+
 /// The parts of a module path. An empty part stays: Rails builds the name of the controller class
 /// from it, and the class does not exist.
 fn split_module(path: &str) -> Vec<String> {
@@ -3265,7 +3312,7 @@ struct ResourceDefinition {
     /// The `as:` option. It replaces the name of the resource where Rails builds the nested
     /// parameter.
     as_name: Option<String>,
-    modules: Vec<String>,
+    modules: Modules,
 }
 
 impl ResourceDefinition {

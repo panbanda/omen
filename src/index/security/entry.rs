@@ -7596,6 +7596,46 @@ func routes() {
         }
     }
 
+    fn nested_blocks_with_one_route_at(depth: usize, open: &str) -> std::time::Duration {
+        let mut routes = String::from("Rails.application.routes.draw do\n");
+        for _ in 0..depth {
+            routes.push_str(open);
+            routes.push('\n');
+        }
+        routes.push_str("get \"/x\", to: \"u#s\"\n");
+        for _ in 0..depth {
+            routes.push_str("end\n");
+        }
+        routes.push_str("end\n");
+        let files = [("config/routes.rb", routes.as_str())];
+        let (found, elapsed) = entries_lean(Language::Ruby, &files);
+        assert_eq!(found.len(), 1);
+        elapsed
+    }
+
+    const NESTING_OPENERS: [&str; 4] = [
+        "namespace :a do",
+        "scope module: :a do",
+        "scope as: :a do",
+        "resources :a, only: [] do",
+    ];
+
+    #[test]
+    fn nested_blocks_of_each_kind_give_their_route() {
+        for open in NESTING_OPENERS {
+            nested_blocks_with_one_route_at(30, open);
+        }
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_blocks_of_each_kind_resolve_in_linear_time() {
+        for open in NESTING_OPENERS {
+            let elapsed = nested_blocks_with_one_route_at(30_000, open);
+            assert!(elapsed.as_secs() < 5, "{open} {elapsed:?}");
+        }
+    }
+
     #[test]
     fn a_scope_path_with_a_parenthesis_makes_the_block_unknown() {
         let routes = "Rails.application.routes.draw do\n  scope \"/a(:x)\" do\n    get \"/in\", to: \"a#b\"\n  end\n  get \"/out\", to: \"a#b\"\nend\n";
