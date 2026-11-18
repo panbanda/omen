@@ -159,6 +159,10 @@ fn trait_visibility(implementation: Node<'_>, context: &Context<'_, '_>) -> Expo
 }
 
 impl LanguageSpec for Rust {
+    fn value_syntax(&self) -> crate::index::calls::ValueSyntax {
+        super::values::RUST
+    }
+
     fn call_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().call_kinds();
         kinds.push(IDENTIFIER);
