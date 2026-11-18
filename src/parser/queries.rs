@@ -30,7 +30,6 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "if_statement",
             "for_statement",
             "while_statement",
-            "with_statement",
             "elif_clause",
             "except_clause",
             "case_clause",
@@ -60,7 +59,7 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
         Language::CSharp => &[
             "if_statement",
             "for_statement",
-            "enhanced_for_statement",
+            "foreach_statement",
             "while_statement",
             "do_statement",
             "switch_section",
@@ -192,7 +191,6 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
             "if_statement",
             "for_statement",
             "while_statement",
-            "with_statement",
             "except_clause",
             "match_statement",
         ],
@@ -224,7 +222,7 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
         Language::CSharp => &[
             "if_statement",
             "for_statement",
-            "enhanced_for_statement",
+            "foreach_statement",
             "while_statement",
             "do_statement",
             "switch_statement",

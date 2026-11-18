@@ -2051,6 +2051,26 @@ fn drain(v: &mut Vec<i32>) {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// A C# `foreach` is a loop: 1 decision point, and 1 + nesting for
+    /// cognitive. A Python `with` is not a branch: it adds nothing.
+    #[test]
+    fn test_csharp_foreach_and_python_with() {
+        let cases: &[(Language, &str, &str, u32, u32)] = &[
+            (Language::CSharp, "A.cs", "class A { void F(bool c, int[] xs) { if (c) { foreach (var x in xs) { G(x); } } } }", 3, 3),
+            (Language::Python, "a.py", "def f(c, p):\n    if c:\n        with open(p) as handle:\n            g(handle)\n", 2, 1),
+        ];
+        for (lang, filename, code, cyclomatic, cognitive) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            assert_eq!(result.functions.len(), 1, "{code}");
+            let metrics = &result.functions[0].metrics;
+            assert_eq!(
+                (metrics.cyclomatic, metrics.cognitive),
+                (*cyclomatic, *cognitive),
+                "{code}"
+            );
+        }
+    }
+
     fn assert_two_case_switch(code: &str, lang: Language, filename: &str) {
         let result = parse_and_analyze(code.as_bytes(), lang, filename);
         assert_eq!(result.functions.len(), 1, "{filename}: {code}");
