@@ -6393,12 +6393,13 @@ func helper(count int) {}
 }
 "#,
         );
-        let found: Vec<(
+        type Row = (
             String,
             Option<String>,
             Vec<String>,
             Option<GuardsUnknownReason>,
-        )> = entries(Language::Go, &[("main.go", &source)])
+        );
+        let found: Vec<Row> = entries(Language::Go, &[("main.go", &source)])
             .into_iter()
             .filter(|entry| entry.kind == EntryKind::HttpHandler)
             .map(|entry| {
