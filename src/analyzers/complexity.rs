@@ -734,8 +734,9 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
         "switch_statement",
         "match_expression",
         "case",
-        "try_statement",
-        "begin",
+        "catch_clause",
+        "except_clause",
+        "rescue",
     ];
 
     let boundary_types = get_nested_scope_node_types(lang);
@@ -1583,6 +1584,95 @@ fn third() { for i in 0..10 { println!("{}", i); } }
         assert_eq!(metrics.max_nesting, 2);
     }
 
+    /// Each probe has an `if` in the `try` body, the `catch` body, and the
+    /// `finally` body. SonarSource gives `try` and `finally` nothing and no
+    /// nesting. A `catch` adds 1 and nests. The cognitive complexity is
+    /// 1 + 1 + (1 + 1) + 1 = 5, and the `if` in the `catch` body has its body
+    /// at nesting level 2.
+    fn assert_try_catch(code: &str, lang: Language, filename: &str, expected: (u32, u32)) {
+        let result = parse_and_analyze(code.as_bytes(), lang, filename);
+        assert_eq!(result.functions.len(), 1, "{filename}");
+        let metrics = &result.functions[0].metrics;
+        assert_eq!(
+            (metrics.cyclomatic, metrics.cognitive),
+            expected,
+            "cyclomatic and cognitive of {filename}"
+        );
+        assert_eq!(metrics.max_nesting, 2, "max_nesting of {filename}");
+    }
+
+    #[test]
+    fn test_try_catch_python() {
+        assert_try_catch(
+            "def f(a, b, c):\n    try:\n        if a:\n            g()\n    except E:\n        if b:\n            h()\n    finally:\n        if c:\n            k()\n",
+            Language::Python,
+            "a.py",
+            (5, 5),
+        );
+    }
+
+    #[test]
+    fn test_try_catch_ecmascript() {
+        let code = "function f(a, b, c) {\n  try { if (a) { g(); } } catch (e) { if (b) { h(); } } finally { if (c) { k(); } }\n}\n";
+        for (lang, filename) in [
+            (Language::TypeScript, "a.ts"),
+            (Language::Tsx, "a.tsx"),
+            (Language::JavaScript, "a.js"),
+            (Language::Jsx, "a.jsx"),
+        ] {
+            assert_try_catch(code, lang, filename, (5, 5));
+        }
+    }
+
+    #[test]
+    fn test_try_catch_java_and_csharp() {
+        let code = "class A {\n  void f(boolean a, boolean b, boolean c) {\n    try { if (a) { g(); } } catch (E e) { if (b) { h(); } } finally { if (c) { k(); } }\n  }\n}\n";
+        assert_try_catch(code, Language::Java, "A.java", (5, 5));
+        assert_try_catch(code, Language::CSharp, "A.cs", (5, 5));
+    }
+
+    #[test]
+    fn test_try_catch_cpp() {
+        // C++ has no `finally`: 1 + 1 + (1 + 1) = 4.
+        assert_try_catch(
+            "void f(bool a, bool b) {\n  try { if (a) { g(); } } catch (int e) { if (b) { h(); } }\n}\n",
+            Language::Cpp,
+            "a.cpp",
+            (4, 4),
+        );
+    }
+
+    #[test]
+    fn test_try_catch_ruby() {
+        assert_try_catch(
+            "def f(a, b, c)\n  begin\n    if a\n      g\n    end\n  rescue E\n    if b\n      h\n    end\n  ensure\n    if c\n      k\n    end\n  end\nend\n",
+            Language::Ruby,
+            "a.rb",
+            (5, 5),
+        );
+    }
+
+    #[test]
+    fn test_try_catch_ruby_method_rescue() {
+        // 1 + 1 + (1 + 1) = 4.
+        assert_try_catch(
+            "def f(a, b)\n  if a\n    g\n  end\nrescue E\n  if b\n    h\n  end\nend\n",
+            Language::Ruby,
+            "a.rb",
+            (4, 4),
+        );
+    }
+
+    #[test]
+    fn test_try_catch_php() {
+        assert_try_catch(
+            "<?php\nfunction f($a, $b, $c) {\n  try { if ($a) { g(); } } catch (E $e) { if ($b) { h(); } } finally { if ($c) { k(); } }\n}\n",
+            Language::Php,
+            "a.php",
+            (5, 5),
+        );
+    }
+
     // SonarSource Cognitive Complexity specification tests
     // These tests verify the fix for:
     // 1. else/elif adding +1 only (no nesting penalty)
@@ -1699,56 +1789,6 @@ fn complex(a: bool, b: bool, c: bool) {
         assert_eq!(
             result.functions[0].metrics.cognitive, 6,
             "3 nested ifs should equal 6 (1+2+3)"
-        );
-    }
-
-    #[test]
-    fn test_cognitive_catch_no_nesting_penalty() {
-        // Per SonarSource spec: catch adds +1 only, no nesting penalty
-        // (similar to else - it's already inside a nesting structure)
-        let code = br#"
-function safeParse(json) {
-    try {
-        if (json) {
-            return JSON.parse(json);
-        }
-    } catch (e) {
-        return null;
-    }
-}
-"#;
-        let result = parse_and_analyze(code, Language::JavaScript, "test.js");
-        assert_eq!(result.functions.len(), 1);
-        // try = +1 (nesting construct)
-        // if (inside try, depth 1) = +1 + 1 = 2
-        // catch = +1 (flat, no depth penalty per SonarSource spec)
-        // Total = 4
-        assert_eq!(
-            result.functions[0].metrics.cognitive, 4,
-            "try + nested if + catch should equal 4 (catch should not get nesting penalty)"
-        );
-    }
-
-    #[test]
-    fn test_cognitive_python_except_no_nesting_penalty() {
-        // Python's except is equivalent to catch - should be flat
-        let code = br#"
-def safe_parse(data):
-    try:
-        if data:
-            return json.loads(data)
-    except ValueError:
-        return None
-"#;
-        let result = parse_and_analyze(code, Language::Python, "test.py");
-        assert_eq!(result.functions.len(), 1);
-        // try = +1
-        // if (depth 1) = +1 + 1 = 2
-        // except = +1 (flat)
-        // Total = 4
-        assert_eq!(
-            result.functions[0].metrics.cognitive, 4,
-            "try + nested if + except should equal 4 (except should not get nesting penalty)"
         );
     }
 

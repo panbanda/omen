@@ -51,7 +51,6 @@ fn listed(language: Language) -> bool {
 const KNOWN_UNKNOWN_KINDS: &[&str] = &[
     "decision/CSharp/enhanced_for_statement",
     "decision/Python/comprehension",
-    "flat/C/catch_clause",
     "nesting/CSharp/enhanced_for_statement",
 ];
 

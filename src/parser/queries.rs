@@ -31,7 +31,6 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "for_statement",
             "while_statement",
             "with_statement",
-            "try_statement",
             "elif_clause",
             "except_clause",
             "case_clause",
@@ -69,12 +68,21 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "catch_clause",
             "conditional_expression",
         ],
-        Language::C | Language::Cpp => &[
+        Language::C => &[
             "if_statement",
             "for_statement",
             "while_statement",
             "do_statement",
             "case_statement",
+            "conditional_expression",
+        ],
+        Language::Cpp => &[
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "do_statement",
+            "case_statement",
+            "catch_clause",
             "conditional_expression",
         ],
         Language::Ruby => &[
@@ -163,7 +171,7 @@ fn named_children_of_kind<'tree>(
 /// Get nesting node types for cognitive complexity.
 pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
-        Language::Ruby => &["if", "unless", "while", "until", "for", "case", "begin"],
+        Language::Ruby => &["if", "unless", "while", "until", "for", "case", "rescue"],
         Language::Go => &[
             "if_statement",
             "for_statement",
@@ -176,7 +184,7 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
             "for_statement",
             "while_statement",
             "with_statement",
-            "try_statement",
+            "except_clause",
         ],
         Language::Rust => &[
             "if_expression",
@@ -192,7 +200,7 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
             "while_statement",
             "do_statement",
             "switch_statement",
-            "try_statement",
+            "catch_clause",
         ],
         Language::Java | Language::CSharp => &[
             "if_statement",
@@ -201,14 +209,22 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
             "while_statement",
             "do_statement",
             "switch_expression",
-            "try_statement",
+            "catch_clause",
         ],
-        Language::C | Language::Cpp => &[
+        Language::C => &[
             "if_statement",
             "for_statement",
             "while_statement",
             "do_statement",
             "switch_statement",
+        ],
+        Language::Cpp => &[
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "do_statement",
+            "switch_statement",
+            "catch_clause",
         ],
         Language::Php => &[
             "if_statement",
@@ -217,7 +233,7 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
             "while_statement",
             "do_statement",
             "switch_statement",
-            "try_statement",
+            "catch_clause",
         ],
         Language::Bash => &[
             "if_statement",
@@ -233,17 +249,15 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
 /// Per SonarSource cognitive complexity spec, these constructs add +1 to complexity
 /// but do NOT increment the nesting level. This includes:
 /// - else/elif/elseif clauses (already inside a nesting if)
-/// - catch/except/rescue clauses (already inside a nesting try)
 /// - break/continue/goto (flow-breaking statements)
 ///
 /// Reference: https://www.sonarsource.com/docs/CognitiveComplexity.pdf
 pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
-        Language::Ruby => &["elsif", "else", "when", "rescue", "break", "next", "redo"],
+        Language::Ruby => &["elsif", "else", "when", "break", "next", "redo"],
         Language::Python => &[
             "else_clause",
             "elif_clause",
-            "except_clause", // Python's catch equivalent
             "break_statement",
             "continue_statement",
         ],
@@ -257,18 +271,14 @@ pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
         ],
         Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => &[
             "else_clause",
-            "catch_clause",
             "switch_case",
             "break_statement",
             "continue_statement",
         ],
-        Language::Java | Language::CSharp => {
-            &["catch_clause", "break_statement", "continue_statement"]
-        }
+        Language::Java | Language::CSharp => &["break_statement", "continue_statement"],
         Language::C | Language::Cpp => &[
             "else_clause",
             "case_statement",
-            "catch_clause",
             "break_statement",
             "continue_statement",
             "goto_statement",
@@ -276,7 +286,6 @@ pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
         Language::Php => &[
             "else_clause",
             "else_if_clause",
-            "catch_clause",
             "break_statement",
             "continue_statement",
         ],
@@ -539,10 +548,10 @@ mod tests {
         // The Go grammar has no `else_clause` kind.
         assert!(get_flat_node_types(Language::Go).is_empty());
 
-        // Ruby has elsif and rescue
+        // Ruby has elsif. A `rescue` nests, as a `catch` does.
         let ruby_types = get_flat_node_types(Language::Ruby);
         assert!(ruby_types.contains(&"elsif"));
-        assert!(ruby_types.contains(&"rescue"));
+        assert!(get_nesting_node_types(Language::Ruby).contains(&"rescue"));
 
         // C/C++ should include goto_statement
         let c_types = get_flat_node_types(Language::C);
