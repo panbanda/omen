@@ -53,11 +53,17 @@ path does not start at an entry point in test code, and it does not end at a sin
 either flag.
 
 The flag `constant_argument` tells that the value that makes the sink is a constant. A
-constant is a literal, or literals that an operator joins, as in `"SELECT a " + "FROM t"`.
-The value is one of these:
+constant is a literal, literals that an operator joins, as in `"SELECT a " + "FROM t"`, or
+a list of such literals, as `["ls", "-l"]`. The value is one of these:
 
 - The SQL text, for a sink of the category `sql_string_construction`.
 - The value of the setting, for a TLS setting such as `verify=` or `InsecureSkipVerify:`.
+- The command, for a sink of the category `command_execution`: the program and its
+  arguments, or the text that a shell reads. An option is not a part of the command. The
+  options are the environment, the directory, the context of Go `CommandContext`, the
+  attributes of a process, the output variables of PHP `exec`, and each object, hash, or
+  keyword argument, such as the options of Node `exec` or Ruby `chdir:`. Thus
+  `exec("ls", { cwd: directory })` has `constant_argument: true`.
 - Each argument of the call, for each other sink.
 
 A TLS setting that turns the check off is a sink. The literal value `true` (or `false` for
@@ -86,6 +92,14 @@ The value `"0"` for `NODE_TLS_REJECT_UNAUTHORIZED` turns off the check for each 
 connection of the process. An assignment to `process.env.NODE_TLS_REJECT_UNAUTHORIZED` and a
 property with this key in an object literal are sinks. A value that is not a literal is a sink
 with `constant_argument: false`.
+
+A server also has the option `rejectUnauthorized`, as in
+`https.createServer({ requestCert: true, rejectUnauthorized: false })`. There, the value
+`false` tells that TLS does not verify the certificates of the clients. Omen reports this
+property as it reports the property of a client. A check of the certificate in the code of the
+server, such as a check of `socket.authorized` for each request, is code that omen does not
+read. Without `requestCert: true`, a server asks for no client certificate, and the option has
+no effect. Omen does not know this case, and reports the property also there.
 
 A sink of the category `unsafe_html_output` marks a string as safe HTML. The template or the
 page then does not escape the string. These are the sinks:

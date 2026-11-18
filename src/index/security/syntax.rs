@@ -347,6 +347,28 @@ pub fn is_literal(node: Node<'_>) -> bool {
             .collect();
         return !operands.is_empty() && operands.into_iter().all(is_literal);
     }
+    // A list of literals, as `["ls", "-l"]` or Go `[]string{"ls"}`, is a constant.
+    if kind == "composite_literal" {
+        return node.child_by_field_name("body").is_some_and(is_literal);
+    }
+    if matches!(
+        kind,
+        "array"
+            | "list"
+            | "tuple"
+            | "array_creation_expression"
+            | "array_element_initializer"
+            | "literal_value"
+            | "literal_element"
+            | "initializer_list"
+            | "array_initializer"
+    ) {
+        let mut cursor = node.walk();
+        return node
+            .named_children(&mut cursor)
+            .filter(|element| !element.kind().contains("comment"))
+            .all(is_literal);
+    }
     if kind.contains("string") {
         if node.kind() == "encapsed_string"
             && has_descendant(node, &|child| child.kind() == "variable_name")
@@ -410,6 +432,15 @@ fn is_disabled_setting(value: Node<'_>, disabled: &[&str], source: &[u8]) -> boo
     disabled.contains(&found.as_str()) || !is_literal(value)
 }
 
+/// An argument that gives options and not a part of a command: an object, a hash, a
+/// dictionary, or a keyword argument.
+fn is_option(node: Node<'_>) -> bool {
+    matches!(
+        node.kind(),
+        "object" | "hash" | "dictionary" | "keyword_argument" | "pair"
+    )
+}
+
 /// The shells that read a command from the argument after `-c`.
 const SHELLS: [&str; 5] = ["sh", "bash", "zsh", "dash", "ksh"];
 
@@ -465,6 +496,14 @@ pub fn subject<'tree>(
         }
         // The matcher gives the receiver as the only argument.
         Predicate::Receiver => Some(arguments.to_vec()),
+        Predicate::Command { from, to } => Some(
+            arguments
+                .iter()
+                .enumerate()
+                .filter(|(position, node)| (*from..*to).contains(position) && !is_option(**node))
+                .map(|(_, node)| *node)
+                .collect(),
+        ),
         Predicate::ShellArgv { program, list } => {
             shell_command(arguments, *program, *list, source).map(|command| vec![command])
         }
@@ -525,7 +564,7 @@ pub fn holds(
         Predicate::Without(inner) => !holds(inner, arguments, source, syntax),
         Predicate::HasArgument { index } => arguments.get(*index).is_some(),
         Predicate::BlockPass => arguments.iter().any(|node| node.kind() == "block_argument"),
-        Predicate::Receiver => true,
+        Predicate::Receiver | Predicate::Command { .. } => true,
         Predicate::ShellArgv { program, list } => {
             shell_command(arguments, *program, *list, source).is_some()
         }

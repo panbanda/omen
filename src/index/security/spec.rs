@@ -74,6 +74,13 @@ pub enum Predicate {
     },
     /// An argument passes a block, as `&block` does in Ruby.
     BlockPass,
+    /// The call runs a command. It always holds. The arguments from `from` to `to` (without
+    /// `to`) give the command, and the others are options, such as the environment or a
+    /// callback. An object, a hash, and a keyword argument are options at each position.
+    Command {
+        from: usize,
+        to: usize,
+    },
     /// The call runs a shell with the option `-c`. The argument `list` is an array literal. When
     /// `program` and `list` are the same index, the array holds the shell, then `-c`, then the
     /// command, as Python `["sh", "-c", command]` does. Otherwise the argument `program` is the
@@ -213,6 +220,14 @@ const fn path(
     }
 }
 
+/// The arguments of a command sink: the command is the arguments from `from` to `to`.
+const fn command(from: usize, to: usize) -> Predicate {
+    Predicate::Command { from, to }
+}
+
+/// Each argument from `from` gives the command.
+const REST: usize = usize::MAX;
+
 const fn method(
     category: SinkCategory,
     languages: &'static [Language],
@@ -307,13 +322,13 @@ const CURL_VERIFY: &[&str] = &["curlopt_ssl_verifypeer", "curlopt_ssl_verifyhost
 /// Each row of the table, in the order in which a sink of a category is chosen.
 pub const SPECS: &[SinkSpec] = &[
     // Python
-    path(CommandExecution, PYTHON, "os", "system|popen", Always),
+    path(CommandExecution, PYTHON, "os", "system|popen", command(0, 1)),
     path(
         CommandExecution,
         PYTHON,
         "subprocess",
         "run|call|check_call|check_output|Popen",
-        keyword("shell", "true"),
+        All(&[keyword("shell", "true"), command(0, 1)]),
     ),
     path(
         CommandExecution,
@@ -325,7 +340,13 @@ pub const SPECS: &[SinkSpec] = &[
             list: 0,
         },
     ),
-    path(CommandExecution, PYTHON, "subprocess", "getoutput|getstatusoutput", Always),
+    path(
+        CommandExecution,
+        PYTHON,
+        "subprocess",
+        "getoutput|getstatusoutput",
+        command(0, 1),
+    ),
     path(CodeEvaluation, PYTHON, "", "eval|exec", Always),
     path(UnsafeDeserialization, PYTHON, "pickle|_pickle|cPickle", "loads|load", Always),
     path(UnsafeDeserialization, PYTHON, "marshal", "loads|load", Always),
@@ -391,14 +412,14 @@ pub const SPECS: &[SinkSpec] = &[
         ECMA,
         "child_process|node:child_process",
         "exec|execSync",
-        Always,
+        command(0, 1),
     ),
     path(
         CommandExecution,
         ECMA,
         "child_process|node:child_process",
         "spawn|spawnSync|execFile|execFileSync",
-        keyword("shell", "true"),
+        All(&[keyword("shell", "true"), command(0, 2)]),
     ),
     path(
         CommandExecution,
@@ -546,9 +567,16 @@ pub const SPECS: &[SinkSpec] = &[
     },
     // Go
     // A command is built here. The sink does not say that the command runs.
-    path(CommandExecution, GO, "os/exec", "Command|CommandContext", Always),
-    path(CommandExecution, GO, "os", "StartProcess", Always),
-    path(CommandExecution, GO, "syscall", "Exec|ForkExec|StartProcess", Always),
+    path(CommandExecution, GO, "os/exec", "Command", command(0, REST)),
+    path(CommandExecution, GO, "os/exec", "CommandContext", command(1, REST)),
+    path(CommandExecution, GO, "os", "StartProcess", command(0, 2)),
+    path(
+        CommandExecution,
+        GO,
+        "syscall",
+        "Exec|ForkExec|StartProcess",
+        command(0, 2),
+    ),
     // `database/sql`, sqlx, gorm, and xorm. A name that other libraries use for a key or a
     // value, such as `Get` or `Select`, is not in the list.
     method(
@@ -599,7 +627,7 @@ pub const SPECS: &[SinkSpec] = &[
     ),
     // Rust
     // A command is built here. The sink does not say that the command runs.
-    path(CommandExecution, RUST, "std::process::Command", "new", Always),
+    path(CommandExecution, RUST, "std::process::Command", "new", command(0, 1)),
     path(
         SqlStringConstruction,
         RUST,
@@ -645,9 +673,15 @@ pub const SPECS: &[SinkSpec] = &[
         JAVA,
         "java.lang.Runtime.getRuntime()",
         "exec",
-        Always,
+        command(0, 1),
     ),
-    path(CommandExecution, JAVA, "java.lang", "ProcessBuilder", Always),
+    path(
+        CommandExecution,
+        JAVA,
+        "java.lang",
+        "ProcessBuilder",
+        command(0, REST),
+    ),
     path(CodeEvaluation, JAVA, "javax.script.ScriptEngine", "eval", Always),
     path(
         UnsafeDeserialization,
@@ -704,8 +738,20 @@ pub const SPECS: &[SinkSpec] = &[
         ]),
     ),
     // C#
-    path(CommandExecution, CSHARP, "System.Diagnostics.Process", "Start", Always),
-    path(CommandExecution, CSHARP, "System.Diagnostics", "ProcessStartInfo", Always),
+    path(
+        CommandExecution,
+        CSHARP,
+        "System.Diagnostics.Process",
+        "Start",
+        command(0, 2),
+    ),
+    path(
+        CommandExecution,
+        CSHARP,
+        "System.Diagnostics",
+        "ProcessStartInfo",
+        command(0, 2),
+    ),
     path(
         CodeEvaluation,
         CSHARP,
@@ -771,15 +817,15 @@ pub const SPECS: &[SinkSpec] = &[
         predicate: Always,
     },
     // Ruby
-    path(CommandExecution, RUBY, "", "system|exec|spawn", Always),
+    path(CommandExecution, RUBY, "", "system|exec|spawn", command(0, REST)),
     path(
         CommandExecution,
         RUBY,
         "Open3",
         "popen3|popen2|popen2e|capture2|capture2e|capture3",
-        Always,
+        command(0, REST),
     ),
-    path(CommandExecution, RUBY, "IO", "popen", Always),
+    path(CommandExecution, RUBY, "IO", "popen", command(0, REST)),
     path(CodeEvaluation, RUBY, "", "eval", Always),
     path(
         CodeEvaluation,
@@ -824,9 +870,10 @@ pub const SPECS: &[SinkSpec] = &[
         CommandExecution,
         PHP,
         "",
-        "exec|shell_exec|system|passthru|popen|proc_open|pcntl_exec",
-        Always,
+        "exec|shell_exec|system|passthru|popen|proc_open",
+        command(0, 1),
     ),
+    path(CommandExecution, PHP, "", "pcntl_exec", command(0, 2)),
     path(CodeEvaluation, PHP, "", "eval|assert|create_function", Always),
     path(UnsafeDeserialization, PHP, "", "unserialize", Always),
     path(
@@ -890,10 +937,18 @@ pub const SPECS: &[SinkSpec] = &[
         CommandExecution,
         C,
         "",
-        "system|popen|execl|execlp|execle|execv|execvp|execve",
-        Always,
+        "system|popen",
+        command(0, 1),
     ),
-    path(CommandExecution, CPP, "std", "system", Always),
+    path(
+        CommandExecution,
+        C,
+        "",
+        "execl|execlp|execle|execv|execvp",
+        command(0, REST),
+    ),
+    path(CommandExecution, C, "", "execve", command(0, 2)),
+    path(CommandExecution, CPP, "std", "system", command(0, 1)),
     path(WeakHash, C, "", "MD5|MD5_Init|MD4|SHA1|SHA1_Init|EVP_md5|EVP_sha1", Always),
     path(
         WeakCipher,

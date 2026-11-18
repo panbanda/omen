@@ -1201,6 +1201,92 @@ mod tests {
         );
     }
 
+    /// The flag `constant_argument` of each command sink, in the order of the lines.
+    fn command_constants(language: Language, name: &str, source: &str) -> Vec<bool> {
+        constants(language, &[(name, source)])
+            .into_iter()
+            .filter(|(_, category, _)| *category == "command_execution")
+            .map(|(_, _, constant)| constant)
+            .collect()
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_ecma() {
+        let source = "import { exec, execSync, spawn } from \"node:child_process\";\n\nexport function run(command: string, options: object) {\n  exec(\"ls -l\", options, () => {});\n  execSync(\"ls\", { cwd: options });\n  spawn(\"ls\", [\"-l\"], { shell: true, cwd: options });\n  exec(command, { timeout: 5 });\n}\n";
+        assert_eq!(
+            command_constants(Language::TypeScript, "a.ts", source),
+            [true, true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_python() {
+        let source = "import os\nimport subprocess\n\ndef run(command, directory):\n    subprocess.run(\"ls -l\", shell=True, cwd=directory)\n    os.popen(\"ls\", \"r\", directory)\n    subprocess.getoutput(command)\n";
+        assert_eq!(
+            command_constants(Language::Python, "a.py", source),
+            [true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_go() {
+        let source = "package main\n\nimport (\n\t\"context\"\n\t\"os\"\n\t\"os/exec\"\n\t\"syscall\"\n)\n\nfunc run(ctx context.Context, attributes *os.ProcAttr, environment []string, program string) {\n\texec.CommandContext(ctx, \"ls\", \"-l\")\n\tos.StartProcess(\"/bin/ls\", []string{\"ls\"}, attributes)\n\tsyscall.Exec(\"/bin/ls\", []string{\"ls\"}, environment)\n\texec.CommandContext(ctx, program)\n}\n";
+        assert_eq!(
+            command_constants(Language::Go, "main.go", source),
+            [true, true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_java() {
+        let source = "public class A {\n    void run(String[] environment, java.io.File directory, String command) throws Exception {\n        Runtime.getRuntime().exec(\"ls -l\", environment, directory);\n        Runtime.getRuntime().exec(command, environment);\n    }\n}\n";
+        assert_eq!(
+            command_constants(Language::Java, "A.java", source),
+            [true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_csharp() {
+        let source = "using System.Diagnostics;\n\npublic class A {\n    public void Run(string user, System.Security.SecureString password, string domain, string command) {\n        Process.Start(\"ls\", \"-l\", user, password, domain);\n        Process.Start(command, \"-l\", user, password, domain);\n    }\n}\n";
+        assert_eq!(
+            command_constants(Language::CSharp, "A.cs", source),
+            [true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_ruby() {
+        let source = "require \"open3\"\n\ndef run(directory, command)\n  system({ \"HOME\" => directory }, \"ls -l\", chdir: directory)\n  Open3.capture2(\"ls\", chdir: directory)\n  system(command, chdir: directory)\nend\n";
+        assert_eq!(
+            command_constants(Language::Ruby, "a.rb", source),
+            [true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_php() {
+        let source = "<?php\nfunction run($command, $environment) {\n    exec(\"ls -l\", $output, $code);\n    proc_open(\"ls\", $descriptors, $pipes, \"/\", $environment);\n    pcntl_exec(\"/bin/ls\", [\"-l\"], $environment);\n    system($command, $code);\n}\n";
+        assert_eq!(
+            command_constants(Language::Php, "a.php", source),
+            [true, true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_c_and_cpp() {
+        let c = "#include <stdio.h>\n#include <unistd.h>\n\nvoid run(const char *mode, char *const environment[], char *const arguments[], const char *command) {\n    popen(\"ls -l\", mode);\n    execve(\"/bin/ls\", 0, environment);\n    popen(command, \"r\");\n}\n";
+        assert_eq!(
+            command_constants(Language::C, "a.c", c),
+            [true, true, false]
+        );
+        let cpp = "#include <cstdlib>\n\nvoid run(const char *command) {\n    std::system(\"ls\");\n    std::system(command);\n}\n";
+        assert_eq!(
+            command_constants(Language::Cpp, "a.cpp", cpp),
+            [true, false]
+        );
+    }
+
     #[test]
     fn a_trusted_html_string_is_unsafe_html_output_csharp_and_rust() {
         let csharp = "using Microsoft.AspNetCore.Html;\n\npublic class A {\n    public object Run(string text) {\n        new HtmlString(text);\n        return new HtmlString(\"<br>\");\n    }\n}\n";

@@ -760,7 +760,10 @@ impl FileContext<'_> {
                 let held = call.is_some()
                     && syntax::holds(&spec.predicate, arguments, self.source, &self.syntax)
                     || (call.is_none()
-                        && matches!(spec.predicate, Predicate::Always | Predicate::Receiver));
+                        && matches!(
+                            spec.predicate,
+                            Predicate::Always | Predicate::Receiver | Predicate::Command { .. }
+                        ));
                 if !held {
                     continue;
                 }
