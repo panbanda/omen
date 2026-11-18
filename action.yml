@@ -74,10 +74,10 @@ outputs:
     description: 'Health grade (A, B, C, D, F)'
     value: ${{ steps.score.outputs.health-grade }}
   diff-json:
-    description: 'Full omen diff JSON output; empty on non-pull-request events.'
+    description: 'The omen diff JSON, or the path of a file that holds it when it has 100,000 bytes or more; empty on non-pull-request events.'
     value: ${{ steps.diff.outputs.diff-json }}
   score-json:
-    description: 'Full omen score JSON output'
+    description: 'The omen score JSON, or the path of a file that holds it when it has 100,000 bytes or more.'
     value: ${{ steps.score.outputs.score-json }}
 
 runs:
@@ -264,13 +264,17 @@ runs:
           core.setOutput('risk-score', String(diff.score));
           core.setOutput('risk-level', diff.level);
 
+          // Later steps receive this output in an environment variable. Linux
+          // refuses to start a process with one environment string longer than
+          // 128 KiB (MAX_ARG_STRLEN), so a larger output goes to a file.
           const json = JSON.stringify(diff);
-          if (json.length < 900000) {
+          const bytes = Buffer.byteLength(json);
+          if (bytes < 100000) {
             core.setOutput('diff-json', json);
           } else {
             const filePath = `${process.env.RUNNER_TEMP}/omen-diff.json`;
             fs.writeFileSync(filePath, json);
-            core.warning(`diff-json output exceeds 900KB (${json.length} bytes), writing to file instead`);
+            core.info(`diff-json output has ${bytes} bytes; it is in ${filePath}`);
             core.setOutput('diff-json', filePath);
           }
 
@@ -310,13 +314,15 @@ runs:
           core.setOutput('health-score', String(score.overall_score));
           core.setOutput('health-grade', score.grade);
 
+          // The same 128 KiB environment limit applies as for diff-json.
           const json = JSON.stringify(score);
-          if (json.length < 900000) {
+          const bytes = Buffer.byteLength(json);
+          if (bytes < 100000) {
             core.setOutput('score-json', json);
           } else {
             const filePath = `${process.env.RUNNER_TEMP}/omen-score.json`;
             fs.writeFileSync(filePath, json);
-            core.warning(`score-json output exceeds 900KB (${json.length} bytes), writing to file instead`);
+            core.info(`score-json output has ${bytes} bytes; it is in ${filePath}`);
             core.setOutput('score-json', filePath);
           }
 
