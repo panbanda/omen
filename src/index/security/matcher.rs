@@ -99,6 +99,43 @@ fn split_path(text: &str) -> Vec<String> {
         .collect()
 }
 
+fn locals_by_name(file: &FileSymbols) -> HashMap<&str, Vec<&Local>> {
+    let mut found: HashMap<&str, Vec<&Local>> = HashMap::new();
+    for local in &file.locals {
+        found
+            .entry(local.name.name.as_str())
+            .or_default()
+            .push(local);
+    }
+    found
+}
+
+/// The names of the locals whose first value starts with a call of a function `promisify`,
+/// as `promisify(exec)` or `util.promisify(exec)`. Only the text before the first `(` counts.
+fn promisified_names<'a>(file: &'a FileSymbols, source: &[u8]) -> HashSet<&'a str> {
+    const LONGEST_CALLEE: usize = 64;
+    file.locals
+        .iter()
+        .filter(|local| {
+            local.name.value_start.is_some_and(|start| {
+                let end = source.len().min(start + LONGEST_CALLEE);
+                let text = source.get(start..end).unwrap_or_default();
+                text.iter()
+                    .position(|byte| *byte == b'(')
+                    .is_some_and(|open| {
+                        let callee: Vec<u8> = text[..open]
+                            .iter()
+                            .copied()
+                            .filter(|byte| !byte.is_ascii_whitespace())
+                            .collect();
+                        callee.ends_with(b"promisify")
+                    })
+            })
+        })
+        .map(|local| local.name.name.as_str())
+        .collect()
+}
+
 /// The package of an import path: `@scope/name/sub` gives `@scope/name`, and `name/sub`
 /// gives `name`.
 fn package_name(module_path: &str) -> String {
@@ -275,6 +312,10 @@ struct FileContext<'a> {
     test_ranges: Vec<Range<usize>>,
     generated: bool,
     call_kinds: Vec<&'static str>,
+    /// The locals of the file by name.
+    locals: HashMap<&'a str, Vec<&'a Local>>,
+    /// The names of the locals whose first value is a call of a function `promisify`.
+    promisified_names: HashSet<&'a str>,
 }
 
 pub(super) fn file_sinks(
@@ -308,6 +349,8 @@ pub(super) fn file_sinks(
         generated: language == Language::Go
             && syntax::has_generated_header(parsed.root_node(), source),
         call_kinds: language_spec(language).call_syntax().call_kinds(),
+        locals: locals_by_name(file),
+        promisified_names: promisified_names(file, source),
     };
     let mut sinks = Vec::new();
     let covered = context.reference_sinks(&mut sinks);
@@ -370,10 +413,11 @@ impl FileContext<'_> {
                 && local.name.value_start.is_none_or(|value| value < at)
                 && local.block.as_ref().is_none_or(|block| block.contains(&at))
         };
+        let candidates = self.locals.get(name).map_or(&[][..], Vec::as_slice);
         let nearest = |owner: Option<usize>| {
-            self.file
-                .locals
+            candidates
                 .iter()
+                .copied()
                 .filter(visible)
                 .filter(|local| local.owner == owner)
                 .min_by_key(|local| local.block.as_ref().map_or(usize::MAX, |block| block.len()))
@@ -660,11 +704,12 @@ impl FileContext<'_> {
                     .any(|binding| Self::binds(binding, &reference.name));
             let chain = self.owner_chain(facts.owner);
             // `const run = promisify(exec)` makes `run(command)` a call of `exec`.
-            let promisified = if aliased {
-                None
-            } else {
-                self.promisified(reference, &chain, facts.start_byte)
-            };
+            let promisified =
+                if aliased || !self.promisified_names.contains(reference.name.as_str()) {
+                    None
+                } else {
+                    self.promisified(reference, &chain, facts.start_byte)
+                };
             let callee_name = promisified
                 .as_ref()
                 .and_then(|(path, _)| path.last())

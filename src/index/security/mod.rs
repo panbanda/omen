@@ -268,6 +268,11 @@ mod tests {
     type Found = (String, u32, &'static str, &'static str);
 
     fn sinks(language: Language, files: &[(&str, &str)]) -> Vec<Sink> {
+        sinks_timed(language, files).0
+    }
+
+    /// The sinks, and the time of the matcher alone.
+    fn sinks_timed(language: Language, files: &[(&str, &str)]) -> (Vec<Sink>, std::time::Duration) {
         let parsed: Vec<ParseResult> = files
             .iter()
             .map(|(name, text)| {
@@ -299,7 +304,38 @@ mod tests {
                     .expect("each file of the index has a tree")
             })
             .collect();
-        find_sinks(&trees, &index)
+        let start = std::time::Instant::now();
+        let found = find_sinks(&trees, &index);
+        (found, start.elapsed())
+    }
+
+    /// A function with `count` locals and a bare call of each local.
+    fn many_bare_calls_at(count: usize) -> std::time::Duration {
+        let mut source = String::from("export function run() {\n");
+        for number in 0..count {
+            source.push_str(&format!(
+                "  const v{number} = make({number});\n  v{number}();\n"
+            ));
+        }
+        source.push_str("}\n");
+        let (found, elapsed) = sinks_timed(Language::TypeScript, &[("a.ts", &source)]);
+        assert!(found.is_empty());
+        elapsed
+    }
+
+    #[test]
+    fn many_bare_calls_give_no_sink() {
+        many_bare_calls_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_bare_calls_of_locals_scale_linearly() {
+        crate::index::security::entry::tests::assert_scales_linearly(
+            "bare calls",
+            20_000,
+            many_bare_calls_at,
+        );
     }
 
     fn found(language: Language, files: &[(&str, &str)]) -> Vec<Found> {

@@ -2015,7 +2015,7 @@ fn collect_strings(node: Node<'_>, context: &Context<'_>, out: &mut Vec<String>)
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::index::security) mod tests {
     use std::path::Path;
 
     use super::*;
@@ -2063,7 +2063,7 @@ mod tests {
     /// check uses the best of two runs for each size, and a floor for a time that is too short to
     /// compare, so the speed of the machine does not change the result. The absolute bound is far
     /// above any speed that a CI machine has.
-    pub(super) fn assert_scales_linearly(
+    pub(in crate::index::security) fn assert_scales_linearly(
         label: &str,
         size: usize,
         run: impl Fn(usize) -> std::time::Duration,
