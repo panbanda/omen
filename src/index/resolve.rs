@@ -1501,8 +1501,10 @@ impl<'a> Resolver<'a> {
     /// The member of the enclosing type that a call on a local name gets
     /// when the first value of the name is the object in a wrapper, as Rust
     /// `let this = Arc::new(self);` gives. `Arc` and `Rc` give the methods of
-    /// their content. A type of the repository with the name of the wrapper
-    /// is a different type, thus it gives `None`.
+    /// their content, but not the methods that they define themselves. A type
+    /// of the repository with the name of the wrapper is a different type,
+    /// thus it gives `None`. `self.clone()` gives the object only when the
+    /// `clone` of the type returns `Self`.
     fn on_wrapped_self(
         &self,
         local: &Local,
@@ -1511,11 +1513,43 @@ impl<'a> Resolver<'a> {
         name: &str,
         arity: usize,
     ) -> Option<Outcome> {
+        // The methods of `Arc` and `Rc` that do not call the method of the
+        // content with the same name.
+        const WRAPPER_METHODS: [&str; 9] = [
+            "as_ref",
+            "borrow",
+            "clone",
+            "clone_from",
+            "deref",
+            "into",
+            "to_owned",
+            "try_into",
+            "type_id",
+        ];
         let wrapper = local.self_wrapper.as_deref()?;
         if !wrapper.is_empty() && !self.types(wrapper, None, file).is_empty() {
             return None;
         }
+        if !wrapper.is_empty() && WRAPPER_METHODS.contains(&name) {
+            return Some(Outcome::none(Status::External));
+        }
         let owner = self.enclosing_type(chain)?;
+        if wrapper.is_empty() {
+            let owner_name = self.symbol(owner).name.as_str();
+            let clones = self.members(owner, "clone", 0, &mut BTreeSet::new());
+            let other_type = clones.iter().any(|clone| {
+                let returned = self
+                    .facts(*clone)
+                    .return_type
+                    .as_deref()
+                    .unwrap_or_default();
+                let returned = returned.split('<').next().unwrap_or_default().trim();
+                returned != "Self" && returned != owner_name
+            });
+            if other_type {
+                return None;
+            }
+        }
         let members = self.members(owner, name, arity, &mut BTreeSet::new());
         Outcome::of(Basis::EnclosingType, members)
     }
@@ -3457,6 +3491,45 @@ mod false_edge_tests {
                 "28 Node.chain>that.start Ambiguous NameOnly [a.rs#Node.start, a.rs#Other.start]",
                 "29 Node.chain>(..).start Ambiguous NameOnly [a.rs#Node.start, a.rs#Other.start]",
                 "30 Node.chain>late.start Ambiguous NameOnly [a.rs#Node.start, a.rs#Other.start]",
+            ]
+        );
+    }
+
+    /// `self.clone()` gives `Self` only when the `clone` of the type returns
+    /// `Self`. An inherent `clone` can return a different type.
+    #[test]
+    fn test_rust_clone_of_self_has_the_return_type_of_the_clone_of_the_type() {
+        let other = "struct Node;\n\nstruct Other;\n\nimpl Other {\n    fn start(&self) {}\n}\n\nimpl Node {\n    fn start(&self) {}\n\n    fn clone(&self) -> Other {\n        Other\n    }\n\n    fn share(&self) {\n        let copy = self.clone();\n        copy.start();\n    }\n}\n";
+        let rows = rows_of(&[("a.rs", other)], "a.rs", "start");
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].contains("[a.rs#Node.start]"), "{rows:?}");
+        for clone in [
+            "impl Clone for Node {\n    fn clone(&self) -> Self {\n        Node\n    }\n}\n",
+            "impl Clone for Node {\n    fn clone(&self) -> Node {\n        Node\n    }\n}\n",
+            "",
+        ] {
+            let source = format!("struct Node;\n\nimpl Node {{\n    fn start(&self) {{}}\n\n    fn share(&self) {{\n        let copy = self.clone();\n        copy.start();\n    }}\n}}\n\n{clone}");
+            assert_eq!(
+                rows_of(&[("a.rs", source.as_str())], "a.rs", "start"),
+                ["8 Node.share>copy.start UniqueCandidate EnclosingType [a.rs#Node.start]"],
+                "{clone}"
+            );
+        }
+    }
+
+    /// `Arc` and `Rc` have their own `clone`, `as_ref`, and other methods. A
+    /// call of one of them on the wrapper is not a call of the method of the
+    /// content.
+    #[test]
+    fn test_rust_method_of_the_wrapper_is_not_a_method_of_self() {
+        let source = "use std::sync::Arc;\n\nstruct Node;\n\nimpl Clone for Node {\n    fn clone(&self) -> Self {\n        Node\n    }\n}\n\nimpl AsRef<Node> for Node {\n    fn as_ref(&self) -> &Node {\n        self\n    }\n}\n\nimpl Node {\n    fn start(&self) {}\n\n    fn run(self) {\n        let this = Arc::new(self);\n        this.clone();\n        this.as_ref();\n        this.start();\n    }\n}\n";
+        assert_eq!(
+            rows(&[("a.rs", source)], "a.rs"),
+            [
+                "21 Node.run>Arc::new External - []",
+                "22 Node.run>this.clone External - []",
+                "23 Node.run>this.as_ref External - []",
+                "24 Node.run>this.start UniqueCandidate EnclosingType [a.rs#Node.start]",
             ]
         );
     }
