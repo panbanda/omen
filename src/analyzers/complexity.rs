@@ -561,13 +561,7 @@ enum ChainBranch {
     None,
 }
 
-fn chain_branch(
-    kind: &str,
-    parent_kind: &str,
-    field: Option<&str>,
-    lang: Language,
-    flat_types: &[&str],
-) -> ChainBranch {
+fn chain_branch(kind: &str, parent_kind: &str, field: Option<&str>, lang: Language) -> ChainBranch {
     // These grammars have a clause kind for `else if`. An `if` in their
     // `else` body is a nested `if`.
     if matches!(lang, Language::Python | Language::Ruby | Language::Bash) {
@@ -582,7 +576,8 @@ fn chain_branch(
     }
     if is_if {
         ChainBranch::ElseIf
-    } else if flat_types.contains(&kind) {
+    } else if matches!(kind, "else_clause" | "else_if_clause" | "else") {
+        // The clause adds its own 1 as a flat kind.
         ChainBranch::None
     } else {
         ChainBranch::BareElse
@@ -614,10 +609,34 @@ fn is_jump_without_label(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
         .any(|child| match child.kind() {
             "statement_identifier" | "label" | "label_name" => true,
             "identifier" => lang == Language::Java,
-            "integer" => child.utf8_text(source).is_ok_and(|text| text.trim() != "1"),
+            "integer" | "parenthesized_expression" => php_jump_level(child, source) != Some(1),
             _ => false,
         });
     !has_label
+}
+
+/// The number of loops that a PHP `break` or `continue` leaves, such as 2 in
+/// `break 2`, `break (2)`, or `break 0b10`.
+fn php_jump_level(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<u64> {
+    match node.kind() {
+        "parenthesized_expression" => php_jump_level(node.named_child(0)?, source),
+        "integer" => {
+            let text = node.utf8_text(source).ok()?.replace('_', "").to_lowercase();
+            let (digits, radix) = if let Some(hex) = text.strip_prefix("0x") {
+                (hex.to_string(), 16)
+            } else if let Some(binary) = text.strip_prefix("0b") {
+                (binary.to_string(), 2)
+            } else if let Some(octal) = text.strip_prefix("0o") {
+                (octal.to_string(), 8)
+            } else if text.len() > 1 && text.starts_with('0') {
+                (text[1..].to_string(), 8)
+            } else {
+                (text, 10)
+            };
+            u64::from_str_radix(&digits, radix).ok()
+        }
+        _ => None,
+    }
 }
 
 /// Calculate cognitive complexity with nesting penalties.
@@ -673,7 +692,7 @@ fn calculate_cognitive_complexity(
 
         let current_depth = depth_at_level[level];
         let branch = if current.is_named() && cursor_depth != start_depth {
-            chain_branch(kind, parent_kind, cursor.field_name(), lang, flat_types)
+            chain_branch(kind, parent_kind, cursor.field_name(), lang)
         } else {
             ChainBranch::None
         };
@@ -683,9 +702,14 @@ fn calculate_cognitive_complexity(
         // keyword (e.g. Ruby's "if"/"while"/"case"), the anonymous keyword
         // token itself shares that kind string with its parent statement
         // node, and must not be double-counted as a second construct.
-        if branch != ChainBranch::None {
-            // SonarSource gives `else if` and `else` +1 each, with no nesting
-            // increment. An `else_clause` parent already added the +1.
+        // An `else` body without braces adds 1 for the `else`, and the body
+        // then gets its own score below.
+        if branch == ChainBranch::BareElse {
+            complexity += 1;
+        }
+        if branch == ChainBranch::ElseIf {
+            // SonarSource gives `else if` +1, with no nesting increment. An
+            // `else_clause` parent already added the +1.
             if parent_kind != "else_clause" {
                 complexity += 1;
             }
@@ -779,7 +803,6 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
     ];
 
     let boundary_types = get_nested_scope_node_types(lang);
-    let flat_types = get_flat_node_types(lang);
     let mut max_depth = initial_depth;
     let mut cursor = node.walk();
     let start_depth = cursor.depth();
@@ -818,8 +841,7 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
         // must not be treated as a second nesting construct.
         let is_else_if = current.is_named()
             && cursor_depth != start_depth
-            && chain_branch(kind, parent_kind, cursor.field_name(), lang, flat_types)
-                == ChainBranch::ElseIf;
+            && chain_branch(kind, parent_kind, cursor.field_name(), lang) == ChainBranch::ElseIf;
         let child_depth = if is_else_if {
             current_depth
         } else if current.is_named() && NESTING_KINDS.contains(&kind) {
@@ -2108,6 +2130,37 @@ fn drain(v: &mut Vec<i32>) {
             if cyclomatic != [*expected] {
                 failures.push(format!(
                     "{lang:?} {cyclomatic:?}, expected {expected}: {code}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// An `else` without braces adds 1, and its body keeps its own score.
+    /// A PHP jump level is a number: `break (2)` leaves two loops, and
+    /// `continue 0x1` leaves one.
+    #[test]
+    fn test_bare_else_and_php_jump_levels() {
+        let cases: &[(Language, &str, &str, u32)] = &[
+            (Language::Java, "A.java", "class A { void f(boolean a, boolean b) { if (a) { g(); } else while (b) { g(); } } }", 4),
+            (Language::Java, "A.java", "class A { void f(boolean a, boolean b) { while (a) { if (b) g(); else break; } } }", 4),
+            (Language::CSharp, "A.cs", "class A { void F(bool a, bool b) { if (a) { G(); } else while (b) { G(); } } }", 4),
+            (Language::CSharp, "A.cs", "class A { void F(bool a) { if (a) { G(); } else goto done; done: ; } }", 3),
+            (Language::Php, "a.php", "<?php\nfunction f() { while (1) { while (1) { break (2); } } }\n", 4),
+            (Language::Php, "a.php", "<?php\nfunction f() { while (1) { continue 0x1; } }\n", 1),
+            (Language::Php, "a.php", "<?php\nfunction f() { while (1) { while (1) { continue 0b10; } } }\n", 4),
+        ];
+        let mut failures = Vec::new();
+        for (lang, filename, code, expected) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            let cognitive: Vec<u32> = result
+                .functions
+                .iter()
+                .map(|f| f.metrics.cognitive)
+                .collect();
+            if cognitive != [*expected] {
+                failures.push(format!(
+                    "{lang:?} {cognitive:?}, expected {expected}: {code}"
                 ));
             }
         }
