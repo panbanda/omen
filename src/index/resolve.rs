@@ -220,6 +220,10 @@ struct Resolver<'a> {
     references_by_start: Vec<HashMap<usize, Vec<usize>>>,
     /// For each Ruby type, the types that have it as a direct parent type.
     ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
+    /// For each Go type, the Go structs that embed it.
+    go_embedders: OnceLock<BTreeMap<Id, Vec<Id>>>,
+    /// The results of `implementations`, by the interface and the method name.
+    implementations_cache: RwLock<HashMap<MethodQuery, Arc<Vec<Id>>>>,
     /// The results of `types`, `package_files`, and `visible_files`. The
     /// resolution of one call asks for the same facts many times.
     types_cache: RwLock<HashMap<TypeQuery, Vec<Id>>>,
@@ -257,6 +261,9 @@ type ModuleScopes = HashMap<Option<usize>, ([bool; 3], Vec<String>)>;
 /// The types, the name, and the number of arguments of one lookup of the
 /// members of `cfg` twin types.
 type TwinQuery = (Vec<Id>, String, usize);
+
+/// A type and the name of one of its methods.
+type MethodQuery = (Id, String);
 
 /// The file and the name of one lookup of an exported name.
 type ExportQuery = (usize, String);
@@ -369,6 +376,8 @@ impl<'a> Resolver<'a> {
             locals_by_owner,
             references_by_start,
             ruby_children: OnceLock::new(),
+            go_embedders: OnceLock::new(),
+            implementations_cache: RwLock::new(HashMap::new()),
             types_cache: RwLock::new(HashMap::new()),
             twin_members_cache: RwLock::new(HashMap::new()),
             module_scopes_cache: RwLock::new(HashMap::new()),
@@ -1486,6 +1495,15 @@ impl<'a> Resolver<'a> {
                 return Outcome::offered(basis, twins.to_vec());
             }
         }
+        if let ([interface], Family::Go) = (types, self.family(file)) {
+            if self.symbol(*interface).kind == SymbolKind::Interface {
+                let mut found = self.members(*interface, name, arity, &mut BTreeSet::new());
+                if !found.is_empty() {
+                    found.extend(self.implementations(*interface, name).iter().copied());
+                    return Outcome::offered(Basis::Implementation, found);
+                }
+            }
+        }
         if dynamic || types.len() > 1 {
             return Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file));
         }
@@ -2283,6 +2301,111 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// The methods `name` of the Go types of the repository that implement
+    /// the interface `interface`. A type implements the interface when it has
+    /// a method, its own or one that an embedded field promotes, for each
+    /// method name of the interface. The rule does not compare the
+    /// signatures, and an embedded interface outside the repository adds no
+    /// name. Thus the result can have more types than the compiler accepts.
+    fn implementations(&self, interface: Id, name: &str) -> Arc<Vec<Id>> {
+        let query = (interface, name.to_string());
+        if let Some(found) = self.implementations_cache.read().get(&query) {
+            return Arc::clone(found);
+        }
+        let required = self.interface_method_names(interface);
+        let embedders = self
+            .go_embedders
+            .get_or_init(|| self.embedders_of_go_types());
+        // The types that own a method `name`, and the structs that embed them.
+        let mut pending: Vec<Id> = self
+            .named(name, interface.0)
+            .filter(|id| is_callable(self.symbol(*id)) && self.symbol(*id).receiver_type.is_some())
+            .filter_map(|id| {
+                match self
+                    .types(self.symbol(id).container.as_deref()?, None, id.0)
+                    .as_slice()
+                {
+                    [owner] => Some(*owner),
+                    _ => None,
+                }
+            })
+            .collect();
+        let mut owners = BTreeSet::new();
+        while let Some(owner) = pending.pop() {
+            if owners.insert(owner) {
+                pending.extend(embedders.get(&owner).into_iter().flatten().copied());
+            }
+        }
+        let mut found: Vec<Id> = owners
+            .into_iter()
+            .filter(|owner| self.symbol(*owner).kind != SymbolKind::Interface)
+            .filter(|owner| {
+                required.iter().all(|method| {
+                    !self
+                        .members(*owner, method, 0, &mut BTreeSet::new())
+                        .is_empty()
+                })
+            })
+            .flat_map(|owner| self.members(owner, name, 0, &mut BTreeSet::new()))
+            .collect();
+        found.sort();
+        found.dedup();
+        let found = Arc::new(found);
+        self.implementations_cache
+            .write()
+            .insert(query, Arc::clone(&found));
+        found
+    }
+
+    /// The method names of a Go interface, with the names of the interfaces
+    /// of the repository that it embeds.
+    fn interface_method_names(&self, interface: Id) -> BTreeSet<&'a str> {
+        let mut names = BTreeSet::new();
+        let mut seen = BTreeSet::new();
+        let mut pending = vec![interface];
+        while let Some(current) = pending.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+            let path = self.member_path(current);
+            let facts = &self.files[current.0];
+            names.extend(
+                facts
+                    .symbols
+                    .iter()
+                    .zip(&facts.link_facts)
+                    .filter(|(symbol, link)| {
+                        symbol.kind == SymbolKind::Method && link.container_path == path
+                    })
+                    .map(|(symbol, _)| symbol.name.as_str()),
+            );
+            pending.extend(self.parents(current));
+        }
+        names
+    }
+
+    /// For each Go type, the Go structs that embed it.
+    fn embedders_of_go_types(&self) -> BTreeMap<Id, Vec<Id>> {
+        let mut embedders: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
+        for (file, facts) in self.files.iter().enumerate() {
+            if self.family(file) != Family::Go {
+                continue;
+            }
+            for (position, symbol) in facts.symbols.iter().enumerate() {
+                if symbol.kind != SymbolKind::Struct || symbol.supertypes.is_empty() {
+                    continue;
+                }
+                for embedded in self.parents((file, position)) {
+                    embedders
+                        .entry(embedded)
+                        .or_default()
+                        .push((file, position));
+                }
+            }
+        }
+        embedders
+    }
+
     /// The types that include the Ruby module `module`, and their subtypes.
     fn including_types(&self, module: Id) -> BTreeSet<Id> {
         let mut found = BTreeSet::new();
@@ -2466,15 +2589,18 @@ impl<'a> Resolver<'a> {
             }
         }
         // The argument types select one of the overloads that the rule found.
-        // The basis stays the basis of that rule.
-        if outcome.status == Status::Ambiguous && outcome.basis != Some(Basis::NameOnly) {
+        // The basis stays the basis of that rule. The candidates of a name or
+        // of an interface are not overloads.
+        let selects = outcome.status == Status::Ambiguous
+            && !matches!(outcome.basis, Some(Basis::NameOnly | Basis::Implementation));
+        if selects {
             if let Some(only) = self.overload(file, position, &outcome.candidates) {
                 outcome.status = Status::UniqueCandidate;
                 outcome.candidates = vec![only];
             }
         }
-        if outcome.status == Status::Ambiguous
-            && outcome.basis != Some(Basis::NameOnly)
+        if selects
+            && outcome.status == Status::Ambiguous
             && self.are_condition_twins(&outcome.candidates)
         {
             outcome.status = Status::UniqueCandidate;

@@ -57,6 +57,7 @@ const TYPE_IDENTIFIER: &str = "type_identifier";
 const FIELD_DECLARATION: &str = "field_declaration";
 const QUALIFIED_TYPE: &str = "qualified_type";
 const GENERIC_TYPE: &str = "generic_type";
+const TYPE_ELEMENT: &str = "type_elem";
 
 const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new(
@@ -228,6 +229,7 @@ impl LanguageSpec for Go {
             FIELD_DECLARATION,
             QUALIFIED_TYPE,
             GENERIC_TYPE,
+            TYPE_ELEMENT,
         ]
     }
 
@@ -295,7 +297,13 @@ impl LanguageSpec for Go {
                             .map(|fields| embedded_types(fields, context))
                             .unwrap_or_default();
                     }
-                    Some(INTERFACE_TYPE) => draft.kind = SymbolKind::Interface,
+                    Some(INTERFACE_TYPE) => {
+                        draft.kind = SymbolKind::Interface;
+                        // The methods of an embedded interface are methods of the interface.
+                        draft.supertypes = definition
+                            .map(|interface| embedded_interfaces(interface, context))
+                            .unwrap_or_default();
+                    }
                     // The type that a name is based on, for example a slice. A
                     // defined type has its own methods.
                     _ => {
@@ -383,6 +391,23 @@ fn embedded_types(fields: Node<'_>, context: &Context<'_, '_>) -> Vec<String> {
         .filter(|field| embedded_type_name(*field).is_some())
         .filter_map(|field| field.child_by_field_name("type"))
         .map(|declared| context.text(declared))
+        .collect();
+    found
+}
+
+/// The interfaces that an interface embeds, as `io.Reader` in
+/// `interface { io.Reader; Close() error }`. A union or an approximation of
+/// types, as `~int | string`, is a constraint and not an interface.
+fn embedded_interfaces(interface: Node<'_>, context: &Context<'_, '_>) -> Vec<String> {
+    let mut cursor = interface.walk();
+    let found: Vec<String> = interface
+        .named_children(&mut cursor)
+        .filter(|element| element.kind() == TYPE_ELEMENT && element.named_child_count() == 1)
+        .filter_map(|element| element.named_child(0))
+        .filter(|embedded| {
+            [TYPE_IDENTIFIER, QUALIFIED_TYPE, GENERIC_TYPE].contains(&embedded.kind())
+        })
+        .map(|embedded| context.text(embedded))
         .collect();
     found
 }
@@ -665,7 +690,7 @@ mod tests {
             [
                 "23 apply>f Unresolved - []",
                 "27 measure>size.Area UniqueCandidate ReceiverDeclaredType [shapes/shapes.go#Square.Area]",
-                "27 measure>shape.Area Ambiguous NameOnly [shapes/shapes.go#Circle.Area, shapes/shapes.go#Shape.Area, shapes/shapes.go#Square.Area]",
+                "27 measure>shape.Area Ambiguous Implementation [shapes/shapes.go#Circle.Area, shapes/shapes.go#Shape.Area, shapes/shapes.go#Square.Area]",
                 "32 shadow>Helper UniqueCandidate LexicalScope [main.go#shadow.Helper]",
                 "37 external>b.WriteString External - []",
                 "38 external>unknown.Area Unresolved - []",

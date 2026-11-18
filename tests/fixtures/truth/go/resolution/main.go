@@ -30,6 +30,7 @@ func main() {
 	render(&Context{})
 	store.Open()
 	localGeneric()
+	_ = persist(&local.Disk{})
 }
 
 func first[T any](values []T) T {
@@ -39,4 +40,8 @@ func first[T any](values []T) T {
 func localGeneric() int {
 	_ = store.Must[string]("x")
 	return first[int]([]int{1})
+}
+
+func persist(store local.Store) error {
+	return store.Save("a")
 }

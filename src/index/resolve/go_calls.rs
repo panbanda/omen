@@ -133,3 +133,28 @@ fn test_call_with_explicit_type_arguments() {
         ]
     );
 }
+
+/// A call through an interface gives no edge: the syntax does not tell the
+/// dynamic type. The candidates are the method of the interface and the
+/// methods of the repository types that implement the interface.
+#[test]
+fn test_interface_call_offers_the_implementations() {
+    let files = [
+        ("go.mod", "module example.com/shop\n"),
+        (
+            "storage/storage.go",
+            "package storage\n\ntype Closer interface {\n\tClose() error\n}\n\ntype Store interface {\n\tCloser\n\tSave(path string) error\n}\n\ntype Disk struct{}\n\nfunc (d *Disk) Save(path string) error { return nil }\n\nfunc (d *Disk) Close() error { return nil }\n\ntype Cloud struct{ *Disk }\n\ntype Partial struct{}\n\nfunc (p Partial) Save(path string) error { return nil }\n\ntype Memory struct{}\n\nfunc (m Memory) Save(path string) error { return nil }\n\nfunc (m Memory) Close() error { return nil }\n",
+        ),
+        (
+            "main.go",
+            "package main\n\nimport \"example.com/shop/storage\"\n\nfunc run(store storage.Store) {\n\t_ = store.Save(\"a\")\n\t_ = store.Close()\n}\n",
+        ),
+    ];
+    assert_eq!(
+        rows(&files, "main.go"),
+        [
+            "6 run>store.Save Ambiguous Implementation [storage/storage.go#Disk.Save, storage/storage.go#Memory.Save, storage/storage.go#Store.Save]",
+            "7 run>store.Close Ambiguous Implementation [storage/storage.go#Closer.Close, storage/storage.go#Disk.Close, storage/storage.go#Memory.Close]",
+        ]
+    );
+}

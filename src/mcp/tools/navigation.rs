@@ -217,6 +217,7 @@ pub(super) static GET_SYMBOL: ToolSpec = ToolSpec {
 /// order of `ResolutionBasis::RANKED`.
 pub(super) const BASIS_NAMES: &[&str] = &[
     "name_only",
+    "implementation",
     "same_package",
     "imported_module",
     "qualified_path",
