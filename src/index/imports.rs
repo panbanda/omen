@@ -709,10 +709,16 @@ impl Repository<'_> {
     }
 
     fn rust(&self, binding: &ImportBinding) -> ImportTarget {
+        // `mod name;` declares a child of the module of the file. A crate with the same
+        // name is a different module.
+        if binding.kind == ImportKind::ModuleDeclaration {
+            return self
+                .rust_child(&Self::rust_children(&binding.file), &binding.module_path)
+                .map_or(ImportTarget::Unresolved, ImportTarget::Resolved);
+        }
         match self.rust_walk(&binding.file, &binding.module_path) {
             None => ImportTarget::Unresolved,
             Some((module, true, _)) => ImportTarget::Resolved(module),
-            Some(_) if binding.kind == ImportKind::ModuleDeclaration => ImportTarget::Unresolved,
             Some(_) => ImportTarget::External,
         }
     }
