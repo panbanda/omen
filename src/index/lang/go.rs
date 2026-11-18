@@ -21,7 +21,12 @@ const COMPOSITE_LITERAL: &str = "composite_literal";
 const UNARY_EXPRESSION: &str = "unary_expression";
 
 const CALL_SYNTAX: CallSyntax = CallSyntax {
-    calls: &[("call_expression", "function", "arguments")],
+    // `f[T](x)` with one argument has the syntax of a conversion to a
+    // generic type. It has no argument list.
+    calls: &[
+        ("call_expression", "function", "arguments"),
+        ("type_conversion_expression", "type", ""),
+    ],
     constructions: &[],
     members: &[("selector_expression", "operand", "field")],
     paths: &[],

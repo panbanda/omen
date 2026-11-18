@@ -108,3 +108,28 @@ fn test_package_of_a_test_file() {
         ["6 TestOther>check Unresolved - []"]
     );
 }
+
+/// A call with explicit type arguments and one argument has the syntax of a
+/// conversion to a generic type. It is a call when the name is a function.
+#[test]
+fn test_call_with_explicit_type_arguments() {
+    let files = [
+        ("go.mod", "module example.com/shop\n"),
+        (
+            "util/util.go",
+            "package util\n\nfunc Must[T any](value T) T { return value }\n",
+        ),
+        (
+            "a.go",
+            "package main\n\nimport \"example.com/shop/util\"\n\ntype Box[T any] struct{ value T }\n\nfunc errorAs[T error](err error) (T, bool) {\n\tvar zero T\n\treturn zero, false\n}\n\nfunc run(err error) {\n\t_, _ = errorAs[error](err)\n\t_ = util.Must[int](1)\n\t_ = Box[int](Box[int]{})\n}\n",
+        ),
+    ];
+    assert_eq!(
+        rows(&files, "a.go"),
+        [
+            "13 run>errorAs UniqueCandidate SameFile [a.go#errorAs]",
+            "14 run>util.Must UniqueCandidate ImportedModule [util/util.go#Must]",
+            "15 run>Box Unresolved - []",
+        ]
+    );
+}

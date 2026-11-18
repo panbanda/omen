@@ -29,4 +29,14 @@ func main() {
 	runLocal(nil)
 	render(&Context{})
 	store.Open()
+	localGeneric()
+}
+
+func first[T any](values []T) T {
+	return values[0]
+}
+
+func localGeneric() int {
+	_ = store.Must[string]("x")
+	return first[int]([]int{1})
 }
