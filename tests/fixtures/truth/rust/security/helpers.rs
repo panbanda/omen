@@ -33,3 +33,5 @@ impl Command {
 pub fn compute(data: &[u8]) -> usize {
     data.len()
 }
+
+pub struct PreEscaped(pub String);

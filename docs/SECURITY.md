@@ -46,11 +46,131 @@ run.
 | tls_verification_disabled | 295 | `requests.get(url, verify=False)` |
 | hardcoded_credential (experimental) | 798 | a token with a provider prefix |
 | memory_unsafe | 119 | a Rust `unsafe` block |
+| unsafe_html_output | 79 | `template.HTML(text)` |
 
 A sink has a basis: `imported_symbol` (an import binds the callee), `builtin` (the
 language gives the name), or `name_only` (only the name is evidence). A sink in test
-code has the flag `in_test`. A call with only literal arguments has the flag
-`constant_argument`.
+code has the flag `in_test`. The rule for test code is in `docs/TEST_CODE.md`: it
+uses the syntax and the path of the file. A sink in a Go file with the standard header of generated
+code has the flag `in_generated`. The header is a line that matches
+`^// Code generated .* DO NOT EDIT\.$` before the first text that is not a comment. A
+path does not start at an entry point in test code, and it does not end at a sink with
+either flag.
+
+The flag `constant_argument` tells that the value that makes the sink is a constant. A
+constant is a literal, literals that an operator joins, as in `"SELECT a " + "FROM t"`, or
+a list of such literals, as `["ls", "-l"]`. The value is one of these:
+
+- The SQL text, for a sink of the category `sql_string_construction`.
+- The value of the setting, for a TLS setting such as `verify=` or `InsecureSkipVerify:`.
+- The command, for a sink of the category `command_execution`: the program and its
+  arguments, or the text that a shell reads. An option is not a part of the command. The
+  options are the environment, the directory, the context of Go `CommandContext`, the
+  attributes of a process, the output variables of PHP `exec`, and each object, hash, or
+  keyword argument, such as the options of Node `exec` or Ruby `chdir:`. Thus
+  `exec("ls", { cwd: directory })` has `constant_argument: true`.
+- Each argument of the call, for each other sink.
+
+A TLS setting that turns the check off is a sink. The literal value `true` (or `false` for
+`verify=` and `rejectUnauthorized:`) turns the check off. A value that is not a literal,
+as `InsecureSkipVerify: settings.Skip`, is also a sink, with `constant_argument: false`,
+because it can turn the check off at run time. A literal value that keeps the check on gives
+no sink. This rule applies to Go `InsecureSkipVerify` in a `tls.Config` literal and in an
+assignment, Python `verify=`, Node `rejectUnauthorized:`, Rust
+`danger_accept_invalid_certs` and `danger_accept_invalid_hostnames`, and the `curl` options
+of PHP and C. A Java hostname verifier and a C# validation callback are not settings. A
+verifier or a callback that is not a constant is usually a real check, thus omen reports only
+a verifier or a callback that always accepts.
+
+In Node, the property `rejectUnauthorized` is a sink in each object literal, also when omen
+does not know the function that gets the object. The key is an option of the TLS client of
+Node, and libraries such as `pg`, `nodemailer`, and `ioredis` give it to that client. Omen
+limits the rule in these ways:
+
+- Only a property of an object literal counts. A type, a class field, a destructured name,
+  a string, and a comment are not properties of an object literal.
+- The key must be exactly `rejectUnauthorized`, with or without quotation marks.
+- An object that is an argument of a call of `https` or `tls` gives one sink, at the call.
+- An object that is an argument of a repository function gives no sink.
+
+The value `"0"` for `NODE_TLS_REJECT_UNAUTHORIZED` turns off the check for each TLS
+connection of the process. An assignment to `process.env.NODE_TLS_REJECT_UNAUTHORIZED` and a
+property with this key in an object literal are sinks. A value that is not a literal is a sink
+with `constant_argument: false`.
+
+A server also has the option `rejectUnauthorized`, as in
+`https.createServer({ requestCert: true, rejectUnauthorized: false })`. There, the value
+`false` tells that TLS does not verify the certificates of the clients. Omen reports this
+property as it reports the property of a client. A check of the certificate in the code of the
+server, such as a check of `socket.authorized` for each request, is code that omen does not
+read. Without `requestCert: true`, a server asks for no client certificate, and the option has
+no effect. Omen does not know this case, and reports the property also there.
+
+A sink of the category `unsafe_html_output` marks a string as safe HTML. The template or the
+page then does not escape the string. These are the sinks:
+
+| Language | Sink |
+| --- | --- |
+| Go | A conversion to `HTML`, `HTMLAttr`, `JS`, `JSStr`, `CSS`, `URL`, or `Srcset` of `html/template` |
+| Python | `mark_safe` and `SafeString` of `django.utils.safestring`, and `Markup` of `markupsafe`, `flask`, or `jinja2` |
+| Ruby | A call of the method `html_safe`. The receiver is the value. |
+| JavaScript and TypeScript | An assignment to a member `innerHTML` or `outerHTML`, a call of the method `insertAdjacentHTML`, and the JSX attribute `dangerouslySetInnerHTML` |
+| C# | The constructor of `HtmlString` of `Microsoft.AspNetCore.Html` or `System.Web` |
+| Rust | `PreEscaped` of `maud` |
+
+Java, PHP, C, C++, and Bash have no such sink in the standard library. A template file, such
+as an ERB file or a JSX file that omen does not parse, is not in the analysis. The receiver
+of an assignment to `innerHTML` can have any type. Thus such a sink has the basis
+`name_only`, and a repository class with a member `innerHTML` also gives a sink.
+
+In Node and Python, a call that starts a program is a command sink only when a shell reads
+the command. These are the forms:
+
+- Node `exec` and `execSync`.
+- Node `spawn`, `spawnSync`, `execFile`, and `execFileSync` with `shell: true`.
+- The same Node functions with a shell and the option `-c`, as in
+  `spawn("sh", ["-c", command])`. The shells are `sh`, `bash`, `zsh`, `dash`, and `ksh`,
+  with or without a directory.
+- Python `subprocess` with `shell=True`, or with a list such as `["sh", "-c", command]`.
+
+A call that starts a program without a shell, as `execFile(program, args)`, is not a sink.
+Node `fork` is not a sink: it runs a module of Node, not a command of a shell. A name that a
+`const` declaration binds to `promisify(exec)` of `util` is the function `exec`. Thus a call of
+the name is a sink when a call of `exec` is.
+
+In Node, `new Script(code)` and `compileFunction(code)` of the module `vm` are sinks of the
+category `code_evaluation`. The construction compiles the code, thus the methods that run
+the script, such as `runInContext`, are not sinks again. For isolated-vm, a call of `eval`,
+`evalSync`, `evalClosure`, `compileScript`, or a similar method is a sink only when a declared
+type gives the receiver, as `context: ivm.Context` does. A receiver without such a type is not
+a sink, because the method names are common.
+
+The Go SQL sinks are methods: omen does not know the type of the receiver. The names are
+`Query`, `QueryRow`, `Exec`, `Prepare` (`database/sql`), `Queryx`, `QueryRowx`, `MustExec`,
+`NamedExec`, `NamedQuery` (sqlx), `Raw` (gorm), and `SQL` (xorm), with the SQL text first,
+and the forms with `Context`, with the SQL text second. A built string as the SQL text makes
+the sink. Omen does not use the names `Get` and `Select`: other libraries use them for a
+key or a value.
+
+The Node SQL sinks are the methods `query`, `execute`, `raw`, `queryRawUnsafe`, and
+`$queryRawUnsafe`, with a built string as the first argument. These rules limit them:
+
+- When an import of an external package gives the receiver, as `git: SimpleGit` from
+  `simple-git` does, the package must be a SQL library, such as `pg`, `mysql2`, `knex`,
+  `typeorm`, `sequelize`, or `@prisma/client`. The list is in `src/index/security/spec.rs`.
+  A package matches by its full name or by its name without the scope, thus `typeorm`
+  matches `@n8n/typeorm`. A receiver without a known package stays a sink with the basis
+  `name_only`.
+- A repository class can inherit the method from a library class, as a TypeORM
+  `Repository` does. Thus only a repository definition of the method excludes the call.
+- An array is not a built string, as `git.raw(["log", `${name}`])` shows.
+- A tagged template, as ``String.raw`...` `` or ``sql`...` ``, is not a built string: the
+  tag function gets the parts and the values apart.
+
+A template whose substitutions are all literals, as `` `SELECT ${"a"}` ``, has
+`constant_argument: true`. Omen does not mark other templates as constant. A substitution
+of a variable, of a field, or of a parameter, such as `${tablePrefix}` in a TypeORM
+migration, can have a value from the configuration, and omen does not follow values.
 
 The precision of each category on real repositories is in
 `docs/benchmarks/security-precision.md`. A category with a precision below 50
