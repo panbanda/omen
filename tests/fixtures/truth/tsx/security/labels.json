@@ -6,6 +6,7 @@
   "closed_world": false,
   "sinks_closed_world": true,
   "not_applicable": [
+    {"dimension": "sinks", "category": "unsafe_html_output/aliased_import", "reason": "The sink is a DOM property, a DOM method, or a React property. No import binds it."},
     {"dimension": "sinks", "category": "memory_unsafe", "reason": "JavaScript is a memory-safe language."},
     {"dimension": "sinks", "category": "sql_string_construction/aliased_import", "reason": "The sink is a method of a connection object. No import binds the method."},
     {"dimension": "sinks", "category": "hardcoded_credential/aliased_import", "reason": "A string literal is not imported."},
@@ -67,6 +68,15 @@
     {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/sinks.test.tsx", "line": 14, "basis": "builtin", "in_test": true},
     {"label": "command_execution.real_call.spawn_shell", "category": "command_execution", "scenario": "real_call", "file": "extra.tsx", "line": 4, "basis": "imported_symbol"},
     {"label": "command_execution.safe_variant.spawn_plain", "category": "command_execution", "scenario": "safe_variant", "file": "extra.tsx", "line": 5, "flagged": false},
-    {"label": "command_execution.safe_variant.spawn_nested", "category": "command_execution", "scenario": "safe_variant", "file": "extra.tsx", "line": 6, "flagged": false}
+    {"label": "command_execution.safe_variant.spawn_nested", "category": "command_execution", "scenario": "safe_variant", "file": "extra.tsx", "line": 6, "flagged": false},
+    {"label": "unsafe_html_output.real_call", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.tsx", "line": 2, "basis": "name_only", "constant_argument": false},
+    {"label": "unsafe_html_output.safe_variant", "category": "unsafe_html_output", "scenario": "safe_variant", "file": "html.tsx", "line": 3, "flagged": false},
+    {"label": "unsafe_html_output.name_in_string", "category": "unsafe_html_output", "scenario": "name_in_string", "file": "html.tsx", "line": 4, "flagged": false},
+    {"label": "unsafe_html_output.name_in_comment", "category": "unsafe_html_output", "scenario": "name_in_comment", "file": "html.tsx", "line": 5, "flagged": false},
+    {"label": "unsafe_html_output.real_call.constant", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.tsx", "line": 7, "basis": "name_only", "constant_argument": true},
+    {"label": "unsafe_html_output.real_call.insert_adjacent_html", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.tsx", "line": 6, "basis": "name_only", "constant_argument": false},
+    {"label": "unsafe_html_output.same_name_symbol", "category": "unsafe_html_output", "scenario": "same_name_symbol", "file": "html_decoys.tsx", "line": 5, "flagged": false},
+    {"label": "unsafe_html_output.in_test", "category": "unsafe_html_output", "scenario": "in_test", "file": "tests/html.test.tsx", "line": 2, "basis": "name_only", "in_test": true},
+    {"label": "unsafe_html_output.real_call.dangerously_set_inner_html", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.tsx", "line": 12, "basis": "name_only", "constant_argument": false}
   ]
 }

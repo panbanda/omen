@@ -21,3 +21,11 @@ func New() string {
 func NewCipher(key []byte) []byte {
 	return key
 }
+
+func Exec(program string) string {
+	return program
+}
+
+func HTML(text string) string {
+	return text
+}
