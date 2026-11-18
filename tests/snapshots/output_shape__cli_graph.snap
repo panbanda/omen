@@ -20,6 +20,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "file": "string",
       "in_degree": "number",
       "instability": "number",
+      "is_test": "bool",
       "out_degree": "number",
       "pagerank": "number"
     }

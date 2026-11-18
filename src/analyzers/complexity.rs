@@ -264,6 +264,10 @@ pub struct FunctionResult {
     pub end_line: u32,
     /// Complexity metrics.
     pub metrics: Metrics,
+    /// The syntax makes the function test code. The path of the file is not
+    /// a part of this value: the command adds it. See `docs/TEST_CODE.md`.
+    #[serde(default)]
+    pub is_test: bool,
 }
 
 /// Complexity metrics for a function.
@@ -321,12 +325,19 @@ fn analyze_parse_result(result: &ParseResult) -> FileResult {
         avg_cognitive: 0.0,
     };
 
+    // The tree is here, thus the test code of the file costs no second parse.
+    let test_lines = crate::index::test_code::test_lines_of_tree(
+        result.root_node(),
+        &result.source,
+        result.language,
+    );
     for func in functions {
         let metrics = analyze_function_complexity(&func, result);
         file_result.total_cyclomatic += metrics.cyclomatic;
         file_result.total_cognitive += metrics.cognitive;
 
         file_result.functions.push(FunctionResult {
+            is_test: crate::index::test_code::is_in_lines(&test_lines, func.start_line),
             name: func.name,
             start_line: func.start_line,
             end_line: func.end_line,
@@ -811,6 +822,7 @@ mod tests {
                         max_nesting: 1,
                         lines: 5,
                     },
+                    is_test: false,
                 }],
                 total_cyclomatic: 5,
                 total_cognitive: 3,
@@ -840,6 +852,7 @@ mod tests {
                         max_nesting: 3,
                         lines: 50,
                     },
+                    is_test: false,
                 }],
                 total_cyclomatic: 20,
                 total_cognitive: 5,
@@ -873,6 +886,7 @@ mod tests {
                         max_nesting: 5,
                         lines: 30,
                     },
+                    is_test: false,
                 }],
                 total_cyclomatic: 5,
                 total_cognitive: 25,
@@ -906,6 +920,7 @@ mod tests {
                             max_nesting: 1,
                             lines: 5,
                         },
+                        is_test: false,
                     },
                     FunctionResult {
                         name: "bad_fn1".to_string(),
@@ -917,6 +932,7 @@ mod tests {
                             max_nesting: 4,
                             lines: 40,
                         },
+                        is_test: false,
                     },
                     FunctionResult {
                         name: "bad_fn2".to_string(),
@@ -928,6 +944,7 @@ mod tests {
                             max_nesting: 6,
                             lines: 40,
                         },
+                        is_test: false,
                     },
                 ],
                 total_cyclomatic: 33,

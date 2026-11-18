@@ -139,7 +139,11 @@ Top-level commands (flat structure):
 
 **Global options**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--compact`, `--ref`, and `--shallow` are clap global flags. Put them before or after the subcommand. `-p` is always the repository path. The `complexity`, `score`, `stubs`, `mutation`, and `security` commands take `--gate off|warn|error`; if the flag is absent, the `gate` key in the table of the command gives the mode. A gated command writes its report to stdout first and the gate result to stderr. `--output` is the file that receives the report on `report render`, `eval`, and `mutation`. With `--compact`, with `-f json` it emits minified single-line JSON and is ignored for other formats.
 
-**Pagination flags** (most analyzers): `--top N` (limit to N results), `--offset N` (skip first N results). Combine for pagination.
+**Pagination flags** (most analyzers): `--top N` (limit to N results), `--offset N` (skip first N results). Combine for pagination. Each list that these flags cut is in rank order, with the row of the most risk first. `complexity --top N` gives the N most complex functions and only their files. See `docs/LISTS_AND_WINDOWS.md`.
+
+**Test code**: `src/index/test_code.rs` has the one rule that tells if a definition is test code. It uses the syntax and the path of the file. Each consumer reads `Symbol::test_role` or `FileSymbols::is_test_at`. Do not add a second rule to an analyzer. Each row of a list of files or of symbols has `is_test`, and `--exclude-tests` (MCP: `exclude_tests`) removes the test rows and adds `tests_excluded`. See `docs/TEST_CODE.md`.
+
+**History windows**: `churn`, `hotspot`, `defect`, `temporal`, and `changes` take `--since`. Each gives the same `churn_window` block: `days`, `anchor_date`, `commits_matched`, `history_complete`, `history_note` for a shallow clone, and `next_since` for an empty result. `changes` does not accept `--since all`.
 
 **Special safety flags**: `deadcode --cargo-check` executes `cargo check`, including build scripts, and is for trusted repositories only. Mutation testing refuses dirty working trees unless `mutation --allow-dirty` is supplied. MCP transport is stdio-only; `mcp --allow-external-paths` permits tool paths outside the configured repository root.
 

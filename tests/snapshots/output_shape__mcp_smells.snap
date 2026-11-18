@@ -23,6 +23,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                 "instability": "number",
                 "is_central_connector": "bool",
                 "is_hub": "bool",
+                "is_test": "bool",
                 "name": "string"
               }
             ],

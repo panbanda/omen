@@ -101,10 +101,15 @@ expression: "responses[0]"
         "name": "outline"
       },
       {
-        "description": "Gives the cyclomatic complexity and the cognitive complexity of each function. The limit applies to the functions.",
+        "description": "Gives the cyclomatic complexity and the cognitive complexity of each function. The limit applies to the functions. The function with the highest cyclomatic complexity is first, and a file without a function on the page is not in the result.",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -133,6 +138,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -161,6 +171,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -189,6 +204,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -217,6 +237,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -249,6 +274,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "include_tests": {
               "default": false,
               "description": "If true, the tool also reads test code. If false, `exclude_tests` of the configuration applies.",
@@ -294,6 +324,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -322,7 +357,7 @@ expression: "responses[0]"
         "name": "defect"
       },
       {
-        "description": "Gives the risk of each recent commit. The tool uses just-in-time risk analysis. `changes.since` of the configuration gives the window of history.",
+        "description": "Gives the risk of each recent commit. The tool uses just-in-time risk analysis. The commit with the highest risk is first.",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -342,6 +377,10 @@ expression: "responses[0]"
             },
             "path": {
               "description": "The file or directory to analyze. The default is the repository root.",
+              "type": "string"
+            },
+            "since": {
+              "description": "The time window of git history to read, such as 30d, 3m, or 1y. The value all is not a window of this tool. The default is `changes.since` in the configuration.",
               "type": "string"
             }
           },
@@ -390,6 +429,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -418,6 +462,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -446,6 +495,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -478,6 +532,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -511,6 +570,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -539,6 +603,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -570,6 +639,11 @@ expression: "responses[0]"
             "compact": {
               "default": false,
               "description": "If true, the server writes each list of flat records as a table. `table_paths` gives a JSON pointer to each table in `result`. Join the `columns` of a table with each of its `rows` to get the records. The server keeps the usual JSON when the table is not smaller.",
+              "type": "boolean"
+            },
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
               "type": "boolean"
             },
             "limit": {
@@ -607,6 +681,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -981,6 +1060,11 @@ expression: "responses[0]"
             "entry": {
               "description": "Keep the paths of this entry point. Give the key of an entry point. Use it with the section `paths`.",
               "type": "string"
+            },
+            "exclude_tests": {
+              "default": false,
+              "description": "If true, the result does not list the rows that are test code, and `tests_excluded` gives their number. Each row has `is_test`. The summary is for all the code.",
+              "type": "boolean"
             },
             "experimental": {
               "description": "Look for the sinks of the experimental categories also. The default is the value of `security.experimental` in the configuration.",

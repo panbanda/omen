@@ -1266,7 +1266,8 @@ mod tests {
         use chrono::Utc;
         let result = crate::analyzers::churn::Analysis {
             generated_at: Utc::now(),
-            period_days: 30,
+            period_days: Some(30),
+            churn_window: None,
             repository_root: ".".to_string(),
             files: vec![],
             summary: crate::analyzers::churn::Summary {
@@ -1295,7 +1296,8 @@ mod tests {
         use chrono::Utc;
         let result = crate::analyzers::churn::Analysis {
             generated_at: Utc::now(),
-            period_days: 30,
+            period_days: Some(30),
+            churn_window: None,
             repository_root: ".".to_string(),
             files: vec![],
             summary: crate::analyzers::churn::Summary {
@@ -1324,7 +1326,8 @@ mod tests {
         use chrono::Utc;
         let result = crate::analyzers::churn::Analysis {
             generated_at: Utc::now(),
-            period_days: 30,
+            period_days: Some(30),
+            churn_window: None,
             repository_root: ".".to_string(),
             files: vec![],
             summary: crate::analyzers::churn::Summary {
@@ -1493,7 +1496,10 @@ mod tests {
                 avg_contributors: 4.0,
                 max_concentration: 0.5,
                 top_contributors: vec![],
+                ..Default::default()
             },
+            history_complete: true,
+            history_note: None,
         };
         let score = calculate_ownership_score(&result);
         assert!(score >= 80.0);
@@ -1512,7 +1518,10 @@ mod tests {
                 avg_contributors: 1.2,
                 max_concentration: 0.95,
                 top_contributors: vec![],
+                ..Default::default()
             },
+            history_complete: true,
+            history_note: None,
         };
         let score = calculate_ownership_score(&result);
         assert!(score < 50.0);

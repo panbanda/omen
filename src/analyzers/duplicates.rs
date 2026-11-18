@@ -741,6 +741,8 @@ impl AnalyzerTrait for Analyzer {
             }
         }
 
+        rank_clones(&mut clones);
+
         // Calculate statistics
         if !clones.is_empty() {
             let mut similarities: Vec<f64> = clones.iter().map(|c| c.similarity).collect();
@@ -811,6 +813,20 @@ impl MinHashSignature {
 
         matches as f64 / self.values.len() as f64
     }
+}
+
+/// Puts the pair with the highest similarity first. Of two pairs with the
+/// same similarity, the one with more lines is first. The places break a tie.
+fn rank_clones(clones: &mut [Clone]) {
+    clones.sort_by(|a, b| {
+        b.similarity
+            .total_cmp(&a.similarity)
+            .then_with(|| (b.lines_a + b.lines_b).cmp(&(a.lines_a + a.lines_b)))
+            .then_with(|| a.file_a.cmp(&b.file_a))
+            .then_with(|| a.start_line_a.cmp(&b.start_line_a))
+            .then_with(|| a.file_b.cmp(&b.file_b))
+            .then_with(|| a.start_line_b.cmp(&b.start_line_b))
+    });
 }
 
 // Output types
@@ -1394,6 +1410,32 @@ fn hash_band(values: &[u64], seed: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_clones_are_in_the_order_of_the_similarity_and_then_of_the_size() {
+        let pair = |file: &str, similarity: f64, lines: usize| Clone {
+            clone_type: CloneType::Type1,
+            similarity,
+            file_a: file.to_string(),
+            file_b: "z.rs".to_string(),
+            start_line_a: 1,
+            end_line_a: lines as u32,
+            start_line_b: 1,
+            end_line_b: lines as u32,
+            lines_a: lines,
+            lines_b: lines,
+            group_id: 1,
+        };
+        let mut clones = vec![
+            pair("a.rs", 0.9, 10),
+            pair("c.rs", 1.0, 10),
+            pair("b.rs", 1.0, 10),
+            pair("d.rs", 1.0, 40),
+        ];
+        rank_clones(&mut clones);
+        let order: Vec<&str> = clones.iter().map(|clone| clone.file_a.as_str()).collect();
+        assert_eq!(order, ["d.rs", "b.rs", "c.rs", "a.rs"]);
+    }
     use crate::config::Config as CoreConfig;
     use crate::core::FileSet;
     use std::fs;

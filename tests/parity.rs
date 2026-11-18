@@ -539,6 +539,7 @@ const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
     (("clones", "include_tests"), "include_tests"),
     (("diff", "base"), "target"),
     (("churn", "since"), "since"),
+    (("changes", "since"), "since"),
     (("defect", "since"), "since"),
     (("hotspot", "since"), "since"),
     (("temporal", "since"), "since"),
@@ -567,8 +568,12 @@ const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
 ];
 
 /// The parameters that each paged tool has, with the flag of the command.
-const COMMON_PARAMETER_FLAGS: &[(&str, &str)] =
-    &[("path", "path"), ("limit", "top"), ("offset", "offset")];
+const COMMON_PARAMETER_FLAGS: &[(&str, &str)] = &[
+    ("path", "path"),
+    ("limit", "top"),
+    ("offset", "offset"),
+    ("exclude_tests", "exclude_tests"),
+];
 
 /// The tool parameters that have no CLI flag, each with the reason.
 const MCP_ONLY: &[((&str, &str), &str)] = &[
@@ -626,6 +631,8 @@ const GATE: &str = "A tool gives data and does not apply a gate.";
 const PULL_REQUEST_COMMENT: &str =
     "Only the Markdown comment of the CLI uses the flag. A tool gives JSON and does not write a comment.";
 const PROCESS: &str = "The flag controls the CLI process, not the analysis.";
+const NO_TEST_ROWS: &str =
+    "The command gives an error for the flag: its report has no list of files or of symbols.";
 
 /// The CLI flags that have no tool parameter, each with the reason. The
 /// command `*` is each mirrored command.
@@ -652,6 +659,11 @@ const CLI_ONLY: &[((&str, &str), &str)] = &[
     (("*", "glob"), FILE_FILTER),
     (("*", "exclude"), FILE_FILTER),
     (("*", "changed_since"), FILE_FILTER),
+    (("changes", "exclude_tests"), NO_TEST_ROWS),
+    (("flags", "exclude_tests"), NO_TEST_ROWS),
+    (("outline", "exclude_tests"), NO_TEST_ROWS),
+    (("impact", "exclude_tests"), NO_TEST_ROWS),
+    (("symbol", "exclude_tests"), NO_TEST_ROWS),
     (("diff", "max_bytes"), PULL_REQUEST_COMMENT),
     (("diff", "max_nodes"), PULL_REQUEST_COMMENT),
     (("complexity", "gate"), GATE),

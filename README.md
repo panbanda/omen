@@ -215,6 +215,8 @@ Risk levels use percentile-based thresholds following JIT defect prediction best
 
 This approach aligns with the 80/20 rule from defect prediction research: ~20% of code changes contain ~80% of defects. It ensures actionable results regardless of repository characteristics - well-disciplined repos will have lower thresholds, while high-churn repos will have higher ones.
 
+A window with fewer than 20 commits has the fixed thresholds 0.6 and 0.3, because a percentile of a few scores is one of those scores. `risk_thresholds.basis` is `percentile` or `absolute`. Use `omen changes --since 3m` for a wider window. See [docs/LISTS_AND_WINDOWS.md](docs/LISTS_AND_WINDOWS.md).
+
 **Why it matters:** [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763) demonstrated that JIT prediction catches risky changes at commit time, before bugs propagate. Their effort-aware approach uses ranking rather than fixed thresholds, focusing limited review resources on the riskiest ~20% of commits. [Zeng et al. (2021)](https://ieeexplore.ieee.org/document/9463091) showed that simple JIT models match deep learning accuracy (~65%) with better interpretability.
 
 > [!TIP]
@@ -396,6 +398,8 @@ Both factors are normalized against industry benchmarks using empirical CDFs, so
 
 - **Churn percentile** - Where this file's commit count ranks against typical OSS projects
 - **Complexity percentile** - Where the average cognitive complexity ranks against industry benchmarks
+
+Each row has the two values that its percentiles rank: `churn_score` and `total_complexity`, the sum of the cyclomatic complexity of the functions of the file. `avg_complexity` is the mean for one function, and the score does not use it. See [docs/LISTS_AND_WINDOWS.md](docs/LISTS_AND_WINDOWS.md).
 
 | Hotspot Score | Severity | Action                 |
 | ------------- | -------- | ---------------------- |
@@ -950,6 +954,13 @@ omen --help
 
 # Minify JSON onto one line
 omen -f json score --compact
+
+# Each list is in rank order: --top gives the rows with the most risk.
+omen defect --top 10
+omen complexity --top 20
+
+# Do not list the rows that are test code
+omen defect --top 10 --exclude-tests
 
 # The flags -p, -f, -c, -v, -j, and --compact are global.
 # Put them before or after the subcommand.

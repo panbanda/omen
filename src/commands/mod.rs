@@ -34,6 +34,7 @@ pub mod search;
 pub mod security;
 pub mod stubs;
 pub mod symbol;
+pub mod test_rows;
 #[cfg(test)]
 pub(crate) mod testing {
     use std::path::PathBuf;

@@ -15,6 +15,12 @@ expression: "shape(&response, &dynamic_key_objects)"
           "next_offset": "null",
           "offset": "number",
           "result": {
+            "churn_window": {
+              "anchor_date": "string",
+              "commits_matched": "number",
+              "days": "number",
+              "history_complete": "bool"
+            },
             "files": [
               {
                 "additions": "number",
@@ -26,6 +32,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                 "deletions": "number",
                 "file": "string",
                 "first_commit": "string",
+                "is_test": "bool",
                 "last_commit": "string",
                 "relative_churn": "number",
                 "total_loc": "number",

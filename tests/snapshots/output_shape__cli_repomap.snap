@@ -15,6 +15,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
     {
       "file": "string",
       "in_degree": "number",
+      "is_test": "bool",
       "kind": "string",
       "line": "number",
       "name": "string",
