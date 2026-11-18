@@ -207,6 +207,8 @@ struct Resolver<'a> {
     /// type that contains them.
     constructors_by_container: Vec<HashMap<&'a str, Vec<usize>>>,
     by_name: HashMap<&'a str, Vec<Id>>,
+    /// The symbols by the name of their container and their own name.
+    by_member: HashMap<(&'a str, &'a str), Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
     locals_by_name: Vec<HashMap<&'a str, Vec<usize>>>,
@@ -270,6 +272,7 @@ type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
 impl<'a> Resolver<'a> {
     fn new(files: &'a [FileSymbols], manifests: &'a Manifests) -> Self {
         let mut by_name: HashMap<&str, Vec<Id>> = HashMap::new();
+        let mut by_member: HashMap<(&str, &str), Vec<Id>> = HashMap::new();
         let mut by_file = HashMap::new();
         for (file, facts) in files.iter().enumerate() {
             by_file.insert(facts.file.as_str(), file);
@@ -278,6 +281,12 @@ impl<'a> Resolver<'a> {
                     .entry(symbol.name.as_str())
                     .or_default()
                     .push((file, position));
+                if let Some(container) = symbol.container.as_deref() {
+                    by_member
+                        .entry((container, symbol.name.as_str()))
+                        .or_default()
+                        .push((file, position));
+                }
             }
         }
         let locals_by_owner = files
@@ -364,6 +373,7 @@ impl<'a> Resolver<'a> {
             php_names,
             constructors_by_container,
             by_name,
+            by_member,
             by_file,
             locals_by_name,
             locals_by_owner,
@@ -902,8 +912,14 @@ impl<'a> Resolver<'a> {
         let type_symbol = self.symbol(owner);
         let namespace = type_symbol.kind == SymbolKind::Module;
         let owner_path = self.member_path(owner);
+        let family = self.family(owner.0);
         let found: Vec<Id> = self
-            .named(name, owner.0)
+            .by_member
+            .get(&(type_symbol.name.as_str(), name))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|id| self.family(id.0) == family)
             .filter(|id| {
                 let member = self.symbol(*id);
                 let member_path = &self.facts(*id).container_path;
@@ -4636,5 +4652,40 @@ mod false_edge_tests {
         assert_doubles_at_most("java", 8_000, |size| {
             calls_between_the_files_of_packages_resolve_at(size, true)
         });
+    }
+
+    /// `classes` Java classes in one file, each with a method `help`, and a
+    /// call of the method of each class.
+    fn calls_of_one_method_name_in_many_classes_resolve_at(classes: usize) -> std::time::Duration {
+        let mut source = String::from("package p;\n\n");
+        for class in 0..classes {
+            source.push_str(&format!(
+                "class B{class} {{\n    static void help() {{}}\n}}\n\nclass A{class} {{\n    void run() {{ B{class}.help(); }}\n}}\n\n"
+            ));
+        }
+        let files = [("src/P.java", source.as_str())];
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        let started = std::time::Instant::now();
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let unique = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| reference.resolution.status == super::Status::UniqueCandidate)
+            .count();
+        assert_eq!(unique, classes);
+        elapsed
+    }
+
+    /// The members of a type are found without a look at each member of
+    /// the repository with the same name.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_one_method_name_in_many_classes_resolves_in_linear_time() {
+        assert_doubles_at_most(
+            "classes",
+            8_000,
+            calls_of_one_method_name_in_many_classes_resolve_at,
+        );
     }
 }
