@@ -1897,12 +1897,6 @@ fn go_interface_methods(files: &[FileSymbols]) -> Vec<SharedStr> {
         }
         interfaces.extend(by_interface.into_values());
     }
-    let mut by_method: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (position, names) in interfaces.iter().enumerate() {
-        for name in names {
-            by_method.entry(name).or_default().push(position);
-        }
-    }
     // The methods of each type, by the directory of the package and the type.
     let mut types: HashMap<(&str, &str), Vec<&Symbol>> = HashMap::new();
     for facts in go_files() {
@@ -1918,13 +1912,39 @@ fn go_interface_methods(files: &[FileSymbols]) -> Vec<SharedStr> {
             }
         }
     }
+    let type_names: Vec<BTreeSet<&str>> = types
+        .values()
+        .map(|methods| methods.iter().map(|method| method.name.as_str()).collect())
+        .collect();
+    // A type that implements an interface has each name of the interface, so
+    // each interface is checked only for the types with its least common
+    // name. Each pair of a type and an interface is checked at most one time.
+    let mut types_with_name: HashMap<&str, usize> = HashMap::new();
+    for names in &type_names {
+        for name in names {
+            *types_with_name.entry(name).or_default() += 1;
+        }
+    }
+    let interfaces: Vec<BTreeSet<&str>> = interfaces
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut by_anchor: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (position, names) in interfaces.iter().enumerate() {
+        let anchor = names
+            .iter()
+            .min_by_key(|name| (types_with_name.get(*name).copied().unwrap_or(0), **name));
+        if let Some(anchor) = anchor {
+            by_anchor.entry(anchor).or_default().push(position);
+        }
+    }
     let mut found = Vec::new();
-    for methods in types.values() {
-        let names: BTreeSet<&str> = methods.iter().map(|method| method.name.as_str()).collect();
+    for (methods, names) in types.values().zip(&type_names) {
         let implemented: HashSet<usize> = names
             .iter()
-            .flat_map(|name| by_method.get(name).into_iter().flatten().copied())
-            .filter(|position| interfaces[*position].is_subset(&names))
+            .flat_map(|name| by_anchor.get(name).into_iter().flatten().copied())
+            .filter(|position| interfaces[*position].is_subset(names))
             .collect();
         let needed: HashSet<&str> = implemented
             .iter()
@@ -5038,6 +5058,34 @@ fn plain_dead() {}
 #[cfg(test)]
 mod go_tests {
     use super::*;
+
+    /// The time of `go_interface_methods` for `size` types and `size`
+    /// interfaces that all have the method `Close`. Type `i` has the second
+    /// method of interface `i` only, thus it implements one interface.
+    fn interface_methods_found_at(size: usize) -> std::time::Duration {
+        let mut source = String::from("package shop\n");
+        for position in 0..size {
+            source.push_str(&format!(
+                "\ntype I{position} interface {{\n\tClose()\n\tM{position}()\n}}\n\ntype T{position} struct{{}}\n\nfunc (t T{position}) Close() {{}}\n\nfunc (t T{position}) M{position}() {{}}\n"
+            ));
+        }
+        let files = [
+            ("go.mod", "module example.com/shop\n"),
+            ("shop/shop.go", source.as_str()),
+        ];
+        let (facts, _) = crate::index::imports::testing::index_with_manifests(&files);
+        let started = std::time::Instant::now();
+        let found = go_interface_methods(&facts);
+        let elapsed = started.elapsed();
+        assert_eq!(found.len(), size * 2);
+        elapsed
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_interface_methods_of_many_types_are_found_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("types", 4_000, interface_methods_found_at);
+    }
     use crate::config::Config;
     use crate::core::FileSet;
 
