@@ -33,6 +33,7 @@ func main() {
 	_ = persist(&local.Disk{})
 	_ = convert(nil, 1)
 	_ = describe(local.Missing{})
+	_ = reuse(&Context{})
 }
 
 func first[T any](values []T) T {
@@ -55,4 +56,9 @@ func convert(values []int, value int) string {
 
 func describe(failure error) string {
 	return failure.Error()
+}
+
+func reuse(ctx *Context) string {
+	base := ctx.Base // the embedded field
+	return base.JSON()
 }

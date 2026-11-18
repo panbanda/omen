@@ -271,10 +271,19 @@ fn value_path(source: &[u8], start: usize) -> Option<Vec<String>> {
         .iter()
         .position(|byte| !(byte.is_ascii_alphanumeric() || b"_$@.".contains(byte)))
         .unwrap_or(rest.len());
-    let after = rest[length..]
+    let blank = rest[length..]
         .iter()
-        .find(|byte| !matches!(byte, b' ' | b'\t'));
-    if !after.is_none_or(|byte| b"\n\r;,){}:".contains(byte)) {
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count();
+    let after = &rest[length + blank..];
+    let comment = ["//", "/*", "#"]
+        .iter()
+        .any(|start| after.starts_with(start.as_bytes()));
+    if !comment
+        && !after
+            .first()
+            .is_none_or(|byte| b"\n\r;,){}:".contains(byte))
+    {
         return None;
     }
     name_path(std::str::from_utf8(&rest[..length]).ok()?)
@@ -2041,6 +2050,18 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
 mod tests {
     use super::testing::rows;
     use crate::core::Language;
+
+    /// A comment after a chain of names does not change the value.
+    #[test]
+    fn test_value_path_before_a_comment() {
+        let path = |source: &str| super::value_path(source.as_bytes(), 0);
+        let expected = Some(vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(path("a.b // note\n"), expected);
+        assert_eq!(path("a.b /* note */\n"), expected);
+        assert_eq!(path("a.b # note\n"), expected);
+        assert_eq!(path("a.b / 2\n"), None);
+        assert_eq!(path("a.b\n"), expected);
+    }
 
     fn rebound_in(source: &str) -> Vec<String> {
         let parsed = crate::parser::Parser::new()

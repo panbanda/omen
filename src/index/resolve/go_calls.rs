@@ -158,3 +158,32 @@ fn test_interface_call_offers_the_implementations() {
         ]
     );
 }
+
+/// A local name that an assignment gives a new value keeps the type of its
+/// declaration. A Go assignment cannot change the type of a variable.
+#[test]
+fn test_reassigned_local_keeps_its_declared_type() {
+    let files = [
+        ("go.mod", "module example.com/shop\n"),
+        (
+            "git/repo.go",
+            "package git\n\ntype Repository struct{}\n\nfunc (r *Repository) GetCommit() {}\n\nfunc Open() (*Repository, error) { return nil, nil }\n",
+        ),
+        (
+            "temp/temp.go",
+            "package temp\n\ntype Upload struct{}\n\nfunc (u *Upload) GetCommit() {}\n",
+        ),
+        (
+            "context/context.go",
+            "package context\n\nimport \"example.com/shop/git\"\n\ntype Repository struct {\n\tGitRepo *git.Repository\n}\n\ntype Context struct {\n\tRepo *Repository\n}\n",
+        ),
+        (
+            "main.go",
+            "package main\n\nimport (\n\t\"example.com/shop/context\"\n\t\"example.com/shop/git\"\n)\n\nfunc diff(ctx *context.Context, wiki bool) {\n\tgitRepo := ctx.Repo.GitRepo // keep\n\tif wiki {\n\t\tvar err error\n\t\tgitRepo, err = git.Open()\n\t\t_ = err\n\t}\n\tgitRepo.GetCommit()\n}\n",
+        ),
+    ];
+    assert_eq!(
+        rows_of(&files, "main.go", "GetCommit"),
+        ["15 diff>gitRepo.GetCommit UniqueCandidate ReceiverDeclaredType [git/repo.go#Repository.GetCommit]"]
+    );
+}
