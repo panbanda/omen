@@ -1071,6 +1071,7 @@ mod tests {
                 visibility: "private".to_string(),
                 confidence: 0.9,
                 reason: "not called".to_string(),
+                is_test: false,
             })
             .collect();
         let result = crate::analyzers::deadcode::Analysis {
@@ -1099,6 +1100,7 @@ mod tests {
                 visibility: "private".to_string(),
                 confidence: 0.9,
                 reason: "not called".to_string(),
+                is_test: false,
             })
             .collect();
         let result = crate::analyzers::deadcode::Analysis {

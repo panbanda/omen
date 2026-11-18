@@ -280,6 +280,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "confidence": "number",
           "end_line": "number",
           "file": "string",
+          "is_test": "bool",
           "kind": "string",
           "line": "number",
           "name": "string",

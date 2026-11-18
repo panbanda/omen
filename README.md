@@ -107,6 +107,8 @@ Dead code includes:
 
 **Why it matters:** Dead code isn't just clutter. It confuses new developers who think it must be important. It increases build times and binary sizes. Worst of all, it can hide bugs - if someone "fixes" dead code thinking it runs, they've wasted time. [Romano et al. (2020)](https://ieeexplore.ieee.org/document/8370748) found that dead code is a strong predictor of other code quality problems.
 
+Omen does not report a test, or a function that only the runtime calls, as dead code. `docs/TEST_CODE.md` gives the rule for a test in each language and the list of these functions. Each item has `is_test`, and the items are in the order of `confidence`.
+
 > [!TIP]
 > Delete dead code. Version control means you can always get it back if needed.
 

@@ -16,15 +16,16 @@ use std::time::Instant;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
+use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::index::extract::FileSymbols;
 use crate::index::imports::RustModules;
 use crate::index::model::{
-    Exported, Receiver, Reference, ResolutionStatus, SharedStr, Symbol, SymbolKind,
+    Exported, Receiver, Reference, ResolutionStatus, SharedStr, Symbol, SymbolKind, TestRole,
 };
 use crate::index::security::entry::{
     entry_points_of_file, find_entry_points_with, EntryPoint, OnDemandTrees,
 };
+use crate::index::test_code::rust_attribute_text;
 use crate::parser::{self, Parser};
 
 /// The result for one file: its definitions and uses, its entry points, and its syntax
@@ -214,8 +215,16 @@ impl AnalyzerTrait for Analyzer {
         let mut roots: Vec<SharedStr> = Vec::new();
         let mut candidate_keys: HashSet<SharedStr> = HashSet::new();
         let mut unresolved_names: HashSet<String> = HashSet::new();
+        let manifests = crate::index::imports::Manifests::default();
+        let rust_modules = RustModules::new(&index.files, &manifests);
+        let mut rust_ancestors = RustAncestors {
+            modules: &rust_modules,
+            of_file: HashMap::new(),
+        };
         for reference in index.files.iter().flat_map(|facts| &facts.references) {
             let resolution = &reference.resolution;
+            let ancestors = rust_ancestors.of(reference.file.as_str());
+            let ancestors: &[String] = &ancestors;
             let weak = matches!(
                 resolution.status,
                 ResolutionStatus::Unresolved
@@ -229,7 +238,7 @@ impl AnalyzerTrait for Analyzer {
                     !weak
                         || all_definitions
                             .get(key.as_str())
-                            .is_none_or(|def| can_be_named_by(def, reference))
+                            .is_none_or(|def| can_be_named_by(def, reference, ancestors))
                 })
                 .cloned()
                 .collect();
@@ -240,7 +249,34 @@ impl AnalyzerTrait for Analyzer {
                 if let Some(keys) = keys_by_name.get(&reference.name) {
                     targets.extend(
                         keys.iter()
-                            .filter(|key| can_be_named_by(&all_definitions[*key], reference))
+                            .filter(|key| {
+                                can_be_named_by(&all_definitions[*key], reference, ancestors)
+                            })
+                            .cloned(),
+                    );
+                }
+            }
+            // A Rust call without a receiver and without a path cannot call a
+            // method. When the index gives only methods for such a call, a
+            // function with the name can be the callee, for example one that a
+            // `use` brings from a crate root that the index does not know.
+            let is_rust_bare_call = reference.receiver.is_none()
+                && reference.qualifier.is_none()
+                && reference.file.ends_with(".rs");
+            let names_only_methods = !targets.is_empty()
+                && targets.iter().all(|key| {
+                    all_definitions
+                        .get(key.as_str())
+                        .is_some_and(|def| !def.is_free_function)
+                });
+            if is_rust_bare_call && names_only_methods {
+                if let Some(keys) = keys_by_name.get(&reference.name) {
+                    targets.extend(
+                        keys.iter()
+                            .filter(|key| {
+                                let def = &all_definitions[*key];
+                                def.is_free_function && can_be_named_by(def, reference, ancestors)
+                            })
                             .cloned(),
                     );
                 }
@@ -259,7 +295,6 @@ impl AnalyzerTrait for Analyzer {
                 None => roots.extend(targets),
             }
         }
-        let manifests = crate::index::imports::Manifests::default();
         let rust_paths = RustPaths {
             modules: RustModules::new(&index.files, &manifests),
             files: index
@@ -366,8 +401,14 @@ impl AnalyzerTrait for Analyzer {
         // Add cargo-detected dead code items (Rust files).
         // Track (file, line) pairs so tree-sitter results don't duplicate them.
         let mut cargo_reported: HashSet<(String, u32)> = HashSet::new();
+        let test_keys: HashSet<(String, u32)> = all_definitions
+            .values()
+            .filter(|def| def.test_role != TestRole::None)
+            .map(|def| (def.file.clone(), def.line))
+            .collect();
         for cargo_item in cargo_items {
             cargo_reported.insert((cargo_item.file.clone(), cargo_item.line));
+            let is_test = test_keys.contains(&(cargo_item.file.clone(), cargo_item.line));
             let item = DeadCodeItem {
                 name: cargo_item.name,
                 kind: cargo_item.kind.clone(),
@@ -377,6 +418,7 @@ impl AnalyzerTrait for Analyzer {
                 visibility: "unknown".to_string(),
                 confidence: 1.0, // Cargo/rustc is authoritative
                 reason: cargo_item.message,
+                is_test,
             };
             *by_kind.entry(cargo_item.kind).or_insert(0) += 1;
             items.push(item);
@@ -411,6 +453,8 @@ impl AnalyzerTrait for Analyzer {
             if is_unreachable || is_unused {
                 let confidence = calculate_confidence(def, is_unreachable, is_unused);
 
+                // The sum of the binary values has noise: 0.9 + 0.05 is not 0.95.
+                let confidence = (confidence * 100.0).round() / 100.0;
                 if confidence >= self.confidence_threshold {
                     let item = DeadCodeItem {
                         name: simple_name.to_string(),
@@ -427,6 +471,7 @@ impl AnalyzerTrait for Analyzer {
                         } else {
                             "No references found in codebase".to_string()
                         },
+                        is_test: def.test_role != TestRole::None,
                     };
 
                     *by_kind.entry(def.kind.clone()).or_insert(0) += 1;
@@ -436,14 +481,18 @@ impl AnalyzerTrait for Analyzer {
         }
 
         let total_items = items.len();
-        // The definitions come from a map, and its sequence is different in
-        // each run.
+        // The item with the highest confidence is first, thus the first page
+        // of the list has the items that are most probably dead. The place
+        // breaks a tie: the definitions come from a map, and its sequence is
+        // different in each run.
         items.sort_by(|a, b| {
-            (a.file.as_str(), a.line, a.name.as_str()).cmp(&(
-                b.file.as_str(),
-                b.line,
-                b.name.as_str(),
-            ))
+            b.confidence.total_cmp(&a.confidence).then_with(|| {
+                (a.file.as_str(), a.line, a.name.as_str()).cmp(&(
+                    b.file.as_str(),
+                    b.line,
+                    b.name.as_str(),
+                ))
+            })
         });
         let analysis = Analysis {
             items,
@@ -484,6 +533,7 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
     // would never match a usage and would be reported as dead with high confidence.
     // A declaration without a body, as a trait method or a prototype does, has no
     // code to remove, and a call can reach it through a different definition.
+    let is_stub_file = facts.file.ends_with(".pyi");
     let functions: Vec<&Symbol> = facts
         .symbols
         .iter()
@@ -492,10 +542,10 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
                 && symbol.kind != SymbolKind::Constructor
                 && (symbol.body_range.is_some() || facts.language == Language::Ruby)
                 && !is_member_of_an_object(result, symbol)
+                // A stub file declares the functions of a different file. It has no code to remove.
+                && !is_stub_file
         })
         .collect();
-
-    let is_test_file = is_test_file(&fdc.path);
 
     // For Rust, extract function attributes and context from the AST
     let function_info = if result.language == Language::Rust {
@@ -523,12 +573,18 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
         let mut visibility = get_visibility(&func.name, result.language);
         let mut exported =
             func.exported == Exported::Exported || is_exported(&func.name, result.language);
-        let info = function_info.get(&func.name);
+        let info = function_info.get(&func.name_range.start_byte);
         let mut attributes = info.map(|i| i.attributes.clone()).unwrap_or_default();
-        // Mark as test file if already in test file OR inside #[cfg(test)] module
-        let is_in_test_context =
-            is_test_file || info.map(|i| i.in_cfg_test_module).unwrap_or(false);
         let is_trait_impl = info.map(|i| i.is_trait_impl).unwrap_or(false);
+        // The interpreter calls a method such as `__eq__`, and the `enum`
+        // module calls a method such as `_missing_`. No call site names them.
+        let is_python_special_method = result.language == Language::Python
+            && func.name.len() > 2
+            && func.name.starts_with('_')
+            && func.name.ends_with('_')
+            && (func.name.starts_with("__") == func.name.ends_with("__"))
+            && (func.name.starts_with("__") || func.kind == SymbolKind::Method);
+        let runtime_entry = is_python_special_method || info.is_some_and(|i| i.runtime_entry);
 
         // Apply Python-specific context
         if let Some(ref py_ctx) = python_ctx {
@@ -572,7 +628,8 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
             end_line: func.range.end_line,
             visibility,
             exported,
-            is_test_file: is_in_test_context,
+            test_role: func.test_role,
+            runtime_entry,
             attributes,
             is_trait_impl,
         });
@@ -602,9 +659,11 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
 
 /// Info about a Rust function extracted from the AST.
 struct RustFunctionInfo {
+    /// The path of each attribute of the function, for example `tokio::main`.
     attributes: Vec<String>,
-    in_cfg_test_module: bool,
     is_trait_impl: bool,
+    /// See `Definition::runtime_entry`.
+    runtime_entry: bool,
 }
 
 /// Python-specific context extracted from the AST.
@@ -622,98 +681,134 @@ struct RubyVisibility {
     method_visibility: HashMap<String, String>,
 }
 
-/// Extract attributes and context for Rust functions.
-/// Returns a map from function name to function info.
+/// The last segment of the path of an attribute that makes the loader, the
+/// linker, the compiler, or a framework call the function.
+const RUST_RUNTIME_ATTRIBUTES: [&str; 12] = [
+    "ctor",
+    "dtor",
+    "no_mangle",
+    "export_name",
+    "proc_macro",
+    "proc_macro_derive",
+    "proc_macro_attribute",
+    "panic_handler",
+    "wasm_bindgen",
+    "pyfunction",
+    "napi",
+    "main",
+];
+
+/// The attribute `allow` or `expect` names the lint `dead_code` or its group `unused`.
+fn allows_dead_code(path: &str, arguments: &str) -> bool {
+    matches!(path, "allow" | "expect")
+        && arguments
+            .split(|character: char| !character.is_alphanumeric() && character != '_')
+            .any(|word| word == "dead_code" || word == "unused")
+}
+
+/// The path and the arguments of each outer attribute of an item. A comment
+/// between two attributes, or between an attribute and the item, does not end the list.
+fn preceding_attributes<'a>(
+    node: &tree_sitter::Node<'_>,
+    source: &'a [u8],
+) -> Vec<(&'a str, &'a str)> {
+    let mut attributes = Vec::new();
+    let mut previous = node.prev_sibling();
+    while let Some(sibling) = previous {
+        match sibling.kind() {
+            "attribute_item" => attributes.extend(rust_attribute_text(sibling, source)),
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        previous = sibling.prev_sibling();
+    }
+    attributes
+}
+
+/// An inner attribute of the block, as `#![allow(dead_code)]` is, permits dead code.
+fn inner_attributes_allow_dead_code(block: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = block.walk();
+    let found = block
+        .children(&mut cursor)
+        .filter(|child| child.kind() == "inner_attribute_item")
+        .filter_map(|item| rust_attribute_text(item, source))
+        .any(|(path, arguments)| allows_dead_code(path, arguments));
+    found
+}
+
+/// The function has a foreign ABI, as `extern "C" fn` has. Code that is not Rust can call it.
+fn has_foreign_abi(function: &tree_sitter::Node<'_>) -> bool {
+    let mut cursor = function.walk();
+    let found = function
+        .children(&mut cursor)
+        .filter(|child| child.kind() == "function_modifiers")
+        .any(|modifiers| {
+            let mut cursor = modifiers.walk();
+            let found = modifiers
+                .children(&mut cursor)
+                .any(|modifier| modifier.kind() == "extern_modifier");
+            found
+        });
+    found
+}
+
+/// The attributes and the context of each Rust function, by the start byte of its name.
 fn extract_rust_function_attributes(
     result: &parser::ParseResult,
-) -> HashMap<String, RustFunctionInfo> {
-    let mut info: HashMap<String, RustFunctionInfo> = HashMap::new();
-    let root = result.root_node();
-    let source = &result.source;
-
-    // Walk the AST looking for function_item nodes
-    fn visit(
-        node: tree_sitter::Node<'_>,
-        source: &[u8],
-        info: &mut HashMap<String, RustFunctionInfo>,
-        in_cfg_test: bool,
-        in_trait_impl: bool,
-    ) {
-        let mut current_in_cfg_test = in_cfg_test;
-        let mut current_in_trait_impl = in_trait_impl;
-
-        // Check if this is a mod_item with #[cfg(test)] attribute
-        if node.kind() == "mod_item" && has_cfg_test_attribute(&node, source) {
-            current_in_cfg_test = true;
+) -> HashMap<usize, RustFunctionInfo> {
+    let mut info: HashMap<usize, RustFunctionInfo> = HashMap::new();
+    let source: &[u8] = &result.source;
+    // Each entry is a node, the trait flag of its block, and the lint flag of its scope.
+    let mut stack = vec![(result.root_node(), false, false)];
+    while let Some((node, in_trait_impl, allows_dead)) = stack.pop() {
+        let mut in_trait_impl = in_trait_impl;
+        let mut allows_dead = allows_dead;
+        match node.kind() {
+            "impl_item" => in_trait_impl = is_trait_impl_block(&node),
+            "source_file" | "declaration_list" => {
+                allows_dead = allows_dead || inner_attributes_allow_dead_code(&node, source);
+            }
+            _ => {}
         }
-
-        // Check if this is a trait impl block (impl Trait for Type)
-        if node.kind() == "impl_item" {
-            current_in_trait_impl = is_trait_impl_block(&node);
-        }
-
-        if node.kind() == "function_item" {
-            if let Some(func_info) = collect_rust_function_info(
-                &node,
-                source,
-                current_in_cfg_test,
-                current_in_trait_impl,
-            ) {
-                info.insert(func_info.0, func_info.1);
+        let is_function = node.kind() == "function_item";
+        if is_function || matches!(node.kind(), "mod_item" | "impl_item" | "trait_item") {
+            let attributes = preceding_attributes(&node, source);
+            allows_dead = allows_dead
+                || attributes
+                    .iter()
+                    .any(|(path, arguments)| allows_dead_code(path, arguments));
+            if let Some(name) = node.child_by_field_name("name").filter(|_| is_function) {
+                let is_runtime_attribute = |path: &str, arguments: &str| {
+                    let last = path.rsplit("::").next().unwrap_or(path);
+                    RUST_RUNTIME_ATTRIBUTES.contains(&last)
+                        || (path == "unsafe"
+                            && (arguments.contains("no_mangle")
+                                || arguments.contains("export_name")))
+                };
+                info.insert(
+                    name.start_byte(),
+                    RustFunctionInfo {
+                        runtime_entry: allows_dead
+                            || has_foreign_abi(&node)
+                            || attributes
+                                .iter()
+                                .any(|(path, arguments)| is_runtime_attribute(path, arguments)),
+                        attributes: attributes
+                            .iter()
+                            .map(|(path, _)| path.to_string())
+                            .collect(),
+                        is_trait_impl: in_trait_impl,
+                    },
+                );
             }
         }
-
-        // Recurse into children with updated context
-        for child in node.children(&mut node.walk()) {
-            visit(
-                child,
-                source,
-                info,
-                current_in_cfg_test,
-                current_in_trait_impl,
-            );
-        }
+        let mut cursor = node.walk();
+        stack.extend(
+            node.children(&mut cursor)
+                .map(|child| (child, in_trait_impl, allows_dead)),
+        );
     }
-
-    visit(root, source, &mut info, false, false);
     info
-}
-
-/// Collect info for a single Rust function_item node: name, attributes, and context flags.
-fn collect_rust_function_info(
-    node: &tree_sitter::Node<'_>,
-    source: &[u8],
-    in_cfg_test_module: bool,
-    is_trait_impl: bool,
-) -> Option<(String, RustFunctionInfo)> {
-    let name_node = node.child_by_field_name("name")?;
-    let func_name = name_node.utf8_text(source).ok()?;
-
-    let preceding_attrs = collect_preceding_attributes(node, source);
-    Some((
-        func_name.to_string(),
-        RustFunctionInfo {
-            attributes: preceding_attrs,
-            in_cfg_test_module,
-            is_trait_impl,
-        },
-    ))
-}
-
-/// Collect attribute names from consecutive attribute_item siblings preceding a node.
-fn collect_preceding_attributes(node: &tree_sitter::Node<'_>, source: &[u8]) -> Vec<String> {
-    let mut attrs = Vec::new();
-    let mut prev = node.prev_sibling();
-    while let Some(sibling) = prev {
-        if sibling.kind() != "attribute_item" {
-            break;
-        }
-        if let Some(attr_name) = extract_attribute_name(&sibling, source) {
-            attrs.push(attr_name);
-        }
-        prev = sibling.prev_sibling();
-    }
-    attrs
 }
 
 /// Extract Python-specific context: `__all__` exports, `if __name__` calls, and decorators.
@@ -1047,54 +1142,6 @@ fn is_trait_impl_block(impl_node: &tree_sitter::Node<'_>) -> bool {
     false
 }
 
-/// Check if a mod_item has a preceding #[cfg(test)] attribute.
-fn has_cfg_test_attribute(mod_node: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
-    let mut prev = mod_node.prev_sibling();
-    while let Some(sibling) = prev {
-        if sibling.kind() == "attribute_item" {
-            // Check if this is #[cfg(test)]
-            for child in sibling.children(&mut sibling.walk()) {
-                if child.kind() == "attribute" {
-                    if let Ok(text) = child.utf8_text(source) {
-                        if text == "cfg(test)" {
-                            return true;
-                        }
-                    }
-                }
-            }
-        } else {
-            // Stop at non-attribute nodes
-            break;
-        }
-        prev = sibling.prev_sibling();
-    }
-    false
-}
-
-/// Extract the attribute name from an attribute_item node.
-/// Handles both simple (#[test]) and path-based (#[tokio::test]) attributes.
-fn extract_attribute_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-    // Find the "attribute" child
-    for child in node.children(&mut node.walk()) {
-        if child.kind() == "attribute" {
-            // The attribute can contain an identifier or a scoped_identifier
-            for attr_child in child.children(&mut child.walk()) {
-                match attr_child.kind() {
-                    "identifier" => {
-                        return attr_child.utf8_text(source).ok().map(|s| s.to_string());
-                    }
-                    "scoped_identifier" => {
-                        // For paths like tokio::test, return the full path
-                        return attr_child.utf8_text(source).ok().map(|s| s.to_string());
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    None
-}
-
 /// Caller name recorded for calls made at module scope. Paired with
 /// `CallReference::from_module_scope`, which is what consumers test.
 const MODULE_SCOPE: &str = "<module>";
@@ -1184,6 +1231,20 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             }
         }
 
+        // A Ruby symbol can name a method: `before_action :authenticate`,
+        // `method(:run)`, and `send(:run)` call the method with that name.
+        if lang == Language::Ruby && kind == "simple_symbol" {
+            if let Ok(text) = node.utf8_text(source) {
+                let name = text.trim_start_matches(':');
+                fdc.usages.insert(name.to_string());
+                let (caller, module_scope) = match &current_function {
+                    Some(caller) => (caller.clone(), from_module_scope),
+                    None => (MODULE_SCOPE.to_string(), true),
+                };
+                value_uses.insert((caller, name.to_string(), module_scope));
+            }
+        }
+
         // `Util.replacer` reads the function `replacer` as a property.
         if kind == "property_identifier" && is_read_as_property(&node) {
             if let Ok(name) = node.utf8_text(source) {
@@ -1225,7 +1286,8 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
 
 /// The keys of a serde attribute whose string is the path of a function. For `with`, the
 /// path is a module, and the derive calls its `serialize` and `deserialize`.
-const SERDE_FUNCTION_KEYS: [&str; 6] = [
+const SERDE_FUNCTION_KEYS: [&str; 7] = [
+    "schema_with",
     "default",
     "skip_serializing_if",
     "serialize_with",
@@ -1238,7 +1300,11 @@ const SERDE_FUNCTION_KEYS: [&str; 6] = [
 /// between the segments. A `with` string names a module, so it gives the paths of its
 /// `serialize` and `deserialize`.
 fn serde_function_names(attribute: &str) -> Vec<String> {
-    let Some(start) = attribute.find("serde(") else {
+    let Some(start) = ["serde(", "schemars("]
+        .iter()
+        .filter_map(|name| attribute.find(name))
+        .min()
+    else {
         return Vec::new();
     };
     let mut names = Vec::new();
@@ -1756,7 +1822,7 @@ fn is_nameable_from_other_files(
 /// the definition private to its file hides it from a call in a different
 /// file. A call with a receiver cannot name a function that has no type around
 /// it, except in a language where a module or an object holds functions.
-fn can_be_named_by(def: &Definition, call: &Reference) -> bool {
+fn can_be_named_by(def: &Definition, call: &Reference, ancestors_of_call: &[String]) -> bool {
     let def_language = Language::detect(Path::new(&def.file));
     let call_language = Language::detect(Path::new(call.file.as_str()));
     let (Some(def_language), Some(call_language)) = (def_language, call_language) else {
@@ -1765,7 +1831,10 @@ fn can_be_named_by(def: &Definition, call: &Reference) -> bool {
     if language_group(def_language) != language_group(call_language) {
         return false;
     }
-    if def.file != call.file && !def.nameable_from_other_files {
+    // A private Rust item is visible in its module and in each module below it.
+    let is_in_ancestor_module =
+        def_language == Language::Rust && ancestors_of_call.contains(&def.file);
+    if def.file != call.file && !def.nameable_from_other_files && !is_in_ancestor_module {
         return false;
     }
     let receiver_calls_a_member = matches!(
@@ -1782,6 +1851,37 @@ fn can_be_named_by(def: &Definition, call: &Reference) -> bool {
             | Language::Tsx
     );
     !(receiver_calls_a_member && def.is_free_function && !functions_live_in_objects)
+}
+
+/// The files of the modules above the module of a Rust file, by file.
+struct RustAncestors<'a> {
+    modules: &'a RustModules<'a>,
+    of_file: HashMap<String, std::rc::Rc<[String]>>,
+}
+
+impl RustAncestors<'_> {
+    /// The file of each module above the module of `file`, from the parent to
+    /// the root of the crate. A file that is not Rust has none.
+    fn of(&mut self, file: &str) -> std::rc::Rc<[String]> {
+        if let Some(found) = self.of_file.get(file) {
+            return std::rc::Rc::clone(found);
+        }
+        let mut chain: Vec<String> = Vec::new();
+        if file.ends_with(".rs") {
+            let mut current = self.modules.parent(file);
+            while let Some(parent) = current {
+                if parent == file || chain.contains(&parent) {
+                    break;
+                }
+                current = self.modules.parent(&parent);
+                chain.push(parent);
+            }
+        }
+        let chain: std::rc::Rc<[String]> = chain.into();
+        self.of_file
+            .insert(file.to_string(), std::rc::Rc::clone(&chain));
+        chain
+    }
 }
 
 fn language_group(language: Language) -> u8 {
@@ -1805,17 +1905,14 @@ fn is_entry_point(name: &str, def: &Definition) -> bool {
         return true;
     }
 
-    // Test functions by name pattern
-    if name.starts_with("Test") || name.starts_with("test") {
+    // A test runner calls a test, and the runtime calls the other definitions.
+    // `crate::index::test_code` has the rule for a test.
+    if def.test_role == TestRole::Entry || def.runtime_entry {
         return true;
     }
 
-    // Rust test attributes (#[test], #[tokio::test], #[bench], etc.)
     // Python decorators and __name__ == "__main__" calls
     for attr in &def.attributes {
-        if attr == "test" || attr.ends_with("::test") || attr == "bench" || attr == "tokio::main" {
-            return true;
-        }
         // Functions called in `if __name__ == "__main__"` blocks
         if attr == "__name__main_call" {
             return true;
@@ -1824,11 +1921,6 @@ fn is_entry_point(name: &str, def: &Definition) -> bool {
         if is_entry_point_decorator(attr) {
             return true;
         }
-    }
-
-    // Benchmark/Example/Fuzz (Go)
-    if name.starts_with("Benchmark") || name.starts_with("Example") || name.starts_with("Fuzz") {
-        return true;
     }
 
     // HTTP handlers
@@ -1877,8 +1969,8 @@ fn calculate_confidence(def: &Definition, is_unreachable: bool, is_unused: bool)
         confidence += 0.05;
     }
 
-    // Reduce for test files
-    if def.is_test_file {
+    // Reduce for test code
+    if def.test_role != TestRole::None {
         confidence -= 0.15;
     }
 
@@ -1933,7 +2025,14 @@ struct Definition {
     end_line: u32,
     visibility: String,
     exported: bool,
-    is_test_file: bool,
+    /// The relation to test code, as the shared index gives it.
+    test_role: TestRole,
+    /// The runtime, the loader, or a tool calls the definition, and no call
+    /// site names it. A Rust function with `#[ctor]`, with `#[no_mangle]`,
+    /// or with a foreign ABI is such a definition, and a Python special
+    /// method is one. A Rust function for which the author permits the lint
+    /// `dead_code` is one too, as it is for the compiler.
+    runtime_entry: bool,
     /// Attributes on this definition (e.g., "test", "tokio::test", "bench")
     attributes: Vec<String>,
     /// Whether this is a trait implementation method
@@ -1973,6 +2072,9 @@ pub struct DeadCodeItem {
     pub visibility: String,
     pub confidence: f64,
     pub reason: String,
+    /// The definition is test code. See `crate::index::test_code`.
+    #[serde(default)]
+    pub is_test: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -2093,15 +2195,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_test_file() {
-        assert!(is_test_file("foo_test.go"));
-        assert!(is_test_file("bar.test.ts"));
-        assert!(is_test_file("src/tests/helper.py"));
-        assert!(!is_test_file("main.go"));
-        assert!(!is_test_file("app.ts"));
-    }
-
-    #[test]
     fn test_is_entry_point() {
         let def = Definition {
             key: SharedStr::default(),
@@ -2114,7 +2207,8 @@ mod tests {
             end_line: 10,
             visibility: "private".to_string(),
             exported: false,
-            is_test_file: false,
+            test_role: TestRole::None,
+            runtime_entry: false,
             attributes: vec![],
             is_trait_impl: false,
         };
@@ -2131,7 +2225,8 @@ mod tests {
             end_line: 10,
             visibility: "public".to_string(),
             exported: true,
-            is_test_file: true,
+            test_role: TestRole::Support,
+            runtime_entry: false,
             attributes: vec![],
             is_trait_impl: false,
         };
@@ -2160,7 +2255,8 @@ mod tests {
             end_line: 10,
             visibility: "private".to_string(),
             exported: false,
-            is_test_file: false,
+            test_role: TestRole::None,
+            runtime_entry: false,
             attributes: vec![],
             is_trait_impl: false,
         };
@@ -2178,7 +2274,8 @@ mod tests {
             end_line: 10,
             visibility: "public".to_string(),
             exported: true,
-            is_test_file: false,
+            test_role: TestRole::None,
+            runtime_entry: false,
             attributes: vec![],
             is_trait_impl: false,
         };
@@ -2205,7 +2302,8 @@ mod tests {
             end_line: 10,
             visibility: "private".to_string(),
             exported: false,
-            is_test_file: false,
+            test_role: TestRole::None,
+            runtime_entry: false,
             attributes: vec![],
             is_trait_impl: false,
         };
@@ -2221,7 +2319,8 @@ mod tests {
             end_line: 15,
             visibility: "private".to_string(),
             exported: false,
-            is_test_file: false,
+            test_role: TestRole::None,
+            runtime_entry: false,
             attributes: vec![],
             is_trait_impl: false,
         };
@@ -2367,7 +2466,6 @@ mod tests {
         let fdc = file_data(&result);
 
         // Functions inside #[cfg(test)] should be recognized as being in test context
-        // They should have is_test_file = true OR have reduced confidence
         let helper_fn = fdc.definition("helper_in_test_module");
         assert!(
             helper_fn.is_some(),
@@ -2377,7 +2475,7 @@ mod tests {
         let helper = helper_fn.unwrap();
         // The helper function should be marked as in a test context
         assert!(
-            helper.is_test_file || !helper.attributes.is_empty(),
+            helper.test_role == TestRole::Support,
             "Function in #[cfg(test)] module should be recognized as test code"
         );
     }
@@ -2797,7 +2895,8 @@ def plain_function():
             end_line: 10,
             visibility: "public".to_string(),
             exported: true,
-            is_test_file: false,
+            test_role: TestRole::None,
+            runtime_entry: false,
             attributes: vec![],
             is_trait_impl: false,
         };
@@ -2814,7 +2913,8 @@ def plain_function():
             end_line: 10,
             visibility: "private".to_string(),
             exported: false,
-            is_test_file: false,
+            test_role: TestRole::None,
+            runtime_entry: false,
             attributes: vec![],
             is_trait_impl: false,
         };
@@ -2834,7 +2934,8 @@ def plain_function():
             end_line: 10,
             visibility: "public".to_string(),
             exported: true,
-            is_test_file: true,
+            test_role: TestRole::Support,
+            runtime_entry: false,
             attributes: vec![],
             is_trait_impl: false,
         };
@@ -3159,7 +3260,8 @@ func RegisterConductorServiceServer() {
             end_line: 10,
             visibility: "private".to_string(),
             exported: false,
-            is_test_file: false,
+            test_role: TestRole::None,
+            runtime_entry: false,
             attributes: vec![],
             is_trait_impl: false,
         };
@@ -3183,12 +3285,14 @@ func RegisterConductorServiceServer() {
             end_line: 10,
             visibility: "private".to_string(),
             exported: false,
-            is_test_file: true,
+            test_role: TestRole::Support,
+            runtime_entry: false,
             attributes: vec![],
             is_trait_impl: false,
         };
         let non_test_def = Definition {
-            is_test_file: false,
+            test_role: TestRole::None,
+            runtime_entry: false,
             file: "helper.go".to_string(),
             ..test_def.clone()
         };
@@ -4263,5 +4367,334 @@ mod index_tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// The names of the reported definitions, each with its `is_test` value.
+    fn dead_rows(files: &[(&str, &str)]) -> Vec<(String, bool)> {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, text) in files {
+            let path = directory.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+        }
+        let config = Config::default();
+        let file_set = FileSet::from_path(directory.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(directory.path()));
+        let mut rows: Vec<(String, bool)> = Analyzer::new()
+            .with_confidence(0.0)
+            .analyze(&ctx)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| (item.name, item.is_test))
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    #[test]
+    fn test_a_rust_test_is_never_dead_and_its_helper_is_used() {
+        let source = r#"
+fn main() {}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    fn helper_of_a_test() {}
+
+    fn unused_helper() {}
+
+    #[test]
+    /// The documentation is between the attribute and the function.
+    fn documented() {
+        helper_of_a_test();
+    }
+
+    #[test]
+    // A comment is between the attribute and the function.
+    fn commented() {}
+
+    #[testlog(tokio::test)]
+    async fn wrapped() {}
+
+    #[gpui::test]
+    async fn of_a_framework() {}
+
+    #[perf]
+    fn measured() {}
+}
+"#;
+        assert_eq!(
+            dead_rows(&[("src/main.rs", source)]),
+            [("unused_helper".to_string(), true)]
+        );
+    }
+
+    #[test]
+    fn test_a_test_is_never_dead_in_each_language() {
+        let cases: [(&[(&str, &str)], &[&str]); 9] = [
+            (
+                &[(
+                    "tests/test_service.py",
+                    "import pytest\n\n@pytest.fixture\ndef database():\n    return _connect()\n\ndef _connect():\n    return 1\n\ndef test_runs(database):\n    pass\n\ndef _unused():\n    pass\n",
+                )],
+                &["_unused"],
+            ),
+            (
+                &[(
+                    "service.test.ts",
+                    "function helper() {}\nfunction unusedOne() {}\ndescribe(\"service\", () => {\n  it(\"runs\", function named() { helper(); });\n});\n",
+                )],
+                &["unusedOne"],
+            ),
+            (
+                &[(
+                    "service_test.go",
+                    "package service\n\nimport \"testing\"\n\nfunc TestRuns(t *testing.T) { helper() }\nfunc BenchmarkRuns(b *testing.B) {}\nfunc helper() {}\nfunc unusedOne() {}\n",
+                )],
+                &["unusedOne"],
+            ),
+            (
+                &[(
+                    "src/Checks.java",
+                    "class Checks {\n    @Test\n    void runs() { helper(); }\n    @BeforeEach\n    void prepare() {}\n    private void helper() {}\n    private void unusedOne() {}\n}\n",
+                )],
+                &["unusedOne"],
+            ),
+            (
+                &[(
+                    "src/Checks.cs",
+                    "public class Checks {\n    [Fact]\n    private void Runs() { Helper(); }\n    private void Helper() {}\n    private void UnusedOne() {}\n}\n",
+                )],
+                &["UnusedOne"],
+            ),
+            (
+                &[(
+                    "lib/checks.rb",
+                    "class ServiceTest < Minitest::Test\n  def test_runs\n    helper\n  end\n\n  private\n\n  def helper\n  end\n\n  def unused_one\n  end\nend\n",
+                )],
+                &["unused_one"],
+            ),
+            (
+                &[(
+                    "src/ServiceTest.php",
+                    "<?php\nclass ServiceTest extends TestCase {\n    public function testRuns(): void { $this->helper(); }\n    /** @test */\n    private function it_runs(): void {}\n    private function helper(): void {}\n    private function unusedOne(): void {}\n}\n",
+                )],
+                &["unusedOne"],
+            ),
+            (
+                &[(
+                    "src/checks.cc",
+                    "static int helper() { return 1; }\nstatic int unused_one() { return 2; }\nTEST(Suite, Runs) {\n    helper();\n}\n",
+                )],
+                &["unused_one"],
+            ),
+            (
+                &[(
+                    "test/run.sh",
+                    "helper() {\n  true\n}\nunused_one() {\n  true\n}\ntest_runs() {\n  helper\n}\n",
+                )],
+                &[],
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (files, expected) in cases {
+            let found = dead_names(files);
+            if found != *expected {
+                failures.push(format!("{}: {found:?}, not {expected:?}", files[0].0));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn test_a_name_that_starts_with_test_is_dead_in_production_code() {
+        assert_eq!(
+            dead_names(&[(
+                "src/main.rs",
+                "fn main() {}\nfn test_connection() {}\nfn TestThing() {}\nfn BenchmarkThing() {}\n"
+            )]),
+            ["BenchmarkThing", "TestThing", "test_connection"]
+        );
+    }
+
+    #[test]
+    fn test_rust_runtime_and_lint_attributes_keep_a_function_alive() {
+        let source = r#"
+fn main() {}
+
+#[ctor(unsafe)]
+unsafe fn build_classes() {
+    registered();
+}
+
+fn registered() {}
+
+#[no_mangle]
+fn exported_symbol() {}
+
+#[unsafe(no_mangle)]
+fn exported_symbol_2024() {}
+
+#[export_name = "other"]
+fn exported_name() {}
+
+extern "C" fn callback(value: u32) {}
+
+#[allow(dead_code)]
+fn kept_by_the_author() {
+    used_by_kept();
+}
+
+fn used_by_kept() {}
+
+#[expect(dead_code, reason = "the next change uses it")]
+fn expected_dead() {}
+
+#[allow(unused, reason = "retained")]
+fn allowed_unused() {}
+
+#[allow(dead_code)]
+mod kept {
+    fn in_kept_module() {}
+}
+
+mod inner {
+    #![allow(dead_code)]
+    fn under_inner_attribute() {}
+}
+
+#[allow(clippy::too_many_arguments)]
+fn other_lint() {}
+
+fn plain_dead() {}
+"#;
+        assert_eq!(
+            dead_names(&[("src/main.rs", source)]),
+            ["other_lint", "plain_dead"]
+        );
+    }
+
+    #[test]
+    fn test_rust_private_function_is_alive_when_a_child_module_file_calls_it() {
+        let files = [
+            ("src/main.rs", "pub mod db;\nfn main() {}\n"),
+            (
+                "src/db.rs",
+                "pub mod queries;\npub struct Database;\nfn helper(value: u32) -> u32 {\n    value\n}\nfn unused_one() {}\n",
+            ),
+            ("src/db/queries.rs", "use super::*;\npub mod projects;\n"),
+            (
+                "src/db/queries/projects.rs",
+                "use super::*;\n\nimpl Database {\n    pub fn run(&self, value: u32) -> u32 {\n        helper(value)\n    }\n}\n",
+            ),
+            (
+                "src/other.rs",
+                "pub fn elsewhere() -> u32 {\n    not_visible_here(1)\n}\n",
+            ),
+            ("src/db/tables.rs", "fn not_visible_here(value: u32) -> u32 {\n    value\n}\n"),
+        ];
+        assert_eq!(dead_names(&files), ["not_visible_here", "unused_one"]);
+    }
+
+    #[test]
+    fn test_rust_call_without_a_receiver_in_a_method_of_the_same_name_reaches_the_function() {
+        let files = [
+            (
+                "src/main.rs",
+                "mod panel;\nfn main() {}\nfn render_button(label: &str) -> usize {\n    label.len()\n}\n",
+            ),
+            (
+                "src/panel.rs",
+                "use crate::render_button;\n\npub struct Panel;\n\nimpl Panel {\n    pub fn render_button(&self) -> usize {\n        render_button(\"push\")\n    }\n}\n",
+            ),
+        ];
+        assert_eq!(dead_names(&files), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_ruby_symbol_names_a_method() {
+        let source = "class Receive\n  def call\n    only_if(:test_request) do\n      model :nodes, :fetch_nodes\n    end\n  end\n\n  private\n\n  def test_request\n    true\n  end\n\n  def fetch_nodes\n    []\n  end\n\n  def unused_one\n    1\n  end\nend\n";
+        assert_eq!(dead_names(&[("app/receive.rb", source)]), ["unused_one"]);
+    }
+
+    #[test]
+    fn test_python_enum_hook_is_not_dead() {
+        let source = "import enum\n\n\nclass _Version(enum.Enum):\n    V1 = \"1\"\n\n    @classmethod\n    def _missing_(cls, value):\n        return cls.V1\n\n    def _unused(self):\n        return 1\n";
+        assert_eq!(dead_names(&[("app/version.py", source)]), ["_unused"]);
+    }
+
+    #[test]
+    fn test_confidence_has_two_decimal_places() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("main.rs"),
+            "fn main() {}\nfn unused_one() {}\n",
+        )
+        .unwrap();
+        let config = Config::default();
+        let file_set = FileSet::from_path(directory.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(directory.path()));
+        let analysis = Analyzer::new().analyze(&ctx).unwrap();
+        let json = serde_json::to_value(&analysis.items[0]).unwrap();
+        assert_eq!(json["confidence"].to_string(), "0.95");
+    }
+
+    #[test]
+    fn test_items_are_in_the_order_of_the_confidence() {
+        let files = [
+            ("b.rs", "fn main() {}\nfn unused_b() {}\n"),
+            ("a/tests/t.rs", "fn helper_in_tests() {}\n"),
+            (
+                "a.rs",
+                "fn unused_a() {}\nfn caller_of_dead() { dead_callee(); }\nfn dead_callee() {}\n",
+            ),
+        ];
+        let directory = tempfile::tempdir().unwrap();
+        for (name, text) in files {
+            let path = directory.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+        }
+        let config = Config::default();
+        let file_set = FileSet::from_path(directory.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(directory.path()));
+        let analysis = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+        let rows: Vec<(&str, f64)> = analysis
+            .items
+            .iter()
+            .map(|item| (item.name.as_str(), item.confidence))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("unused_a", 0.95),
+                ("caller_of_dead", 0.95),
+                ("unused_b", 0.95),
+                ("dead_callee", 0.9),
+                ("helper_in_tests", 0.8),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_schemars_schema_with_names_a_function() {
+        let source = "fn main() {}\n\n#[derive(JsonSchema)]\nstruct Profile {\n    #[schemars(schema_with = \"tools_schema\")]\n    tools: u32,\n}\n\nfn tools_schema() {}\n\nfn not_named() {}\n";
+        assert_eq!(dead_names(&[("src/main.rs", source)]), ["not_named"]);
+    }
+
+    #[test]
+    fn test_python_dunder_methods_and_stub_files_are_not_dead() {
+        let files = [
+            (
+                "app/model.py",
+                "class _Size:\n    def __eq__(self, other):\n        return self._same(other)\n\n    def __repr__(self):\n        return \"size\"\n\n    def _same(self, other):\n        return True\n\n    def _unused(self):\n        return False\n\n    def __private(self):\n        return 1\n",
+            ),
+            (
+                "stubs/config.pyi",
+                "class _Setting:\n    def __get__(self, instance, owner): ...\n    def _helper(self): ...\n",
+            ),
+        ];
+        assert_eq!(dead_names(&files), ["__private", "_unused"]);
     }
 }
