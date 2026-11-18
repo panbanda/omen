@@ -66,12 +66,13 @@ fn cache_isolates_repository_roots_and_cannot_escape_root() {
 #[test]
 fn bounded_context_retains_seed_and_discovers_transitive_test_candidates() {
     for (file, source) in [
-        ("main.rs", "fn helper(){}\nfn service(){helper();}\nfn wrapper(){service();}\nfn test_service(){wrapper();}"),
-        ("main.ts", "function helper(){}\nfunction service(){helper();}\nfunction wrapper(){service();}\nfunction test_service(){wrapper();}"),
-        ("main.rb", "def helper; end\ndef service; helper(); end\ndef wrapper; service(); end\ndef test_service; wrapper(); end"),
-        ("main.go", "package main\nfunc helper(){}\nfunc service(){helper()}\nfunc wrapper(){service()}\nfunc TestService(){wrapper()}"),
+        ("main.rs", "fn helper(){}\nfn service(){helper();}\nfn wrapper(){service();}\n#[test]\nfn checks_service(){wrapper();}"),
+        ("main.test.ts", "function helper(){}\nfunction service(){helper();}\nfunction wrapper(){service();}\nfunction checksService(){wrapper();}"),
+        ("test/main_test.rb", "def helper; end\ndef service; helper(); end\ndef wrapper; service(); end\ndef test_service; wrapper(); end"),
+        ("main_test.go", "package main\nfunc helper(){}\nfunc service(){helper()}\nfunc wrapper(){service()}\nfunc TestService(){wrapper()}"),
     ] {
         let dir = TempDir::new().unwrap(); let path = dir.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, source).unwrap();
         let snapshot = IndexCache::default().load(dir.path(), &[path]).unwrap();
         let report = build(&snapshot, dir.path(), "service", &Options::default()).unwrap();
@@ -87,6 +88,33 @@ fn bounded_context_retains_seed_and_discovers_transitive_test_candidates() {
 }
 
 #[test]
+fn test_candidate_hint_follows_the_syntax_and_not_the_name() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("main.rs");
+    std::fs::write(
+        &path,
+        "fn service(){}\nfn test_connection(){service();}\n#[cfg(test)]\nmod checks {\n    use super::*;\n    #[test]\n    fn runs(){service();}\n}\n",
+    )
+    .unwrap();
+    let snapshot = IndexCache::default().load(dir.path(), &[path]).unwrap();
+    let report = build(&snapshot, dir.path(), "service", &Options::default()).unwrap();
+    let hinted: Vec<&str> = report["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|symbol| {
+            symbol["role_hints"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|role| role["role"] == "test_candidate")
+        })
+        .map(|symbol| symbol["location"]["qualified_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(hinted, ["main.rs#checks.runs"]);
+}
+
+#[test]
 fn ambiguity_and_unavailable_history_remain_explicit() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("a.rs");
@@ -96,9 +124,12 @@ fn ambiguity_and_unavailable_history_remain_explicit() {
     )
     .unwrap();
     let snapshot = IndexCache::default().load(dir.path(), &[path]).unwrap();
-    let report = build(&snapshot, dir.path(), "helper", &Options::default()).unwrap();
-    assert_eq!(report["ambiguous"], true);
-    assert!(report.get("symbols").is_none());
+    let error = build(&snapshot, dir.path(), "helper", &Options::default()).unwrap_err();
+    assert!(
+        matches!(&error, omen::core::Error::SymbolLookup(failure)
+            if matches!(**failure, omen::symbol::LookupFailure::Ambiguous { .. })),
+        "{error}"
+    );
     let selected = build(
         &snapshot,
         dir.path(),
@@ -222,4 +253,22 @@ fn wide_unicode_neighborhood_has_exact_omission_counts_and_byte_bounds() {
             101
         );
     }
+}
+
+#[test]
+fn a_c_prototype_does_not_make_the_name_ambiguous() {
+    let dir = TempDir::new().unwrap();
+    let header = dir.path().join("area.h");
+    let source = dir.path().join("area.c");
+    std::fs::write(&header, "int area(void);\n").unwrap();
+    std::fs::write(
+        &source,
+        "#include \"area.h\"\nint area(void) { return 1; }\n",
+    )
+    .unwrap();
+    let snapshot = IndexCache::default()
+        .load(dir.path(), &[header, source])
+        .unwrap();
+    let report = build(&snapshot, dir.path(), "area", &Options::default()).unwrap();
+    assert_eq!(report["seed"]["qualified_name"], "area.c#area");
 }

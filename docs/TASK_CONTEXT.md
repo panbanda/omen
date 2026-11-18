@@ -72,7 +72,8 @@ validated release speedups. Reads and hashing still occur on every request.
 
 ## Boundaries by improvement area
 
-- Test roles: path/name candidates, not measured execution coverage. Do not use
+- Test roles: the syntax and the path give the candidates (see
+  `docs/TEST_CODE.md`). They are not measured execution coverage. Do not use
   this to skip all other tests.
 - Data flow: syntax occurrences only, not binding-resolved def-use, taint paths,
   return/parameter propagation, or branch feasibility.

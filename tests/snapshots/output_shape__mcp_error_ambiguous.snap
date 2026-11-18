@@ -5,23 +5,41 @@ expression: body
 {
   "error": {
     "code": "ambiguous",
-    "expected": "a name and a start line that select one definition",
-    "message": "3 definitions agree with the symbol `helper`. The tool did not select one.",
-    "next": "Call `get_symbol` again with the `name` and the `start_line` of one suggestion.",
+    "expected": "a name, or a name and a start line, that select one definition",
+    "message": "3 definitions agree with the symbol `helper`. Select one with its key or its start line.",
+    "next": "Call `get_symbol` again with the arguments of this call. Use the `arguments` of one suggestion in place of the arguments with the same names.",
     "param": "name",
     "received": "helper",
     "suggestions": [
       {
+        "arguments": {
+          "name": "main.rs#shadow.helper"
+        },
+        "container": "shadow",
+        "file": "main.rs",
+        "kind": "Function",
         "name": "main.rs#shadow.helper",
         "signature": "helper = ||",
         "start_line": 38
       },
       {
+        "arguments": {
+          "name": "other.rs#helper"
+        },
+        "container": null,
+        "file": "other.rs",
+        "kind": "Function",
         "name": "other.rs#helper",
         "signature": "pub fn helper() -> u32",
         "start_line": 1
       },
       {
+        "arguments": {
+          "name": "util.rs#helper"
+        },
+        "container": null,
+        "file": "util.rs",
+        "kind": "Function",
         "name": "util.rs#helper",
         "signature": "pub fn helper() -> u32",
         "start_line": 1

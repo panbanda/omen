@@ -52,6 +52,17 @@ pub enum Predicate {
     BuiltString {
         index: usize,
     },
+    /// The argument at the index is one of the values that turn a check off, or it is not a
+    /// literal. A value that is not a literal can turn the check off at run time.
+    ArgSetting {
+        index: usize,
+        disabled: &'static [&'static str],
+    },
+    /// Like [`Predicate::ArgSetting`], for the value of a keyword argument or an object property.
+    KeywordSetting {
+        name: &'static str,
+        disabled: &'static [&'static str],
+    },
     All(&'static [Predicate]),
     /// At least one of the predicates holds.
     AnyOf(&'static [Predicate]),
@@ -63,6 +74,24 @@ pub enum Predicate {
     },
     /// An argument passes a block, as `&block` does in Ruby.
     BlockPass,
+    /// The call runs a command. It always holds. The arguments from `from` to `to` (without
+    /// `to`) give the command, and the others are options, such as the environment or a
+    /// callback. An object, a hash, and a keyword argument are options at each position.
+    Command {
+        from: usize,
+        to: usize,
+    },
+    /// The call runs a shell with the option `-c`. The argument `list` is an array literal. When
+    /// `program` and `list` are the same index, the array holds the shell, then `-c`, then the
+    /// command, as Python `["sh", "-c", command]` does. Otherwise the argument `program` is the
+    /// shell and the array starts with `-c`, as Node `spawn("sh", ["-c", command])` does.
+    ShellArgv {
+        program: usize,
+        list: usize,
+    },
+    /// The receiver of the method is the value of the sink, as in `text.html_safe`. The
+    /// predicate always holds. The receiver tells if the sink is constant.
+    Receiver,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +104,11 @@ pub enum Target {
     /// A method call on a receiver of unknown type. Only the name gives the evidence.
     Method {
         callee: &'static str,
+        /// The packages whose objects have the method. Empty means any. When an import of an
+        /// external package that is not in the list gives the receiver, the call is not a sink.
+        /// A package matches by its full name or by its name without the scope, thus
+        /// `typeorm` matches `@n8n/typeorm`.
+        packages: &'static str,
     },
     /// A member access that is not a call.
     Mention {
@@ -82,18 +116,40 @@ pub enum Target {
         name: &'static str,
     },
     /// A field of a struct literal. The literal has the type `owner` of the module `module`.
+    /// The predicate gets the value of the field as its only argument.
     KeyedField {
         key: &'static str,
-        value: &'static str,
         module: &'static str,
         owner: &'static str,
     },
-    /// An assignment to a member. The assigned value, without white space and in
-    /// lower case, contains one of the values.
+    /// An assignment to a member. The last name of the assigned value, in lower case, is one
+    /// of the values. An empty list accepts each value. The predicate gets the assigned value
+    /// as its only argument.
     Assignment {
         module: &'static str,
         name: &'static str,
         values: &'static [&'static str],
+    },
+    /// An assignment to a member with one of the names, as `element.innerHTML = text` is.
+    /// The receiver can have any type, thus only the name gives the evidence. The predicate
+    /// gets the assigned value as its only argument.
+    MemberAssignment {
+        names: &'static str,
+        /// The receiver, as the source writes it, such as `process.env`. Empty means any.
+        receiver: &'static str,
+    },
+    /// A property of an object literal with one of the keys. The callee that gets the object
+    /// is not known, thus only the key gives the evidence. The predicate gets the value of the
+    /// property as its only argument. An object that is an argument of a call that a row
+    /// names, or of a repository function, is not read again.
+    ObjectProperty {
+        keys: &'static str,
+    },
+    /// A JSX attribute with the name. The value is the property `key` of the object in the
+    /// attribute, or the whole expression of the attribute when it has no such property.
+    Attribute {
+        name: &'static str,
+        key: &'static str,
     },
     UnsafeBlock,
     /// A string literal that is a token with a provider prefix.
@@ -146,7 +202,7 @@ use Predicate::{
 };
 use SinkCategory::{
     CodeEvaluation, CommandExecution, HardcodedCredential, MemoryUnsafe, SqlStringConstruction,
-    TlsVerificationDisabled, UnsafeDeserialization, WeakCipher, WeakHash,
+    TlsVerificationDisabled, UnsafeDeserialization, UnsafeHtmlOutput, WeakCipher, WeakHash,
 };
 
 const fn path(
@@ -164,6 +220,14 @@ const fn path(
     }
 }
 
+/// The arguments of a command sink: the command is the arguments from `from` to `to`.
+const fn command(from: usize, to: usize) -> Predicate {
+    Predicate::Command { from, to }
+}
+
+/// Each argument from `from` gives the command.
+const REST: usize = usize::MAX;
+
 const fn method(
     category: SinkCategory,
     languages: &'static [Language],
@@ -173,7 +237,10 @@ const fn method(
     SinkSpec {
         category,
         languages,
-        target: Target::Method { callee },
+        target: Target::Method {
+            callee,
+            packages: "",
+        },
         predicate,
     }
 }
@@ -196,20 +263,15 @@ const fn keyed(
     category: SinkCategory,
     languages: &'static [Language],
     key: &'static str,
-    value: &'static str,
     module: &'static str,
     owner: &'static str,
+    predicate: Predicate,
 ) -> SinkSpec {
     SinkSpec {
         category,
         languages,
-        target: Target::KeyedField {
-            key,
-            value,
-            module,
-            owner,
-        },
-        predicate: Always,
+        target: Target::KeyedField { key, module, owner },
+        predicate,
     }
 }
 
@@ -219,6 +281,7 @@ const fn assignment(
     module: &'static str,
     name: &'static str,
     values: &'static [&'static str],
+    predicate: Predicate,
 ) -> SinkSpec {
     SinkSpec {
         category,
@@ -228,7 +291,7 @@ const fn assignment(
             name,
             values,
         },
-        predicate: Always,
+        predicate,
     }
 }
 
@@ -246,6 +309,12 @@ const NOT_FOR_SECURITY: Predicate = Predicate::Without(&Predicate::Keyword {
     value: "false",
 });
 
+/// The first argument turns the check off with `true`, or it is not a constant.
+const FIRST_IS_TRUE_OR_UNKNOWN: Predicate = Predicate::ArgSetting {
+    index: 0,
+    disabled: &["true"],
+};
+
 const WEAK_DIGESTS: &[&str] = &["md5", "sha1", "sha-1", "md2", "md4"];
 const WEAK_CIPHERS: &[&str] = &["des", "rc4", "rc2", "bf", "blowfish", "arcfour"];
 const CURL_VERIFY: &[&str] = &["curlopt_ssl_verifypeer", "curlopt_ssl_verifyhost"];
@@ -253,15 +322,31 @@ const CURL_VERIFY: &[&str] = &["curlopt_ssl_verifypeer", "curlopt_ssl_verifyhost
 /// Each row of the table, in the order in which a sink of a category is chosen.
 pub const SPECS: &[SinkSpec] = &[
     // Python
-    path(CommandExecution, PYTHON, "os", "system|popen", Always),
+    path(CommandExecution, PYTHON, "os", "system|popen", command(0, 1)),
     path(
         CommandExecution,
         PYTHON,
         "subprocess",
         "run|call|check_call|check_output|Popen",
-        keyword("shell", "true"),
+        All(&[keyword("shell", "true"), command(0, 1)]),
     ),
-    path(CommandExecution, PYTHON, "subprocess", "getoutput|getstatusoutput", Always),
+    path(
+        CommandExecution,
+        PYTHON,
+        "subprocess",
+        "run|call|check_call|check_output|Popen",
+        Predicate::ShellArgv {
+            program: 0,
+            list: 0,
+        },
+    ),
+    path(
+        CommandExecution,
+        PYTHON,
+        "subprocess",
+        "getoutput|getstatusoutput",
+        command(0, 1),
+    ),
     path(CodeEvaluation, PYTHON, "", "eval|exec", Always),
     path(UnsafeDeserialization, PYTHON, "pickle|_pickle|cPickle", "loads|load", Always),
     path(UnsafeDeserialization, PYTHON, "marshal", "loads|load", Always),
@@ -307,23 +392,44 @@ pub const SPECS: &[SinkSpec] = &[
         PYTHON,
         "requests|httpx",
         "get|post|put|patch|delete|head|options|request",
-        keyword("verify", "false"),
+        Predicate::KeywordSetting {
+            name: "verify",
+            disabled: &["false"],
+        },
     ),
     path(TlsVerificationDisabled, PYTHON, "ssl", "_create_unverified_context", Always),
+    path(
+        UnsafeHtmlOutput,
+        PYTHON,
+        "django.utils.safestring",
+        "mark_safe|SafeString",
+        Always,
+    ),
+    path(UnsafeHtmlOutput, PYTHON, "markupsafe|flask|jinja2", "Markup", Always),
     // JavaScript and TypeScript
     path(
         CommandExecution,
         ECMA,
         "child_process|node:child_process",
         "exec|execSync",
-        Always,
+        command(0, 1),
     ),
     path(
         CommandExecution,
         ECMA,
         "child_process|node:child_process",
         "spawn|spawnSync|execFile|execFileSync",
-        keyword("shell", "true"),
+        All(&[keyword("shell", "true"), command(0, 2)]),
+    ),
+    path(
+        CommandExecution,
+        ECMA,
+        "child_process|node:child_process",
+        "spawn|spawnSync|execFile|execFileSync",
+        Predicate::ShellArgv {
+            program: 0,
+            list: 1,
+        },
     ),
     path(CodeEvaluation, ECMA, "", "eval|Function", Always),
     path(
@@ -333,13 +439,43 @@ pub const SPECS: &[SinkSpec] = &[
         "runInNewContext|runInThisContext|runInContext",
         Always,
     ),
-    path(UnsafeDeserialization, ECMA, "node-serialize", "unserialize", Always),
-    method(
-        SqlStringConstruction,
+    // `new Script(code)` compiles the code. The methods of the script run it.
+    path(
+        CodeEvaluation,
         ECMA,
-        "query|execute|raw|queryRawUnsafe|$queryRawUnsafe",
-        built(0),
+        "vm|node:vm",
+        "Script|compileFunction",
+        Always,
     ),
+    // isolated-vm. Only a receiver that a declared type of the module gives is a sink.
+    path(
+        CodeEvaluation,
+        ECMA,
+        "isolated-vm.Context",
+        "eval|evalSync|evalIgnored|evalClosure|evalClosureSync",
+        Predicate::HasArgument { index: 0 },
+    ),
+    path(
+        CodeEvaluation,
+        ECMA,
+        "isolated-vm.Isolate",
+        "compileScript|compileScriptSync|compileModule|compileModuleSync",
+        Predicate::HasArgument { index: 0 },
+    ),
+    path(UnsafeDeserialization, ECMA, "node-serialize", "unserialize", Always),
+    SinkSpec {
+        category: SqlStringConstruction,
+        languages: ECMA,
+        target: Target::Method {
+            callee: "query|execute|raw|queryRawUnsafe|$queryRawUnsafe",
+            packages: "pg|pg-pool|pg-promise|postgres|mysql|mysql2|mariadb|mssql|tedious|oracledb|\
+                       sqlite|sqlite3|better-sqlite3|knex|typeorm|sequelize|@prisma/client|\
+                       kysely|drizzle-orm|@mikro-orm/core|objection|slonik|alasql|duckdb|\
+                       @google-cloud/bigquery|snowflake-sdk|@databricks/sql|@neondatabase/serverless|\
+                       @vercel/postgres|@planetscale/database|@libsql/client",
+        },
+        predicate: built(0),
+    },
     path(
         WeakHash,
         ECMA,
@@ -365,21 +501,94 @@ pub const SPECS: &[SinkSpec] = &[
         ECMA,
         "https|node:https|tls|node:tls",
         "request|get|connect|Agent",
-        keyword("rejectunauthorized", "false"),
+        Predicate::KeywordSetting {
+            name: "rejectunauthorized",
+            disabled: &["false"],
+        },
     ),
+    // The key is an option of the TLS client of Node. Libraries give it to that client.
+    SinkSpec {
+        category: TlsVerificationDisabled,
+        languages: ECMA,
+        target: Target::ObjectProperty {
+            keys: "rejectUnauthorized",
+        },
+        predicate: Predicate::ArgSetting {
+            index: 0,
+            disabled: &["false"],
+        },
+    },
+    SinkSpec {
+        category: TlsVerificationDisabled,
+        languages: ECMA,
+        target: Target::ObjectProperty {
+            keys: "NODE_TLS_REJECT_UNAUTHORIZED",
+        },
+        predicate: Predicate::ArgSetting {
+            index: 0,
+            disabled: &["0"],
+        },
+    },
+    SinkSpec {
+        category: TlsVerificationDisabled,
+        languages: ECMA,
+        target: Target::MemberAssignment {
+            names: "NODE_TLS_REJECT_UNAUTHORIZED",
+            receiver: "process.env",
+        },
+        predicate: Predicate::ArgSetting {
+            index: 0,
+            disabled: &["0"],
+        },
+    },
+    SinkSpec {
+        category: UnsafeHtmlOutput,
+        languages: ECMA,
+        target: Target::MemberAssignment {
+            names: "innerHTML|outerHTML",
+            receiver: "",
+        },
+        predicate: Always,
+    },
+    method(
+        UnsafeHtmlOutput,
+        ECMA,
+        "insertAdjacentHTML",
+        Predicate::HasArgument { index: 1 },
+    ),
+    SinkSpec {
+        category: UnsafeHtmlOutput,
+        languages: ECMA,
+        target: Target::Attribute {
+            name: "dangerouslySetInnerHTML",
+            key: "__html",
+        },
+        predicate: Always,
+    },
     // Go
     // A command is built here. The sink does not say that the command runs.
-    path(CommandExecution, GO, "os/exec", "Command|CommandContext", Always),
+    path(CommandExecution, GO, "os/exec", "Command", command(0, REST)),
+    path(CommandExecution, GO, "os/exec", "CommandContext", command(1, REST)),
+    path(CommandExecution, GO, "os", "StartProcess", command(0, 2)),
+    path(
+        CommandExecution,
+        GO,
+        "syscall",
+        "Exec|ForkExec|StartProcess",
+        command(0, 2),
+    ),
+    // `database/sql`, sqlx, gorm, and xorm. A name that other libraries use for a key or a
+    // value, such as `Get` or `Select`, is not in the list.
     method(
         SqlStringConstruction,
         GO,
-        "Query|QueryRow|Exec",
+        "Query|QueryRow|Exec|Prepare|SQL|Raw|Queryx|QueryRowx|MustExec|NamedExec|NamedQuery",
         built(0),
     ),
     method(
         SqlStringConstruction,
         GO,
-        "QueryContext|QueryRowContext|ExecContext",
+        "QueryContext|QueryRowContext|ExecContext|PrepareContext|QueryxContext|QueryRowxContext|MustExecContext|NamedExecContext|NamedQueryContext",
         built(1),
     ),
     path(WeakHash, GO, "crypto/md5|crypto/sha1", "New|Sum", Always),
@@ -389,9 +598,25 @@ pub const SPECS: &[SinkSpec] = &[
         TlsVerificationDisabled,
         GO,
         "InsecureSkipVerify",
-        "true",
         "crypto/tls",
         "Config",
+        FIRST_IS_TRUE_OR_UNKNOWN,
+    ),
+    assignment(
+        TlsVerificationDisabled,
+        GO,
+        "crypto/tls.Config",
+        "InsecureSkipVerify",
+        &[],
+        FIRST_IS_TRUE_OR_UNKNOWN,
+    ),
+    // A conversion to a type of `html/template` tells the template not to escape the value.
+    path(
+        UnsafeHtmlOutput,
+        GO,
+        "html/template",
+        "HTML|HTMLAttr|JS|JSStr|CSS|URL|Srcset",
+        Always,
     ),
     path(
         MemoryUnsafe,
@@ -402,7 +627,13 @@ pub const SPECS: &[SinkSpec] = &[
     ),
     // Rust
     // A command is built here. The sink does not say that the command runs.
-    path(CommandExecution, RUST, "std::process::Command", "new", Always),
+    path(
+        CommandExecution,
+        RUST,
+        "std::process::Command|tokio::process::Command|smol::process::Command|async_process::Command|async_std::process::Command",
+        "new",
+        command(0, 1),
+    ),
     path(
         SqlStringConstruction,
         RUST,
@@ -424,10 +655,7 @@ pub const SPECS: &[SinkSpec] = &[
         TlsVerificationDisabled,
         RUST,
         "danger_accept_invalid_certs|danger_accept_invalid_hostnames",
-        ArgIn {
-            index: 0,
-            values: &["true"],
-        },
+        FIRST_IS_TRUE_OR_UNKNOWN,
     ),
     SinkSpec {
         category: MemoryUnsafe,
@@ -444,15 +672,22 @@ pub const SPECS: &[SinkSpec] = &[
         Always,
     ),
     path(MemoryUnsafe, RUST, "std::ffi::CStr", "from_ptr", Always),
+    path(UnsafeHtmlOutput, RUST, "maud", "PreEscaped", Always),
     // Java
     path(
         CommandExecution,
         JAVA,
         "java.lang.Runtime.getRuntime()",
         "exec",
-        Always,
+        command(0, 1),
     ),
-    path(CommandExecution, JAVA, "java.lang", "ProcessBuilder", Always),
+    path(
+        CommandExecution,
+        JAVA,
+        "java.lang",
+        "ProcessBuilder",
+        command(0, REST),
+    ),
     path(CodeEvaluation, JAVA, "javax.script.ScriptEngine", "eval", Always),
     path(
         UnsafeDeserialization,
@@ -509,8 +744,20 @@ pub const SPECS: &[SinkSpec] = &[
         ]),
     ),
     // C#
-    path(CommandExecution, CSHARP, "System.Diagnostics.Process", "Start", Always),
-    path(CommandExecution, CSHARP, "System.Diagnostics", "ProcessStartInfo", Always),
+    path(
+        CommandExecution,
+        CSHARP,
+        "System.Diagnostics.Process",
+        "Start",
+        command(0, 2),
+    ),
+    path(
+        CommandExecution,
+        CSHARP,
+        "System.Diagnostics",
+        "ProcessStartInfo",
+        command(0, 2),
+    ),
     path(
         CodeEvaluation,
         CSHARP,
@@ -552,6 +799,7 @@ pub const SPECS: &[SinkSpec] = &[
         "System.Net.Http.HttpClientHandler",
         "ServerCertificateCustomValidationCallback",
         &["dangerousacceptanyservercertificatevalidator", "=>true"],
+        Always,
     ),
     assignment(
         TlsVerificationDisabled,
@@ -559,6 +807,14 @@ pub const SPECS: &[SinkSpec] = &[
         "System.Net.ServicePointManager",
         "ServerCertificateValidationCallback",
         &["=>true"],
+        Always,
+    ),
+    path(
+        UnsafeHtmlOutput,
+        CSHARP,
+        "Microsoft.AspNetCore.Html|System.Web",
+        "HtmlString",
+        Always,
     ),
     SinkSpec {
         category: MemoryUnsafe,
@@ -567,15 +823,15 @@ pub const SPECS: &[SinkSpec] = &[
         predicate: Always,
     },
     // Ruby
-    path(CommandExecution, RUBY, "", "system|exec|spawn", Always),
+    path(CommandExecution, RUBY, "", "system|exec|spawn", command(0, REST)),
     path(
         CommandExecution,
         RUBY,
         "Open3",
         "popen3|popen2|popen2e|capture2|capture2e|capture3",
-        Always,
+        command(0, REST),
     ),
-    path(CommandExecution, RUBY, "IO", "popen", Always),
+    path(CommandExecution, RUBY, "IO", "popen", command(0, REST)),
     path(CodeEvaluation, RUBY, "", "eval", Always),
     path(
         CodeEvaluation,
@@ -614,14 +870,16 @@ pub const SPECS: &[SinkSpec] = &[
         Always,
     ),
     mention(TlsVerificationDisabled, RUBY, "OpenSSL::SSL", "VERIFY_NONE"),
+    method(UnsafeHtmlOutput, RUBY, "html_safe", Predicate::Receiver),
     // PHP
     path(
         CommandExecution,
         PHP,
         "",
-        "exec|shell_exec|system|passthru|popen|proc_open|pcntl_exec",
-        Always,
+        "exec|shell_exec|system|passthru|popen|proc_open",
+        command(0, 1),
     ),
+    path(CommandExecution, PHP, "", "pcntl_exec", command(0, 2)),
     path(CodeEvaluation, PHP, "", "eval|assert|create_function", Always),
     path(UnsafeDeserialization, PHP, "", "unserialize", Always),
     path(
@@ -674,9 +932,9 @@ pub const SPECS: &[SinkSpec] = &[
                 index: 1,
                 values: CURL_VERIFY,
             },
-            ArgIn {
+            Predicate::ArgSetting {
                 index: 2,
-                values: &["false", "0"],
+                disabled: &["false", "0"],
             },
         ]),
     ),
@@ -685,10 +943,18 @@ pub const SPECS: &[SinkSpec] = &[
         CommandExecution,
         C,
         "",
-        "system|popen|execl|execlp|execle|execv|execvp|execve",
-        Always,
+        "system|popen",
+        command(0, 1),
     ),
-    path(CommandExecution, CPP, "std", "system", Always),
+    path(
+        CommandExecution,
+        C,
+        "",
+        "execl|execlp|execle|execv|execvp",
+        command(0, REST),
+    ),
+    path(CommandExecution, C, "", "execve", command(0, 2)),
+    path(CommandExecution, CPP, "std", "system", command(0, 1)),
     path(WeakHash, C, "", "MD5|MD5_Init|MD4|SHA1|SHA1_Init|EVP_md5|EVP_sha1", Always),
     path(
         WeakCipher,
@@ -707,9 +973,9 @@ pub const SPECS: &[SinkSpec] = &[
                 index: 1,
                 values: CURL_VERIFY,
             },
-            ArgIn {
+            Predicate::ArgSetting {
                 index: 2,
-                values: &["0l", "0", "false"],
+                disabled: &["0l", "0", "false"],
             },
         ]),
     ),
@@ -845,6 +1111,10 @@ pub struct LanguageSyntax {
     pub keyed_kinds: &'static [&'static str],
     /// The node kinds of an assignment to a member.
     pub assignment_kinds: &'static [&'static str],
+    /// The node kinds of a property of an object literal.
+    pub property_kinds: &'static [&'static str],
+    /// The node kinds of an attribute of a markup element, such as a JSX attribute.
+    pub attribute_kinds: &'static [&'static str],
     /// The node kind of a block that the language marks as unsafe.
     pub unsafe_kinds: &'static [&'static str],
     /// The modules that the language gives without an import. A callee in one of them can be written without the module.
@@ -864,6 +1134,8 @@ pub fn syntax_of(language: Language) -> LanguageSyntax {
         mention_kinds: &[],
         keyed_kinds: &[],
         assignment_kinds: &[],
+        attribute_kinds: &[],
+        property_kinds: &[],
         unsafe_kinds: &[],
         implicit_modules: &[],
         global_namespace: false,
@@ -878,12 +1150,16 @@ pub fn syntax_of(language: Language) -> LanguageSyntax {
         Language::JavaScript | Language::TypeScript | Language::Tsx | Language::Jsx => {
             LanguageSyntax {
                 string_kinds: &["string", "template_string"],
+                assignment_kinds: &["assignment_expression", "augmented_assignment_expression"],
+                attribute_kinds: &["jsx_attribute"],
+                property_kinds: &["pair"],
                 ..base
             }
         }
         Language::Go => LanguageSyntax {
             string_kinds: &["interpreted_string_literal", "raw_string_literal"],
             keyed_kinds: &["keyed_element"],
+            assignment_kinds: &["assignment_statement"],
             ..base
         },
         Language::Rust => LanguageSyntax {
@@ -977,6 +1253,8 @@ mod tests {
                 Predicate::ArgStartsWith { prefixes, .. } => vec![prefixes],
                 Predicate::ArgContains { needles, .. } => vec![needles],
                 Predicate::AnyArgIn(values) | Predicate::AnyArgStartsWith(values) => vec![values],
+                Predicate::ArgSetting { disabled, .. }
+                | Predicate::KeywordSetting { disabled, .. } => vec![disabled],
                 Predicate::All(inner) | Predicate::AnyOf(inner) => {
                     inner.iter().for_each(check);
                     vec![]

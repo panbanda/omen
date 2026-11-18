@@ -83,6 +83,12 @@ impl<'a> AnalysisContext<'a> {
         Ok(Arc::clone(index))
     }
 
+    /// The shared index, when an analyzer of this context built it. A caller
+    /// that only wants facts that the index has can thus avoid a build.
+    pub fn code_index_if_built(&self) -> Option<Arc<CodeIndex>> {
+        self.code_index.get().map(Arc::clone)
+    }
+
     /// The files of one directory, from the content source if available,
     /// otherwise from the filesystem. A path has the form of `directory`.
     fn list_directory(&self, directory: &Path) -> Vec<PathBuf> {

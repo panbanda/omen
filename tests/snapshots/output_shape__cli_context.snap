@@ -37,6 +37,8 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "entry_points_by_kind": {
         "cli_main": "number"
       },
+      "entry_points_with_incomplete_guards": "number",
+      "incomplete_guards_by_reason": {},
       "invalid_suppressions": "number",
       "paths": "number",
       "sinks": "number",

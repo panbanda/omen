@@ -3,6 +3,12 @@ source: tests/output_shape.rs
 expression: "shape(&output, case.dynamic_key_objects)"
 ---
 {
+  "churn_window": {
+    "anchor_date": "string",
+    "commits_matched": "number",
+    "days": "number",
+    "history_complete": "bool"
+  },
   "commits": [
     {
       "author": "string",
@@ -51,6 +57,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
   },
   "period_days": "number",
   "risk_thresholds": {
+    "basis": "string",
     "high_threshold": "number",
     "medium_threshold": "number"
   },

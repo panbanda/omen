@@ -56,6 +56,7 @@ expression: "shape(&response, &dynamic_key_objects)"
             "callees": [
               {
                 "file": "string",
+                "is_test": "bool",
                 "line": "number",
                 "qualified_name": "string"
               }
@@ -63,13 +64,14 @@ expression: "shape(&response, &dynamic_key_objects)"
             "callers": [
               {
                 "file": "string",
+                "is_test": "bool",
                 "line": "number",
                 "qualified_name": "string"
               }
             ],
-            "candidates": [],
             "cognitive": "number",
             "cyclomatic": "number",
+            "declarations": [],
             "end_line": "number",
             "file": "string",
             "kind": "string",

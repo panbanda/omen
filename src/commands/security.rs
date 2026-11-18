@@ -88,6 +88,11 @@ pub fn run(
         request.entry.as_deref(),
         request.sink.as_deref(),
     );
+    let report = if request.scope.exclude_tests {
+        report.without_tests()
+    } else {
+        report
+    };
     let section = match request.section {
         None => Section::All,
         Some(SecuritySection::Sinks) => Section::Sinks,

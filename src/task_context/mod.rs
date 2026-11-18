@@ -2,7 +2,7 @@
 pub mod cache;
 mod facts;
 
-use crate::core::{is_test_file, Error, Result};
+use crate::core::{Error, Result};
 use crate::index::view::{SymbolLocation, DEFAULT_MIN_BASIS};
 use cache::Snapshot;
 use serde_json::{json, Value};
@@ -34,33 +34,18 @@ pub fn build(snapshot: &Snapshot, root: &Path, name: &str, options: &Options) ->
         ));
     }
     let index = &snapshot.index;
-    let matches: Vec<_> = index
-        .resolve(name)
-        .into_iter()
-        .filter(|&i| {
-            options
-                .start_line
-                .is_none_or(|line| index.symbols[i].line == line)
-        })
+    let selection = crate::symbol::select(index, name, options.start_line)?;
+    let seed = selection.definition;
+    // A call can resolve to a declaration of the function, such as a C prototype.
+    let roots: Vec<usize> = std::iter::once(seed)
+        .chain(selection.declarations.iter().copied())
         .collect();
-    if matches.len() != 1 {
-        let choices: Vec<_> = matches
-            .iter()
-            .map(|&i| SymbolLocation::from(&index.symbols[i]))
-            .collect();
-        let mut report = json!({"found": !matches.is_empty(), "ambiguous": matches.len() > 1,
-            "choices": choices, "omitted": {"choices": 0},
-            "hint": "Select qualified_name and start_line. No definition selected."});
-        fit(&mut report, options.max_bytes, &["choices"])?;
-        return Ok(report);
-    }
-    let seed = matches[0];
     let mut related = BTreeMap::new();
     related.insert(seed, ("seed", 0));
     for (relation, levels) in [
         (
             "caller",
-            index.callers(&[seed], options.depth, DEFAULT_MIN_BASIS),
+            index.callers(&roots, options.depth, DEFAULT_MIN_BASIS),
         ),
         (
             "callee",
@@ -74,18 +59,11 @@ pub fn build(snapshot: &Snapshot, root: &Path, name: &str, options: &Options) ->
         }
     }
     let mut related: Vec<_> = related.into_iter().collect();
-    related.sort_by_key(|&(i, (_, depth))| {
-        (
-            i != seed,
-            depth,
-            !test_hint(&index.symbols[i].file, &index.symbols[i].name),
-            i,
-        )
-    });
+    related.sort_by_key(|&(i, (_, depth))| (i != seed, depth, !index.symbols[i].is_test, i));
     let symbols: Vec<_> = related.iter().map(|&(i, (relation, depth))| {
         let symbol = &index.symbols[i];
         json!({"location": SymbolLocation::from(symbol), "signature": symbol.signature,
-            "relation": relation, "depth": depth, "role_hints": role_hints(&symbol.file, &symbol.name)})
+            "relation": relation, "depth": depth, "role_hints": role_hints(&symbol.file, symbol.is_test)})
     }).collect();
     let calls = index.calls_of(seed);
     let symbol = &index.symbols[seed];
@@ -166,14 +144,10 @@ fn fit(value: &mut Value, max_bytes: usize, fields: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn test_hint(file: &str, name: &str) -> bool {
-    is_test_file(Path::new(file)) || name.starts_with("test_") || name.starts_with("Test")
-}
-
-fn role_hints(file: &str, name: &str) -> Vec<Value> {
+fn role_hints(file: &str, is_test: bool) -> Vec<Value> {
     let mut roles = Vec::new();
-    if test_hint(file, name) {
-        roles.push(json!({"role": "test_candidate", "basis": "path_or_name_convention"}));
+    if is_test {
+        roles.push(json!({"role": "test_candidate", "basis": "test_syntax_or_path"}));
     }
     let components: Vec<_> = file.split('/').collect();
     for (component, role) in [

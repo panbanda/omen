@@ -115,6 +115,34 @@ pub struct ChurnWindow {
     /// False for a shallow clone, where a valid HEAD coexists with truncated
     /// history, so a low match count proves nothing.
     pub history_complete: bool,
+    /// Present only when `history_complete` is false. It tells what a shallow
+    /// clone does to the numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_note: Option<String>,
+    /// Present only when the list of the result is empty and a wider window
+    /// exists. The value is a valid `--since` value, and it is the next
+    /// window to try.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_since: Option<String>,
+}
+
+/// The note of a history window that comes from a shallow clone.
+pub const SHALLOW_WINDOW_NOTE: &str = "The clone is shallow. Git has only a part of the \
+    history, thus each count is a lower limit and an empty result proves nothing. \
+    Run `git fetch --unshallow` to get the full history.";
+
+/// The windows that `next_since` gives, from the narrowest to the widest.
+const WIDER_WINDOWS: [(u32, &str); 3] = [(90, "90d"), (180, "6m"), (365, "1y")];
+
+/// The next window that is wider than `days`. A window of all the history has none.
+pub fn next_wider_window(days: Option<u32>) -> Option<&'static str> {
+    let days = days?;
+    Some(
+        WIDER_WINDOWS
+            .iter()
+            .find(|(wider, _)| *wider > days)
+            .map_or("all", |(_, text)| text),
+    )
 }
 
 impl ChurnWindow {
@@ -131,7 +159,29 @@ impl ChurnWindow {
                 .map(|date| date.to_rfc3339()),
             commits_matched,
             history_complete,
+            history_note: (!history_complete).then(|| SHALLOW_WINDOW_NOTE.to_string()),
+            next_since: None,
         }
+    }
+
+    /// The window with `next_since`, when the result has no rows. An empty
+    /// list then tells that the window is too narrow, and not that the
+    /// repository has nothing to report.
+    pub fn for_rows(mut self, rows: usize) -> Self {
+        self.next_since = (rows == 0)
+            .then(|| next_wider_window(self.days))
+            .flatten()
+            .map(str::to_string);
+        self
+    }
+
+    /// The window for a command that does not accept `--since all`. Such a
+    /// command must not tell the agent to try that value.
+    pub fn without_all_history(mut self) -> Self {
+        if self.next_since.as_deref() == Some("all") {
+            self.next_since = None;
+        }
+        self
     }
 }
 
@@ -141,6 +191,8 @@ pub struct GitRepo {
     repo: Repository,
     /// Repository root path.
     root: PathBuf,
+    /// The commits at which a shallow clone stops, read one time.
+    shallow_boundary: std::sync::OnceLock<std::collections::HashSet<String>>,
 }
 
 impl GitRepo {
@@ -154,7 +206,29 @@ impl GitRepo {
             .ok_or_else(|| Error::git("Not a work tree"))?
             .to_path_buf();
 
-        Ok(Self { repo, root })
+        Ok(Self {
+            repo,
+            root,
+            shallow_boundary: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// The hashes of the commits at which a shallow clone stops. Git has no
+    /// parent for such a commit, thus `git blame` gives it each older line.
+    /// The set is empty for a clone with the full history.
+    pub fn shallow_boundary(&self) -> &std::collections::HashSet<String> {
+        self.shallow_boundary.get_or_init(|| {
+            // The file is in the common directory. A linked worktree has no copy of it.
+            std::fs::read_to_string(self.repo.common_dir().join("shallow"))
+                .map(|text| {
+                    text.lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
     }
 
     /// Get the repository root path.
@@ -235,7 +309,7 @@ impl GitRepo {
 
     /// Get blame information for a file.
     pub fn blame(&self, path: &Path) -> Result<BlameInfo> {
-        blame::get_blame(&self.repo, &self.root, path)
+        blame::get_blame(&self.repo, &self.root, path, self.shallow_boundary())
     }
 
     /// Get commit statistics for a specific commit.
@@ -268,6 +342,56 @@ impl GitRepo {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    #[test]
+    fn test_next_wider_window_is_the_next_step_or_all() {
+        assert_eq!(next_wider_window(Some(7)), Some("90d"));
+        assert_eq!(next_wider_window(Some(30)), Some("90d"));
+        assert_eq!(next_wider_window(Some(90)), Some("6m"));
+        assert_eq!(next_wider_window(Some(180)), Some("1y"));
+        assert_eq!(next_wider_window(Some(365)), Some("all"));
+        assert_eq!(next_wider_window(Some(4000)), Some("all"));
+        assert_eq!(next_wider_window(None), None);
+        for (_, text) in WIDER_WINDOWS {
+            assert!(since_to_days(text).is_ok(), "{text}");
+        }
+    }
+
+    #[test]
+    fn test_window_of_an_empty_result_gives_the_next_window() {
+        let window = ChurnWindow::new(30, Some(1_700_000_000), 1, true);
+        assert_eq!(window.next_since, None);
+        assert_eq!(window.clone().for_rows(3).next_since, None);
+        assert_eq!(window.for_rows(0).next_since.as_deref(), Some("90d"));
+        let all = ChurnWindow::new(u32::MAX, None, 0, true).for_rows(0);
+        assert_eq!(all.days, None);
+        assert_eq!(all.next_since, None);
+    }
+
+    #[test]
+    fn test_window_without_all_history_gives_no_window_of_all() {
+        let year = ChurnWindow::new(365, Some(1_700_000_000), 0, true).for_rows(0);
+        assert_eq!(year.next_since.as_deref(), Some("all"));
+        assert_eq!(year.without_all_history().next_since, None);
+        let month = ChurnWindow::new(30, Some(1_700_000_000), 0, true).for_rows(0);
+        assert_eq!(
+            month.without_all_history().next_since.as_deref(),
+            Some("90d")
+        );
+    }
+
+    #[test]
+    fn test_window_of_a_shallow_clone_has_a_note() {
+        let complete = serde_json::to_value(ChurnWindow::new(30, None, 4, true)).unwrap();
+        assert!(complete.get("history_note").is_none());
+        assert!(complete.get("next_since").is_none());
+        let shallow = serde_json::to_value(ChurnWindow::new(30, None, 1, false)).unwrap();
+        assert_eq!(shallow["history_complete"], false);
+        assert!(shallow["history_note"]
+            .as_str()
+            .unwrap()
+            .contains("git fetch --unshallow"));
+    }
 
     fn init_git_repo(path: &Path) {
         Command::new("git")

@@ -1,11 +1,9 @@
 //! The tools that an agent uses to find and read code.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::validate::nearest;
 use super::{
     Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolData, ToolOutput, ToolSpec,
     COMPACT, MAX_COUNT, PATH,
@@ -15,6 +13,7 @@ use crate::git::GitRepo;
 use crate::mcp::envelope::{Hint, IndexInfo, Truncation};
 use crate::mcp::error::{ErrorCode, ToolError};
 use crate::mcp::McpServer;
+use crate::symbol::{LookupFailure, SymbolChoice};
 
 const START_LINE: Param = Param::integer(
     "start_line",
@@ -185,11 +184,12 @@ pub(super) static GET_SYMBOL: ToolSpec = ToolSpec {
         of one symbol. \
         `call_resolutions` shows the unique, ambiguous, and unresolved candidates of each call. \
         The edges come from names, and a compiler does not prove them. \
-        The graph does not include ambiguous and unresolved calls.",
+        The graph does not include ambiguous and unresolved calls. \
+        A name that agrees with more than one definition gives the `ambiguous` error.",
     params: &[
         Param::string(
             "name",
-            "The symbol name. Use a bare name or the qualified form `file:name`.",
+            "The symbol name: a bare name, the qualified form `file:name`, or the key of a definition.",
         )
         .required(),
         Param::boolean(
@@ -264,24 +264,6 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
 
     let index = server.load_view(&scope.path, &files)?;
     let index = index.as_ref();
-    let matches: Vec<usize> = index
-        .resolve(name)
-        .into_iter()
-        .filter(|&symbol| start_line.is_none_or(|line| index.symbols[symbol].line == line))
-        .collect();
-    if matches.len() > 1 {
-        let choices: Vec<_> = matches
-            .into_iter()
-            .map(|symbol| {
-                json!({
-                    "name": index.symbols[symbol].qualified_name,
-                    "start_line": index.symbols[symbol].line,
-                    "signature": index.symbols[symbol].signature
-                })
-            })
-            .collect();
-        return Err(symbol_ambiguous("get_symbol", name, choices));
-    }
     match report_from_index(&scope.path, index, name, &options, start_line) {
         Ok(mut report) => {
             let analysis =
@@ -320,80 +302,79 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
                 ..ToolData::new(serde_json::to_value(&report)?)
             }))
         }
-        Err(_) => Err(symbol_not_found(
-            "name",
-            name,
-            symbol_suggestions(&index.by_name, name),
-        )),
+        Err(crate::core::Error::SymbolLookup(failure)) => {
+            Err(lookup_error(&GET_SYMBOL, "name", &failure))
+        }
+        Err(error) => Err(error.into()),
     }
 }
 
-/// The largest number of names that contain the query, or that the query
-/// contains, in one error.
-const MAX_SUBSTRING_SUGGESTIONS: usize = 10;
-
-/// The symbol names that are near `query`, in a stable sequence.
-///
-/// The first rule is the rule of the `symbol` command: a name that contains
-/// the query, or that the query contains. When no name agrees, the second
-/// rule gives the names with a small edit distance to the bare name.
-fn symbol_suggestions(by_name: &HashMap<String, Vec<usize>>, query: &str) -> Vec<String> {
-    let lowercase_query = query.to_lowercase();
-    let mut suggestions: Vec<String> = by_name
-        .keys()
-        .filter(|candidate| {
-            let candidate = candidate.to_lowercase();
-            candidate.contains(&lowercase_query) || lowercase_query.contains(candidate.as_str())
-        })
-        .cloned()
-        .collect();
-    suggestions.sort();
-    suggestions.truncate(MAX_SUBSTRING_SUGGESTIONS);
-    if !suggestions.is_empty() {
-        return suggestions;
-    }
-    let bare_name = query.rsplit(':').next().unwrap_or(query);
-    let names: Vec<&str> = by_name.keys().map(String::as_str).collect();
-    nearest(bare_name, &names)
-        .into_iter()
-        .map(str::to_string)
-        .collect()
-}
-
-/// The error for a symbol name that agrees with no definition.
-fn symbol_not_found(param: &'static str, name: &str, suggestions: Vec<String>) -> ToolError {
-    let next = if suggestions.is_empty() {
-        "Find the symbol with `outline` or `search`."
-    } else {
-        "Use a name from `suggestions`."
+/// The error for a symbol name that does not select one definition. Each
+/// choice has the `arguments` that select only it.
+fn lookup_error(tool: &ToolSpec, param: &'static str, failure: &LookupFailure) -> ToolError {
+    let with_arguments = |choices: &[SymbolChoice], with_line: bool| -> Vec<Value> {
+        choices
+            .iter()
+            .map(|choice| {
+                let mut value = json!(choice);
+                value["arguments"] = if with_line {
+                    json!({ (param): choice.name, "start_line": choice.start_line })
+                } else {
+                    json!({ (param): choice.name })
+                };
+                value
+            })
+            .collect()
     };
-    ToolError::new(
-        ErrorCode::NotFound,
-        format!("No definition agrees with the symbol `{name}`."),
-    )
-    .with_param(param)
-    .with_received(&json!(name))
-    .with_suggestions(suggestions)
-    .with_next(next)
-}
-
-/// The error for a symbol name that agrees with more than one definition.
-/// Each choice has a `name` and a `start_line` that select one definition.
-fn symbol_ambiguous(tool: &str, name: &str, choices: Vec<Value>) -> ToolError {
-    ToolError::new(
-        ErrorCode::Ambiguous,
-        format!(
-            "{} definitions agree with the symbol `{name}`. The tool did not select one.",
-            choices.len()
-        ),
-    )
-    .with_param("name")
-    .with_expected("a name and a start line that select one definition")
-    .with_received(&json!(name))
-    .with_suggestions(choices)
-    .with_next(format!(
-        "Call `{tool}` again with the `name` and the `start_line` of one suggestion."
-    ))
+    let same_call = format!(
+        "Call `{}` again with the arguments of this call.",
+        tool.name
+    );
+    match failure {
+        LookupFailure::NotFound {
+            name,
+            start_line,
+            suggestions,
+        } => {
+            let mut next = if suggestions.is_empty() {
+                "Find the symbol with `outline` or `search`.".to_string()
+            } else {
+                "Use a name from `suggestions`.".to_string()
+            };
+            if start_line.is_some() {
+                next.push_str(" Also correct `start_line` or remove it.");
+            }
+            ToolError::new(ErrorCode::NotFound, failure.to_string())
+                .with_param(param)
+                .with_received(&json!(name))
+                .with_suggestions(suggestions.clone())
+                .with_next(next)
+        }
+        LookupFailure::NotAtLine {
+            start_line,
+            choices,
+            ..
+        } => ToolError::new(ErrorCode::NotFound, failure.to_string())
+            .with_param("start_line")
+            .with_expected("the start line of a definition of the name")
+            .with_received(&json!(start_line))
+            .with_suggestions(with_arguments(choices, true))
+            .with_next(format!(
+                "{same_call} Correct `start_line` or remove it, or use the `arguments` of one \
+                 suggestion in place of the arguments with the same names."
+            )),
+        LookupFailure::Ambiguous { name, choices } => {
+            ToolError::new(ErrorCode::Ambiguous, failure.to_string())
+                .with_param(param)
+                .with_expected("a name, or a name and a start line, that select one definition")
+                .with_received(&json!(name))
+                .with_suggestions(with_arguments(choices, false))
+                .with_next(format!(
+                    "{same_call} Use the `arguments` of one suggestion in place of the \
+                     arguments with the same names."
+                ))
+        }
+    }
 }
 
 pub(super) static TASK_CONTEXT: ToolSpec = ToolSpec {
@@ -446,23 +427,12 @@ fn task_context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult 
     };
     let files = absolute_files(&scope.path, &scope.file_set);
     let snapshot = server.load_index(&scope.path, &files)?;
-    let result = crate::task_context::build(&snapshot, &scope.path, name, &options)?;
-    if result["ambiguous"] == true {
-        let choices: Vec<Value> = result["choices"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|choice| json!({"name": choice["qualified_name"], "start_line": choice["line"]}))
-            .collect();
-        return Err(symbol_ambiguous("task_context", name, choices));
-    }
-    if result["found"] == false {
-        return Err(symbol_not_found(
-            "name",
-            name,
-            symbol_suggestions(&snapshot.index.by_name, name),
-        ));
-    }
+    let result = match crate::task_context::build(&snapshot, &scope.path, name, &options) {
+        Err(crate::core::Error::SymbolLookup(failure)) => {
+            return Err(lookup_error(&TASK_CONTEXT, "name", &failure));
+        }
+        other => other?,
+    };
     let truncated = omitted_lists(&result);
     let symbols = result["symbols"].as_array().map_or(0, Vec::len);
     Ok(ToolOutput::Data(ToolData {
@@ -521,13 +491,15 @@ pub(super) static IMPACT: ToolSpec = ToolSpec {
         to a given depth. \
         The edges come from names. The tool does not include ambiguous and unresolved calls, \
         thus the result is not a full safety check. \
+        A name that agrees with more than one definition gives the `ambiguous` error. \
         The limit applies to the symbols of all levels.",
     params: &[
         Param::string(
             "symbol",
-            "The symbol name. Use a bare name or the qualified form `file:name`.",
+            "The symbol name: a bare name, the qualified form `file:name`, or the key of a definition.",
         )
         .required(),
+        START_LINE,
         Param::integer("depth", 0, MAX_COUNT, "The maximum depth of the traversal.")
             .with_default(ParamDefault::Integer(2)),
         Param::choice(
@@ -560,10 +532,20 @@ fn impact(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     };
     let files = absolute_files(&scope.path, &scope.file_set);
     let view = server.load_view(&scope.path, &files)?;
-    let mut report = analyze_view(&view, symbol, depth, direction, min_basis(arguments));
-    if report.resolved.is_empty() {
-        return Err(symbol_not_found("symbol", symbol, report.suggestions));
-    }
+    let start_line = arguments.count_u32("start_line");
+    let mut report = match analyze_view(
+        &view,
+        symbol,
+        start_line,
+        depth,
+        direction,
+        min_basis(arguments),
+    ) {
+        Err(crate::core::Error::SymbolLookup(failure)) => {
+            return Err(lookup_error(&IMPACT, "symbol", &failure));
+        }
+        other => other?,
+    };
     let analysis = crate::analyzers::security::analyze_paths(&scope.path, &files, &server.config)?;
     report.security = Some(crate::index::security::symbol_security(
         &analysis,
@@ -571,7 +553,14 @@ fn impact(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     ));
     // The traversal stops at `depth`. The totals without a limit tell if
     // the limit cut callers or callees.
-    let all = analyze_view(&view, symbol, usize::MAX, direction, min_basis(arguments));
+    let all = analyze_view(
+        &view,
+        symbol,
+        start_line,
+        usize::MAX,
+        direction,
+        min_basis(arguments),
+    )?;
     let mut truncated = Vec::new();
     for (path, total, returned) in [
         (

@@ -30,14 +30,21 @@ pub fn clones_analyzer(
     include_tests: bool,
 ) -> analyzers::duplicates::Analyzer {
     let configured = &config.duplicates;
-    analyzers::duplicates::Analyzer::new()
+    analyzers::duplicates::Analyzer::from_config(config)
         .with_min_tokens(min_tokens.unwrap_or(configured.min_tokens))
         .with_similarity_threshold(similarity.unwrap_or(configured.min_similarity))
         .with_exclude_tests(!include_tests && config.exclude_tests)
 }
 
+/// DEPRECATED(remove-in: 6.0): use `defect_analyzer_with_config`. This
+/// constructor uses the default `[duplicates]` table.
+#[deprecated(since = "5.2.0", note = "use `defect_analyzer_with_config`")]
 pub fn defect_analyzer(days: u32) -> analyzers::defect::Analyzer {
     analyzers::defect::Analyzer::new().with_churn_days(days)
+}
+
+pub fn defect_analyzer_with_config(config: &Config, days: u32) -> analyzers::defect::Analyzer {
+    analyzers::defect::Analyzer::from_config(config).with_churn_days(days)
 }
 
 pub fn hotspot_analyzer(days: u32) -> analyzers::hotspot::Analyzer {
@@ -48,8 +55,27 @@ pub fn churn_analyzer(days: u32) -> analyzers::churn::Analyzer {
     analyzers::churn::Analyzer::new().with_days(days)
 }
 
-pub fn changes_analyzer(config: &Config) -> analyzers::changes::Analyzer {
-    analyzers::changes::Analyzer::new().with_days(config.changes.since.days())
+pub fn changes_analyzer(days: u32) -> analyzers::changes::Analyzer {
+    analyzers::changes::Analyzer::new().with_days(days)
+}
+
+/// The message for a `changes` window of all the history. The configuration
+/// gives the same message for `changes.since`.
+pub const CHANGES_ALL_MESSAGE: &str =
+    "\"all\" is not a window of `changes`. Use a duration such as 30d.";
+
+/// The days of the `changes` window: the `--since` value, or `changes.since`
+/// of the configuration. The value `all` is an error.
+pub fn changes_window(since: Option<&str>, config: &Config) -> Result<u32> {
+    let Some(since) = since else {
+        return Ok(config.changes.since.days());
+    };
+    match since_flag_days(since)? {
+        u32::MAX => Err(Error::InvalidArgument(format!(
+            "--since: {CHANGES_ALL_MESSAGE}"
+        ))),
+        days => Ok(days),
+    }
 }
 
 pub fn score_analyzer(config: &Config) -> crate::score::Analyzer {
@@ -155,7 +181,9 @@ pub fn run_analyzer_instance<A: Analyzer>(
         .and_then(|scope| scope.top)
         .or_else(|| (analyzer_name == "hotspot").then_some(DEFAULT_TOP));
     let offset = scope.and_then(|scope| scope.offset);
-    let value = serde_json::to_value(&result)?;
+    let mut value = serde_json::to_value(&result)?;
+    let exclude_tests = scope.is_some_and(|scope| scope.exclude_tests);
+    super::test_rows::mark(&mut value, analyzer_name, &ctx, exclude_tests);
     let mut out = out;
     format_with_limits(value, format, top, offset, &mut out)?;
     Ok(result)
@@ -270,7 +298,7 @@ pub fn run_defect(
         config,
         format,
         Some(&request.scope),
-        defect_analyzer(window),
+        defect_analyzer_with_config(config, window),
         out,
     )
     .map(drop)
@@ -386,9 +414,11 @@ pub fn run_churn(
     let file_set = scoped_file_set(path, config, scope)?;
     let ctx = build_context(path, &file_set, config);
     let result = churn_analyzer(days).analyze(&ctx)?;
+    let mut value = serde_json::to_value(&result)?;
+    super::test_rows::mark(&mut value, "churn", &ctx, scope.exclude_tests);
     let mut out = out;
     format_with_limits(
-        serde_json::to_value(&result)?,
+        value,
         format,
         scope.top.or(Some(DEFAULT_TOP)),
         scope.offset,
@@ -400,12 +430,14 @@ pub fn run_changes(
     path: &PathBuf,
     config: &Config,
     format: Format,
-    scope: &Scope,
+    request: &WindowedRequest,
     out: &mut dyn Write,
 ) -> Result<()> {
+    let days = changes_window(request.window.since.as_deref(), config)?;
+    let scope = &request.scope;
     let file_set = scoped_file_set(path, config, scope)?;
     let ctx = build_context(path, &file_set, config);
-    let result = changes_analyzer(config).analyze(&ctx)?;
+    let result = changes_analyzer(days).analyze(&ctx)?;
     let mut out = out;
     format_with_limits(
         serde_json::to_value(&result)?,
@@ -420,6 +452,15 @@ pub fn run_changes(
 mod tests {
     use super::*;
     use crate::commands::testing::repository;
+
+    /// The one-argument constructor of 5.0 stays until 6.0.
+    #[test]
+    #[allow(deprecated)]
+    fn test_defect_analyzer_keeps_the_signature_of_5_0() {
+        let constructor: fn(u32) -> analyzers::defect::Analyzer = defect_analyzer;
+        let _ = constructor(30);
+        let _ = defect_analyzer_with_config(&Config::default(), 30);
+    }
 
     #[test]
     fn test_plain_analyzer_writes_its_report() {
@@ -467,6 +508,18 @@ mod tests {
         assert_eq!(churn_window(Some("30d"), 90).unwrap(), 30);
         assert_eq!(churn_window(None, 90).unwrap(), 90);
         assert!(churn_window(Some("garbage"), 90).is_err());
+    }
+
+    #[test]
+    fn test_changes_window_uses_since_over_the_configuration_and_rejects_all() {
+        let config = Config::default();
+        assert_eq!(changes_window(None, &config).unwrap(), 30);
+        assert_eq!(changes_window(Some("3m"), &config).unwrap(), 90);
+        let error = changes_window(Some("all"), &config)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not a window of `changes`"), "{error}");
+        assert!(changes_window(Some("garbage"), &config).is_err());
     }
 
     #[test]

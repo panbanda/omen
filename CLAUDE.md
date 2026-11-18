@@ -46,7 +46,7 @@ src/
     satd.rs       - Self-admitted technical debt
     deadcode.rs   - Unused code detection
     churn.rs      - Git history file churn
-    duplicates.rs - Code clone detection (MinHash+LSH)
+    duplicates.rs - Code clone detection (exact shingle Jaccard, prefix filter)
     defect.rs     - Defect probability (PMAT)
     changes.rs    - JIT commit-level risk
     tdg.rs        - Technical Debt Gradient
@@ -139,7 +139,13 @@ Top-level commands (flat structure):
 
 **Global options**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--compact`, `--ref`, and `--shallow` are clap global flags. Put them before or after the subcommand. `-p` is always the repository path. The `complexity`, `score`, `stubs`, `mutation`, and `security` commands take `--gate off|warn|error`; if the flag is absent, the `gate` key in the table of the command gives the mode. A gated command writes its report to stdout first and the gate result to stderr. `--output` is the file that receives the report on `report render`, `eval`, and `mutation`. With `--compact`, with `-f json` it emits minified single-line JSON and is ignored for other formats.
 
-**Pagination flags** (most analyzers): `--top N` (limit to N results), `--offset N` (skip first N results). Combine for pagination.
+**Pagination flags** (most analyzers): `--top N` (limit to N results), `--offset N` (skip first N results). Combine for pagination. Each list that these flags cut is in rank order, with the row of the most risk first. `complexity --top N` gives the N most complex functions and only their files. See `docs/LISTS_AND_WINDOWS.md`.
+
+**Test code**: `src/index/test_code.rs` has the one rule that tells if a definition is test code. It uses the syntax and the path of the file. Each consumer reads `Symbol::test_role` or `FileSymbols::is_test_at`. Do not add a second rule to an analyzer. Each row of a list of files or of symbols has `is_test`, and `--exclude-tests` (MCP: `exclude_tests`) removes the test rows and adds `tests_excluded`. See `docs/TEST_CODE.md`.
+
+**History windows**: `churn`, `hotspot`, `defect`, `temporal`, and `changes` take `--since`. Each gives the same `churn_window` block: `days`, `anchor_date`, `commits_matched`, `history_complete`, `history_note` for a shallow clone, and `next_since` for an empty result. `changes` does not accept `--since all`.
+
+**Symbol lookup**: `symbol` and `impact`, and the MCP tools `get_symbol`, `impact`, and `task_context`, select one definition. The name is a bare name, `file:name`, or a symbol key. `--start-line` (MCP `start_line`) selects the definition that starts on that line. A name that agrees with more than one definition gives the `ambiguous` error with each choice. The commands do not select the first choice, and `impact` does not merge the definitions. A C prototype or a C++ member declaration without a body is not a second definition: the commands select the one definition and list the declarations in `declarations`. A declaration is a part of the function also when a file, a key, or a start line selects the definition; a `static` function and a declaration in a different file are different functions. An unknown name gives `not_found` with near names. A start line that no definition of the name has gives `not_found` with `param` `start_line`. The CLI writes the error object to stdout and exits with 1. Each CLI choice has a `command`, and each MCP choice has `arguments`, that select only that definition. The `command` keeps the program path and the other arguments, removes the user information of a URL, and is absent when an argument is not UTF-8. An MCP client sends the same call again with the `arguments` of the choice in place of the arguments with the same names.
 
 **Special safety flags**: `deadcode --cargo-check` executes `cargo check`, including build scripts, and is for trusted repositories only. Mutation testing refuses dirty working trees unless `mutation --allow-dirty` is supplied. MCP transport is stdio-only; `mcp --allow-external-paths` permits tool paths outside the configured repository root.
 

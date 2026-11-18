@@ -9,18 +9,16 @@
 //! The public API is [`find_entry_points`]. A different analyzer can call it
 //! with the parsed files and the index of the same files.
 
-use std::ops::Range;
-
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
 
 use super::spec::syntax_of;
 use super::syntax;
-use crate::core::{is_test_file, Language};
+use crate::core::Language;
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ResolutionBasis, ResolutionStatus, Span, Symbol, SymbolKind};
-use crate::parser::{cfg_test_module_ranges, ParseResult};
+use crate::parser::ParseResult;
 
 mod fastapi;
 mod go_routes;
@@ -83,6 +81,105 @@ impl EntryBasis {
     }
 }
 
+/// Why the guard list of an entry point is not complete: code that omen did not read can add a
+/// guard to the entry point, or remove one. The order of the variants is the order in which omen
+/// reports one reason for an entry point that has more than one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardsUnknownReason {
+    /// A loop around the route has more work than omen expands. Omen read the block of the loop
+    /// one time, and the values of the loop parameters are not known.
+    UnexpandedLoop,
+    /// Omen did not find the controller or the action of the route.
+    UnresolvedController,
+    /// The method of the action is not public, or omen cannot read its visibility.
+    UnreadableAction,
+    /// The handler of the route is an application that is not a controller of the repository.
+    RackEndpoint,
+    /// A class of the chain has a superclass that omen cannot find in the repository.
+    UnresolvedSuperclass,
+    /// A class of the chain includes, extends, or prepends a module. A module can add callbacks.
+    IncludedModule,
+    /// Code outside the body of a class of the chain can change the callbacks of the class.
+    CallbackOutsideClass,
+    /// A class of the chain calls a class method that omen cannot resolve to a definition
+    /// that it can read.
+    UnresolvedMacro,
+    /// A callback call has a form or a place that omen cannot read.
+    UnreadableCallback,
+    /// A callback has a condition, so omen does not know if it runs.
+    ConditionalCallback,
+    /// A class of the chain has an `around_action` callback. Omen reads only `before_action`.
+    AroundCallback,
+    /// The router of the route comes from an import.
+    ImportedRouter,
+    /// Omen cannot find the one router that the route belongs to.
+    UnresolvedRouter,
+    /// The file does not include the router in an application. Another file can include it
+    /// with more dependencies.
+    IncludedElsewhere,
+    /// The file includes the router two times, in a condition, or in a loop of routers.
+    UnreadableInclude,
+    /// A dependency is not a name that omen can read, or the `dependencies` value is not a
+    /// literal list, or the file uses the `dependencies` attribute of an object.
+    UnreadableDependency,
+    /// The file has a wildcard import, which can bind a name again.
+    WildcardImport,
+    /// A middleware argument is not a name that omen can read, or a call around a Go handler is
+    /// not a conversion and not a middleware that omen reads.
+    UnreadMiddleware,
+    /// The framework has a place for guards that omen does not read, such as the middleware of
+    /// the application.
+    LayerNotRead,
+}
+
+impl GuardsUnknownReason {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::UnexpandedLoop => "unexpanded_loop",
+            Self::UnresolvedController => "unresolved_controller",
+            Self::UnreadableAction => "unreadable_action",
+            Self::RackEndpoint => "rack_endpoint",
+            Self::UnresolvedSuperclass => "unresolved_superclass",
+            Self::IncludedModule => "included_module",
+            Self::CallbackOutsideClass => "callback_outside_class",
+            Self::UnresolvedMacro => "unresolved_macro",
+            Self::UnreadableCallback => "unreadable_callback",
+            Self::ConditionalCallback => "conditional_callback",
+            Self::AroundCallback => "around_callback",
+            Self::ImportedRouter => "imported_router",
+            Self::UnresolvedRouter => "unresolved_router",
+            Self::IncludedElsewhere => "included_elsewhere",
+            Self::UnreadableInclude => "unreadable_include",
+            Self::UnreadableDependency => "unreadable_dependency",
+            Self::WildcardImport => "wildcard_import",
+            Self::UnreadMiddleware => "unread_middleware",
+            Self::LayerNotRead => "layer_not_read",
+        }
+    }
+}
+
+/// The first of two reasons in the order of [`GuardsUnknownReason`].
+fn first_reason(
+    left: Option<GuardsUnknownReason>,
+    right: Option<GuardsUnknownReason>,
+) -> Option<GuardsUnknownReason> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (left, right) => left.or(right),
+    }
+}
+
+/// The HTTP frameworks for which omen reads only the guards that the route itself declares. Each
+/// has a place for guards that omen does not read: `app.use` of Express, `before_request` of
+/// Flask, the middleware and the class-based views of Django, the security configuration of
+/// Spring, the filters and the policies of ASP.NET, the layers and the extractors of axum, the
+/// wrappers and the guards of actix, the fairings and the request guards of rocket, the route
+/// groups of Laravel, and the middleware file of Next.
+const FRAMEWORKS_WITH_UNREAD_LAYERS: [&str; 10] = [
+    "express", "flask", "django", "spring", "aspnet", "axum", "actix", "rocket", "laravel", "next",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Route {
     /// The method that the framework registers, or `ANY`. gin and echo keep a custom method as the source writes it.
@@ -109,8 +206,36 @@ pub struct EntryPoint {
     /// The decorators, annotations, middleware names, and declared dependencies that the syntax
     /// attaches to the handler.
     pub guards: Vec<String>,
+    /// `true` when omen read each place that can give the entry point a guard, so `guards` is
+    /// the full list. `false` when code that omen did not read can add a guard or remove one.
+    /// Then an empty `guards` list does not tell that the entry point has no guard.
+    #[serde(default)]
+    pub guards_complete: bool,
+    /// Why `guards` is not complete. It is `None` when `guards_complete` is `true`.
+    #[serde(default)]
+    pub guards_unknown_reason: Option<GuardsUnknownReason>,
     pub basis: EntryBasis,
     pub in_test: bool,
+}
+
+impl EntryPoint {
+    /// The guards as one text for a table: the names, and a note when the list is not
+    /// complete.
+    pub fn guards_text(&self) -> String {
+        let names = self.guards.join(", ");
+        match (self.guards_unknown_reason, names.is_empty()) {
+            (None, true) if self.guards_complete => String::from("none declared"),
+            (None, _) if self.guards_complete => names,
+            (reason, empty) => {
+                let reason = reason.map_or("not known", GuardsUnknownReason::name);
+                if empty {
+                    format!("unknown ({reason})")
+                } else {
+                    format!("{names} (incomplete: {reason})")
+                }
+            }
+        }
+    }
 }
 
 /// The entry points of the files, in file order and then in source order.
@@ -532,7 +657,6 @@ struct Context<'a> {
     all_parsed: &'a dyn TreeSource,
     rules: &'a [EntryRule],
     source: &'a [u8],
-    test_ranges: Vec<Range<usize>>,
     /// The start of the first statement of a list that jumps out of the block (`next`, `break`), by
     /// the id of the list node.
     rails_jumps: std::cell::RefCell<std::collections::HashMap<usize, Option<usize>>>,
@@ -543,6 +667,13 @@ struct Context<'a> {
     rails_handled: std::cell::RefCell<std::collections::HashMap<rails::HandlerKey, rails::Handler>>,
     /// Tells for a chain of modules and a controller if the repository has the class.
     rails_known: std::cell::RefCell<std::collections::HashMap<(usize, rails::ControllerKey), bool>>,
+    /// The controller that a chain of modules names, by the id of the chain.
+    rails_module_controllers:
+        std::cell::RefCell<std::collections::HashMap<usize, rails::ScopedController>>,
+    /// The names that a Rails routes file assigns a value to.
+    rails_assigned: std::sync::OnceLock<std::collections::HashSet<String>>,
+    /// The work that the expansion of Rails loops can still add to the walks of the file.
+    rails_loop_work: std::cell::Cell<usize>,
     /// The position of the first symbol of the file for each start of a name.
     symbol_starts: std::sync::OnceLock<std::collections::HashMap<usize, usize>>,
     /// The positions of the functions, the methods, and the constructors of the file, by name.
@@ -560,6 +691,8 @@ struct Context<'a> {
     go_declared: std::sync::OnceLock<std::sync::Arc<std::collections::HashSet<String>>>,
     /// The bindings of a Python file, by scope. Only a file with a FastAPI route builds them.
     python_scopes: std::cell::OnceCell<fastapi::Scopes<'a>>,
+    /// Why the guards of the FastAPI route that omen reads now are not complete.
+    guard_gap: std::cell::Cell<Option<GuardsUnknownReason>>,
     /// Tells for the text of the receiver of a Python route decorator if it is a framework value.
     python_receivers: std::cell::RefCell<std::collections::HashMap<&'a str, bool>>,
 }
@@ -574,6 +707,8 @@ struct Draft {
     basis: EntryBasis,
     /// Tells apart the entry points that one call registers, as the action of a Rails `resources` call.
     variant: Option<String>,
+    /// Why the reader of the framework cannot give the full list of the guards.
+    unknown: Option<GuardsUnknownReason>,
 }
 
 impl<'a> Context<'a> {
@@ -584,12 +719,6 @@ impl<'a> Context<'a> {
         all_parsed: &'a dyn TreeSource,
         rules: &'a [EntryRule],
     ) -> Self {
-        let test_ranges = if file.language == Language::Rust {
-            let text = std::str::from_utf8(&parsed.source).unwrap_or("");
-            cfg_test_module_ranges(&parsed.root_node(), text)
-        } else {
-            Vec::new()
-        };
         Self {
             parsed,
             file,
@@ -597,11 +726,13 @@ impl<'a> Context<'a> {
             all_parsed,
             rules,
             source: &parsed.source,
-            test_ranges,
             rails_jumps: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_handled: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_known: std::cell::RefCell::new(std::collections::HashMap::new()),
+            rails_module_controllers: std::cell::RefCell::new(std::collections::HashMap::new()),
+            rails_assigned: std::sync::OnceLock::new(),
+            rails_loop_work: std::cell::Cell::new(rails::LOOP_WORK_LIMIT),
             symbol_starts: std::sync::OnceLock::new(),
             callables_here: std::sync::OnceLock::new(),
             go_locals: std::sync::OnceLock::new(),
@@ -610,6 +741,7 @@ impl<'a> Context<'a> {
             go_dead: std::sync::OnceLock::new(),
             go_declared: std::sync::OnceLock::new(),
             python_scopes: std::cell::OnceCell::new(),
+            guard_gap: std::cell::Cell::new(None),
             python_receivers: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
@@ -873,6 +1005,18 @@ impl<'a> Context<'a> {
                         .as_ref()
                         .map(|variant| format!("#{variant}"))
                         .unwrap_or_default();
+                let layer = (draft.kind == EntryKind::HttpHandler
+                    && FRAMEWORKS_WITH_UNREAD_LAYERS.contains(&draft.framework))
+                .then_some(GuardsUnknownReason::LayerNotRead);
+                let placeholder = draft
+                    .guards
+                    .iter()
+                    .any(|guard| {
+                        guard == go_routes::UNREAD_GUARD
+                            || guard == go_routes::UNNAMED_FUNCTION_GUARD
+                    })
+                    .then_some(GuardsUnknownReason::UnreadMiddleware);
+                let unknown = first_reason(draft.unknown, first_reason(placeholder, layer));
                 EntryPoint {
                     key: format!(
                         "{}:{}:{}:{}{}",
@@ -889,12 +1033,10 @@ impl<'a> Context<'a> {
                     framework: draft.framework.to_string(),
                     route: draft.route,
                     guards: draft.guards,
+                    guards_complete: unknown.is_none(),
+                    guards_unknown_reason: unknown,
                     basis: draft.basis,
-                    in_test: is_test_file(&self.file.file)
-                        || self
-                            .test_ranges
-                            .iter()
-                            .any(|range| range.contains(&draft.range.start_byte)),
+                    in_test: self.file.is_test_at(draft.range.start_byte),
                 }
             })
             .collect();
@@ -935,30 +1077,65 @@ impl<'a> Context<'a> {
     /// so no node asks for its ancestors. A node with no readable scope has no readable descendant,
     /// and the visit does not enter it.
     fn walk(&self, root: Node<'_>, out: &mut Vec<Draft>) {
-        let routes_file =
-            self.file.language == Language::Ruby && self.file.file.ends_with("routes.rb");
-        let mut stack: Vec<(
-            Node<'_>,
-            Option<Node<'_>>,
-            Option<std::rc::Rc<rails::Scope>>,
-        )> = vec![(root, None, routes_file.then(rails::root_scope))];
-        while let Some((node, parent, outer)) = stack.pop() {
-            let scope = if routes_file {
-                match outer.and_then(|outer| self.scope_inside(node, parent, outer)) {
-                    Some(scope) => Some(scope),
-                    None => continue,
-                }
-            } else {
-                None
-            };
-            self.visit(node, scope.as_ref(), out);
+        if self.file.language == Language::Ruby && self.file.file.ends_with("routes.rb") {
+            self.walk_scoped(
+                root,
+                None,
+                rails::root_scope(),
+                false,
+                &mut |node, scope| self.visit(node, Some(scope), out),
+            );
+            return;
+        }
+        let mut stack: Vec<Node<'_>> = vec![root];
+        while let Some(node) = stack.pop() {
+            self.visit(node, None, out);
             let mut cursor = node.walk();
             let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
+            stack.extend(children.into_iter().rev());
+        }
+    }
+
+    /// Visits the nodes of Rails routes from `start` in source order, each with its scope. The
+    /// block of a loop over a literal list is visited one time for each item. `entered` tells that
+    /// `scope` is the scope of `start`, and not of its parent.
+    fn walk_scoped<'t>(
+        &self,
+        start: Node<'t>,
+        parent: Option<Node<'t>>,
+        scope: std::rc::Rc<rails::Scope>,
+        entered: bool,
+        visit: &mut dyn FnMut(Node<'t>, &std::rc::Rc<rails::Scope>),
+    ) {
+        // The flag tells that the scope is the scope of the node, and not of its parent.
+        let mut stack: Vec<(Node<'t>, Option<Node<'t>>, std::rc::Rc<rails::Scope>, bool)> =
+            vec![(start, parent, scope, entered)];
+        while let Some((node, parent, outer, entered)) = stack.pop() {
+            let scope = if entered {
+                outer
+            } else {
+                match self.scope_inside(node, parent, outer) {
+                    rails::Entered::One(scope) => scope,
+                    rails::Entered::Each(scopes) => {
+                        stack.extend(
+                            scopes
+                                .into_iter()
+                                .rev()
+                                .map(|scope| (node, parent, scope, true)),
+                        );
+                        continue;
+                    }
+                    rails::Entered::No => continue,
+                }
+            };
+            visit(node, &scope);
+            let mut cursor = node.walk();
+            let children: Vec<Node<'t>> = node.children(&mut cursor).collect();
             stack.extend(
                 children
                     .into_iter()
                     .rev()
-                    .map(|child| (child, Some(node), scope.clone())),
+                    .map(|child| (child, Some(node), scope.clone(), false)),
             );
         }
     }
@@ -1005,6 +1182,7 @@ impl<'a> Context<'a> {
                         guards: Vec::new(),
                         basis: EntryBasis::Convention,
                         variant: None,
+                        unknown: None,
                     });
                 }
             }
@@ -1020,6 +1198,7 @@ impl<'a> Context<'a> {
                     guards: Vec::new(),
                     basis: EntryBasis::Convention,
                     variant: None,
+                    unknown: None,
                 });
             }
             return;
@@ -1074,6 +1253,7 @@ impl<'a> Context<'a> {
                     guards: Vec::new(),
                     basis: EntryBasis::Convention,
                     variant: None,
+                    unknown: None,
                 });
             }
         }
@@ -1123,6 +1303,7 @@ impl<'a> Context<'a> {
                     guards: Vec::new(),
                     basis: EntryBasis::Convention,
                     variant: None,
+                    unknown: None,
                 });
             }
         }
@@ -1147,6 +1328,7 @@ impl<'a> Context<'a> {
                         guards: Vec::new(),
                         basis: EntryBasis::Convention,
                         variant: None,
+                        unknown: None,
                     });
                 }
             }
@@ -1190,6 +1372,7 @@ impl<'a> Context<'a> {
                     guards: Vec::new(),
                     basis: EntryBasis::Declared,
                     variant: None,
+                    unknown: None,
                 });
                 continue;
             }
@@ -1276,6 +1459,7 @@ impl<'a> Context<'a> {
                 .cloned()
                 .collect();
             let mut route = route(&methods.join(","), path);
+            self.guard_gap.set(None);
             if framework == "fastapi" {
                 let (dependencies, parameters) =
                     self.fastapi_declared(node, *decorator, expression, receiver);
@@ -1293,6 +1477,7 @@ impl<'a> Context<'a> {
                 guards,
                 basis: EntryBasis::Declared,
                 variant: None,
+                unknown: self.guard_gap.take(),
             });
         }
     }
@@ -1398,6 +1583,7 @@ impl<'a> Context<'a> {
             guards: self.python_view_guards(target),
             basis: EntryBasis::Registered,
             variant: None,
+            unknown: None,
         });
     }
 
@@ -1456,6 +1642,7 @@ impl<'a> Context<'a> {
             guards,
             basis: EntryBasis::Registered,
             variant: None,
+            unknown: None,
         });
     }
 
@@ -1584,6 +1771,7 @@ impl<'a> Context<'a> {
                     guards: guards.clone(),
                     basis: EntryBasis::Declared,
                     variant: None,
+                    unknown: None,
                 });
             } else if JAVA_CONSUMERS.contains(&name) || name == "Scheduled" {
                 out.push(Draft {
@@ -1599,6 +1787,7 @@ impl<'a> Context<'a> {
                     guards: guards.clone(),
                     basis: EntryBasis::Declared,
                     variant: None,
+                    unknown: None,
                 });
             }
         }
@@ -1681,6 +1870,7 @@ impl<'a> Context<'a> {
                 guards: guards.clone(),
                 basis: EntryBasis::Declared,
                 variant: None,
+                unknown: None,
             });
         }
     }
@@ -1718,6 +1908,7 @@ impl<'a> Context<'a> {
             guards: Vec::new(),
             basis: EntryBasis::Registered,
             variant: None,
+            unknown: None,
         });
     }
 
@@ -1778,6 +1969,9 @@ impl<'a> Context<'a> {
             guards: wrapped.guards,
             basis: EntryBasis::Registered,
             variant: None,
+            unknown: wrapped
+                .unread_wrapper
+                .then_some(GuardsUnknownReason::UnreadMiddleware),
         });
     }
 
@@ -1824,6 +2018,7 @@ impl<'a> Context<'a> {
                 guards: Vec::new(),
                 basis: EntryBasis::Declared,
                 variant: None,
+                unknown: None,
             });
         }
         for attribute in attributes.iter().rev() {
@@ -1859,6 +2054,7 @@ impl<'a> Context<'a> {
                 guards: Vec::new(),
                 basis: EntryBasis::Declared,
                 variant: None,
+                unknown: None,
             });
         }
     }
@@ -1906,6 +2102,7 @@ impl<'a> Context<'a> {
                 guards: Vec::new(),
                 basis: EntryBasis::Registered,
                 variant: None,
+                unknown: None,
             });
         }
     }
@@ -2033,6 +2230,7 @@ impl<'a> Context<'a> {
             guards,
             basis: EntryBasis::Registered,
             variant: None,
+            unknown: None,
         });
     }
 
@@ -2072,6 +2270,7 @@ mod tests {
     use crate::index::extract::{extract_file, link_files};
     use crate::index::imports::{resolve_imports, Manifests};
     use crate::index::resolve::resolve_references;
+    pub(super) use crate::index::timing::assert_scales_linearly;
     use crate::parser::Parser;
 
     #[test]
@@ -2105,28 +2304,6 @@ mod tests {
         files: &[(&str, &str)],
     ) -> (Vec<EntryPoint>, std::time::Duration) {
         entries_timed(language, files, false)
-    }
-
-    /// Runs a timing case at `size` and at twice that size, and checks that the time grows in
-    /// proportion to the size. A quadratic search takes four times as long for twice the input. The
-    /// check uses the best of two runs for each size, and a floor for a time that is too short to
-    /// compare, so the speed of the machine does not change the result. The absolute bound is far
-    /// above any speed that a CI machine has.
-    pub(super) fn assert_scales_linearly(
-        label: &str,
-        size: usize,
-        run: impl Fn(usize) -> std::time::Duration,
-    ) {
-        let best = |size: usize| (0..2).map(|_| run(size)).min().expect("two runs");
-        let small = best(size);
-        let large = best(size * 2);
-        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
-        assert!(
-            large < allowed,
-            "{label}: {small:?} at {size}, {large:?} at {}",
-            size * 2
-        );
-        assert!(large.as_secs() < 60, "{label}: {large:?}");
     }
 
     /// The entry points, and the time of the search for entry points alone.
@@ -2416,6 +2593,92 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].kind, EntryKind::CliMain);
         assert_eq!(found[0].basis, EntryBasis::Convention);
+    }
+
+    #[test]
+    fn a_framework_with_guards_that_omen_does_not_read_has_a_list_that_is_not_complete() {
+        let express = "const express = require(\"express\");\nconst app = express();\n\nfunction show(req, res) {}\napp.get(\"/users/:id\", authenticate, show);\n";
+        let found = entries(Language::JavaScript, &[("server.js", express)]);
+        assert_eq!(found[0].guards, ["authenticate"]);
+        assert!(!found[0].guards_complete);
+        assert_eq!(
+            found[0].guards_unknown_reason,
+            Some(GuardsUnknownReason::LayerNotRead)
+        );
+        assert_eq!(
+            found[0].guards_text(),
+            "authenticate (incomplete: layer_not_read)"
+        );
+        let axum = "use axum::{routing::get, Router};\n\nasync fn list() {}\n\nfn app() -> Router {\n    Router::new().route(\"/items\", get(list)).layer(middleware::from_fn(auth::validate_header))\n}\n";
+        let found: Vec<EntryPoint> = entries(Language::Rust, &[("main.rs", axum)])
+            .into_iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .collect();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].guards.is_empty());
+        assert_eq!(
+            found[0].guards_unknown_reason,
+            Some(GuardsUnknownReason::LayerNotRead)
+        );
+        assert_eq!(found[0].guards_text(), "unknown (layer_not_read)");
+        let flask = "from flask import Flask\n\napp = Flask(__name__)\n\n@app.route(\"/a\")\n@login_required\ndef a():\n    return 1\n";
+        let found = entries(Language::Python, &[("app.py", flask)]);
+        assert_eq!(found[0].guards, ["login_required"]);
+        assert_eq!(
+            found[0].guards_unknown_reason,
+            Some(GuardsUnknownReason::LayerNotRead)
+        );
+    }
+
+    #[test]
+    fn an_entry_point_that_is_not_an_http_handler_has_a_complete_empty_list() {
+        let source = "def main():\n    pass\n\nif __name__ == \"__main__\":\n    main()\n";
+        let found = entries(Language::Python, &[("tool.py", source)]);
+        assert!(found[0].guards.is_empty());
+        assert!(found[0].guards_complete);
+        assert_eq!(found[0].guards_unknown_reason, None);
+        assert_eq!(found[0].guards_text(), "none declared");
+    }
+
+    #[test]
+    fn a_go_middleware_that_is_not_a_name_makes_the_guards_not_complete() {
+        let source = go_source(
+            &[CHI],
+            "func routes() http.Handler {\n\tr := chi.NewRouter()\n\tr.Use(logger)\n\tr.Get(\"/a\", list)\n\tr.Group(func(r chi.Router) {\n\t\tr.Use(chain[0])\n\t\tr.Get(\"/b\", list)\n\t})\n\treturn r\n}\n",
+        );
+        let found: Vec<EntryPoint> = entries(Language::Go, &[("main.go", source.as_str())])
+            .into_iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .collect();
+        let state = |path: &str| {
+            let entry = found
+                .iter()
+                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .unwrap();
+            (entry.guards.join(","), entry.guards_unknown_reason)
+        };
+        assert_eq!(state("/a"), ("logger".to_string(), None));
+        assert_eq!(
+            state("/b"),
+            (
+                "logger,<expression>".to_string(),
+                Some(GuardsUnknownReason::UnreadMiddleware)
+            )
+        );
+    }
+
+    #[test]
+    fn an_entry_point_of_an_older_version_reads_as_not_complete() {
+        let old = serde_json::json!({
+            "key": "a.py:1:0:http_handler", "file": "a.py", "kind": "http_handler",
+            "range": {"start_line": 1, "start_column": 0, "end_line": 1, "end_column": 1,
+                      "start_byte": 0, "end_byte": 1},
+            "symbol": null, "framework": "flask", "route": null, "guards": [],
+            "basis": "declared", "in_test": false
+        });
+        let entry: EntryPoint = serde_json::from_value(old).unwrap();
+        assert!(!entry.guards_complete);
+        assert_eq!(entry.guards_text(), "unknown (not known)");
     }
 
     #[test]
@@ -6132,6 +6395,78 @@ func helper(count int) {}
     }
 
     #[test]
+    fn a_wrapper_of_a_go_handler_that_is_not_a_known_middleware_makes_the_guards_not_complete() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	http.Handle("/direct", http.HandlerFunc(show))
+	http.HandleFunc("/named", show)
+	http.Handle("/known", audit(auth(http.HandlerFunc(show))))
+	http.Handle("/z", middleware.Auth(cfg)(http.HandlerFunc(show)))
+	http.HandleFunc("/v", unknownWrap(show))
+	http.Handle("/r", audit(unknownWrap(http.HandlerFunc(show))))
+	http.HandleFunc("/t", makeHandler(onError))
+	r := chi.NewRouter()
+	r.Get("/chi", unknownWrap(show))
+	r.Get("/chi-known", authFunc(show))
+	http.ListenAndServe(":8080", r)
+}
+"#,
+        );
+        type Row = (
+            String,
+            Option<String>,
+            Vec<String>,
+            Option<GuardsUnknownReason>,
+        );
+        let found: Vec<Row> = entries(Language::Go, &[("main.go", &source)])
+            .into_iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .map(|entry| {
+                (
+                    entry.route.unwrap().path,
+                    entry
+                        .symbol
+                        .map(|symbol| symbol.rsplit('#').next().unwrap().to_string()),
+                    entry.guards,
+                    entry.guards_unknown_reason,
+                )
+            })
+            .collect();
+        let unread = Some(GuardsUnknownReason::UnreadMiddleware);
+        let show = Some(String::from("show"));
+        assert_eq!(
+            found,
+            [
+                (String::from("/direct"), show.clone(), vec![], None),
+                (String::from("/named"), show.clone(), vec![], None),
+                (
+                    String::from("/known"),
+                    show.clone(),
+                    vec![String::from("audit"), String::from("auth")],
+                    None
+                ),
+                (String::from("/z"), show.clone(), vec![], unread),
+                (String::from("/v"), show.clone(), vec![], unread),
+                (
+                    String::from("/r"),
+                    show.clone(),
+                    vec![String::from("audit")],
+                    unread
+                ),
+                (String::from("/t"), None, vec![], unread),
+                (String::from("/chi"), show.clone(), vec![], unread),
+                (
+                    String::from("/chi-known"),
+                    show,
+                    vec![String::from("authFunc")],
+                    None
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn framework_handler_adapters_are_not_guards() {
         let source = go_source(
             &[GIN],
@@ -7740,7 +8075,7 @@ func routes() {
         );
         assert_eq!(found[0].guards, ["lower"]);
         let real = "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  inflect.acronym \"API\"\nend\n";
-        let shadow = "module ActiveSupport\n  module Inflector\n  end\nend\n";
+        let shadow = "module ActiveSupport\n  module Inflector\n    def self.inflections\n      yield Object.new\n    end\n  end\nend\n";
         let found = rails_routes(
             routes,
             &[
@@ -7898,8 +8233,14 @@ func routes() {
                 ("controllers/c.rb", posts),
             ],
         );
-        assert_eq!(found[0].guards, Vec::<String>::new());
+        assert_eq!(found[0].guards, ["base"]);
+        assert_eq!(
+            found[0].guards_unknown_reason,
+            Some(GuardsUnknownReason::UnreadableCallback)
+        );
+        assert!(!found[0].guards_complete);
         assert_eq!(found[1].guards, ["base", "own"]);
+        assert!(found[1].guards_complete);
     }
 
     #[test]
@@ -8281,13 +8622,20 @@ func routes() {
                 .iter()
                 .find(|entry| entry.route.as_ref().unwrap().path == path)
                 .unwrap()
-                .guards
-                .clone()
         };
-        for path in ["/a", "/b", "/c", "/d"] {
-            assert!(by_path(path).is_empty(), "{path}");
+        for path in ["/a", "/c", "/d"] {
+            assert_eq!(by_path(path).guards, ["auth"], "{path}");
+            assert_eq!(
+                by_path(path).guards_unknown_reason,
+                Some(GuardsUnknownReason::UnreadableCallback),
+                "{path}"
+            );
         }
-        assert_eq!(by_path("/e"), ["auth"]);
+        assert_eq!(by_path("/e").guards, ["auth"]);
+        assert!(by_path("/e").guards_complete);
+        // `self.skip_before_action` is the call of the class itself.
+        assert!(by_path("/b").guards.is_empty());
+        assert!(by_path("/b").guards_complete);
     }
 
     #[test]
@@ -8551,13 +8899,43 @@ func routes() {
                 .iter()
                 .find(|entry| entry.route.as_ref().unwrap().path == path)
                 .unwrap()
-                .guards
-                .clone()
         };
-        for path in ["/a", "/b", "/c", "/d"] {
-            assert!(by_path(path).is_empty(), "{path}");
+        let module = Some(GuardsUnknownReason::IncludedModule);
+        let outside = Some(GuardsUnknownReason::CallbackOutsideClass);
+        for (path, reason) in [
+            ("/a", module),
+            ("/b", outside),
+            ("/c", outside),
+            ("/d", module),
+        ] {
+            assert_eq!(by_path(path).guards, ["auth"], "{path}");
+            assert!(!by_path(path).guards_complete, "{path}");
+            assert_eq!(by_path(path).guards_unknown_reason, reason, "{path}");
         }
-        assert_eq!(by_path("/e"), ["auth"]);
+        assert_eq!(by_path("/e").guards, ["auth"]);
+        assert!(by_path("/e").guards_complete);
+        assert_eq!(by_path("/e").guards_unknown_reason, None);
+    }
+
+    #[test]
+    fn a_forgery_or_basic_authentication_call_outside_the_class_makes_the_guards_unknown() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"a#show\"\nend\n";
+        for call in [
+            "AController.skip_forgery_protection",
+            "AController.protect_from_forgery with: :null_session",
+            "AController.http_basic_authenticate_with name: \"x\", password: \"y\"",
+        ] {
+            let classes = format!(
+                "class AController < ActionController::Base\n  protect_from_forgery\n  def show; end\nend\n{call}\n"
+            );
+            let found = rails_routes(routes, &[("controllers/a.rb", classes.as_str())]);
+            assert_eq!(found[0].guards, ["verify_authenticity_token"], "{call}");
+            assert_eq!(
+                found[0].guards_unknown_reason,
+                Some(GuardsUnknownReason::CallbackOutsideClass),
+                "{call}"
+            );
+        }
     }
 
     #[test]
@@ -8566,7 +8944,11 @@ func routes() {
         let classes = "class ApplicationController\n  include Pundit\n  before_action :auth\nend\nclass AController < ApplicationController\n  def show; end\nend\n";
         let found = rails_routes(routes, &[("controllers/a.rb", classes)]);
         assert!(found[0].symbol.is_some());
-        assert!(found[0].guards.is_empty());
+        assert_eq!(found[0].guards, ["auth"]);
+        assert_eq!(
+            found[0].guards_unknown_reason,
+            Some(GuardsUnknownReason::IncludedModule)
+        );
     }
 
     #[test]
@@ -8978,8 +9360,11 @@ func routes() {
         ];
         let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), 3);
-        let expected = if shape == 1 { size } else { 0 };
+        let expected = if shape == 2 { 0 } else { size };
         assert!(found.iter().all(|entry| entry.guards.len() == expected));
+        assert!(found
+            .iter()
+            .all(|entry| entry.guards_complete == (shape != 0)));
         elapsed
     }
 
@@ -9225,7 +9610,24 @@ func routes() {
                 ("controllers/users_controller.rb", users),
             ],
         );
+        // Ruby finds the class at the top level before a class in another module.
+        assert_eq!(found[0].guards, ["top", "owner"]);
+        assert!(found[0].guards_complete);
+        let other =
+            "module Other\n  class ApplicationController\n    before_action :top\n  end\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/other.rb", other),
+                ("controllers/admin.rb", admin),
+                ("controllers/users_controller.rb", users),
+            ],
+        );
         assert_eq!(found[0].guards, ["owner"]);
+        assert_eq!(
+            found[0].guards_unknown_reason,
+            Some(GuardsUnknownReason::UnresolvedSuperclass)
+        );
     }
 
     #[test]
@@ -9405,7 +9807,7 @@ func routes() {
 
     #[test]
     fn routes_that_omen_cannot_read_exactly_are_skipped() {
-        let routes = "Rails.application.routes.draw do\n  name = \"dynamic\"\n  get \"/#{name}\", to: \"a#b\"\n  %w[a b].each do |part|\n    get \"/#{part}\", to: \"a#b\"\n  end\n  [:c].each do |part|\n    resources part\n  end\n  concern :commentable do\n    get \"/comments\", to: \"comments#index\"\n  end\n  resources :things, concerns: :commentable, only: [:index]\n  draw(:admin)\n  mount Sidekiq::Web => \"/sidekiq\"\n  resources :users, only: only_actions\n  resources :slugs, param: :slug\n  resources name\n  get \"/kept\", to: \"a#b\"\nend\n";
+        let routes = "Rails.application.routes.draw do\n  name = \"dynamic\"\n  get \"/#{name}\", to: \"a#b\"\n  PARTS.each do |part|\n    get \"/#{part}\", to: \"a#b\"\n  end\n  [:c, other].each do |part|\n    resources part\n  end\n  concern :commentable do\n    get \"/comments\", to: \"comments#index\"\n  end\n  resources :things, concerns: :commentable, only: [:index]\n  draw(:admin)\n  mount Sidekiq::Web => \"/sidekiq\"\n  resources :users, only: only_actions\n  resources :slugs, param: :slug\n  resources name\n  get \"/kept\", to: \"a#b\"\nend\n";
         let found = rails_routes(routes, &[]);
         assert_eq!(
             verbs_and_paths(&found),

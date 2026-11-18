@@ -5,16 +5,50 @@
 1. Call `context` once for repository orientation. Cache only for the same repository revision.
 2. Use `repomap` for ranked symbol/location discovery, or `impact` for candidate graph traversal.
 3. Call `get_symbol` with `include_source: false` to inspect relationships and resolution evidence.
-4. Get the source only for the selected definition. Use the `name` and the `start_line` of one suggestion of an `ambiguous` error.
+4. Get the source only for the selected definition. Send the `arguments` of one suggestion of an `ambiguous` error.
 
-When a name agrees with more than one definition, `get_symbol` and
+When a name agrees with more than one definition, `get_symbol`, `impact`, and
 `task_context` give an error with the code `ambiguous`. They do not select a
-definition. `error.suggestions` holds one object for each choice, with the
-qualified `name` and the `start_line`. For `get_symbol`, each object also has
-the `signature`. `start_line` is an integer from 1 to 4294967295. It must be
-equal to the line on which the definition starts. When no definition starts on
-that line, the tool gives an error with the code `not_found`. The file and the
-line identify a definition in the current checkout, not after an edit.
+definition, and `impact` does not merge the definitions. `error.suggestions`
+holds one object for each choice, with these keys:
+
+- `name`: the key of the definition. As a name, it selects only this definition.
+- `kind`, `container`, `file`, `start_line`, and `signature`.
+- `arguments`: the arguments that select this choice in the same tool. Send
+  the same call again, and use these arguments in place of the arguments with
+  the same names. Keep the other arguments, such as `path`.
+
+A callable declaration without a body, such as a C prototype or a C++ member
+declaration, and one definition with the same name and container are one
+function. The tools select the definition. `get_symbol` and `impact` give the
+declarations in `declarations`. `task_context` does not give them, but its
+callers include the callers of each declaration. A declaration is a part of the
+function also when the name has a file, a key, or a start line that excludes the
+declaration. A `static` C or C++ function and a declaration in a different file
+are different functions. Two definitions, or two declarations without a
+definition, give the `ambiguous` error.
+
+`start_line` is an integer from 1 to 4294967295. It must be
+equal to the line on which the definition starts. When the name agrees with a
+definition but no definition starts on that line, the tool gives an error with
+the code `not_found` and the `param` `start_line`. Its suggestions are the
+definitions of the name, and their `arguments` have the correct `start_line`.
+When the name agrees with no definition and the call has a `start_line`, `next`
+tells the client to also correct or remove `start_line`. When two
+definitions start on that line, the tool gives the `ambiguous` error again. The
+file and the line identify a definition in the current checkout, not after an
+edit.
+
+The CLI commands `symbol` and `impact` obey the same rules. They write the same
+error object to stdout and exit with the status 1. Each choice has a `command`
+in place of `arguments`. The `command` is the command line with the key in place
+of the name, with shell quotes. It keeps the program path and the other
+arguments. It does not keep the user information of a URL, such as a token in
+`https://user:token@host/owner/repo`. A key that starts with `-` comes after
+`--`. For a start line that no definition has, the `command` has no
+`--start-line`. When an argument is not UTF-8, the choices have no `command`.
+In Markdown, each command is in a code block. `--start-line` is the flag for
+`start_line`.
 
 ## Arguments, errors, and the envelope
 
@@ -46,13 +80,17 @@ takes: the value in the configuration, or the built-in default.
 | `clones` | `similarity` | `duplicates.min_similarity` (0.9) |
 | `clones` | `include_tests` | `false`; `exclude_tests` then applies |
 | `defect` | `since` | `defect.since` (30d) |
+| `changes` | `since` | `changes.since` (30d). The value `all` is an `invalid_argument` error. |
 | `hotspot` | `since` | `hotspot.since` (90d) |
 | `temporal` | `since` | `30d` |
+| each tool with `exclude_tests` | `exclude_tests` | `false` |
 | `flags` | `provider` | `feature_flags.providers` |
 | `flags` | `stale_days` | `feature_flags.stale_days` (90) |
 
-`changes` reads `changes.since`, and `satd` reads `satd.markers`. They
-have no parameter for these values.
+`satd` reads `satd.markers`. It has no parameter for this value.
+
+`docs/LISTS_AND_WINDOWS.md` gives the default window of each history tool,
+the `churn_window` block that each of them gives, and the order of each list.
 
 `tests/parity.rs` compares each tool with its command on a fixture repository,
 with and without a configuration file. Its tables list each permitted
@@ -133,7 +171,9 @@ each element of an array, such as `/files/*/functions`.
 A hint comes only from the data of the result. When `has_more` is `true`, the
 first kind of hint repeats the call with `offset` set to `next_offset`. The
 tools `get_symbol` and `impact` give a hint for `impact` and `get_symbol`
-when the result has symbols to follow. `reason` states the fact that causes
+when the result has symbols to follow. A history tool gives a hint when its
+list is empty and a wider window exists: the same call with `since` set to
+`churn_window.next_since`. `reason` states the fact that causes
 the hint. A hint is not an instruction, and an agent can ignore it.
 
 `fingerprint` is a blake3 hash of the relative names and the contents of the
@@ -255,6 +295,17 @@ each other path.
 is `true`, send the same call with `offset` set to `next_offset`. The pages
 together hold each item one time.
 
+Each list that a tool pages is in rank order: the row with the most risk is
+first. `docs/LISTS_AND_WINDOWS.md` gives the order of each list. `limit` of
+`complexity` applies to the functions of all the files as one list, with the
+highest cyclomatic complexity first. A file without a function on the page is
+not in the result, and `truncated` has an entry for `/files`.
+
+Each row of a list of files or of symbols has `is_test`. With `exclude_tests`,
+a tool removes the rows that are test code before the pagination, and
+`result.tests_excluded` gives their number. `total_items` is then the number
+of the other rows.
+
 The primary list of `score` is the `components` object. `limit` and `offset`
 apply to its entries in the sequence of their keys. `skipped_components` and
 the overall score are complete on each page.
@@ -294,6 +345,16 @@ encoding metadata, saves at least 128 UTF-8 bytes. This headroom rejects margina
 byte savings that can increase tokens. This runtime check is not a promise
 of fewer tokens for every tokenizer or response. Exact token counts are evaluated
 separately by the benchmark. Small responses may remain unchanged.
+
+## Security facts in tool results
+
+The tool `security` gives each entry point with `guards`, `guards_complete`, and
+`guards_unknown_reason`. The tools `get_symbol` and `impact` give the same three fields in
+`security.entry_point`, when the symbol is the handler of an entry point. If `guards_complete`
+is `false`, code that omen did not read can add a guard or remove one. Then an empty `guards`
+list does not tell that the entry point has no guard. The summary of `security` has
+`entry_points_with_incomplete_guards` and `incomplete_guards_by_reason`. See "Guards that omen
+did not read" in `docs/SECURITY.md` for each reason.
 
 ## What is guaranteed
 

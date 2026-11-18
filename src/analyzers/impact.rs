@@ -1,8 +1,8 @@
 //! Impact (blast-radius) analyzer.
 //!
 //! Given a symbol name, finds all transitive callers and callees up to a
-//! configurable BFS depth, reporting affected files and suggestions when the
-//! symbol is unknown.
+//! configurable BFS depth, and reports the affected files. The name must
+//! select one definition.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,20 @@ pub struct ImpactSymbol {
     pub qualified_name: String,
     pub file: String,
     pub line: u32,
+    /// The symbol is test code. See `crate::index::test_code`.
+    #[serde(default)]
+    pub is_test: bool,
+}
+
+impl ImpactSymbol {
+    pub fn of(symbol: &crate::index::view::ViewSymbol) -> Self {
+        Self {
+            qualified_name: symbol.qualified_name.clone(),
+            file: symbol.file.clone(),
+            line: symbol.line,
+            is_test: symbol.is_test,
+        }
+    }
 }
 
 /// One BFS level in the impact report.
@@ -36,8 +50,11 @@ pub struct ImpactReport {
     pub resolution_summary: crate::index::view::ResolutionSummary,
     /// The query symbol name.
     pub symbol: String,
-    /// Qualified names of all resolved root symbols.
+    /// The key of the one root definition.
     pub resolved: Vec<String>,
+    /// The declarations without a body of the same function, such as a C
+    /// prototype. They are roots of the traversal also.
+    pub declarations: Vec<ImpactSymbol>,
     /// Callers by BFS level (empty when direction is Callees).
     pub callers: Vec<ImpactLevel>,
     /// Callees by BFS level (empty when direction is Callers).
@@ -46,9 +63,7 @@ pub struct ImpactReport {
     pub files_affected: Vec<String>,
     pub total_callers: usize,
     pub total_callees: usize,
-    /// Suggestions when the symbol was not found (by_name keys that share substrings).
-    pub suggestions: Vec<String>,
-    /// The security facts of the first resolved symbol. The caller adds them.
+    /// The security facts of the root. The caller adds them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<crate::index::security::SymbolSecurity>,
 }
@@ -62,6 +77,9 @@ pub enum Direction {
 }
 
 /// Run the impact analysis.
+///
+/// The symbol must select one definition. An unknown name or an ambiguous
+/// name gives [`crate::core::Error::SymbolLookup`].
 pub fn analyze(
     root: &Path,
     files: &[PathBuf],
@@ -70,57 +88,35 @@ pub fn analyze(
     direction: Direction,
 ) -> Result<ImpactReport> {
     let index = CallView::from_index(&CodeIndex::from_files(root, files));
-    Ok(analyze_view(
+    analyze_view(
         &index,
         symbol,
+        None,
         depth,
         direction,
         crate::index::view::DEFAULT_MIN_BASIS,
-    ))
+    )
 }
 
-/// Run the impact analysis on a view of the shared index.
+/// Run the impact analysis on a view of the shared index. `start_line`
+/// selects one of the definitions of the name.
 pub fn analyze_view(
     index: &CallView,
     symbol: &str,
+    start_line: Option<u32>,
     depth: usize,
     direction: Direction,
     min_basis: crate::index::model::ResolutionBasis,
-) -> ImpactReport {
-    let root_indices = index.resolve(symbol);
-
-    // Unknown symbol path
-    if root_indices.is_empty() {
-        let q = symbol.to_lowercase();
-        let mut suggestions: Vec<String> = index
-            .by_name
-            .keys()
-            .filter(|k| {
-                let kl = k.to_lowercase();
-                kl.contains(&q) || q.contains(kl.as_str())
-            })
-            .cloned()
-            .collect();
-        suggestions.sort();
-        suggestions.truncate(10);
-        return ImpactReport {
-            resolution_summary: index.resolution_summary(),
-            symbol: symbol.to_string(),
-            resolved: vec![],
-            callers: vec![],
-            callees: vec![],
-            files_affected: vec![],
-            total_callers: 0,
-            total_callees: 0,
-            suggestions,
-            security: None,
-        };
-    }
-
-    let resolved: Vec<String> = root_indices
-        .iter()
-        .map(|&i| index.symbols[i].qualified_name.clone())
+) -> Result<ImpactReport> {
+    let selection = crate::symbol::select(index, symbol, start_line)?;
+    let root = selection.definition;
+    // A call can resolve to a declaration of the function, thus each
+    // declaration is a root of the traversal also.
+    let root_indices: Vec<usize> = std::iter::once(root)
+        .chain(selection.declarations.iter().copied())
         .collect();
+
+    let resolved = vec![index.symbols[root].qualified_name.clone()];
 
     // BFS callers
     let caller_levels = if direction == Direction::Callers || direction == Direction::Both {
@@ -148,6 +144,7 @@ pub fn analyze_view(
                         qualified_name: index.symbols[i].qualified_name.clone(),
                         file: index.symbols[i].file.clone(),
                         line: index.symbols[i].line,
+                        is_test: index.symbols[i].is_test,
                     })
                     .collect();
                 ImpactLevel {
@@ -182,18 +179,22 @@ pub fn analyze_view(
     let mut files_affected: Vec<String> = files_set.into_iter().collect();
     files_affected.sort();
 
-    ImpactReport {
+    Ok(ImpactReport {
         resolution_summary: index.resolution_summary(),
         symbol: symbol.to_string(),
         resolved,
+        declarations: selection
+            .declarations
+            .iter()
+            .map(|&position| ImpactSymbol::of(&index.symbols[position]))
+            .collect(),
         callers: caller_impact,
         callees: callee_impact,
         files_affected,
         total_callers,
         total_callees,
-        suggestions: vec![],
         security: None,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -244,6 +245,30 @@ mod tests {
     }
 
     #[test]
+    fn test_a_caller_in_test_code_has_is_test() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("lib.rs");
+        fs::write(
+            &file,
+            "fn target() {}\nfn production() { target(); }\n#[cfg(test)]\n#[allow(dead_code)]\nmod checks {\n    use super::*;\n    #[test]\n    fn runs() { target(); }\n}\n",
+        )
+        .unwrap();
+        let report = analyze(dir.path(), &[file], "target", 1, Direction::Callers).unwrap();
+        let rows: Vec<(&str, bool)> = report.callers[0]
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.qualified_name.as_str(), symbol.is_test))
+            .collect();
+        assert_eq!(
+            rows,
+            [("lib.rs#production", false), ("lib.rs#checks.runs", true)]
+        );
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["callers"][0]["symbols"][0]["is_test"], false);
+        assert_eq!(json["callers"][0]["symbols"][1]["is_test"], true);
+    }
+
+    #[test]
     fn test_direction_filtering_callees_only() {
         let dir = rust_chain();
         let files = all_files(&dir);
@@ -263,30 +288,116 @@ mod tests {
         assert!(!report.callees.is_empty());
     }
 
-    #[test]
-    fn test_unknown_symbol_suggestions() {
-        let dir = rust_chain();
-        let files = all_files(&dir);
-        // Query something that partially matches
-        let report = analyze(dir.path(), &files, "xyz_unknown", 2, Direction::Both).unwrap();
-        assert!(report.resolved.is_empty());
-        // suggestions should be sorted and <= 10
-        assert!(report.suggestions.len() <= 10);
-        let is_sorted = report.suggestions.windows(2).all(|w| w[0] <= w[1]);
-        assert!(is_sorted, "suggestions must be sorted");
+    fn lookup_failure(result: Result<ImpactReport>) -> crate::symbol::LookupFailure {
+        match result {
+            Err(crate::core::Error::SymbolLookup(failure)) => *failure,
+            other => panic!("expected a lookup failure: {other:?}"),
+        }
     }
 
     #[test]
-    fn test_suggestions_substring_match() {
+    fn test_an_unknown_symbol_gives_the_near_names() {
         let dir = rust_chain();
         let files = all_files(&dir);
-        // 'b' is a substring of 'b' (exact match in bare names), or we search for something that contains known names
-        let report = analyze(dir.path(), &files, "bb_unknown", 2, Direction::Both).unwrap();
-        // resolved is empty since bb_unknown doesn't exist
-        assert!(report.resolved.is_empty());
-        // 'b' should appear in suggestions since 'b' is a substring of 'bb_unknown'
-        // actually the check is k.contains(q) || q.contains(k): 'bb_unknown'.contains('b') = true
-        assert!(report.suggestions.contains(&"b".to_string()));
+        let failure = lookup_failure(analyze(
+            dir.path(),
+            &files,
+            "bb_unknown",
+            2,
+            Direction::Both,
+        ));
+        let crate::symbol::LookupFailure::NotFound { suggestions, .. } = failure else {
+            panic!("expected not found: {failure:?}");
+        };
+        // `bb_unknown` contains the name `b`.
+        assert_eq!(suggestions, ["b"]);
+    }
+
+    /// Two definitions of `helper`, each with one caller.
+    fn two_helpers() -> (TempDir, Vec<PathBuf>) {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("x.py"),
+            "def helper():\n    pass\n\ndef use_x():\n    helper()\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("y.py"),
+            "def helper():\n    pass\n\ndef use_y():\n    helper()\n",
+        )
+        .unwrap();
+        let files = vec![dir.path().join("x.py"), dir.path().join("y.py")];
+        (dir, files)
+    }
+
+    #[test]
+    fn test_an_ambiguous_seed_gives_the_choices_and_no_report() {
+        let (dir, files) = two_helpers();
+        let failure = lookup_failure(analyze(dir.path(), &files, "helper", 2, Direction::Both));
+        let crate::symbol::LookupFailure::Ambiguous { choices, .. } = failure else {
+            panic!("expected ambiguous: {failure:?}");
+        };
+        let keys: Vec<&str> = choices.iter().map(|choice| choice.name.as_str()).collect();
+        assert_eq!(keys, ["x.py#helper", "y.py#helper"]);
+    }
+
+    #[test]
+    fn test_the_key_of_a_choice_selects_one_root() {
+        let (dir, files) = two_helpers();
+        let report = analyze(dir.path(), &files, "y.py#helper", 1, Direction::Callers).unwrap();
+        assert_eq!(report.resolved, ["y.py#helper"]);
+        assert_eq!(report.callers[0].symbols[0].qualified_name, "y.py#use_y");
+        assert_eq!(report.files_affected, ["y.py"]);
+    }
+
+    #[test]
+    fn test_a_c_prototype_is_a_root_with_its_definition() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("area.h"), "int area(void);\n").unwrap();
+        fs::write(
+            dir.path().join("area.c"),
+            "#include \"area.h\"\nint area(void) { return 1; }\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("main.c"),
+            "#include \"area.h\"\nint main(void) { return area(); }\n",
+        )
+        .unwrap();
+        let files = vec![
+            dir.path().join("area.h"),
+            dir.path().join("area.c"),
+            dir.path().join("main.c"),
+        ];
+        let report = analyze(dir.path(), &files, "area", 1, Direction::Callers).unwrap();
+        assert_eq!(report.resolved, ["area.c#area"]);
+        assert_eq!(
+            report.declarations,
+            [ImpactSymbol {
+                qualified_name: "area.h#area".to_string(),
+                file: "area.h".to_string(),
+                line: 1,
+                is_test: false,
+            }]
+        );
+        assert_eq!(report.callers[0].symbols[0].qualified_name, "main.c#main");
+        assert_eq!(report.files_affected, ["area.c", "area.h", "main.c"]);
+    }
+
+    #[test]
+    fn test_a_file_and_a_start_line_select_one_root() {
+        let (dir, files) = two_helpers();
+        let view = CallView::from_index(&CodeIndex::from_files(dir.path(), &files));
+        let report = analyze_view(
+            &view,
+            "x.py:helper",
+            Some(1),
+            1,
+            Direction::Callers,
+            crate::index::view::DEFAULT_MIN_BASIS,
+        )
+        .unwrap();
+        assert_eq!(report.resolved, ["x.py#helper"]);
     }
 
     #[test]
@@ -342,7 +453,14 @@ mod tests {
         fs::write(dir.path().join(a_file), a_src).unwrap();
         fs::write(dir.path().join(b_file), b_src).unwrap();
         let files = vec![dir.path().join(a_file), dir.path().join(b_file)];
-        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers).unwrap();
+        let report = analyze(
+            dir.path(),
+            &files,
+            &format!("{b_file}:b"),
+            1,
+            Direction::Callers,
+        )
+        .unwrap();
         // b should be resolved
         assert!(
             !report.resolved.is_empty(),

@@ -23,6 +23,7 @@ pub mod diff;
 pub mod eval;
 pub mod gate;
 pub mod impact;
+pub mod lookup;
 #[cfg(feature = "mutation")]
 pub mod mutation;
 pub mod outline;
@@ -34,6 +35,7 @@ pub mod search;
 pub mod security;
 pub mod stubs;
 pub mod symbol;
+pub mod test_rows;
 #[cfg(test)]
 pub(crate) mod testing {
     use std::path::PathBuf;

@@ -549,6 +549,7 @@ const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
     (("diff", "base"), "target"),
     (("diff", "max_callers"), "max_callers"),
     (("churn", "since"), "since"),
+    (("changes", "since"), "since"),
     (("defect", "since"), "since"),
     (("hotspot", "since"), "since"),
     (("temporal", "since"), "since"),
@@ -564,10 +565,12 @@ const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
     (("get_symbol", "include_source"), "no_source"),
     (("get_symbol", "max_source_lines"), "max_source_lines"),
     (("get_symbol", "min_basis"), "min_basis"),
+    (("get_symbol", "start_line"), "start_line"),
     (("impact", "symbol"), "symbol"),
     (("impact", "depth"), "depth"),
     (("impact", "direction"), "direction"),
     (("impact", "min_basis"), "min_basis"),
+    (("impact", "start_line"), "start_line"),
     (("security", "section"), "section"),
     (("security", "entry"), "entry"),
     (("security", "sink"), "sink"),
@@ -577,8 +580,12 @@ const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
 ];
 
 /// The parameters that each paged tool has, with the flag of the command.
-const COMMON_PARAMETER_FLAGS: &[(&str, &str)] =
-    &[("path", "path"), ("limit", "top"), ("offset", "offset")];
+const COMMON_PARAMETER_FLAGS: &[(&str, &str)] = &[
+    ("path", "path"),
+    ("limit", "top"),
+    ("offset", "offset"),
+    ("exclude_tests", "exclude_tests"),
+];
 
 /// The tool parameters that have no CLI flag, each with the reason.
 const MCP_ONLY: &[((&str, &str), &str)] = &[
@@ -617,10 +624,6 @@ const MCP_ONLY: &[((&str, &str), &str)] = &[
         ("search", "max_complexity"),
         "The `search query` command has no complexity filter.",
     ),
-    (
-        ("get_symbol", "start_line"),
-        "The `symbol` command selects the first definition and has no line selector.",
-    ),
     (("get_symbol", "compact"), TABLE_ENCODING),
     (("impact", "compact"), TABLE_ENCODING),
 ];
@@ -636,6 +639,8 @@ const GATE: &str = "A tool gives data and does not apply a gate.";
 const PULL_REQUEST_COMMENT: &str =
     "Only the Markdown comment of the CLI uses the flag. A tool gives JSON and does not write a comment.";
 const PROCESS: &str = "The flag controls the CLI process, not the analysis.";
+const NO_TEST_ROWS: &str =
+    "The command gives an error for the flag: its report has no list of files or of symbols.";
 
 /// The CLI flags that have no tool parameter, each with the reason. The
 /// command `*` is each mirrored command.
@@ -662,6 +667,11 @@ const CLI_ONLY: &[((&str, &str), &str)] = &[
     (("*", "glob"), FILE_FILTER),
     (("*", "exclude"), FILE_FILTER),
     (("*", "changed_since"), FILE_FILTER),
+    (("changes", "exclude_tests"), NO_TEST_ROWS),
+    (("flags", "exclude_tests"), NO_TEST_ROWS),
+    (("outline", "exclude_tests"), NO_TEST_ROWS),
+    (("impact", "exclude_tests"), NO_TEST_ROWS),
+    (("symbol", "exclude_tests"), NO_TEST_ROWS),
     (("diff", "max_bytes"), PULL_REQUEST_COMMENT),
     (("diff", "max_nodes"), PULL_REQUEST_COMMENT),
     (("complexity", "gate"), GATE),
@@ -906,16 +916,7 @@ struct KnownDifference {
     reason: &'static str,
 }
 
-const KNOWN_DIFFERENCES: &[KnownDifference] = &[KnownDifference {
-    tool: "get_symbol",
-    // The fixture has `helper` in `util.rs` and in `other.rs`.
-    command: &["symbol", "helper"],
-    arguments: r#"{"name": "helper"}"#,
-    tool_error: "ambiguous",
-    reason: "The `symbol` command selects the first definition of an ambiguous name. \
-             The tool gives an `ambiguous` error. The 5.0 plan changes the command later: \
-             it will give the choices and a non-zero exit status.",
-}];
+const KNOWN_DIFFERENCES: &[KnownDifference] = &[];
 
 #[test]
 fn each_known_difference_continues_to_exist() {
@@ -1207,4 +1208,81 @@ fn keys_in_the_schemas() -> BTreeSet<String> {
         .filter_map(|part| part.split('`').next())
         .map(str::to_string)
         .collect()
+}
+
+/// A name that does not select one definition. The command and the tool give
+/// the same error with the same choices. Only the way to select a choice is
+/// different: a `command` for the CLI and the `arguments` for the tool.
+const LOOKUP_FAILURES: &[(&str, &[&str], &str)] = &[
+    // The fixture has `helper` in `util.rs`, in `other.rs`, and in `main.rs`.
+    ("get_symbol", &["symbol", "helper"], r#"{"name": "helper"}"#),
+    ("impact", &["impact", "helper"], r#"{"symbol": "helper"}"#),
+    ("get_symbol", &["symbol", "helpr"], r#"{"name": "helpr"}"#),
+    ("impact", &["impact", "helpr"], r#"{"symbol": "helpr"}"#),
+    (
+        "get_symbol",
+        &["symbol", "helper", "--start-line", "1"],
+        r#"{"name": "helper", "start_line": 1}"#,
+    ),
+    (
+        "impact",
+        &["impact", "helper", "--start-line", "1"],
+        r#"{"symbol": "helper", "start_line": 1}"#,
+    ),
+    (
+        "get_symbol",
+        &["symbol", "helpr", "--start-line", "1"],
+        r#"{"name": "helpr", "start_line": 1}"#,
+    ),
+];
+
+#[test]
+fn lookup_failures_are_the_same_in_the_command_and_the_tool() {
+    let directory = fixture_repository();
+    let repository = directory.path();
+    let requests: Vec<Value> = LOOKUP_FAILURES
+        .iter()
+        .enumerate()
+        .map(|(id, (tool, _, arguments))| {
+            let arguments: Value = serde_json::from_str(arguments).expect("arguments");
+            json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": {"name": tool, "arguments": arguments}
+            })
+        })
+        .collect();
+    let responses = mcp_responses(repository, &requests);
+    let mut found = Vec::new();
+    for ((tool, command, _), response) in LOOKUP_FAILURES.iter().zip(responses) {
+        let output = omen(repository)
+            .args(*command)
+            .output()
+            .expect("omen starts");
+        let name = command.join(" ");
+        if output.status.code() != Some(1) {
+            found.push(format!("{name}: exit status {:?}", output.status.code()));
+            continue;
+        }
+        let mut cli: Value = serde_json::from_slice(&output.stdout).expect("JSON error");
+        let mut mcp = response["result"]["structuredContent"].clone();
+        for (body, key) in [(&mut cli, "command"), (&mut mcp, "arguments")] {
+            let suggestions = body["error"]["suggestions"].as_array_mut();
+            for suggestion in suggestions.into_iter().flatten() {
+                if let Some(choice) = suggestion.as_object_mut() {
+                    if choice.remove(key).is_none() {
+                        found.push(format!("{name}: a choice has no `{key}`"));
+                    }
+                }
+            }
+            body["error"]["next"] = Value::Null;
+        }
+        let mut places = Vec::new();
+        differences("", &cli, &mcp, &mut places);
+        found.extend(
+            places
+                .into_iter()
+                .map(|place| format!("{name} / {tool}: {place}")),
+        );
+    }
+    assert_no_differences(found);
 }
