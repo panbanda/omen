@@ -887,11 +887,21 @@ impl FileContext<'_> {
                     && syntax::holds(&spec.predicate, &[value], self.source, &self.syntax)
                     && self.literal_has_type(node, module, owner)
                 {
+                    // A value can hold a literal, and a literal can be a secret. Thus the text
+                    // of the sink has the value only when the value is a chain of names.
+                    let value_text: String = syntax::text(value, self.source)
+                        .split_whitespace()
+                        .collect();
+                    let shown = if chain_segments(&value_text).is_some() {
+                        value_text
+                    } else {
+                        "<expression>".to_string()
+                    };
                     sinks.push(self.sink(
                         spec.category,
                         Span::of(&node),
                         self.enclosing_key(node.start_byte()),
-                        syntax::text(node, self.source),
+                        &format!("{wanted_key}: {shown}"),
                         SinkBasis::NameOnly,
                         self.is_constant(&spec.predicate, &[value]),
                     ));
@@ -975,12 +985,19 @@ impl FileContext<'_> {
             {
                 continue;
             }
+            // A receiver can hold literals, and a literal can be a secret. Thus the text of
+            // the sink is the chain of names, or only the member.
             let compact: String = syntax::text(left, self.source).split_whitespace().collect();
+            let callee_text = if chain_segments(&compact).is_some() {
+                compact
+            } else {
+                format!("*.{member}")
+            };
             sinks.push(self.sink(
                 spec.category,
                 Span::of(&node),
                 self.enclosing_key(node.start_byte()),
-                &compact,
+                &callee_text,
                 SinkBasis::NameOnly,
                 self.is_constant(&spec.predicate, &[right]),
             ));

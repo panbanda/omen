@@ -998,6 +998,35 @@ mod tests {
     }
 
     #[test]
+    fn the_callee_text_of_a_member_assignment_has_no_literal() {
+        let source = "export function run(element, text) {\n  element.querySelector(\"AKIAJ3KD92LQ7MZP5XWB\").innerHTML = text;\n  element.body.innerHTML = text;\n}\n";
+        let callees: Vec<String> = sinks(Language::JavaScript, &[("a.js", source)])
+            .into_iter()
+            .filter(|sink| sink.category == SinkCategory::UnsafeHtmlOutput)
+            .map(|sink| sink.callee_text)
+            .collect();
+        assert_eq!(callees, ["*.innerHTML", "element.body.innerHTML"]);
+    }
+
+    #[test]
+    fn the_callee_text_of_a_struct_field_has_no_literal_go() {
+        let source = "package main\n\nimport \"crypto/tls\"\n\nfunc run(settings Settings) {\n\t_ = &tls.Config{InsecureSkipVerify: lookup(\"AKIAJ3KD92LQ7MZP5XWB\")}\n\t_ = &tls.Config{InsecureSkipVerify: settings.Skip}\n\t_ = &tls.Config{InsecureSkipVerify: true}\n}\n";
+        let callees: Vec<String> = sinks(Language::Go, &[("a.go", source)])
+            .into_iter()
+            .filter(|sink| sink.category == SinkCategory::TlsVerificationDisabled)
+            .map(|sink| sink.callee_text)
+            .collect();
+        assert_eq!(
+            callees,
+            [
+                "InsecureSkipVerify: <expression>",
+                "InsecureSkipVerify: settings.Skip",
+                "InsecureSkipVerify: true",
+            ]
+        );
+    }
+
+    #[test]
     fn a_trusted_html_string_is_unsafe_html_output_csharp_and_rust() {
         let csharp = "using Microsoft.AspNetCore.Html;\n\npublic class A {\n    public object Run(string text) {\n        new HtmlString(text);\n        return new HtmlString(\"<br>\");\n    }\n}\n";
         assert_eq!(
