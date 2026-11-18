@@ -23,6 +23,7 @@ use crate::index::model::{Span, Symbol, SymbolKind};
 use crate::parser::{cfg_test_module_ranges, ParseResult};
 
 mod go_routes;
+mod handler_paths;
 mod persistent;
 mod rails;
 
@@ -192,6 +193,7 @@ pub struct EntryShared {
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
     go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
     go_packages: std::sync::OnceLock<go_routes::PackageNames>,
+    handler_paths: std::sync::OnceLock<handler_paths::HandlerPaths>,
 }
 
 /// The syntax trees that the entry point rules ask for in other files. The source
@@ -730,7 +732,19 @@ impl<'a> Context<'a> {
         }
         let name = match handler.kind() {
             "identifier" => self.text(handler),
+            "scoped_identifier" | "generic_function" if self.file.language == Language::Rust => {
+                return self.rust_path_handler(handler);
+            }
+            // The type of a static method selects it among the methods with its name.
+            "member_access_expression" => {
+                let mut names = self.text(handler).rsplit('.').map(str::trim);
+                let name = names.next().unwrap_or("");
+                return self.symbol_named(name, Some(names.next()?));
+            }
             "attribute" | "member_expression" | "selector_expression" | "field_expression" => {
+                if let Some(symbol) = self.imported_path_handler(handler) {
+                    return Some(symbol);
+                }
                 self.text(handler).rsplit(['.', ':']).next().unwrap_or("")
             }
             _ => return None,
@@ -5988,6 +6002,167 @@ func routes() {
         );
         assert_eq!(found[0].route, route("GET", "/items/{id}", &["id"]));
         assert_eq!(found[1].route, route("GET", "/ping", &[]));
+    }
+
+    /// The handler symbol of each route, sorted by the path of the route.
+    fn handlers_by_route(found: &[EntryPoint]) -> Vec<(String, Option<String>)> {
+        let mut handlers: Vec<(String, Option<String>)> = found
+            .iter()
+            .filter_map(|entry| {
+                let route = entry.route.as_ref()?;
+                Some((route.path.clone(), entry.symbol.clone()))
+            })
+            .collect();
+        handlers.sort();
+        handlers
+    }
+
+    const SCOPED_HANDLER_FILES: &[(&str, &str)] = &[
+        ("src/lib.rs", "mod routes;\nmod server;\n"),
+        ("src/routes/mod.rs", "pub mod health;\npub mod items;\n"),
+        ("src/routes/health.rs", "pub async fn health() {}\n"),
+        (
+            "src/routes/items.rs",
+            "pub async fn list() {}\n\npub async fn health() {}\n\npub struct Api;\n\nimpl Api {\n    pub async fn show() {}\n}\n",
+        ),
+        (
+            "src/server.rs",
+            "use axum::{routing::get, Router};\nuse crate::routes::{health, items};\n\nmod inline {\n    pub async fn ping() {}\n}\n\npub struct Server;\n\nimpl Server {\n    pub fn router() -> Router {\n        Router::new()\n            .route(\"/health\", get(health::health))\n            .route(\"/items\", get(items::list))\n            .route(\"/full\", get(crate::routes::items::list))\n            .route(\"/super\", get(super::routes::health::health))\n            .route(\"/show\", get(items::Api::show))\n            .route(\"/generic\", get(items::list::<u32>))\n            .route(\"/inline\", get(inline::ping))\n            .route(\"/self\", get(Self::handle))\n            .route(\"/missing\", get(items::missing))\n            .route(\"/external\", get(other_crate::handlers::list))\n    }\n\n    async fn handle() {}\n}\n\npub struct Other;\n\nimpl Other {\n    async fn handle() {}\n}\n",
+        ),
+    ];
+
+    #[test]
+    fn an_axum_handler_with_a_path_resolves_through_the_modules_of_the_index() {
+        let found = entries(Language::Rust, SCOPED_HANDLER_FILES);
+        let symbol = |key: &str| Some(key.to_string());
+        assert_eq!(
+            handlers_by_route(&found),
+            [
+                ("/external".to_string(), None),
+                ("/full".to_string(), symbol("src/routes/items.rs#list")),
+                ("/generic".to_string(), symbol("src/routes/items.rs#list")),
+                ("/health".to_string(), symbol("src/routes/health.rs#health")),
+                ("/inline".to_string(), symbol("src/server.rs#inline.ping")),
+                ("/items".to_string(), symbol("src/routes/items.rs#list")),
+                ("/missing".to_string(), None),
+                ("/self".to_string(), symbol("src/server.rs#Server.handle")),
+                ("/show".to_string(), symbol("src/routes/items.rs#Api.show")),
+                ("/super".to_string(), symbol("src/routes/health.rs#health")),
+            ]
+        );
+    }
+
+    /// `count` modules with a handler of one name, and `count` files that each register
+    /// one handler with a module path.
+    fn scoped_axum_handlers(count: usize) -> (usize, std::time::Duration) {
+        let mut files: Vec<(String, String)> = Vec::new();
+        let mut declarations = String::new();
+        for index in 0..count {
+            declarations.push_str(&format!("mod m{index};\nmod s{index};\n"));
+            files.push((
+                format!("src/m{index}.rs"),
+                "pub async fn handler() {}\n".to_string(),
+            ));
+            let (import, path) = if index % 2 == 0 {
+                (String::new(), format!("crate::m{index}::handler"))
+            } else {
+                (
+                    format!("use crate::m{index};\n"),
+                    format!("m{index}::handler"),
+                )
+            };
+            files.push((
+                format!("src/s{index}.rs"),
+                format!("use axum::{{routing::get, Router}};\n{import}\npub fn app() -> Router {{\n    Router::new().route(\"/{index}\", get({path}))\n}}\n"),
+            ));
+        }
+        files.push(("src/lib.rs".to_string(), declarations));
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(name, text)| (name.as_str(), text.as_str()))
+            .collect();
+        let (found, took) = entries_timed(Language::Rust, &borrowed, true);
+        assert_eq!(found.len(), count);
+        assert!(found.iter().all(|entry| entry.symbol.is_some()));
+        (found.len(), took)
+    }
+
+    #[test]
+    fn scoped_axum_handlers_of_one_name_all_resolve() {
+        scoped_axum_handlers(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_axum_handlers_of_one_name_with_module_paths_resolve_in_linear_time() {
+        assert_scales_linearly("scoped axum handlers", 10_000, |count| {
+            scoped_axum_handlers(count).1
+        });
+    }
+
+    #[test]
+    fn an_axum_handler_path_is_not_resolved_by_its_last_name_alone() {
+        let files = [
+            ("src/lib.rs", "mod server;\nmod items;\n"),
+            ("src/items.rs", "pub async fn other() {}\n"),
+            (
+                "src/server.rs",
+                "use axum::{routing::get, Router};\n\npub fn app() -> Router {\n    Router::new().route(\"/a\", get(items::list)).route(\"/b\", get(crate::unknown::list))\n}\n",
+            ),
+            ("src/elsewhere.rs", "pub async fn list() {}\n"),
+        ];
+        let found = entries(Language::Rust, &files);
+        assert_eq!(
+            handlers_by_route(&found),
+            [("/a".to_string(), None), ("/b".to_string(), None)]
+        );
+    }
+
+    #[test]
+    fn a_csharp_minimal_api_handler_with_a_type_resolves_to_the_method_of_the_type() {
+        let program = "var app = WebApplication.Create(args);\napp.MapGet(\"/items\", Handlers.List);\napp.MapGet(\"/others\", Others.List);\n";
+        let handlers = "public static class Handlers {\n    public static string List() => \"\";\n}\n\npublic static class Others {\n    public static string List() => \"\";\n}\n";
+        let found = entries(
+            Language::CSharp,
+            &[("Program.cs", program), ("Handlers.cs", handlers)],
+        );
+        assert_eq!(
+            handlers_by_route(&found),
+            [
+                (
+                    "/items".to_string(),
+                    Some("Handlers.cs#Handlers.List".to_string())
+                ),
+                (
+                    "/others".to_string(),
+                    Some("Handlers.cs#Others.List".to_string())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_django_view_of_an_imported_module_resolves_when_another_file_has_the_name() {
+        let urls = "from django.urls import path\nfrom . import views\n\nurlpatterns = [\n    path(\"items/\", views.detail),\n]\n";
+        let views = "def detail(request):\n    return request\n";
+        let admin = "def detail(request):\n    return request\n";
+        let found = entries(
+            Language::Python,
+            &[("urls.py", urls), ("views.py", views), ("admin.py", admin)],
+        );
+        assert_eq!(found[0].symbol.as_deref(), Some("views.py#detail"));
+    }
+
+    #[test]
+    fn an_express_handler_of_an_imported_module_resolves_when_another_file_has_the_name() {
+        let app = "import express from \"express\";\nimport * as users from \"./users\";\n\nconst app = express();\napp.get(\"/users\", users.list);\n";
+        let users = "export function list(request, response) {}\n";
+        let posts = "export function list(request, response) {}\n";
+        let found = entries(
+            Language::JavaScript,
+            &[("app.js", app), ("users.js", users), ("posts.js", posts)],
+        );
+        assert_eq!(found[0].symbol.as_deref(), Some("users.js#list"));
     }
 
     #[test]
