@@ -677,7 +677,7 @@ mod tests {
                 "17 run>apply UniqueCandidate SameFile [main.go#apply]",
                 "17 run>local UniqueCandidate SameFile [main.go#local]",
                 "19 run>add UniqueCandidate LexicalScope [main.go#run.add]",
-                "19 run>len Unresolved - []",
+                "19 run>len External - []",
             ]
         );
     }
@@ -813,7 +813,7 @@ mod tests {
                 "31 Cart.Run>item.Name UniqueCandidate ReceiverDeclaredType [a.go#Item.Name]",
                 "33 Cart.Run>c.Find UniqueCandidate ReceiverDeclaredType [a.go#Cart.Find]",
                 "34 Cart.Run>found.Name UniqueCandidate ReceiverDeclaredType [a.go#Item.Name]",
-                "35 Cart.Run>err.Error Unresolved - []",
+                "35 Cart.Run>err.Error External - []",
                 "36 Cart.Run>c.items::Name Unresolved - []",
                 "37 Cart.Run>c.count::Name Unresolved - []",
                 "38 Cart.Run>c.missing::Name Ambiguous NameOnly [a.go#Item.Name]",

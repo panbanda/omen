@@ -31,6 +31,8 @@ func main() {
 	store.Open()
 	localGeneric()
 	_ = persist(&local.Disk{})
+	_ = convert(nil, 1)
+	_ = describe(local.Missing{})
 }
 
 func first[T any](values []T) T {
@@ -44,4 +46,13 @@ func localGeneric() int {
 
 func persist(store local.Store) error {
 	return store.Save("a")
+}
+
+func convert(values []int, value int) string {
+	values = append(values, value)
+	return string(rune(len(values)))
+}
+
+func describe(failure error) string {
+	return failure.Error()
 }
