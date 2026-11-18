@@ -21,8 +21,10 @@ use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
+use petgraph::algo::tarjan_scc;
+use petgraph::graph::{DiGraph, NodeIndex};
 use tree_sitter::Node;
 
 use super::{
@@ -34,6 +36,11 @@ use crate::index::model::{ImportBinding, ImportKind, ImportTarget, Span, SymbolK
 
 /// The longest chain of names, imports, mounts, and superclasses that omen follows.
 const MAX_HOPS: usize = 16;
+
+/// The most prefixes that the mounts of one router give. A router with more prefixes has one
+/// prefix that omen does not know, because the number of chains can grow exponentially with
+/// the layers of mounts.
+const MAX_MOUNT_CHAINS: usize = 64;
 
 /// The framework name of a route that a decorator of the repository declares.
 const REPOSITORY_DECORATORS: &str = "repository_decorators";
@@ -211,6 +218,7 @@ pub(super) struct State {
     /// The imports of each file, by the position of the file and then by the local name.
     imports: RefCell<HashMap<usize, Rc<ImportsByName>>>,
     mounts: OnceCell<HashMap<BindingKey, Vec<Mount>>>,
+    mount_chains: OnceCell<HashMap<BindingKey, Vec<Vec<Part>>>>,
     /// The positions of the symbols of the file, by the end of their range.
     symbol_ends: OnceCell<HashMap<usize, Vec<usize>>>,
 }
@@ -222,6 +230,18 @@ pub(super) struct Shared {
     /// The framework of a field, by the position of the file, the start of the class, and the
     /// name of the field.
     fields: parking_lot::Mutex<HashMap<(usize, usize, String), Option<Framework>>>,
+    /// The fields of each class body, by the position of the file and the start of the body.
+    classes: parking_lot::Mutex<HashMap<(usize, usize), Arc<ClassFields>>>,
+}
+
+/// The fields of one class body, by the name of the field.
+#[derive(Default)]
+struct ClassFields {
+    /// The ranges of the type annotations of the field definitions and of the parameter
+    /// properties of the constructor.
+    typed: HashMap<String, Vec<Range<usize>>>,
+    /// The ranges of the initializers and of the values of each `this.name = value` in the class.
+    values: HashMap<String, Vec<Range<usize>>>,
 }
 
 /// A file and its syntax tree.
@@ -1201,30 +1221,36 @@ impl<'a> Context<'a> {
         found
     }
 
-    fn read_class_field(
-        &self,
-        unit: Unit<'_>,
-        class: Node<'_>,
-        name: &str,
-        hops: usize,
-    ) -> Option<Framework> {
-        let body = class.child_by_field_name("body")?;
-        let mut typed: Vec<Option<Framework>> = Vec::new();
-        let mut values: Vec<Option<Framework>> = Vec::new();
+    /// The fields of the class body, read in one pass and shared by each search of a field.
+    fn class_fields(&self, unit: Unit<'_>, body: Node<'_>) -> Arc<ClassFields> {
+        let key = (unit.position, body.start_byte());
+        if let Some(found) = self.all_parsed.shared().ecma.classes.lock().get(&key) {
+            return Arc::clone(found);
+        }
+        let mut fields = ClassFields::default();
         for member in named_children(body) {
             match member.kind() {
                 "public_field_definition" | "field_definition" => {
-                    let field_name = member
+                    let Some(field_name) = member
                         .child_by_field_name("name")
-                        .or_else(|| member.child_by_field_name("property"));
-                    if field_name.is_none_or(|field| text(field, unit.source) != name) {
+                        .or_else(|| member.child_by_field_name("property"))
+                    else {
                         continue;
-                    }
+                    };
+                    let field_name = text(field_name, unit.source).to_string();
                     if let Some(annotation) = member.child_by_field_name("type") {
-                        typed.push(self.framework_of_type(unit, annotation));
+                        fields
+                            .typed
+                            .entry(field_name.clone())
+                            .or_default()
+                            .push(annotation.byte_range());
                     }
                     if let Some(value) = member.child_by_field_name("value") {
-                        values.push(self.framework_of(unit, value, hops + 1));
+                        fields
+                            .values
+                            .entry(field_name)
+                            .or_default()
+                            .push(value.byte_range());
                     }
                 }
                 "method_definition" => {
@@ -1239,14 +1265,18 @@ impl<'a> Context<'a> {
                         let declares = children(parameter).iter().any(|child| {
                             matches!(child.kind(), "accessibility_modifier" | "readonly")
                         });
-                        let pattern = parameter.child_by_field_name("pattern");
-                        if declares
-                            && pattern.is_some_and(|pattern| text(pattern, unit.source) == name)
-                        {
-                            if let Some(annotation) = parameter.child_by_field_name("type") {
-                                typed.push(self.framework_of_type(unit, annotation));
-                            }
-                        }
+                        let (true, Some(pattern), Some(annotation)) = (
+                            declares,
+                            parameter.child_by_field_name("pattern"),
+                            parameter.child_by_field_name("type"),
+                        ) else {
+                            continue;
+                        };
+                        fields
+                            .typed
+                            .entry(text(pattern, unit.source).to_string())
+                            .or_default()
+                            .push(annotation.byte_range());
                     }
                 }
                 _ => {}
@@ -1256,27 +1286,67 @@ impl<'a> Context<'a> {
         while let Some(node) = stack.pop() {
             if node.kind() == "assignment_expression" {
                 let left = node.child_by_field_name("left").map(unwrap);
-                let assigns = left.is_some_and(|left| {
-                    left.kind() == "member_expression"
-                        && left
-                            .child_by_field_name("object")
-                            .is_some_and(|object| object.kind() == "this")
-                        && left
-                            .child_by_field_name("property")
-                            .is_some_and(|property| text(property, unit.source) == name)
-                });
-                if assigns {
-                    if let Some(right) = node.child_by_field_name("right") {
-                        values.push(self.framework_of(unit, right, hops + 1));
-                    }
+                let property = left
+                    .filter(|left| {
+                        left.kind() == "member_expression"
+                            && left
+                                .child_by_field_name("object")
+                                .is_some_and(|object| object.kind() == "this")
+                    })
+                    .and_then(|left| left.child_by_field_name("property"));
+                if let (Some(property), Some(right)) = (property, node.child_by_field_name("right"))
+                {
+                    fields
+                        .values
+                        .entry(text(property, unit.source).to_string())
+                        .or_default()
+                        .push(right.byte_range());
                 }
             }
-            for child in named_children(node) {
+            for child in named_children(node).into_iter().rev() {
                 if !THIS_BINDERS.contains(&child.kind()) && child.kind() != "class_body" {
                     stack.push(child);
                 }
             }
         }
+        let fields = Arc::new(fields);
+        self.all_parsed
+            .shared()
+            .ecma
+            .classes
+            .lock()
+            .insert(key, Arc::clone(&fields));
+        fields
+    }
+
+    fn read_class_field(
+        &self,
+        unit: Unit<'_>,
+        class: Node<'_>,
+        name: &str,
+        hops: usize,
+    ) -> Option<Framework> {
+        let body = class.child_by_field_name("body")?;
+        let fields = self.class_fields(unit, body);
+        let typed: Vec<Option<Framework>> = fields
+            .typed
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(|range| {
+                node_at(unit.root, range)
+                    .and_then(|annotation| self.framework_of_type(unit, annotation))
+            })
+            .collect();
+        let values: Vec<Option<Framework>> = fields
+            .values
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(|range| {
+                node_at(unit.root, range).and_then(|value| self.framework_of(unit, value, hops + 1))
+            })
+            .collect();
         if let Some(found) = typed.iter().flatten().next() {
             return Some(*found);
         }
@@ -1444,28 +1514,87 @@ impl<'a> Context<'a> {
     /// `use` call of the file mounts the router.
     fn mount_prefixes(&self, unit: Unit<'_>, receiver: Node<'_>) -> Option<Vec<Vec<Part>>> {
         let key = self.binding_key(unit, receiver)?;
-        self.mounts().get(&key)?;
-        Some(self.chains(&key, 0))
+        self.mount_chains().get(&key).cloned()
     }
 
-    fn chains(&self, key: &BindingKey, depth: usize) -> Vec<Vec<Part>> {
-        let Some(mounts) = self.mounts().get(key) else {
-            return vec![Vec::new()];
-        };
-        if depth > MAX_HOPS {
-            return vec![vec![Part::Unknown("...".to_string())]];
-        }
-        let mut chains = Vec::new();
-        for mount in mounts {
-            let outer = match &mount.parent {
-                Some(parent) => self.chains(parent, depth + 1),
-                None => vec![Vec::new()],
+    /// The prefixes of each router that a `use` call of the file mounts. The search starts at
+    /// the routers that no `use` call mounts and goes down the mounts, so it reads each mount
+    /// one time.
+    fn mount_chains(&self) -> &HashMap<BindingKey, Vec<Vec<Part>>> {
+        self.ecma.mount_chains.get_or_init(|| {
+            let mounts = self.mounts();
+            let mut graph: DiGraph<BindingKey, ()> = DiGraph::new();
+            let mut nodes: HashMap<BindingKey, NodeIndex> = HashMap::new();
+            let mut node_of = |graph: &mut DiGraph<BindingKey, ()>, key: &BindingKey| {
+                *nodes
+                    .entry(key.clone())
+                    .or_insert_with(|| graph.add_node(key.clone()))
             };
-            for chain in outer {
-                chains.push(joined(chain, &mount.prefix));
+            let mut keys: Vec<&BindingKey> = mounts.keys().collect();
+            keys.sort();
+            for key in keys {
+                let child = node_of(&mut graph, key);
+                for parent in mounts[key].iter().filter_map(|mount| mount.parent.as_ref()) {
+                    let parent = node_of(&mut graph, parent);
+                    graph.add_edge(parent, child, ());
+                }
             }
-        }
-        chains
+            // `tarjan_scc` gives each component after the components that it has edges to.
+            let mut components = tarjan_scc(&graph);
+            components.reverse();
+            let mut chains: HashMap<BindingKey, Vec<Vec<Part>>> = HashMap::new();
+            let mut depths: HashMap<BindingKey, usize> = HashMap::new();
+            for component in components {
+                let cyclic = component.len() > 1 || graph.contains_edge(component[0], component[0]);
+                for node in component {
+                    let key = graph[node].clone();
+                    if cyclic {
+                        chains.insert(key, vec![vec![Part::Unknown("mount cycle".to_string())]]);
+                        continue;
+                    }
+                    let Some(own) = mounts.get(&key) else {
+                        continue;
+                    };
+                    let parent_depth = own
+                        .iter()
+                        .filter_map(|mount| mount.parent.as_ref())
+                        .filter_map(|parent| depths.get(parent))
+                        .max()
+                        .copied()
+                        .unwrap_or(0);
+                    depths.insert(key.clone(), parent_depth + 1);
+                    if parent_depth >= MAX_HOPS {
+                        chains.insert(key, vec![vec![Part::Unknown("...".to_string())]]);
+                        continue;
+                    }
+                    let mut found: Vec<Vec<Part>> = Vec::new();
+                    for mount in own {
+                        let empty = vec![Vec::new()];
+                        let outer = match &mount.parent {
+                            Some(parent) => chains.get(parent).unwrap_or(&empty),
+                            None => &empty,
+                        };
+                        for chain in outer {
+                            let chain = joined(chain.clone(), &mount.prefix);
+                            if !found.contains(&chain) {
+                                found.push(chain);
+                            }
+                            if found.len() > MAX_MOUNT_CHAINS {
+                                break;
+                            }
+                        }
+                        if found.len() > MAX_MOUNT_CHAINS {
+                            break;
+                        }
+                    }
+                    if found.len() > MAX_MOUNT_CHAINS {
+                        found = vec![vec![Part::Unknown("prefix".to_string())]];
+                    }
+                    chains.insert(key, found);
+                }
+            }
+            chains
+        })
     }
 
     /// The nearest symbol that contains the node, other than a field.
@@ -2384,5 +2513,90 @@ mod tests {
     #[ignore = "timing: run in release"]
     fn timing_many_routes_in_one_function_resolve_in_linear_time() {
         assert_scales_linearly("express routes in one function", 4_000, many_routes);
+    }
+
+    /// A file with `layers` layers of `width` routers. Each router is mounted under each router
+    /// of the layer above it, and the last router has the route `/leaf`.
+    fn layered_mounts(layers: usize, width: usize) -> String {
+        let mut source = String::from("import express from 'express';\nconst app = express();\n");
+        for layer in 0..layers {
+            for index in 0..width {
+                source.push_str(&format!("const r{layer}_{index} = express.Router();\n"));
+                let parents: Vec<String> = if layer == 0 {
+                    vec!["app".to_string()]
+                } else {
+                    (0..width)
+                        .map(|parent| format!("r{}_{parent}", layer - 1))
+                        .collect()
+                };
+                for parent in parents {
+                    source.push_str(&format!(
+                        "{parent}.use('/l{layer}x{index}', r{layer}_{index});\n"
+                    ));
+                }
+            }
+        }
+        source.push_str(&format!("r{}_0.get('/leaf', handler);\n", layers - 1));
+        source
+    }
+
+    #[test]
+    fn a_router_with_more_chains_of_mounts_than_the_limit_has_an_unknown_prefix() {
+        let small = layered_mounts(3, 2);
+        assert_eq!(paths(&[("src/app.ts", &small)]).len(), 4);
+        let large = layered_mounts(8, 2);
+        assert_eq!(
+            paths(&[("src/app.ts", &large)]),
+            [unknown("GET", "/${prefix}/leaf")]
+        );
+    }
+
+    #[test]
+    fn a_cycle_of_mounts_gives_an_unknown_prefix() {
+        let source = "import express from 'express';\nconst app = express();\nconst a = express.Router();\nconst b = express.Router();\napp.use('/a', a);\na.use('/b', b);\nb.use('/a', a);\nb.get('/x', handler);\n";
+        assert_eq!(
+            paths(&[("src/app.ts", source)]),
+            [unknown("GET", "/${mount cycle}/x")]
+        );
+    }
+
+    fn many_mounts(count: usize) -> std::time::Duration {
+        let source = layered_mounts(count / 4, 4);
+        let (found, took) = entries_timed(Language::TypeScript, &[("src/app.ts", &source)], true);
+        assert_eq!(found.len(), 1);
+        took
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_layers_of_mounts_resolve_in_linear_time() {
+        assert_scales_linearly("layers of mounts", 2_000, many_mounts);
+    }
+
+    fn many_fields(count: usize) -> std::time::Duration {
+        let mut source = String::from("import express from 'express';\nexport class Server {\n");
+        for index in 0..count {
+            source.push_str(&format!("  f{index} = express();\n"));
+        }
+        source.push_str("  setup() {\n");
+        for index in 0..count {
+            source.push_str(&format!("    this.f{index}.get('/r{index}', handler);\n"));
+        }
+        source.push_str("  }\n}\n");
+        let (found, took) =
+            entries_timed(Language::TypeScript, &[("src/server.ts", &source)], true);
+        assert_eq!(found.len(), count);
+        took
+    }
+
+    #[test]
+    fn each_field_of_a_class_is_a_receiver() {
+        many_fields(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_fields_of_one_class_resolve_in_linear_time() {
+        assert_scales_linearly("fields of one class", 4_000, many_fields);
     }
 }
