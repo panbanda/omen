@@ -137,7 +137,7 @@ For each other HTTP framework, omen reads the guards that the route itself decla
 | Framework | Guards that omen reads | Guards that omen does not read |
 | --- | --- | --- |
 | Rails | The `before_action` chain of the controller and of its superclasses, and the constraint objects of the routes | A guard of Rails itself, such as the CSRF check, and the Rack middleware of the application. These do not make the list incomplete. |
-| FastAPI | The dependencies of the route, of its router, of the application, and of an `include_router` call of the file | A middleware. A file with `add_middleware` or `middleware` gives `layer_not_read`. A middleware in a different file is not seen. |
+| FastAPI | The dependencies of the route, of its router, of the application, and of an `include_router` call of the file | A middleware. A file with `add_middleware`, `middleware`, or `FastAPI(middleware=...)` with a value that is not `None` or an empty list gives `layer_not_read`. A middleware in a different file is not seen. |
 | chi, echo, gin, gorilla/mux, `net/http` | The middleware of `Use`, `Pre`, `With`, `Group`, and of the route call, and a wrapper of the handler | A wrapper of the whole router at the server, as `http.ListenAndServe(address, auth(router))`. It does not make the list incomplete. |
 | Express | The middleware names in the route call | `app.use` and `router.use`, a middleware that is a call or a function, and the mount of a router |
 | Flask | The known decorators below the route decorator | `before_request`, and a decorator that omen does not know |

@@ -132,7 +132,8 @@ pub(super) struct Scopes<'a> {
     /// Why the guards of the routers around a router are not complete, by the binding of the
     /// router.
     outer_gaps: RefCell<HashMap<BindingKey<'a>, Option<GuardsUnknownReason>>>,
-    /// The file calls `add_middleware` or `middleware`. Omen does not read a middleware.
+    /// The file calls `add_middleware` or `middleware`, or it gives `FastAPI` a middleware
+    /// argument. Omen does not read a middleware.
     middleware: bool,
 }
 
@@ -301,6 +302,7 @@ impl<'a> Context<'a> {
                         .is_some_and(|attribute| {
                             matches!(self.text(attribute), "add_middleware" | "middleware")
                         });
+                    scopes.middleware |= self.has_middleware_argument(node);
                 }
                 _ => {}
             }
@@ -327,6 +329,37 @@ impl<'a> Context<'a> {
             }
         }
         scopes
+    }
+
+    /// Tells if the call is `FastAPI(...)` with a `middleware=` argument that can hold a
+    /// middleware: a value other than `None` and an empty list or tuple.
+    fn has_middleware_argument(&self, call: Node<'_>) -> bool {
+        let is_application = call
+            .child_by_field_name("function")
+            .is_some_and(|function| match function.kind() {
+                "identifier" => self.text(function) == "FastAPI",
+                "attribute" => function
+                    .child_by_field_name("attribute")
+                    .is_some_and(|attribute| self.text(attribute) == "FastAPI"),
+                _ => false,
+            });
+        if !is_application {
+            return false;
+        }
+        let Some(arguments) = call.child_by_field_name("arguments") else {
+            return false;
+        };
+        named_children(arguments).into_iter().any(|argument| {
+            argument.kind() == "keyword_argument"
+                && argument
+                    .child_by_field_name("name")
+                    .is_some_and(|name| self.text(name) == "middleware")
+                && argument.child_by_field_name("value").is_some_and(|value| {
+                    !(value.kind() == "none"
+                        || (matches!(value.kind(), "list" | "tuple")
+                            && value.named_child_count() == 0))
+                })
+        })
     }
 
     fn bind(
@@ -1480,6 +1513,32 @@ mod tests {
                 states(&source),
                 expected_states(&[("/a", "layer_not_read")]),
                 "{middleware}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_middleware_argument_of_the_application_makes_the_guards_not_complete() {
+        let route = "\n\n@app.get(\"/a\")\nasync def a():\n    return 1\n";
+        for (application, state) in [
+            (
+                "app = FastAPI(middleware=[Middleware(AuthMiddleware)])",
+                "layer_not_read",
+            ),
+            (
+                "app = fastapi.FastAPI(title=\"x\", middleware=MIDDLEWARE)",
+                "layer_not_read",
+            ),
+            ("app = FastAPI(middleware=[])", "complete"),
+            ("app = FastAPI(middleware=None)", "complete"),
+            ("app = FastAPI(title=\"x\")", "complete"),
+        ] {
+            let source =
+                format!("import fastapi\nfrom fastapi import FastAPI\n\n{application}{route}");
+            assert_eq!(
+                states(&source),
+                expected_states(&[("/a", state)]),
+                "{application}"
             );
         }
     }
