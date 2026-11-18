@@ -152,6 +152,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 offset: args.pagination.offset,
                 max_bytes: args.max_bytes,
                 max_nodes: args.max_nodes,
+                max_callers: args.max_callers,
             };
             commands::diff::run(path, &config, &request, format, &mut stdout())?;
         }

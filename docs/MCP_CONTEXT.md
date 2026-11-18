@@ -149,6 +149,8 @@ while the fingerprint is the same. `sources` is the number of source files.
 - `context`: each list that `max_tokens` cut.
 - `search`: `/results` when `top_k` cut the
   results that the filters accepted.
+- `diff`: `/symbols/*/direct_callers` when `max_callers` cut the callers of a
+  symbol on this page.
 
 One rule applies to each tool. `total_items` is the size of the primary list
 before `limit` and `offset`, and after the cuts of the tool. Each cut of a tool
@@ -157,6 +159,56 @@ has an entry in `truncated` with the total before the cut.
 These limits do not appear in `truncated`, because the server does not know
 the total without them: `max_symbols` and `max_risks` of `context`,
 `max_symbols` of `repomap`, and `depth` of `impact` and `task_context`.
+
+### The change set of `diff`
+
+The tool `diff` and the command `omen diff -f json` give the risk of the branch
+and its change set. The risk keys, such as `score`, `level`, and `factors`, are
+the keys that the tool gave before. The change set adds these keys:
+
+| Key | Value |
+|---|---|
+| `head` | The short hash of `HEAD`. `merge_base` is the base. |
+| `summary` | The counts of the full change set: the files, the lines, the added, removed, and changed symbols, the callers affected, the cyclomatic complexity before and after, the new stubs, the new debt comments, and the hotspots touched. |
+| `symbols` | The primary list. Each entry is one symbol that the branch added, removed, or changed. |
+| `files` | Each changed file with its lines, its changed symbols, its maximum cyclomatic complexity, its hotspot severity, and its owners. |
+| `new_findings` | Each stub and each debt comment that the head has and the base does not have. |
+| `notes` | The limits of this change set that the reader must know. |
+| `security` | The sinks, the entry points, and the paths that the branch adds or removes, and the changed symbols on a path. |
+
+One entry of `symbols` has `key`, `name`, `kind`, `file`, `line`, `state`,
+`is_test`, `signature_before`, `signature_after`, `complexity_before`,
+`complexity_after`, `direct_callers`, `direct_caller_count`,
+`test_caller_count`, `direct_callers_omitted`, `transitive_callers`, and
+`weakest_basis`. `state` is `added`, `removed`, or `changed`. Each caller has
+`key`, `file`, `line`, and `is_test`. Give a `key` to `get_symbol` or `impact`.
+
+The order of `symbols` puts the entries with the most effect first:
+
+1. A symbol that is not test code comes before a symbol that is test code.
+2. A changed or removed symbol comes before an added symbol.
+3. A symbol with more transitive callers comes first.
+4. The key decides between two symbols that are equal in the other rules.
+
+The Markdown comment of `omen diff -f markdown` uses the same order. A symbol
+is test code when its file is a test file or its name starts with `test_` or
+`Test`. The same rule gives `is_test` of a caller.
+
+`limit` and `offset` page `symbols`. `summary` is always the count of the full
+change set. `max_callers` (default 20) is the maximum number of
+`direct_callers` of one symbol. The callers that are not test code come first.
+`direct_caller_count` and `test_caller_count` are always complete, and
+`direct_callers_omitted` is the number of callers that the cap removed. The
+value 0 removes the cap. The lists `files`, `new_findings`, and the lists in
+`security` have no cap.
+
+The result does not have the call graph of the Markdown comment. Call `impact`
+with a key for the callers of one symbol. When the branch has no changes,
+`symbols` and `files` are empty and the counts are 0.
+
+Before this change, `limit` and `offset` of `diff` applied to
+`recommendations`, and `total_items` was the number of recommendations.
+`recommendations` now always has all its items.
 
 The search tools apply `min_score`, `files`, and `max_complexity` first, and
 then `top_k`. An empty `include_projects` is the same as no `include_projects`.
