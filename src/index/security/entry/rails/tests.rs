@@ -166,7 +166,7 @@ fn a_constraint_object_of_a_scope_a_block_a_route_or_a_resource_is_a_guard() {
     assert_eq!(
         rows(&routes, &[WEBHOOKS]),
         sorted(&[
-            "GET /a WebhooksController.show [A.new, B.new(x: 1), C, check]",
+            "GET /a WebhooksController.show [C, check]",
             "GET /webhooks WebhooksController.index [A.new, B.new(x: 1), D.new, check]",
             "GET /b WebhooksController.show [lambda:8, check]",
             "GET /c WebhooksController.show [lambda:11, check]",
@@ -366,17 +366,143 @@ fn the_entries_of_a_loop_have_keys_that_differ() {
 }
 
 #[test]
-fn loops_that_expand_to_more_than_the_limit_give_no_route() {
+fn loops_in_loops_under_the_limit_give_each_route() {
     let items: Vec<String> = (0..40).map(|number| format!("i{number}")).collect();
     let list = format!("%w[{}]", items.join(" "));
     let two = draw(&format!(
         "  {list}.each do |a|\n    {list}.each do |b|\n      get \"#{{a}}/#{{b}}\" => \"webhooks#show\"\n    end\n  end"
     ));
     assert_eq!(rows(&two, &[WEBHOOKS]).len(), 1_600);
-    let three = draw(&format!(
-        "  {list}.each do |a|\n    get \"#{{a}}\" => \"webhooks#show\"\n    {list}.each do |b|\n      {list}.each do |c|\n        get \"#{{a}}/#{{b}}/#{{c}}\" => \"webhooks#show\"\n      end\n    end\n  end"
-    ));
-    assert_eq!(rows(&three, &[WEBHOOKS]).len(), 40);
+}
+
+/// A list of 4,096 literal items.
+fn long_list(hash: bool) -> String {
+    let items: Vec<String> = (0..4_096)
+        .map(|number| {
+            if hash {
+                format!("\"i{number}\" => \"webhooks#show\"")
+            } else {
+                format!("i{number}")
+            }
+        })
+        .collect();
+    if hash {
+        format!("{{ {} }}", items.join(", "))
+    } else {
+        format!("%w[{}]", items.join(" "))
+    }
+}
+
+/// A loop of 4,096 items around `size` routes that use the loop parameter, and a route after the
+/// loop.
+fn a_long_loop_around(size: usize) -> String {
+    let mut body = format!("  {}.each do |name|\n", long_list(false));
+    for number in 0..size {
+        body.push_str(&format!(
+            "    get \"#{{name}}/r{number}\" => \"webhooks#show\"\n"
+        ));
+    }
+    body.push_str("  end\n  get \"after\" => \"webhooks#index\"");
+    draw(&body)
+}
+
+fn assert_unexpanded(found: &[EntryPoint], path: &str) {
+    for entry in found {
+        let route = entry.route.as_ref().expect("a Rails entry has a route");
+        if route.path.contains('[') {
+            assert!(!entry.guards_complete, "{}", route.path);
+            assert_eq!(
+                entry.guards_unknown_reason,
+                Some(super::GuardsUnknownReason::UnexpandedLoop),
+                "{}",
+                route.path
+            );
+        } else {
+            assert_eq!(route.path, path);
+            assert_ne!(
+                entry.guards_unknown_reason,
+                Some(super::GuardsUnknownReason::UnexpandedLoop)
+            );
+        }
+    }
+}
+
+#[test]
+fn a_loop_over_the_expansion_limit_gives_each_route_one_time_with_an_unknown_segment() {
+    let routes = a_long_loop_around(200);
+    let found = rails(&[("config/routes.rb", &routes), WEBHOOKS]);
+    let mut expected: Vec<String> = (0..200)
+        .map(|number| format!("GET /[name]/r{number} WebhooksController.show [check]"))
+        .collect();
+    expected.push(String::from("GET /after WebhooksController.index [check]"));
+    expected.sort();
+    assert_eq!(rows_of(&found), expected);
+    assert_unexpanded(&found, "/after");
+}
+
+#[test]
+fn a_long_loop_in_a_short_loop_gives_the_routes_of_each_outer_item() {
+    let mut body = format!(
+        "  %w[a b].each do |outer|\n    scope outer do\n      {}.each do |name|\n",
+        long_list(false)
+    );
+    for number in 0..200 {
+        body.push_str(&format!(
+            "        get \"#{{name}}/r{number}\" => \"webhooks#show\"\n"
+        ));
+    }
+    body.push_str("      end\n    end\n  end");
+    let found = rails(&[("config/routes.rb", &draw(&body)), WEBHOOKS]);
+    let mut expected: Vec<String> = ["a", "b"]
+        .iter()
+        .flat_map(|outer| {
+            (0..200).map(move |number| {
+                format!("GET /{outer}/[name]/r{number} WebhooksController.show [check]")
+            })
+        })
+        .collect();
+    expected.sort();
+    assert_eq!(rows_of(&found), expected);
+    assert_unexpanded(&found, "");
+}
+
+#[test]
+fn a_long_hash_loop_gives_each_route_with_an_unknown_target() {
+    let mut body = format!("  {}.each do |path, action|\n", long_list(true));
+    for number in 0..200 {
+        body.push_str(&format!("    get \"#{{path}}/r{number}\", to: action\n"));
+    }
+    body.push_str("  end");
+    let found = rails(&[("config/routes.rb", &draw(&body)), WEBHOOKS]);
+    let mut expected: Vec<String> = (0..200)
+        .map(|number| format!("GET /[path]/r{number} - []"))
+        .collect();
+    expected.sort();
+    assert_eq!(rows_of(&found), expected);
+    assert_unexpanded(&found, "");
+}
+
+#[test]
+fn a_mount_in_a_loop_over_the_expansion_limit_is_not_read() {
+    let mut body = format!(
+        "  {}.each do |name|\n    mount Blog::Engine, at: name\n",
+        long_list(false)
+    );
+    for number in 0..200 {
+        body.push_str(&format!(
+            "    get \"#{{name}}/r{number}\" => \"webhooks#show\"\n"
+        ));
+    }
+    body.push_str("  end");
+    let routes = draw(&body);
+    let found = rails(&[
+        ("config/routes.rb", &routes),
+        WEBHOOKS,
+        BLOG_ENGINE,
+        BLOG_ROUTES,
+    ]);
+    assert_eq!(found.len(), 200);
+    assert_unexpanded(&found, "");
 }
 
 #[test]
@@ -422,6 +548,41 @@ fn a_definition_in_the_draw_block_that_omen_cannot_model_gives_no_route() {
         rows(helper, &[WEBHOOKS]),
         ["GET /a WebhooksController.show [check]"]
     );
+}
+
+#[test]
+fn a_definition_in_a_branch_that_never_runs_changes_nothing() {
+    for definition in [
+        "if false\n    def patch(*)\n      super\n    end\n  end",
+        "unless true\n    alias patch get\n  end",
+        "if true\n  else\n    define_method(:get) { |*| }\n  end",
+        "def patch(*)\n    super\n  end if nil",
+        "case true\n  when false\n    undef get\n  end",
+    ] {
+        let routes = format!(
+            "Rails.application.routes.draw do\n  {definition}\n  get \"a\" => \"webhooks#show\"\nend\n"
+        );
+        assert_eq!(
+            rows(&routes, &[WEBHOOKS]),
+            ["GET /a WebhooksController.show [check]"],
+            "{definition}"
+        );
+    }
+}
+
+#[test]
+fn a_mount_in_a_branch_that_never_runs_mounts_nothing() {
+    for mount in [
+        "if false\n  Rails.application.routes.append do\n    mount Blog::Engine, at: \"/blog\"\n  end\nend\n",
+        "Rails.application.routes.draw do\n  unless true\n    mount Blog::Engine, at: \"/blog\"\n  end\nend\n",
+    ] {
+        assert!(
+            engine_rows(&[("plugins/blog/plugin.rb", mount)]).is_empty(),
+            "{mount}"
+        );
+    }
+    let live = "if true\n  Rails.application.routes.append do\n    mount Blog::Engine, at: \"/blog\"\n  end\nend\n";
+    assert_eq!(engine_rows(&[("plugins/blog/plugin.rb", live)]).len(), 2);
 }
 
 #[test]
@@ -494,8 +655,35 @@ fn the_constraints_around_a_mount_guard_the_routes_of_the_engine() {
     assert_eq!(
         engine_rows(&[("plugins/blog/plugin.rb", mount)]),
         sorted(&[
-            "GET /blog/posts Blog.PostsController.index [A.new, AdminConstraint.new, ensure_blog]",
-            "GET /blog/posts/:id Blog.PostsController.show [A.new, AdminConstraint.new, ensure_blog]",
+            "GET /blog/posts Blog.PostsController.index [AdminConstraint.new, ensure_blog]",
+            "GET /blog/posts/:id Blog.PostsController.show [AdminConstraint.new, ensure_blog]",
+        ])
+    );
+    let scoped = "Rails.application.routes.draw do\n  scope constraints: A.new do\n    mount Blog::Engine, at: \"/blog\", constraints: { subdomain: \"x\" }\n  end\nend\n";
+    assert_eq!(
+        engine_rows(&[("plugins/blog/plugin.rb", scoped)]),
+        sorted(&[
+            "GET /blog/posts Blog.PostsController.index [A.new, ensure_blog]",
+            "GET /blog/posts/:id Blog.PostsController.show [A.new, ensure_blog]",
+        ])
+    );
+}
+
+#[test]
+fn a_route_constraint_object_in_an_engine_replaces_the_blocks_but_not_the_mount() {
+    let mount = (
+        "plugins/blog/plugin.rb",
+        "Rails.application.routes.draw do\n  mount Blog::Engine, at: \"/blog\", constraints: M.new\nend\n",
+    );
+    let routes = (
+        "plugins/blog/config/routes.rb",
+        "Blog::Engine.routes.draw do\n  scope constraints: S.new do\n    get \"/posts\" => \"posts#index\", constraints: R.new\n    resources :posts, only: :show\n  end\nend\n",
+    );
+    assert_eq!(
+        rows_of(&rails(&[BLOG_ENGINE, BLOG_POSTS, routes, mount])),
+        sorted(&[
+            "GET /blog/posts Blog.PostsController.index [M.new, R.new, ensure_blog]",
+            "GET /blog/posts/:id Blog.PostsController.show [M.new, S.new, ensure_blog]",
         ])
     );
 }
@@ -551,6 +739,9 @@ fn an_engine_namespace_that_omen_cannot_read_gives_no_route() {
         "isolate_namespace Blog if ENV[\"X\"]",
         "routes.default_scope = { module: \"other\" }",
         "initializer \"x\" do\n      isolate_namespace Blog\n    end",
+        "isolate_namespace Blog\n    endpoint CustomRackApp",
+        "isolate_namespace Blog\n    endpoint(-> (env) { [200, {}, []] })",
+        "isolate_namespace Blog\n    self.endpoint = CustomRackApp",
     ] {
         let engine =
             format!("module Blog\n  class Engine < ::Rails::Engine\n    {body}\n  end\nend\n");
@@ -652,12 +843,51 @@ fn many_mounted_engines_at(size: usize) -> std::time::Duration {
     elapsed
 }
 
+/// One loop of 4,096 items around `size` routes.
+fn a_long_loop_at(size: usize) -> std::time::Duration {
+    let routes = a_long_loop_around(size);
+    let (found, elapsed) = entries_lean(Language::Ruby, &[("config/routes.rb", &routes), WEBHOOKS]);
+    assert_eq!(found.len(), size + 1);
+    elapsed
+}
+
+/// `size` loops of 4,096 items, each around one route. The first loops expand, until the work of
+/// the expansion gets to the limit.
+fn long_sibling_loops_at(size: usize) -> std::time::Duration {
+    let list = long_list(false);
+    let mut body = String::new();
+    for number in 0..size {
+        body.push_str(&format!(
+            "  {list}.each do |name|\n    get \"#{{name}}/r{number}\" => \"webhooks#show\"\n  end\n"
+        ));
+    }
+    let routes = draw(&body);
+    let (found, elapsed) = entries_lean(Language::Ruby, &[("config/routes.rb", &routes), WEBHOOKS]);
+    assert!(found.len() >= size);
+    assert!(found.len() < size + 100 * 4_096);
+    elapsed
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_a_long_loop_around_many_routes_resolves_in_linear_time() {
+    assert_scales_linearly("long loop", 20_000, a_long_loop_at);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_many_long_loops_resolve_in_linear_time() {
+    assert_scales_linearly("long sibling loops", 200, long_sibling_loops_at);
+}
+
 #[test]
 fn the_linear_cases_give_each_route() {
     sibling_loops_at(20);
     nested_loops_at(20);
     nested_constrained_scopes_at(20);
     many_mounted_engines_at(10);
+    a_long_loop_at(100);
+    long_sibling_loops_at(20);
 }
 
 #[test]
@@ -974,6 +1204,135 @@ fn a_class_method_of_the_chain_gives_the_callbacks_that_it_registers() {
 }
 
 #[test]
+fn a_class_method_call_uses_the_definition_that_exists_at_the_call() {
+    let routes = draw("  get \"index\" => \"a#index\"");
+    let base =
+        "class ApplicationController\n  def self.guarded\n    before_action :parent\n  end\nend\n";
+    for (child, expected) in [
+        (
+            "class AController < ApplicationController\n  guarded\n  def self.guarded\n    before_action :child\n  end\n  def index; end\nend\n",
+            "/index [parent] complete",
+        ),
+        (
+            "class AController < ApplicationController\n  def self.guarded\n    before_action :child\n  end\n  guarded\n  def index; end\nend\n",
+            "/index [child] complete",
+        ),
+    ] {
+        assert_eq!(
+            guard_rows(
+                &routes,
+                &[
+                    ("app/controllers/application_controller.rb", base),
+                    ("app/controllers/a_controller.rb", child),
+                ]
+            ),
+            [expected],
+            "{child}"
+        );
+    }
+    let reopened = guard_rows(
+        &routes,
+        &[
+            ("app/controllers/application_controller.rb", base),
+            (
+                "app/controllers/a_controller.rb",
+                "class AController < ApplicationController\n  guarded\n  def index; end\nend\n",
+            ),
+            (
+                "lib/a_patch.rb",
+                "class AController\n  def self.guarded\n    before_action :child\n  end\nend\n",
+            ),
+        ],
+    );
+    assert_eq!(reopened, ["/index [] unresolved_macro"]);
+}
+
+#[test]
+fn each_callback_block_is_a_separate_callback() {
+    for (body, index, show) in [
+        (
+            "http_basic_authenticate_with name: \"a\", password: \"b\", only: :index\n  http_basic_authenticate_with name: \"c\", password: \"d\", only: :show",
+            "[base, http_basic_authenticate_with] complete",
+            "[base, http_basic_authenticate_with] complete",
+        ),
+        (
+            "requires_plugin \"a\"\n  requires_plugin \"b\" if ENV[\"X\"]",
+            "[base, requires_plugin] conditional_callback",
+            "[base, requires_plugin] conditional_callback",
+        ),
+        (
+            "http_basic_authenticate_with name: \"a\", password: \"b\"\n  skip_before_action :http_basic_authenticate_with",
+            "[base, http_basic_authenticate_with] complete",
+            "[base, http_basic_authenticate_with] complete",
+        ),
+    ] {
+        assert_eq!(
+            macro_rows(MACRO_BASE, body),
+            [format!("/index {index}"), format!("/show {show}")],
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_callback_with_a_name_and_a_block_registers_both() {
+    assert_eq!(
+        macro_rows(MACRO_BASE, "before_action(:check) { check_region }"),
+        [
+            "/index [base, check] unreadable_callback",
+            "/show [base, check] unreadable_callback"
+        ]
+    );
+    let base = "class ApplicationController\n  before_action :base\n  def self.guarded\n    before_action(:check) { check_region }\n  end\nend\n";
+    assert_eq!(
+        macro_rows(base, "guarded"),
+        [
+            "/index [base, check, guarded] complete",
+            "/show [base, check, guarded] complete"
+        ]
+    );
+    assert_eq!(
+        macro_rows(MACRO_BASE, "before_action :check"),
+        [
+            "/index [base, check] complete",
+            "/show [base, check] complete"
+        ]
+    );
+}
+
+#[test]
+fn a_call_with_the_receiver_self_is_a_call_of_the_class() {
+    for (body, index, show) in [
+        (
+            "self.requires_admin",
+            "[base, ensure_admin] complete",
+            "[base, ensure_admin, ensure_fresh] complete",
+        ),
+        (
+            "self.requires_staff()",
+            "[base, ensure_staff] complete",
+            "[base, ensure_staff] complete",
+        ),
+        (
+            "self.before_action :own, only: :show",
+            "[base] complete",
+            "[base, own] complete",
+        ),
+        (
+            "self.unknown_macro",
+            "[base] unresolved_macro",
+            "[base] unresolved_macro",
+        ),
+    ] {
+        assert_eq!(
+            macro_rows(MACRO_BASE, body),
+            [format!("/index {index}"), format!("/show {show}")],
+            "{body}"
+        );
+    }
+}
+
+#[test]
 fn a_class_method_that_omen_cannot_resolve_makes_the_guards_not_complete() {
     for body in [
         "unknown_macro",
@@ -1121,4 +1480,53 @@ fn a_route_without_a_controller_in_a_module_has_the_module_as_its_controller() {
 fn a_proc_target_is_a_rack_endpoint() {
     let routes = draw("  get \"/favicon.ico\", to: proc { [200, {}, [\"\"]] } if Rails.env.test?");
     assert_eq!(guard_rows(&routes, &[]), ["/favicon.ico [] rack_endpoint"]);
+}
+
+/// An opening of the inflector that wraps `singularize` with the block `body`.
+fn wrapped_singularize(body: &str) -> String {
+    format!(
+        "module ActiveSupport\n  module Inflector\n    def self.wrap(*names)\n      names.each do |method_name|\n        old = \"#{{method_name}}_without_wrap\"\n        alias_method old, method_name\n        define_method(method_name) do |*arguments|\n          {body}\n        end\n      end\n    end\n\n    wrap :singularize\n  end\nend\n"
+    )
+}
+
+#[test]
+fn a_wrapper_that_returns_the_result_of_the_old_method_keeps_the_names() {
+    let readable = sorted(&[
+        "POST /webhooks/aws WebhooksController.aws [check]",
+        "GET /webhooks WebhooksController.index [check]",
+        "GET /webhooks/:webhook_id/x WebhooksController.show [check]",
+    ]);
+    for body in [
+        "public_send(old, *arguments)",
+        "log(1)\n          public_send(old, *arguments)",
+        "value = public_send(old, *arguments)\n          value",
+        "cache[arguments] ||= public_send(old, *arguments)",
+    ] {
+        assert_eq!(
+            with_inflector(&wrapped_singularize(body)),
+            readable,
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_wrapper_that_can_change_the_result_of_the_old_method_makes_the_names_unreadable() {
+    let unreadable = sorted(&["POST /webhooks/aws - []", "GET /webhooks - []"]);
+    for body in [
+        "public_send(old, *arguments).upcase",
+        "value = public_send(old, *arguments)\n          value.upcase",
+        "public_send(old, *arguments)\n          \"fixed\"",
+        "public_send(old, arguments.first.upcase)",
+        "return \"x\" if arguments.empty?\n          public_send(old, *arguments)",
+        "value = public_send(old, *arguments)\n          value << \"s\"\n          value",
+        "cache[arguments] ||= public_send(old, *arguments).upcase",
+        "cache[arguments] += public_send(old, *arguments)",
+    ] {
+        assert_eq!(
+            with_inflector(&wrapped_singularize(body)),
+            unreadable,
+            "{body}"
+        );
+    }
 }

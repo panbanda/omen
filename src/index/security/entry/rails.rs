@@ -214,8 +214,12 @@ pub(super) struct Scope {
     bindings: Bindings,
     /// The request constraints of the blocks around the route.
     constraints: Constraints,
-    /// The number of times that the loops around the route run the route.
-    runs: Runs,
+    /// The request constraints of the mount of the engine of the route set. Rails checks them on
+    /// the route of the mount, so a constraint of a route of the engine does not replace them.
+    mount_constraints: Rc<Vec<String>>,
+    /// A loop around the route has more work than `LOOP_WORK_LIMIT` allows. Omen reads its block
+    /// one time, and each loop parameter has an unknown value.
+    unexpanded: bool,
     /// The `format:` option of the blocks around the route.
     format: Format,
     /// The request methods that a definition in the `draw` block disables.
@@ -302,20 +306,12 @@ impl Constraints {
     }
 }
 
-/// The largest number of times that the loops around a route can run it. Loops in each other
-/// multiply their sizes, so a loop that goes above this number is skipped. Thus omen visits a
-/// node at most this number of times.
-const LOOP_RUN_LIMIT: usize = 4_096;
-
-/// The number of times that the loops around a node run it.
-#[derive(Clone, Copy)]
-pub(super) struct Runs(usize);
-
-impl Default for Runs {
-    fn default() -> Self {
-        Self(1)
-    }
-}
+/// The largest number of node visits that the expansion of loops adds to one walk of a file. The
+/// expansion of a loop costs the number of its items times the number of nodes in its block, and
+/// each expansion takes its cost from this total. When the remaining total is too small, omen
+/// reads the block one time with unknown values. Thus the work and the number of routes stay in
+/// proportion to the size of the file.
+pub(super) const LOOP_WORK_LIMIT: usize = 1 << 20;
 
 /// The `format:` option of a route or of the blocks around it.
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -1025,9 +1021,16 @@ impl<'a> Context<'a> {
         if scope.is_disabled(name, node.start_byte()) {
             return;
         }
+        let first = out.len();
         match name {
             "resources" | "resource" => self.rails_resources(node, name == "resource", scope, out),
             _ => self.rails_plain_route(node, name, scope, out),
+        }
+        if scope.unexpanded {
+            for draft in &mut out[first..] {
+                draft.unknown =
+                    first_reason(draft.unknown, Some(GuardsUnknownReason::UnexpandedLoop));
+            }
         }
     }
 
@@ -1251,9 +1254,11 @@ impl<'a> Context<'a> {
 
     /// The scopes of the block of a loop over a literal list: one scope for each item, with the
     /// values of the block parameters. The outer `None` tells that the call is not such a loop.
-    /// The inner `None` tells that omen cannot expand the loop: an item is not a literal string or
-    /// symbol, the block parameters are not plain names of the right number, the file assigns a
-    /// value to a parameter name, or the loops around the block run it too many times.
+    /// The inner `None` tells that omen cannot read the loop: an item is not a literal string or
+    /// symbol, the block parameters are not plain names of the right number, or the file assigns a
+    /// value to a parameter name. When the expansion costs more than the remaining work of
+    /// `LOOP_WORK_LIMIT`, the result is one scope: each parameter has the value `[name]`, and the
+    /// scope is `unexpanded`.
     ///
     /// Omen reads `each` and `each_with_index` on an array, and `each` and `each_pair` on a hash.
     fn rails_loop(&self, call: Node<'_>, outer: &Rc<Scope>) -> Option<Option<Vec<Rc<Scope>>>> {
@@ -1298,10 +1303,6 @@ impl<'a> Context<'a> {
         }
         let mut cursor = receiver.walk();
         let items: Vec<Node<'_>> = receiver.named_children(&mut cursor).collect();
-        let runs = outer.runs.0.checked_mul(items.len().max(1))?;
-        if runs > LOOP_RUN_LIMIT {
-            return None;
-        }
         let mut rows: Vec<Vec<Value>> = Vec::with_capacity(items.len());
         for (place, item) in items.into_iter().enumerate() {
             let row = if is_hash {
@@ -1322,11 +1323,30 @@ impl<'a> Context<'a> {
             };
             rows.push(row);
         }
+        let cost = rows.len().saturating_mul(block.descendant_count());
+        let remaining = self.rails_loop_work.get();
+        if cost > remaining {
+            let mut scope = (**outer).clone();
+            scope.unexpanded = true;
+            for (place, name) in names.iter().enumerate() {
+                let text = format!("[{name}]");
+                let symbols = rows
+                    .iter()
+                    .all(|row| matches!(row[place], Value::Symbol(_)));
+                let value = if symbols {
+                    Value::Symbol(text)
+                } else {
+                    Value::Text(text)
+                };
+                scope.bindings.insert(name.clone(), value);
+            }
+            return Some(vec![Rc::new(scope)]);
+        }
+        self.rails_loop_work.set(remaining - cost);
         Some(
             rows.into_iter()
                 .map(|row| {
                     let mut scope = (**outer).clone();
-                    scope.runs = Runs(runs);
                     for (name, value) in names.iter().zip(row) {
                         scope.bindings.insert(name.clone(), value);
                     }
@@ -1443,6 +1463,25 @@ impl<'a> Context<'a> {
             .borrow_mut()
             .insert(case.id(), alive.clone());
         alive
+    }
+
+    /// The named children of a node, without a branch that a literal condition or a literal
+    /// `case` makes dead.
+    fn live_children<'t>(&self, node: Node<'t>) -> Vec<Node<'t>> {
+        let alive = (node.kind() == "case")
+            .then(|| self.case_alive(node))
+            .flatten();
+        let mut cursor = node.walk();
+        let children: Vec<Node<'t>> = node.named_children(&mut cursor).collect();
+        children
+            .into_iter()
+            .filter(|child| {
+                !Self::is_dead_branch(node, *child)
+                    && alive
+                        .as_ref()
+                        .is_none_or(|alive| alive.contains(&child.id()))
+            })
+            .collect()
     }
 
     /// Tells if a literal condition makes the branch of `child` dead: `if false`, `if nil`,
@@ -1617,6 +1656,19 @@ impl<'a> Context<'a> {
         )
     }
 
+    /// The guards that the constraints give to a route or to a `mount`: the constraints of the
+    /// mount of the engine, and then the constraints of the blocks. A constraint object of the
+    /// route replaces the constraints of the blocks, as `Mapping#initialize` of Rails 7.2.2 uses
+    /// only that object. A hash keeps them.
+    fn route_constraints(&self, scope: &Scope, value: Option<Node<'_>>) -> Vec<String> {
+        let mut guards = scope.mount_constraints.to_vec();
+        match value.and_then(|value| self.constraint_text(value)) {
+            Some(own) => guards.push(own),
+            None => guards.extend(scope.constraints.names()),
+        }
+        guards
+    }
+
     fn add_constraint(&self, value: Node<'_>, scope: &mut Scope) {
         if let Some(text) = self.constraint_text(value) {
             scope.constraints.add(text);
@@ -1680,13 +1732,13 @@ impl<'a> Context<'a> {
         let block = call.child_by_field_name("block")?;
         let lexical = scope.lexical.clone();
         let bindings = scope.bindings.clone();
-        let runs = scope.runs;
+        let unexpanded = scope.unexpanded;
         scope = Scope {
             prefix: Some(Prefix::root()),
             draw: true,
             lexical,
             bindings,
-            runs,
+            unexpanded,
             disabled: self.rails_draw_definitions(block)?,
             api_only: self.rails_api_only(&owner),
             ..Scope::default()
@@ -1698,9 +1750,7 @@ impl<'a> Context<'a> {
             };
             scope.prefix = Prefix::root().push(&mount.path);
             scope.prefix.as_ref()?;
-            for guard in &mount.guards {
-                scope.constraints.add(guard.clone());
-            }
+            scope.mount_constraints = Rc::new(mount.guards.clone());
             scope.modules = scope.modules.extend(self.rails_engine_module(identity)?);
         }
         Some(scope)
@@ -1809,8 +1859,7 @@ impl<'a> Context<'a> {
                 }
                 _ => {}
             }
-            let mut cursor = node.walk();
-            stack.extend(node.named_children(&mut cursor));
+            stack.extend(self.live_children(node));
         }
         Some(disabled)
     }
@@ -1880,9 +1929,11 @@ impl<'a> Context<'a> {
                 }
                 _ => {}
             }
-            let mut cursor = node.walk();
-            let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-            stack.extend(children.into_iter().map(|child| (child, inner.clone())));
+            stack.extend(
+                self.live_children(node)
+                    .into_iter()
+                    .map(|child| (child, inner.clone())),
+            );
         }
     }
 
@@ -1941,25 +1992,21 @@ impl<'a> Context<'a> {
             if !Self::rails_positional(rest).is_empty()
                 || scope.resource.is_some()
                 || scope.method_scope
+                || scope.unexpanded
             {
                 return None;
             }
-            let mut guards = scope.constraints.clone();
             for option in &options.0 {
                 match option.key.as_str() {
-                    "at" | "as" | "defaults" if !option.string_key => {}
-                    "constraints" if !option.string_key => {
-                        if let Some(text) = self.constraint_text(option.value) {
-                            guards.add(text);
-                        }
-                    }
+                    "at" | "as" | "defaults" | "constraints" if !option.string_key => {}
                     _ => return None,
                 }
             }
+            let guards = self.route_constraints(scope, options.get("constraints"));
             let path = self.rails_literal(path.or(options.get("at"))?, &scope.bindings)?;
             Some(Mount {
                 path: join(&scope.prefix, &path)?.text(),
-                guards: guards.names(),
+                guards,
             })
         };
         let state = match (mounts.get(&identity), read()) {
@@ -1975,8 +2022,8 @@ impl<'a> Context<'a> {
     /// Omen reads one `isolate_namespace` call with a constant, as a statement of the body of the
     /// engine class. Rails gives the routes the module `underscore` of the name of the constant.
     /// A second call, a call in another place, an argument that is not a constant of the
-    /// repository, a name that an acronym of the application can change, and a `default_scope`
-    /// in the class give `None`.
+    /// repository, a name that an acronym of the application can change, a `default_scope`, and an
+    /// `endpoint` in the class give `None`.
     fn rails_engine_module(&self, identity: &str) -> Option<Vec<String>> {
         let shared = self.rails_shared();
         if let Some(found) = shared.engine_modules.lock().get(identity) {
@@ -1999,6 +2046,10 @@ impl<'a> Context<'a> {
                     };
                     match text {
                         Some("default_scope" | "default_scope=") => unreadable = true,
+                        // A custom endpoint answers the requests of the mount in place of the routes.
+                        Some("endpoint" | "endpoint=") if node.kind() == "call" => {
+                            unreadable = true
+                        }
                         Some("isolate_namespace") if node.kind() == "call" => {
                             total += 1;
                             let arguments = Self::arguments_of(node);
@@ -2161,7 +2212,9 @@ impl<'a> Context<'a> {
         if let Some(constraint) = &definition.constraint {
             constraints.add(constraint.clone());
         }
-        let constraints = constraints.names();
+        let mut guards = scope.mount_constraints.to_vec();
+        guards.extend(constraints.names());
+        let constraints = guards;
         let api_only = match scope.api_only {
             ApiOnly::On => true,
             ApiOnly::Off => false,
@@ -2254,12 +2307,7 @@ impl<'a> Context<'a> {
                 None => return,
             }
         }
-        let mut constraints = scope.constraints.clone();
-        if let Some(value) = options.get("constraints") {
-            if let Some(text) = self.constraint_text(value) {
-                constraints.add(text);
-            }
-        }
+        let constraints = self.route_constraints(scope, options.get("constraints"));
 
         let mut target_text = None;
         let mut path_node = None;
@@ -2436,7 +2484,7 @@ impl<'a> Context<'a> {
                 _ => unresolved_handler(),
             },
         };
-        let mut guards = constraints.names();
+        let mut guards = constraints;
         guards.extend(handler_guards);
         super::keep_first(&mut guards);
         for method in methods {
@@ -3033,7 +3081,8 @@ impl<'a> Context<'a> {
                 .contains(class)
                 .then_some(GuardsUnknownReason::UnresolvedSuperclass);
             let defined = self.rails_class_macros(shared, class);
-            let mut macros = program.macros.clone();
+            let inherited = program.macros.clone();
+            let mut macros = inherited.clone();
             for (name, body) in defined.iter() {
                 macros.insert(name.clone(), body.clone());
             }
@@ -3043,16 +3092,31 @@ impl<'a> Context<'a> {
                 for statement in &class_callbacks.list {
                     match statement {
                         Statement::Callback(callback) => own.push(callback.clone()),
-                        Statement::Macro { name, conditional } => {
-                            let Some(Some(body)) = macros.get(name) else {
+                        Statement::Macro {
+                            name,
+                            conditional,
+                            at,
+                        } => {
+                            // Ruby runs the class body in order, so a call before the definition
+                            // of the class calls the method of the superclass. The order of two
+                            // files is not known.
+                            let body = match defined.get(name) {
+                                Some(Some(body)) if body.place.0 != *position => None,
+                                Some(Some(body)) if body.place.1 < *at => Some(Arc::clone(body)),
+                                Some(Some(_)) => inherited.get(name).cloned().flatten(),
+                                Some(None) => None,
+                                None => inherited.get(name).cloned().flatten(),
+                            };
+                            let Some(body) = body else {
                                 gap = first_reason(gap, Some(GuardsUnknownReason::UnresolvedMacro));
                                 continue;
                             };
                             if body.gap.is_some() {
                                 gap = first_reason(gap, Some(GuardsUnknownReason::UnresolvedMacro));
                             }
+                            let site = format!("{}:{at}", self.all[*position].file);
                             own.extend(body.callbacks.iter().map(|callback| {
-                                let mut callback = callback.clone();
+                                let mut callback = callback.at_site(&site);
                                 callback.conditional |= conditional;
                                 callback
                             }));
@@ -3177,7 +3241,11 @@ impl<'a> Context<'a> {
                     let name = reader.text(name).to_string();
                     let body = match table.get(&name) {
                         Some(_) => None,
-                        None => Some(Arc::new(reader.read_macro(definition, &name))),
+                        None => Some(Arc::new(reader.read_macro(
+                            definition,
+                            &name,
+                            (*position, definition.start_byte()),
+                        ))),
                     };
                     table.insert(name, body);
                 }
@@ -3195,7 +3263,7 @@ impl<'a> Context<'a> {
     /// body is read as a class body is read. A `before_action` call with a block and no name gets
     /// the name of the method, so the guard has a name. A `super` call, a call of another class
     /// method, and a callback that omen cannot read make the body not readable.
-    fn read_macro(&self, definition: Node<'_>, name: &str) -> MacroBody {
+    fn read_macro(&self, definition: Node<'_>, name: &str, place: (usize, usize)) -> MacroBody {
         let mut callbacks = ClassCallbacks {
             macro_name: Some(name.to_string()),
             ..ClassCallbacks::default()
@@ -3215,6 +3283,7 @@ impl<'a> Context<'a> {
         let mut body = MacroBody {
             callbacks: Vec::new(),
             gap: callbacks.gap,
+            place,
         };
         for statement in callbacks.list {
             match statement {
@@ -3501,11 +3570,15 @@ impl<'a> Context<'a> {
                     out.list.push(Statement::Macro {
                         name: name.to_string(),
                         conditional,
+                        at: node.start_byte(),
                     });
                 }
             }
             "call" => match self.rails_callback(node, out.macro_name.as_deref()) {
-                Some(mut callback) if node.child_by_field_name("receiver").is_none() => {
+                Some(mut callback) if Self::is_own_call(node) => {
+                    if callback.unnamed_block {
+                        out.note(GuardsUnknownReason::UnreadableCallback);
+                    }
                     callback.conditional |= conditional;
                     out.list.push(Statement::Callback(callback));
                 }
@@ -3520,13 +3593,14 @@ impl<'a> Context<'a> {
                     } else if method.contains("around_action") || method.contains("around_filter") {
                         out.note(GuardsUnknownReason::AroundCallback);
                     } else if out.blocks == 0
-                        && node.child_by_field_name("receiver").is_none()
+                        && Self::is_own_call(node)
                         && !CLASS_METHODS_WITHOUT_CALLBACKS.contains(&method)
                     {
                         // A call of a class method in the class body can register callbacks.
                         out.list.push(Statement::Macro {
                             name: method.to_string(),
                             conditional,
+                            at: node.start_byte(),
                         });
                     }
                     let mut cursor = node.walk();
@@ -3551,6 +3625,13 @@ impl<'a> Context<'a> {
                 }
             }
         }
+    }
+
+    /// Tells if a call in a class body calls a method of the class: it has no receiver, or the
+    /// receiver `self`.
+    fn is_own_call(call: Node<'_>) -> bool {
+        call.child_by_field_name("receiver")
+            .is_none_or(|receiver| receiver.kind() == "self")
     }
 
     /// The names, the `only:` and `except:` lists, and the conditions of a callback call.
@@ -3583,23 +3664,35 @@ impl<'a> Context<'a> {
         let bindings = &Bindings::default();
         let options = self.rails_options(&arguments, bindings);
         let positional = Self::rails_positional(&arguments);
-        let has_block = call.child_by_field_name("block").is_some()
-            || matches!(positional.as_slice(), [one] if one.kind() == "lambda");
+        let call_block = call.child_by_field_name("block").is_some();
+        let has_block =
+            call_block || matches!(positional.as_slice(), [one] if one.kind() == "lambda");
+        let block_key =
+            |name: &str| format!("{name}{BLOCK_MARK}{}:{}", self.file.file, call.start_byte());
+        let mut unnamed_block = false;
         let names = match (fixed, anonymous) {
+            (Some("http_basic_authenticate_with"), _) if positional.is_empty() => {
+                vec![block_key(method)]
+            }
             (Some(fixed), _) if positional.is_empty() => vec![fixed.to_string()],
             (Some(_), _) => return None,
-            // A callback with a block and no name is a guard. In a class method, it gets the
-            // name of the method. In a class body, omen cannot name it.
+            // A callback with a block is a guard. In a class method, the block gets the name of
+            // the method. In a class body, omen cannot name it.
             (None, Some(anonymous)) if !skip && has_block && positional.len() <= 1 => {
-                if positional.len() == 1 && positional[0].kind() != "lambda" {
-                    return None;
+                match positional.first() {
+                    Some(named) if named.kind() != "lambda" => {
+                        vec![self.rails_literal(*named, bindings)?, block_key(anonymous)]
+                    }
+                    _ => vec![block_key(anonymous)],
                 }
-                vec![anonymous.to_string()]
             }
-            _ => positional
-                .into_iter()
-                .map(|argument| self.rails_literal(argument, bindings))
-                .collect::<Option<Vec<String>>>()?,
+            _ => {
+                unnamed_block = !skip && call_block;
+                positional
+                    .into_iter()
+                    .map(|argument| self.rails_literal(argument, bindings))
+                    .collect::<Option<Vec<String>>>()?
+            }
         };
         if !skip && names.is_empty() {
             return None;
@@ -3642,9 +3735,15 @@ impl<'a> Context<'a> {
             unreadable,
             conditional,
             prepend,
+            unnamed_block,
         })
     }
 }
+
+/// Separates the name of a block callback from the place of the call that registers it. Rails
+/// registers a new callback for each block, so two blocks with one name do not replace each other.
+/// A guard text has only the part before the mark.
+const BLOCK_MARK: char = '\u{1f}';
 
 #[derive(Clone)]
 struct Callback {
@@ -3661,9 +3760,40 @@ struct Callback {
     conditional: bool,
     /// A `prepend: true` option, or a `prepend_before_action` call. The callback goes to the front.
     prepend: bool,
+    /// The call has a block next to its names. Rails registers the block too, and omen cannot name it.
+    unnamed_block: bool,
 }
 
 impl Callback {
+    /// The callback of a call of a class method at `site`. Each call registers new blocks, so the
+    /// key of a block name gets the place of the call.
+    fn at_site(&self, site: &str) -> Self {
+        if !self.names.iter().any(|name| name.contains(BLOCK_MARK)) {
+            return self.clone();
+        }
+        let names: Vec<String> = self
+            .names
+            .iter()
+            .map(|name| {
+                if name.contains(BLOCK_MARK) {
+                    format!("{name}@{site}")
+                } else {
+                    name.clone()
+                }
+            })
+            .collect();
+        let places = names
+            .iter()
+            .enumerate()
+            .map(|(place, name)| (name.clone(), place))
+            .collect();
+        Self {
+            names,
+            places,
+            ..self.clone()
+        }
+    }
+
     /// A callback call with one name and no option.
     fn named(name: &str, skip: bool, conditional: bool) -> Self {
         Self {
@@ -3675,6 +3805,7 @@ impl Callback {
             unreadable: false,
             conditional,
             prepend: false,
+            unnamed_block: false,
         }
     }
 
@@ -3740,7 +3871,11 @@ fn ordered_names(slots: &PersistentMap<String, Slot>) -> Vec<String> {
     order_slots(&mut ordered);
     ordered
         .iter()
-        .map(|(name, _)| (*name).to_string())
+        .map(|(name, _)| {
+            name.split_once(BLOCK_MARK)
+                .map_or(*name, |(text, _)| text)
+                .to_string()
+        })
         .collect()
 }
 
@@ -3765,6 +3900,8 @@ enum Statement {
     Macro {
         name: String,
         conditional: bool,
+        /// The byte where the call starts in its file.
+        at: usize,
     },
 }
 
@@ -3773,6 +3910,8 @@ struct MacroBody {
     callbacks: Vec<Callback>,
     /// The body has a statement that omen cannot read.
     gap: Option<GuardsUnknownReason>,
+    /// The position of the file of the definition, and the byte where the definition starts.
+    place: (usize, usize),
 }
 
 /// The class methods of one class by name. `None` is a name with two definitions.
@@ -4662,6 +4801,9 @@ fn is_callback_family(method: &str) -> bool {
         || matches!(
             method,
             "skip_callback"
+                | "protect_from_forgery"
+                | "skip_forgery_protection"
+                | "http_basic_authenticate_with"
                 | "set_callback"
                 | "reset_callbacks"
                 | "skip_filter"
@@ -4835,11 +4977,139 @@ fn is_derived_name(name: &str, before: Node<'_>, source: &[u8]) -> bool {
     derived
 }
 
+/// Tells if a wrapper block gives the result of the method `old` without a change. The block has
+/// one parameter `*arguments`, and it has no `return`, `next`, or `break`. Its last statement is
+/// one of these forms:
+///
+/// - `public_send(old, *arguments)`, or `send` or `__send__` in place of `public_send`;
+/// - `cache[arguments] ||= public_send(old, *arguments)`, as a cache does;
+/// - a variable, or `variable.dup`, when each assignment of the variable is such a call or a
+///   `cache.fetch(...)` call of a variable `cache`, as the memoization of Rails does, and the block
+///   uses the variable in no other place.
+fn returns_old_result(block: Node<'_>, old: &str, source: &[u8]) -> bool {
+    let text = |node: Node<'_>| super::syntax::text(node, source);
+    let Some(parameters) = block.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cursor = parameters.walk();
+    let parameters: Vec<Node<'_>> = parameters.named_children(&mut cursor).collect();
+    let [splat] = parameters.as_slice() else {
+        return false;
+    };
+    let Some(arguments) = (splat.kind() == "splat_parameter")
+        .then(|| splat.child_by_field_name("name"))
+        .flatten()
+        .map(text)
+    else {
+        return false;
+    };
+    let is_old_call = |node: Node<'_>| {
+        node.kind() == "call"
+            && node.child_by_field_name("receiver").is_none()
+            && node.child_by_field_name("block").is_none()
+            && node
+                .child_by_field_name("method")
+                .is_some_and(|method| matches!(text(method), "public_send" | "send" | "__send__"))
+            && matches!(
+                call_arguments(node).as_slice(),
+                [first, rest]
+                    if first.kind() == "identifier"
+                        && text(*first) == old
+                        && rest.kind() == "splat_argument"
+                        && rest.named_child(0).is_some_and(|name| {
+                            name.kind() == "identifier" && text(name) == arguments
+                        })
+            )
+    };
+    let Some(body) = block.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    let Some(last) = body
+        .named_children(&mut cursor)
+        .filter(|statement| statement.kind() != "comment")
+        .last()
+    else {
+        return false;
+    };
+    let is_cache_write = |node: Node<'_>| {
+        node.kind() == "operator_assignment"
+            && node
+                .child_by_field_name("operator")
+                .is_some_and(|operator| text(operator) == "||=")
+            && node
+                .child_by_field_name("left")
+                .is_some_and(|left| left.kind() == "element_reference")
+            && node.child_by_field_name("right").is_some_and(is_old_call)
+    };
+    if is_old_call(last) || is_cache_write(last) {
+        return !subtree_has_jump(block);
+    }
+    let (variable, final_use) = match last.kind() {
+        "identifier" => (last, last),
+        "call"
+            if last
+                .child_by_field_name("method")
+                .is_some_and(|method| text(method) == "dup")
+                && last.child_by_field_name("arguments").is_none()
+                && last.child_by_field_name("block").is_none() =>
+        {
+            match last.child_by_field_name("receiver") {
+                Some(receiver) if receiver.kind() == "identifier" => (receiver, receiver),
+                _ => return false,
+            }
+        }
+        _ => return false,
+    };
+    let name = text(variable);
+    let is_cache_read = |node: Node<'_>| {
+        node.kind() == "call"
+            && node
+                .child_by_field_name("method")
+                .is_some_and(|method| text(method) == "fetch")
+            && node
+                .child_by_field_name("receiver")
+                .is_some_and(|receiver| receiver.kind() == "identifier")
+    };
+    let mut assigned = false;
+    let mut stack = vec![body];
+    while let Some(node) = stack.pop() {
+        if matches!(node.kind(), "return" | "next" | "break" | "redo" | "retry") {
+            return false;
+        }
+        if node.kind() == "identifier" && text(node) == name && node != final_use {
+            let parent = node.parent();
+            let assignment = parent.filter(|parent| {
+                parent.kind() == "assignment" && parent.child_by_field_name("left") == Some(node)
+            });
+            match assignment.and_then(|assignment| assignment.child_by_field_name("right")) {
+                Some(value) if is_old_call(value) || is_cache_read(value) => assigned = true,
+                _ => return false,
+            }
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+    }
+    assigned
+}
+
+/// Tells if the code has `return`, `next`, `break`, `redo`, or `retry`.
+fn subtree_has_jump(node: Node<'_>) -> bool {
+    let mut stack = vec![node];
+    while let Some(node) = stack.pop() {
+        if matches!(node.kind(), "return" | "next" | "break" | "redo" | "retry") {
+            return true;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+    }
+    false
+}
+
 /// Tells if a `define_method` call with the name `target` is a wrapper that calls the method that
 /// it replaces. The statements before it in its list must have `alias_method <old>, <target>`
-/// with a derived name `<old>`, and the block must call `public_send`, `send`, or `__send__` with
-/// `<old>` as the first argument. Omen takes such a wrapper as one that keeps the result of the
-/// method, as a cache does.
+/// with a derived name `<old>`, and the block must give the result of `<old>` without a change
+/// (see `returns_old_result`).
 fn is_delegating_wrapper(call: Node<'_>, target: &str, source: &[u8]) -> bool {
     let statement = match call.parent() {
         Some(parent) if parent.kind() == "assignment" => parent,
@@ -4876,25 +5146,7 @@ fn is_delegating_wrapper(call: Node<'_>, target: &str, source: &[u8]) -> bool {
     let (Some(old), Some(block)) = (old, call.child_by_field_name("block")) else {
         return false;
     };
-    let mut stack = vec![block];
-    while let Some(node) = stack.pop() {
-        if node.kind() == "call"
-            && node.child_by_field_name("method").is_some_and(|method| {
-                matches!(
-                    super::syntax::text(method, source),
-                    "public_send" | "send" | "__send__"
-                )
-            })
-            && call_arguments(node).first().is_some_and(|first| {
-                first.kind() == "identifier" && super::syntax::text(*first, source) == old
-            })
-        {
-            return true;
-        }
-        let mut cursor = node.walk();
-        stack.extend(node.named_children(&mut cursor));
-    }
-    false
+    returns_old_result(block, old, source)
 }
 
 /// Tells if an opening of `ActiveSupport::Inflector`, or of a class or a module in it, can change

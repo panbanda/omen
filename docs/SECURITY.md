@@ -184,6 +184,7 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 
 | Reason | Framework | Meaning |
 | --- | --- | --- |
+| `unexpanded_loop` | Rails | A loop around the route has more work than omen expands. Omen reads its block one time, and each loop parameter is an unknown path segment, as `[name]`. See "Loops over literal lists". |
 | `unresolved_controller` | Rails | Omen did not find the controller class or the action of the route. |
 | `unreadable_action` | Rails | The method of the action is not public, or omen cannot read its visibility. |
 | `rack_endpoint` | Rails | The target of the route is an object that is not a controller action, as a Rack application or a lambda. |
@@ -191,17 +192,17 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 | `included_module` | Rails | A class of the chain has `include`, `extend`, or `prepend`, in its body or from outside. A module can add callbacks with `included do`. |
 | `callback_outside_class` | Rails | A callback call or `class_eval` in another place has the constant of a class of the chain as its receiver. |
 | `unresolved_macro` | Rails | A class of the chain calls a class method that omen cannot resolve to a definition that it can read. |
-| `unreadable_callback` | Rails | A callback call has a form or a place that omen cannot read: a name that is not a literal, a block or a lambda with no name, a list that is not a literal, a receiver, or `skip_callback`. |
+| `unreadable_callback` | Rails | A callback call has a form or a place that omen cannot read: a name that is not a literal, a block or a lambda with no name, a list that is not a literal, a receiver other than `self`, or `skip_callback`. |
 | `conditional_callback` | Rails | A callback for the action has `if:` or `unless:`, or it is in a branch that omen cannot evaluate. |
 | `around_callback` | Rails | A class of the chain has an `around_action` callback. Omen reads only the `before_action` callbacks. |
 | `imported_router` | FastAPI | An import binds the router of the route, or the router that includes it. |
 | `unresolved_router` | FastAPI, Go router types | FastAPI: the router is not one name with one assignment of a `FastAPI` call or an `APIRouter` call. Go: a part of the path is not known. The path starts with `<unresolved>`. |
 | `included_elsewhere` | FastAPI | The file does not include the `APIRouter` in an application. A different file can include it with more dependencies. |
 | `unreadable_include` | FastAPI | The file includes the router two times, in a condition, after the route, or in a loop of routers. |
-| `unreadable_dependency` | FastAPI | A dependency is not a name, or the `dependencies` value is not a literal list. |
+| `unreadable_dependency` | FastAPI | A dependency is not a name, or the `dependencies` value is not a literal list. Or the file uses the `dependencies` attribute of an object, as `router.dependencies.clear()`, which can change the dependencies that a later route gets. |
 | `wildcard_import` | FastAPI | The file has `from module import *`, which can bind a name again. |
 | `conditional_middleware` | Go router types | A layer method of a router, as `AfterRouting`, is called in a condition, a loop, or a function literal, or a function returns the router with different layers. |
-| `unread_middleware` | chi, echo, gin, gorilla/mux, Go router types | A middleware argument is not a name, or a spread of a slice that omen cannot read. Its guard text is `<expression>` or `<function literal>`. |
+| `unread_middleware` | chi, echo, gin, gorilla/mux, `net/http`, Go router types | A middleware argument is not a name, or a spread of a slice that omen cannot read. Its guard text is `<expression>` or `<function literal>`. Or a call around the handler is not a conversion, as `http.HandlerFunc(show)`, and not a middleware of the repository, as `middleware.Auth(cfg)(...)`. The handler and the known guards stay. |
 | `layer_not_read` | See the next table | The framework has a place for guards that omen does not read. |
 
 Omen reads the full chain of the guards only for Rails, for FastAPI, and for the Go routers.
@@ -211,7 +212,7 @@ For each other HTTP framework, omen reads the guards that the route itself decla
 | Framework | Guards that omen reads | Guards that omen does not read |
 | --- | --- | --- |
 | Rails | The `before_action` chain of the controller and of its superclasses, and the constraint objects of the routes | A guard of Rails itself, such as the CSRF check, and the Rack middleware of the application. These do not make the list incomplete. |
-| FastAPI | The dependencies of the route, of its router, of the application, and of an `include_router` call of the file | A middleware. A file with `add_middleware` or `middleware` gives `layer_not_read`. A middleware in a different file is not seen. |
+| FastAPI | The dependencies of the route, of its router, of the application, and of an `include_router` call of the file | A middleware. A file with `add_middleware`, `middleware`, or `FastAPI(middleware=...)` with a value that is not `None` or an empty list gives `layer_not_read`. A middleware in a different file is not seen. |
 | chi, echo, gin, gorilla/mux, `net/http` | The middleware of `Use`, `Pre`, `With`, `Group`, and of the route call, and a wrapper of the handler | A wrapper of the whole router at the server, as `http.ListenAndServe(address, auth(router))`. It does not make the list incomplete. |
 | Express | The middleware names in the route call | `app.use` and `router.use`, a middleware that is a call or a function, and the mount of a router |
 | Flask | The known decorators below the route decorator | `before_request`, and a decorator that omen does not know |
@@ -260,12 +261,12 @@ each form against the source of Rails 7.2.2.
 | `scope`, `namespace`, `resources`, or a route with a key that Rails does not know, as `id: /\d+/` or `id: Format.username` | Read. Rails makes the key a requirement or a default of each route. It changes no path and no controller. |
 | `controller :x do` | Read. |
 | `constraints do`, `defaults do` | Read. They change no path. |
-| `constraints:` or `constraints(...)` with an object, as `constraints: StaffConstraint.new` | Read on `scope`, `namespace`, `constraints`, `resources`, `resource`, `mount`, and a route. Rails asks the object if the request matches, so the object is a guard of each route in its reach. The guard is the source text of the object, with one space for each run of white space. A lambda is `lambda:` and its line. The guards of the blocks come first, from the outer block to the inner block. Then the guard of the route comes, and then the callbacks of the controller. A guard with the text of an earlier guard is not repeated. A hash, as `constraints: { id: /\d+/ }`, constrains segments and request attributes. It is not a guard. |
+| `constraints:` or `constraints(...)` with an object, as `constraints: StaffConstraint.new` | Read on `scope`, `namespace`, `constraints`, `resources`, `resource`, `mount`, and a route. Rails asks the object if the request matches, so the object is a guard of each route in its reach. The guard is the source text of the object, with one space for each run of white space. A lambda is `lambda:` and its line. The guards of the blocks come first, from the outer block to the inner block. Then the callbacks of the controller come. A constraint object of a route or of a `mount` replaces the guards of the blocks, because Rails uses only that object for the route. A constraint object of `resources` or `resource` adds to them, because Rails makes it a scope. The constraint objects of the mount of an engine come first for each route of the engine, and a route of the engine does not replace them. A guard with the text of an earlier guard is not repeated. A hash, as `constraints: { id: /\d+/ }`, constrains segments and request attributes. It is not a guard. |
 | `format: true` on `scope`, `namespace`, `resources`, `resource`, or a route | Read. The path ends with `.:format`, as `Mapping.normalize_path` gives it. `format: false`, `nil`, a string, a symbol, and a regular expression add nothing to the path. Any other value skips the route or the block. The option of a route replaces the option of its blocks. |
 | `each` and `each_with_index` on a literal array, and `each` and `each_pair` on a literal hash | Read. See "Loops over literal lists". |
 | Devise blocks, `concern`, any other loop, and any block that omen does not know | The block is skipped. |
 | `def get(*)`, `def post(*)`, `def put(*)`, `def patch(*)`, or `def delete(*)` with an empty body, as a statement of the `draw` block | Read. Rails evaluates the block with `instance_exec`, so the definition replaces the helper of the mapper of this `draw` call. From that statement on, a call of the helper gives no route, and `resources` and `resource` give no route for that request method. `match` does not use the helpers. |
-| Any other definition of a method of the mapper in a `draw` block, and `alias`, `undef`, `define_method`, `define_singleton_method`, `alias_method`, `undef_method`, `remove_method`, `singleton_class`, `extend`, `instance_eval`, `class_eval`, or `module_eval` in it | The `draw` block gives no route. A definition with another name is a helper of the file. Omen reads no route from its body, and it changes nothing. |
+| Any other definition of a method of the mapper in a `draw` block, and `alias`, `undef`, `define_method`, `define_singleton_method`, `alias_method`, `undef_method`, `remove_method`, `singleton_class`, `extend`, `instance_eval`, `class_eval`, or `module_eval` in it | The `draw` block gives no route. A definition with another name is a helper of the file. Omen reads no route from its body, and it changes nothing. A definition or a call in a branch that a literal condition or a literal `case` makes dead changes nothing. |
 | `get`, `post`, `put`, `patch`, `delete` with a string path or a symbol path | Read, with the options `to`, `controller`, `action`, `on`, `as`, `constraints`, `defaults`, `anchor`, and `format`. The options `path:` and `internal:`, `via:` on a helper, and a `**` splat skip the route. |
 | A route with no controller in a `namespace` block or a `scope module:` block, as `get "settings"` in `namespace :site` | Read as `site#settings`. `add_controller_module` of Rails takes the module as the controller when the route and its blocks give none. |
 | A string path of two or more parts with no `to:` and no `action:`, as `put "topics/bulk"` | Read as `topics#bulk`, as `get_to_from_path` of Rails gives it. Each part has only letters, digits, `_`, and `-`. A `-` becomes `_` in the controller and in the action. |
@@ -284,11 +285,11 @@ each form against the source of Rails 7.2.2.
 | A repeated option, as `to: "a#b", to: "c#d"`, or a repeated hash-rocket key | The last value wins, as in Ruby. |
 | A hash-rocket target together with `to:`, `controller:`, or `action:` | The route has no symbol and no guard. Rails lets the hash-rocket value win over `to:`, and it reads a rocket value without `#` as a controller. Omen does not model this. |
 | A target that is not a literal, as `to: TARGET`, `controller: NAME`, or `action: ACTION`, and a `to:` string with more than one `#` | The route has no symbol and no guard. The path stays. |
-| A `before_action` call with a name that is not a literal or with a block and no name, a `skip_before_action` call with a name that is not a literal, a callback call with a receiver, `skip_callback`, `set_callback`, and `reset_callbacks` | The guards of the class, and of each class that inherits from it, are not complete, with the reason `unreadable_callback`. The guards that omen read stay in the list. |
+| A `before_action` call with a name that is not a literal, with a block and no name, or with a name and a block, a `skip_before_action` call with a name that is not a literal, a callback call with a receiver other than `self`, `skip_callback`, `set_callback`, and `reset_callbacks` | The guards of the class, and of each class that inherits from it, are not complete, with the reason `unreadable_callback`. The guards that omen read stay in the list. |
 | `around_action`, `prepend_around_action`, and `skip_around_action` | Not read. The guards of the class, and of each class that inherits from it, are not complete, with the reason `around_callback`. |
 | `append_before_action` | Read as `before_action`. |
-| `protect_from_forgery` and `skip_forgery_protection` | Read as `before_action :verify_authenticity_token` and as the skip of it, with the options `only:`, `except:`, `if:`, `unless:`, and `prepend:`. Rails 7.2.2 defines them in this way. |
-| `http_basic_authenticate_with` | Read as a callback with the name `http_basic_authenticate_with`, with the options `only:`, `except:`, `if:`, and `unless:`. |
+| `protect_from_forgery` and `skip_forgery_protection` | Read as `before_action :verify_authenticity_token` and as the skip of it, with the options `only:`, `except:`, `if:`, `unless:`, and `prepend:`. Rails 7.2.2 defines them in this way. A call of `protect_from_forgery`, `skip_forgery_protection`, or `http_basic_authenticate_with` with the constant of a class as the receiver, in any file, gives `callback_outside_class`. |
+| `http_basic_authenticate_with` | Read as a callback with the name `http_basic_authenticate_with`, with the options `only:`, `except:`, `if:`, and `unless:`. Rails registers a new block for each call. Thus a second call does not replace the first, and a skip by name does not remove it. |
 | A call of a class method in a class body, as `requires_plugin "chat"` | See "Class methods that register callbacks". |
 | A superclass that omen cannot find in the repository, other than `ActionController::Base`, `ActionController::API`, `ActionController::Metal`, and `AbstractController::Base` | The guards of the class, and of each class that inherits from it, are not complete, with the reason `unresolved_superclass`. |
 | A key with quotes and a colon, as `"only": :index`, `"if": :ok`, `"module": "admin"` | The key is a symbol, as in Ruby. Only a key with `=>` is a string key. |
@@ -348,8 +349,20 @@ Omen does not read a loop in these conditions:
   or for `each_with_index`.
 - The file assigns a value to a name of a parameter in any place, or uses the name as the receiver
   of a call or of `<<`. Then the value can change in the block.
-- The loops around a route run it more than 4,096 times. Loops in each other multiply their sizes,
-  and this limit keeps the cost in proportion to the size of the file.
+
+The expansion of a loop costs the number of its items times the number of syntax nodes in its
+block. Each walk of a file can add a total of 1,048,576 node visits for its loops. The loops take
+their costs in the order of the walk. If the remaining total is less than the cost of a loop, omen
+does not expand the loop:
+
+- Omen reads the block one time.
+- Each loop parameter has the value `[name]`, where `name` is the name of the parameter. Thus a
+  path has the unknown segment `/[name]`.
+- Each route of the block has `guards_complete: false` with the reason `unexpanded_loop`. A target
+  or a controller that uses the parameter is not known, so the route has no symbol.
+- A `mount` call in the block makes the mount of the engine unknown.
+
+This limit keeps the work and the number of routes in proportion to the size of the file.
 
 Each entry point of a loop has the range of its call. The key of an entry point has its path when
 two entry points of one call have one method.
@@ -360,8 +373,9 @@ A route in `Blog::Engine.routes.draw` has a path that starts at the place where 
 mounts the engine. Omen reads the `mount` calls in the block of `draw`, `append`, or `prepend` on
 the routes of the application, in each Ruby file, and in the blocks in it that omen can enter.
 The forms are `mount Blog::Engine, at: "/blog"` and `mount Blog::Engine => "/blog"`, with the
-options `as:`, `defaults:`, and `constraints:`. A `constraints:` object of the mount, and of the
-blocks around it, is a guard of each route of the engine.
+options `as:`, `defaults:`, and `constraints:`. A `constraints:` object of the mount is a guard of
+each route of the engine. Without it, the constraint objects of the blocks around the mount are
+the guards.
 
 Omen gives the routes of an engine only when it reads exactly one mount of the engine. These
 conditions give no route for the engine:
@@ -372,14 +386,17 @@ conditions give no route for the engine:
 - a mount in a `resources` block or a `resource` block
 
 Omen does not read a `mount` call in any other place, as in a method or in the `draw` block of
-an engine. It does not read a mount with a target that is not a constant. If such a call mounts the engine
+an engine. A `mount` call or a `draw` block in a branch that a literal condition makes dead mounts
+nothing. It does not read a mount with a target that is not a constant. If such a call mounts the engine
 a second time, omen gives the routes of the first mount only.
 
 `isolate_namespace Blog` in the body of the engine class gives the module `blog` to each route:
 Rails sets the default scope to `underscore` of the name of the constant. An engine without the
 call has no module. Omen reads one call with a constant of the repository, as a statement of the
 class body. A second call, a call in another place, a `default_scope` in the class, and a name
-that an acronym of the application can change give no route for the engine.
+that an acronym of the application can change give no route for the engine. An `endpoint` call in
+the class gives no route for the engine too: Rails then sends the requests of the mount to that
+Rack application, not to the routes of the engine.
 
 ### The inflector, opened again
 
@@ -401,11 +418,18 @@ symbol and no guard.
 
 One form of `define_method` with a name that is not a literal keeps the names readable: a wrapper
 that calls the method that it replaces. The statements before it must have
-`alias_method old, name`, and the block must call `public_send(old, ...)`, `send`, or `__send__`.
-The value of `old` must be a string with an interpolation and a literal part that is in none of
-the method names above, as `"#{name}_without_cache"`. A cache has this form. Omen does not prove
-that the wrapper returns the result of the old method. It takes the call of the old method as the
-sign that the wrapper keeps the result.
+`alias_method old, name`. The value of `old` must be a string with an interpolation and a literal
+part that is in none of the method names above, as `"#{name}_without_cache"`. The block must give
+the result of the old method without a change:
+
+- The block has one parameter `*arguments`, and no `return`, `next`, or `break`.
+- Its last statement is `public_send(old, *arguments)`, or `send` or `__send__` in place of
+  `public_send`. The form `cache[arguments] ||= public_send(old, *arguments)` also counts.
+- Or its last statement is a variable or `variable.dup`. Each assignment of the variable must be
+  such a call or a `cache.fetch(...)` call, and the block must use the variable in no other place.
+  The memoization of Rails has this form.
+
+Any other block, as `public_send(old, *arguments).upcase`, makes the names unreadable.
 
 A guard is a `before_action` callback of the action. Omen reads the symbols, `only:`, and
 `except:` of the call from the syntax tree. A `skip_before_action` call removes a guard for
@@ -438,25 +462,28 @@ complete.
 ### Class methods that register callbacks
 
 An application can define a class method that calls `before_action`, and a controller can call
-that method in its body. Omen reads a call without a receiver that is a statement of the class
-body, or of a branch of a condition in it. A call in a block is not such a call.
+that method in its body. Omen reads a call without a receiver or with the receiver `self` that is
+a statement of the class body, or of a branch of a condition in it. A call in a block is not such a call.
 
 Omen searches the name in the class and then in each superclass in the repository. A definition
 is `def self.name` in a class body, or `def name` in `class << self`. The definition of the
 nearest class decides. Omen reads the body of the definition as it reads a class body, and it
-applies the callbacks at the place of the call.
+applies the callbacks at the place of the call. Ruby runs a class body in order. Thus a call before
+the definition in the same file uses the definition of the superclass.
 
 - A body with no callback call changes nothing, as a method that only sets a variable.
 - A body with `before_action :name` and literal options gives that callback.
 - A body with `before_action do ... end`, or with a lambda, gives a guard with the name of the
   class method. `requires_plugin` of an application with such a body gives the guard
-  `requires_plugin`.
+  `requires_plugin`. Each call of the class method registers new blocks, so two calls do not replace
+  each other. A body with `before_action(:name) { ... }` gives `name` and the block.
 - A call in a branch that omen cannot evaluate gives conditional callbacks.
 
 The guards are not complete, with the reason `unresolved_macro`, in these conditions:
 
 - No class of the chain defines the name, and the name is not in the list below.
 - The class has two definitions of the name.
+- The class defines the name in a different file from the call, so the order is not known.
 - The body calls `super`, calls a different class method without a receiver, or has a callback
   call that omen cannot read, as `before_action :check, options`.
 

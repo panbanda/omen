@@ -90,6 +90,9 @@ impl EntryBasis {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardsUnknownReason {
+    /// A loop around the route has more work than omen expands. Omen read the block of the loop
+    /// one time, and the values of the loop parameters are not known.
+    UnexpandedLoop,
     /// Omen did not find the controller or the action of the route.
     UnresolvedController,
     /// The method of the action is not public, or omen cannot read its visibility.
@@ -121,14 +124,15 @@ pub enum GuardsUnknownReason {
     /// The file includes the router two times, in a condition, or in a loop of routers.
     UnreadableInclude,
     /// A dependency is not a name that omen can read, or the `dependencies` value is not a
-    /// literal list.
+    /// literal list, or the file uses the `dependencies` attribute of an object.
     UnreadableDependency,
     /// The file has a wildcard import, which can bind a name again.
     WildcardImport,
     /// A middleware layer of a router is added in a condition, a loop, or a function literal, so
     /// omen does not know if it runs.
     ConditionalMiddleware,
-    /// A middleware argument is not a name that omen can read.
+    /// A middleware argument is not a name that omen can read, or a call around a Go handler is
+    /// not a conversion and not a middleware that omen reads.
     UnreadMiddleware,
     /// The framework has a place for guards that omen does not read, such as the middleware of
     /// the application.
@@ -138,6 +142,7 @@ pub enum GuardsUnknownReason {
 impl GuardsUnknownReason {
     pub fn name(self) -> &'static str {
         match self {
+            Self::UnexpandedLoop => "unexpanded_loop",
             Self::UnresolvedController => "unresolved_controller",
             Self::UnreadableAction => "unreadable_action",
             Self::RackEndpoint => "rack_endpoint",
@@ -676,6 +681,8 @@ struct Context<'a> {
         std::cell::RefCell<std::collections::HashMap<usize, rails::ScopedController>>,
     /// The names that a Rails routes file assigns a value to.
     rails_assigned: std::sync::OnceLock<std::collections::HashSet<String>>,
+    /// The work that the expansion of Rails loops can still add to the walks of the file.
+    rails_loop_work: std::cell::Cell<usize>,
     /// The position of the first symbol of the file for each start of a name.
     symbol_starts: std::sync::OnceLock<std::collections::HashMap<usize, usize>>,
     /// The positions of the functions, the methods, and the constructors of the file, by name.
@@ -741,6 +748,7 @@ impl<'a> Context<'a> {
             rails_known: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_module_controllers: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_assigned: std::sync::OnceLock::new(),
+            rails_loop_work: std::cell::Cell::new(rails::LOOP_WORK_LIMIT),
             symbol_starts: std::sync::OnceLock::new(),
             callables_here: std::sync::OnceLock::new(),
             go_locals: std::sync::OnceLock::new(),
@@ -1982,7 +1990,9 @@ impl<'a> Context<'a> {
             guards: wrapped.guards,
             basis: EntryBasis::Registered,
             variant: None,
-            unknown: None,
+            unknown: wrapped
+                .unread_wrapper
+                .then_some(GuardsUnknownReason::UnreadMiddleware),
         });
     }
 
@@ -6427,6 +6437,78 @@ func helper(count int) {}
     }
 
     #[test]
+    fn a_wrapper_of_a_go_handler_that_is_not_a_known_middleware_makes_the_guards_not_complete() {
+        let source = go_source(
+            &[CHI],
+            r#"func routes() {
+	http.Handle("/direct", http.HandlerFunc(show))
+	http.HandleFunc("/named", show)
+	http.Handle("/known", audit(auth(http.HandlerFunc(show))))
+	http.Handle("/z", middleware.Auth(cfg)(http.HandlerFunc(show)))
+	http.HandleFunc("/v", unknownWrap(show))
+	http.Handle("/r", audit(unknownWrap(http.HandlerFunc(show))))
+	http.HandleFunc("/t", makeHandler(onError))
+	r := chi.NewRouter()
+	r.Get("/chi", unknownWrap(show))
+	r.Get("/chi-known", authFunc(show))
+	http.ListenAndServe(":8080", r)
+}
+"#,
+        );
+        type Row = (
+            String,
+            Option<String>,
+            Vec<String>,
+            Option<GuardsUnknownReason>,
+        );
+        let found: Vec<Row> = entries(Language::Go, &[("main.go", &source)])
+            .into_iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .map(|entry| {
+                (
+                    entry.route.unwrap().path,
+                    entry
+                        .symbol
+                        .map(|symbol| symbol.rsplit('#').next().unwrap().to_string()),
+                    entry.guards,
+                    entry.guards_unknown_reason,
+                )
+            })
+            .collect();
+        let unread = Some(GuardsUnknownReason::UnreadMiddleware);
+        let show = Some(String::from("show"));
+        assert_eq!(
+            found,
+            [
+                (String::from("/direct"), show.clone(), vec![], None),
+                (String::from("/named"), show.clone(), vec![], None),
+                (
+                    String::from("/known"),
+                    show.clone(),
+                    vec![String::from("audit"), String::from("auth")],
+                    None
+                ),
+                (String::from("/z"), show.clone(), vec![], unread),
+                (String::from("/v"), show.clone(), vec![], unread),
+                (
+                    String::from("/r"),
+                    show.clone(),
+                    vec![String::from("audit")],
+                    unread
+                ),
+                (String::from("/t"), None, vec![], unread),
+                (String::from("/chi"), show.clone(), vec![], unread),
+                (
+                    String::from("/chi-known"),
+                    show,
+                    vec![String::from("authFunc")],
+                    None
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn framework_handler_adapters_are_not_guards() {
         let source = go_source(
             &[GIN],
@@ -8583,7 +8665,7 @@ func routes() {
                 .find(|entry| entry.route.as_ref().unwrap().path == path)
                 .unwrap()
         };
-        for path in ["/a", "/b", "/c", "/d"] {
+        for path in ["/a", "/c", "/d"] {
             assert_eq!(by_path(path).guards, ["auth"], "{path}");
             assert_eq!(
                 by_path(path).guards_unknown_reason,
@@ -8593,6 +8675,9 @@ func routes() {
         }
         assert_eq!(by_path("/e").guards, ["auth"]);
         assert!(by_path("/e").guards_complete);
+        // `self.skip_before_action` is the call of the class itself.
+        assert!(by_path("/b").guards.is_empty());
+        assert!(by_path("/b").guards_complete);
     }
 
     #[test]
@@ -8872,6 +8957,27 @@ func routes() {
         assert_eq!(by_path("/e").guards, ["auth"]);
         assert!(by_path("/e").guards_complete);
         assert_eq!(by_path("/e").guards_unknown_reason, None);
+    }
+
+    #[test]
+    fn a_forgery_or_basic_authentication_call_outside_the_class_makes_the_guards_unknown() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"a#show\"\nend\n";
+        for call in [
+            "AController.skip_forgery_protection",
+            "AController.protect_from_forgery with: :null_session",
+            "AController.http_basic_authenticate_with name: \"x\", password: \"y\"",
+        ] {
+            let classes = format!(
+                "class AController < ActionController::Base\n  protect_from_forgery\n  def show; end\nend\n{call}\n"
+            );
+            let found = rails_routes(routes, &[("controllers/a.rb", classes.as_str())]);
+            assert_eq!(found[0].guards, ["verify_authenticity_token"], "{call}");
+            assert_eq!(
+                found[0].guards_unknown_reason,
+                Some(GuardsUnknownReason::CallbackOutsideClass),
+                "{call}"
+            );
+        }
     }
 
     #[test]
