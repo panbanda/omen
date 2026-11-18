@@ -692,6 +692,8 @@ struct Extractor<'a, 'tree> {
     members: Option<Recorder>,
     memo: Memo,
     test_mark_kinds: &'static [&'static str],
+    /// The ancestors that have a kind of `test_code::owner_kinds`, the nearest last.
+    test_owners: Vec<test_code::Owner<'tree>>,
     test_marks: Vec<TestMark>,
     in_test_file: bool,
 }
@@ -840,6 +842,7 @@ impl<'tree> Extractor<'_, 'tree> {
                     language: self.language,
                     source: self.source,
                     ancestors: &self.ancestors,
+                    owners: &self.test_owners,
                     in_test_file: self.in_test_file,
                 },
                 &mut self.test_marks,
@@ -1006,7 +1009,13 @@ impl<'tree> Extractor<'_, 'tree> {
                     let owner = self.spec.return_owner(node, self.source);
                     self.return_owners.push(owner);
                 }
-                self.ancestors.push(node);
+                test_code::push_ancestor(
+                    node,
+                    self.language,
+                    self.source,
+                    &mut self.ancestors,
+                    &mut self.test_owners,
+                );
                 depth += 1;
                 continue;
             }
@@ -1018,7 +1027,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 if !cursor.goto_parent() {
                     return;
                 }
-                if let Some(left) = self.ancestors.pop() {
+                if let Some(left) = self.ancestors.last().copied() {
                     if self
                         .return_owners
                         .last()
@@ -1027,6 +1036,7 @@ impl<'tree> Extractor<'_, 'tree> {
                         self.return_owners.pop();
                     }
                 }
+                test_code::pop_ancestor(&mut self.ancestors, &mut self.test_owners);
                 depth -= 1;
             }
         }
@@ -1483,6 +1493,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         members: Recorder::new(parsed.language),
         memo: Memo::default(),
         test_mark_kinds: test_code::mark_kinds(parsed.language),
+        test_owners: Vec::new(),
         test_marks: Vec::new(),
         in_test_file: test_code::is_test_path(file, parsed.language),
     };

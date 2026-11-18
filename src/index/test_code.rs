@@ -87,26 +87,73 @@ pub fn mark_kinds(language: Language) -> &'static [&'static str] {
     }
 }
 
+/// The kinds of the ancestors that [`MarkContext::owner`] gives: the class,
+/// the module, or the function that contains a definition.
+pub fn owner_kinds(language: Language) -> &'static [&'static str] {
+    match language {
+        Language::Rust => &["mod_item"],
+        Language::Python => &["class_definition", "function_definition"],
+        Language::Java | Language::CSharp | Language::Php => &["class_declaration"],
+        Language::Ruby => &["class", "module", "method"],
+        _ => &[],
+    }
+}
+
 /// What the walk knows at one node.
 pub struct MarkContext<'a, 'tree> {
     pub language: Language,
     pub source: &'a [u8],
     /// The nodes that contain the node, from the root.
     pub ancestors: &'a [Node<'tree>],
+    /// The ancestors that have a kind of [`owner_kinds`], the nearest last.
+    /// The walk keeps this list, thus a question for the owner does not
+    /// search all the ancestors.
+    pub owners: &'a [Owner<'tree>],
     pub in_test_file: bool,
+}
+
+/// An ancestor that has a kind of [`owner_kinds`].
+#[derive(Debug, Clone, Copy)]
+pub struct Owner<'tree> {
+    pub node: Node<'tree>,
+    /// The owner is a class of a test framework, such as a `TestCase`
+    /// subclass. The walk reads the class one time, and not one time for
+    /// each of its methods.
+    pub is_test_class: bool,
+}
+
+impl<'tree> Owner<'tree> {
+    pub fn new(node: Node<'tree>, language: Language, source: &[u8]) -> Self {
+        let is_test_class = match (language, node.kind()) {
+            (Language::Python, "class_definition") => python_is_test_case(node, source),
+            (Language::Ruby, "class") => ruby_is_test_class(node, source),
+            (Language::Php, "class_declaration") => php_is_test_case(node, source),
+            _ => false,
+        };
+        Self {
+            node,
+            is_test_class,
+        }
+    }
+}
+
+fn node_text<'a>(node: Node<'_>, source: &'a [u8]) -> &'a str {
+    node.utf8_text(source).unwrap_or("")
 }
 
 impl MarkContext<'_, '_> {
     fn text(&self, node: Node<'_>) -> &str {
-        node.utf8_text(self.source).unwrap_or("")
+        node_text(node, self.source)
     }
 
-    fn nearest(&self, kinds: &[&str]) -> Option<Node<'_>> {
-        self.ancestors
-            .iter()
-            .rev()
-            .find(|ancestor| kinds.contains(&ancestor.kind()))
-            .copied()
+    /// The nearest ancestor that has a kind of [`owner_kinds`].
+    fn owner(&self) -> Option<Node<'_>> {
+        self.owners.last().map(|owner| owner.node)
+    }
+
+    /// The nearest owner is a class of a test framework.
+    fn owner_is_test_class(&self) -> bool {
+        self.owners.last().is_some_and(|owner| owner.is_test_class)
     }
 }
 
@@ -198,34 +245,16 @@ const RUST_INERT_ATTRIBUTES: [&str; 31] = [
 ///
 /// `test` and `all(test, x)` are such predicates. `any(test, x)` and
 /// `not(test)` are not.
+///
+/// The text is read one time from left to right. A list such as `all(` opens
+/// a frame on a stack in the heap, and its `)` gives the answer of the frame
+/// to the member that contains it. Thus the time is linear in the length of
+/// the text, and a deep nesting cannot overflow the stack of the thread.
 pub fn cfg_requires_test(predicate: &str) -> bool {
-    let predicate = predicate.trim();
-    if predicate == "test" {
-        return true;
-    }
-    let Some(open) = predicate.find('(') else {
-        return false;
-    };
-    if !predicate.ends_with(')') {
-        return false;
-    }
-    let name = predicate[..open].trim();
-    let members = split_arguments(&predicate[open + 1..predicate.len() - 1]);
-    match name {
-        "all" => members.iter().any(|member| cfg_requires_test(member)),
-        "any" => !members.is_empty() && members.iter().all(|member| cfg_requires_test(member)),
-        _ => false,
-    }
-}
-
-/// The arguments of a list, without the commas in parentheses and in strings.
-fn split_arguments(text: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut depth = 0usize;
+    let mut frames = vec![CfgFrame::new(CfgOperator::Root, 0)];
     let mut in_string = false;
     let mut escaped = false;
-    let mut start = 0;
-    for (position, character) in text.char_indices() {
+    for (position, character) in predicate.char_indices() {
         if in_string {
             match character {
                 _ if escaped => escaped = false,
@@ -235,22 +264,120 @@ fn split_arguments(text: &str) -> Vec<&str> {
             }
             continue;
         }
+        let Some(frame) = frames.last_mut() else {
+            return false;
+        };
         match character {
-            '"' => in_string = true,
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                parts.push(text[start..position].trim());
-                start = position + 1;
+            '"' => {
+                in_string = true;
+                frame.after_list |= frame.list.is_some();
             }
+            '[' | '{' => frame.brackets += 1,
+            ']' | '}' => frame.brackets = frame.brackets.saturating_sub(1),
+            ',' if frame.brackets == 0 => {
+                frame.end_member(predicate, position, true);
+                frame.member_start = position + 1;
+            }
+            '(' => {
+                let operator = if frame.list.is_some() {
+                    CfgOperator::Other
+                } else {
+                    match predicate[frame.member_start..position].trim() {
+                        "all" => CfgOperator::All,
+                        "any" => CfgOperator::Any,
+                        _ => CfgOperator::Other,
+                    }
+                };
+                frames.push(CfgFrame::new(operator, position + 1));
+            }
+            ')' => {
+                let Some(mut closed) = frames.pop() else {
+                    return false;
+                };
+                let Some(parent) = frames.last_mut() else {
+                    // A `)` without its `(`.
+                    return false;
+                };
+                closed.end_member(predicate, position, false);
+                parent.list = Some(closed.answer());
+                parent.after_list = false;
+            }
+            _ if !character.is_whitespace() => frame.after_list |= frame.list.is_some(),
             _ => {}
         }
     }
-    let last = text[start..].trim();
-    if !last.is_empty() {
-        parts.push(last);
+    if in_string || frames.len() != 1 {
+        return false;
     }
-    parts
+    let mut root = frames.remove(0);
+    root.end_member(predicate, predicate.len(), false);
+    root.answer()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CfgOperator {
+    /// The whole predicate. It must have one member.
+    Root,
+    All,
+    Any,
+    /// `not` and each other list. It is not true only in a test build.
+    Other,
+}
+
+/// One list of a `cfg` predicate that the scan has not closed.
+struct CfgFrame {
+    operator: CfgOperator,
+    /// The byte at which the member that the scan reads starts.
+    member_start: usize,
+    /// The answer of the list in the current member, such as `all(test)`.
+    list: Option<bool>,
+    /// The current member has text after its list. Then it is not a list.
+    after_list: bool,
+    brackets: usize,
+    members: usize,
+    any_member: bool,
+    each_member: bool,
+}
+
+impl CfgFrame {
+    fn new(operator: CfgOperator, member_start: usize) -> Self {
+        Self {
+            operator,
+            member_start,
+            list: None,
+            after_list: false,
+            brackets: 0,
+            members: 0,
+            any_member: false,
+            each_member: true,
+        }
+    }
+
+    /// Adds the member that ends at `end`. An empty member counts only
+    /// before a comma, as the argument list of an attribute does.
+    fn end_member(&mut self, predicate: &str, end: usize, before_comma: bool) {
+        let text = predicate[self.member_start..end].trim();
+        let answer = match self.list.take() {
+            Some(answer) => answer && !self.after_list,
+            None => text == "test",
+        };
+        self.after_list = false;
+        if text.is_empty() && !before_comma {
+            return;
+        }
+        self.members += 1;
+        self.any_member |= answer;
+        self.each_member &= answer;
+    }
+
+    fn answer(&self) -> bool {
+        match self.operator {
+            CfgOperator::Root => self.members == 1 && self.each_member,
+            CfgOperator::All => self.any_member,
+            CfgOperator::Any => self.members > 0 && self.each_member,
+            CfgOperator::Other => false,
+        }
+    }
 }
 
 /// The text names a path that ends in `::test`, outside a string.
@@ -300,44 +427,84 @@ pub fn rust_attribute_text<'a>(item: Node<'_>, source: &'a [u8]) -> Option<(&'a 
     Some((&text[..end], text[end..].trim()))
 }
 
-/// The item to which an outer attribute applies.
-fn rust_attribute_target<'tree>(item: Node<'tree>) -> Option<Node<'tree>> {
-    let mut next = item.next_sibling();
+fn is_rust_comment(node: Node<'_>) -> bool {
+    matches!(node.kind(), "line_comment" | "block_comment")
+}
+
+/// The outer attributes of one item, and the item to which they apply. The
+/// attribute must be the first of the run: an attribute and comments can
+/// follow it, and then the item. One scan of the run thus serves each
+/// attribute of the run, and the time is linear in the number of attributes.
+fn rust_attribute_run<'tree>(first: Node<'tree>) -> (Vec<Node<'tree>>, Option<Node<'tree>>) {
+    let mut attributes = Vec::new();
+    let mut next = Some(first);
     while let Some(node) = next {
-        if !matches!(
-            node.kind(),
-            "attribute_item" | "line_comment" | "block_comment"
-        ) {
-            return Some(node);
+        match node.kind() {
+            "attribute_item" => attributes.push(node),
+            _ if is_rust_comment(node) => {}
+            _ => return (attributes, Some(node)),
         }
         next = node.next_sibling();
     }
-    None
+    (attributes, None)
 }
 
-fn rust_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
-    let Some((path, arguments)) = rust_attribute_text(node, context.source) else {
-        return;
-    };
-    let requires_test = path == "cfg"
+/// An attribute before this one applies to the same item, with only comments
+/// between them. Each comment is before one attribute, thus all the calls
+/// together read each comment one time.
+fn follows_rust_attribute(attribute: Node<'_>) -> bool {
+    let mut previous = attribute.prev_sibling();
+    while let Some(node) = previous {
+        if !is_rust_comment(node) {
+            return node.kind() == "attribute_item";
+        }
+        previous = node.prev_sibling();
+    }
+    false
+}
+
+fn rust_cfg_requires_test(path: &str, arguments: &str) -> bool {
+    path == "cfg"
         && arguments
             .strip_prefix('(')
             .and_then(|rest| rest.strip_suffix(')'))
-            .is_some_and(cfg_requires_test);
+            .is_some_and(cfg_requires_test)
+}
+
+fn rust_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
     if node.kind() == "inner_attribute_item" {
         // `#![cfg(test)]` applies to the module or the file that contains it.
+        let requires_test = rust_attribute_text(node, context.source)
+            .is_some_and(|(path, arguments)| rust_cfg_requires_test(path, arguments));
         if requires_test {
             let owner = context
-                .nearest(&["mod_item"])
+                .owner()
                 .or_else(|| context.ancestors.first().copied());
             out.extend(owner.map(|owner| mark(owner, MarkKind::Code)));
         }
         return;
     }
-    let Some(target) = rust_attribute_target(node) else {
+    if follows_rust_attribute(node) {
+        return;
+    }
+    let (attributes, Some(target)) = rust_attribute_run(node) else {
         return;
     };
-    if requires_test {
+    for attribute in attributes {
+        rust_attribute_marks(attribute, target, context, out);
+    }
+}
+
+fn rust_attribute_marks(
+    attribute: Node<'_>,
+    target: Node<'_>,
+    context: &MarkContext<'_, '_>,
+    out: &mut Vec<TestMark>,
+) {
+    let Some((path, arguments)) = rust_attribute_text(attribute, context.source) else {
+        return;
+    };
+    if rust_cfg_requires_test(path, arguments) {
         out.push(mark(target, MarkKind::Code));
         return;
     }
@@ -377,14 +544,14 @@ const PYTHON_HOOK_NAMES: [&str; 17] = [
 ];
 
 /// The class has a superclass whose name ends in `TestCase`.
-fn python_is_test_case(class: Node<'_>, context: &MarkContext<'_, '_>) -> bool {
+fn python_is_test_case(class: Node<'_>, source: &[u8]) -> bool {
     let Some(superclasses) = class.child_by_field_name("superclasses") else {
         return false;
     };
     let mut cursor = superclasses.walk();
     let found = superclasses
         .named_children(&mut cursor)
-        .any(|base| last_segment(context.text(base)).ends_with("TestCase"));
+        .any(|base| last_segment(node_text(base, source)).ends_with("TestCase"));
     found
 }
 
@@ -414,7 +581,7 @@ fn python_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<Tes
             let name = node
                 .child_by_field_name("name")
                 .map_or("", |name| context.text(name));
-            if python_is_test_case(node, context)
+            if python_is_test_case(node, context.source)
                 || (context.in_test_file && name.starts_with("Test"))
             {
                 out.push(mark(node, MarkKind::Entry));
@@ -424,11 +591,7 @@ fn python_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<Tes
             let name = node
                 .child_by_field_name("name")
                 .map_or("", |name| context.text(name));
-            let in_test_case = context
-                .nearest(&["class_definition", "function_definition"])
-                .is_some_and(|owner| {
-                    owner.kind() == "class_definition" && python_is_test_case(owner, context)
-                });
+            let in_test_case = context.owner_is_test_class();
             let named_as_test = name.starts_with("test") || PYTHON_HOOK_NAMES.contains(&name);
             let is_pytest_hook = context.in_test_file && name.starts_with("pytest_");
             if (named_as_test && (in_test_case || context.in_test_file)) || is_pytest_hook {
@@ -588,11 +751,7 @@ fn java_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestM
         return;
     }
     out.push(mark(node, MarkKind::Entry));
-    out.extend(
-        context
-            .nearest(&["class_declaration"])
-            .map(|class| mark(class, MarkKind::Code)),
-    );
+    out.extend(context.owner().map(|class| mark(class, MarkKind::Code)));
 }
 
 /// The attributes of NUnit, xUnit, and MSTest that make a method a test or a hook.
@@ -648,21 +807,17 @@ fn csharp_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<Tes
         return;
     }
     out.push(mark(node, MarkKind::Entry));
-    out.extend(
-        context
-            .nearest(&["class_declaration"])
-            .map(|class| mark(class, MarkKind::Code)),
-    );
+    out.extend(context.owner().map(|class| mark(class, MarkKind::Code)));
 }
 
 // ----- Ruby -----
 
 /// The superclass is a class of Minitest, Test::Unit, or the Rails test cases.
-fn ruby_is_test_class(class: Node<'_>, context: &MarkContext<'_, '_>) -> bool {
+fn ruby_is_test_class(class: Node<'_>, source: &[u8]) -> bool {
     let Some(superclass) = class.child_by_field_name("superclass") else {
         return false;
     };
-    let text = context.text(superclass);
+    let text = node_text(superclass, source);
     let path = text.trim_start_matches('<').trim();
     let name = last_segment(path);
     path == "Minitest::Test"
@@ -684,7 +839,7 @@ const RUBY_SPEC_BLOCKS: [&str; 7] = [
 fn ruby_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
     match node.kind() {
         "class" => {
-            if ruby_is_test_class(node, context) {
+            if ruby_is_test_class(node, context.source) {
                 out.push(mark(node, MarkKind::Entry));
             }
         }
@@ -692,9 +847,7 @@ fn ruby_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestM
             let name = node
                 .child_by_field_name("name")
                 .map_or("", |name| context.text(name));
-            let in_test_class = context
-                .nearest(&["class", "module", "method"])
-                .is_some_and(|owner| owner.kind() == "class" && ruby_is_test_class(owner, context));
+            let in_test_class = context.owner_is_test_class();
             let named_as_test = name.starts_with("test_") || name == "setup" || name == "teardown";
             if named_as_test && (in_test_class || context.in_test_file) {
                 out.push(mark(node, MarkKind::Entry));
@@ -746,13 +899,13 @@ const PHP_TEST_ATTRIBUTES: [&str; 8] = [
 ];
 
 /// The class extends a class whose name ends in `TestCase`.
-fn php_is_test_case(class: Node<'_>, context: &MarkContext<'_, '_>) -> bool {
+fn php_is_test_case(class: Node<'_>, source: &[u8]) -> bool {
     let mut cursor = class.walk();
     let found = class
         .children(&mut cursor)
         .filter(|child| child.kind() == "base_clause")
         .any(|base| {
-            let text = context.text(base);
+            let text = node_text(base, source);
             last_segment(text.trim_start_matches("extends").trim()).ends_with("TestCase")
         });
     found
@@ -789,7 +942,7 @@ fn php_is_marked_test(method: Node<'_>, context: &MarkContext<'_, '_>) -> bool {
 
 fn php_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
     if node.kind() == "class_declaration" {
-        if php_is_test_case(node, context) {
+        if php_is_test_case(node, context.source) {
             out.push(mark(node, MarkKind::Entry));
         }
         return;
@@ -797,13 +950,12 @@ fn php_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMa
     let name = node
         .child_by_field_name("name")
         .map_or("", |name| context.text(name));
-    let class = context.nearest(&["class_declaration"]);
-    let in_test_case = class.is_some_and(|class| php_is_test_case(class, context));
+    let in_test_case = context.owner_is_test_class();
     let marked = php_is_marked_test(node, context);
     let named_as_test = name.starts_with("test") || PHP_HOOK_NAMES.contains(&name);
     if marked || (named_as_test && in_test_case) {
         out.push(mark(node, MarkKind::Entry));
-        out.extend(class.map(|class| mark(class, MarkKind::Code)));
+        out.extend(context.owner().map(|class| mark(class, MarkKind::Code)));
     }
 }
 
@@ -962,6 +1114,7 @@ fn marks_of_tree(root: Node<'_>, source: &[u8], language: Language) -> MarkTable
     let kinds = mark_kinds(language);
     let mut found = Vec::new();
     let mut ancestors: Vec<Node<'_>> = Vec::new();
+    let mut owners: Vec<Owner<'_>> = Vec::new();
     let mut cursor = root.walk();
     loop {
         let node = cursor.node();
@@ -970,12 +1123,13 @@ fn marks_of_tree(root: Node<'_>, source: &[u8], language: Language) -> MarkTable
                 language,
                 source,
                 ancestors: &ancestors,
+                owners: &owners,
                 in_test_file: false,
             };
             marks(node, &context, &mut found);
         }
         if cursor.goto_first_child() {
-            ancestors.push(node);
+            push_ancestor(node, language, source, &mut ancestors, &mut owners);
             continue;
         }
         loop {
@@ -985,7 +1139,34 @@ fn marks_of_tree(root: Node<'_>, source: &[u8], language: Language) -> MarkTable
             if !cursor.goto_parent() {
                 return MarkTable::new(found);
             }
-            ancestors.pop();
+            pop_ancestor(&mut ancestors, &mut owners);
+        }
+    }
+}
+
+/// Adds the node that the walk enters to the ancestors, and to the owners
+/// when it has a kind of [`owner_kinds`].
+pub fn push_ancestor<'tree>(
+    node: Node<'tree>,
+    language: Language,
+    source: &[u8],
+    ancestors: &mut Vec<Node<'tree>>,
+    owners: &mut Vec<Owner<'tree>>,
+) {
+    if owner_kinds(language).contains(&node.kind()) {
+        owners.push(Owner::new(node, language, source));
+    }
+    ancestors.push(node);
+}
+
+/// Removes the node that the walk leaves. See [`push_ancestor`].
+pub fn pop_ancestor<'tree>(ancestors: &mut Vec<Node<'tree>>, owners: &mut Vec<Owner<'tree>>) {
+    if let Some(left) = ancestors.pop() {
+        if owners
+            .last()
+            .is_some_and(|owner| owner.node.id() == left.id())
+        {
+            owners.pop();
         }
     }
 }
@@ -1126,6 +1307,142 @@ mod tests {
         assert!(!cfg_requires_test("not(test)"));
         assert!(!cfg_requires_test("feature = \"test\""));
         assert!(!cfg_requires_test("all(not(test), unix)"));
+    }
+
+    /// The first version of `cfg_requires_test`. It is correct, but it
+    /// recurses once for each level and scans the text again at each level.
+    fn cfg_requires_test_by_recursion(predicate: &str) -> bool {
+        let predicate = predicate.trim();
+        if predicate == "test" {
+            return true;
+        }
+        let Some(open) = predicate.find('(') else {
+            return false;
+        };
+        if !predicate.ends_with(')') {
+            return false;
+        }
+        let members = split_arguments_for_reference(&predicate[open + 1..predicate.len() - 1]);
+        match predicate[..open].trim() {
+            "all" => members
+                .iter()
+                .any(|member| cfg_requires_test_by_recursion(member)),
+            "any" => {
+                !members.is_empty()
+                    && members
+                        .iter()
+                        .all(|member| cfg_requires_test_by_recursion(member))
+            }
+            _ => false,
+        }
+    }
+
+    fn split_arguments_for_reference(text: &str) -> Vec<&str> {
+        let mut parts = Vec::new();
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut start = 0;
+        for (position, character) in text.char_indices() {
+            if in_string {
+                match character {
+                    _ if escaped => escaped = false,
+                    '\\' => escaped = true,
+                    '"' => in_string = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match character {
+                '"' => in_string = true,
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => {
+                    parts.push(text[start..position].trim());
+                    start = position + 1;
+                }
+                _ => {}
+            }
+        }
+        let last = text[start..].trim();
+        if !last.is_empty() {
+            parts.push(last);
+        }
+        parts
+    }
+
+    #[test]
+    fn test_cfg_predicate_has_the_answer_of_the_recursive_reference() {
+        let leaves = [
+            "test",
+            " test ",
+            "unix",
+            "feature = \"a,b)\"",
+            "feature = \"test\"",
+            "not(test)",
+            "",
+        ];
+        let mut predicates: Vec<String> = leaves.iter().map(|leaf| leaf.to_string()).collect();
+        for _ in 0..2 {
+            let mut next = predicates.clone();
+            for operator in ["all", "any", "not", "cfg", "all ", "x = all"] {
+                for first in &predicates {
+                    next.push(format!("{operator}({first})"));
+                    for second in leaves {
+                        next.push(format!("{operator}({first}, {second})"));
+                        next.push(format!("{operator}({second},{first})"));
+                    }
+                }
+            }
+            predicates = next;
+        }
+        let malformed = [
+            "all(test",
+            "all(test))",
+            "all(test) x",
+            "all(test), all(test)",
+            "any(test,)",
+            "any(test,,test)",
+            "all()",
+            "any()",
+            ")",
+            "all(test)(test)",
+            "all([test, unix])",
+            "all({test}, test)",
+            "all(\"a\\\"(\", test)",
+        ];
+        predicates.extend(malformed.iter().map(|text| text.to_string()));
+        for predicate in &predicates {
+            assert_eq!(
+                cfg_requires_test(predicate),
+                cfg_requires_test_by_recursion(predicate),
+                "{predicate}"
+            );
+        }
+    }
+
+    fn nested_cfg(depth: usize) -> String {
+        format!("{}test{}", "all(".repeat(depth), ")".repeat(depth))
+    }
+
+    #[test]
+    fn test_deeply_nested_cfg_predicate_does_not_overflow_the_stack() {
+        assert!(cfg_requires_test(&nested_cfg(200_000)));
+        let mut negated = nested_cfg(200_000);
+        negated.insert_str(0, "not(");
+        negated.push(')');
+        assert!(!cfg_requires_test(&negated));
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_deeply_nested_cfg_predicate_is_read_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("nested cfg", 400_000, |depth| {
+            let predicate = nested_cfg(depth);
+            let started = std::time::Instant::now();
+            assert!(cfg_requires_test(&predicate));
+            started.elapsed()
+        });
     }
 
     #[test]
@@ -1931,5 +2248,126 @@ public:
         assert!(production.get("test_role").is_none());
         let check = serde_json::to_value(&found.symbols[1]).unwrap();
         assert_eq!(check["test_role"], "entry");
+    }
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::index::timing::assert_scales_linearly;
+    use crate::parser::Parser;
+
+    /// The time of the walk that finds the test code, without the parse.
+    fn time_of_marks(language: Language, file: &str, source: &str) -> std::time::Duration {
+        let parsed = Parser::new()
+            .parse(source.as_bytes(), language, Path::new(file))
+            .unwrap();
+        let started = std::time::Instant::now();
+        let ranges = test_ranges_of_tree(parsed.root_node(), source.as_bytes(), language);
+        let elapsed = started.elapsed();
+        assert!(!ranges.is_empty(), "{file}");
+        elapsed
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_rust_attributes_before_one_test_are_read_in_linear_time() {
+        assert_scales_linearly("attributes", 20_000, |size| {
+            let source = format!("{}#[test]\nfn check() {{}}\n", "#[inline]\n".repeat(size));
+            time_of_marks(Language::Rust, "src/lib.rs", &source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_rust_tests_in_one_module_are_read_in_linear_time() {
+        assert_scales_linearly("tests", 20_000, |size| {
+            let source: String = (0..size)
+                .map(|position| format!("#[test]\nfn check_{position}() {{}}\n"))
+                .collect();
+            time_of_marks(Language::Rust, "src/lib.rs", &source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_c_test_macros_are_read_in_linear_time() {
+        assert_scales_linearly("macros", 20_000, |size| {
+            let source: String = (0..size)
+                .map(|position| format!("TEST(Suite, Name{position}) {{\n}}\n"))
+                .collect();
+            time_of_marks(Language::C, "test/a_test.c", &source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_tests_in_deeply_nested_anonymous_classes_are_read_in_linear_time() {
+        assert_scales_linearly("java", 2_000, |depth| {
+            let source = format!(
+                "class A {{ void m() {{ {}{} }} }}\n",
+                "new Object() { @Test void t() { ".repeat(depth),
+                "} };".repeat(depth)
+            );
+            time_of_marks(Language::Java, "src/A.java", &source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_tests_in_deeply_nested_ruby_blocks_are_read_in_linear_time() {
+        assert_scales_linearly("ruby", 2_000, |depth| {
+            let source = format!(
+                "class ATest < Minitest::Test\n{}{}end\n",
+                "run do\ndef test_a\nend\n".repeat(depth),
+                "end\n".repeat(depth)
+            );
+            time_of_marks(Language::Ruby, "test/a_test.rb", &source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_tests_in_deeply_nested_structs_are_read_in_linear_time() {
+        assert_scales_linearly("csharp", 2_000, |depth| {
+            let source = format!(
+                "{}{}",
+                "struct S { [Test] void M() {} ".repeat(depth),
+                "}".repeat(depth)
+            );
+            time_of_marks(Language::CSharp, "Tests/A.cs", &source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_methods_of_a_class_with_many_bases_are_read_in_linear_time() {
+        assert_scales_linearly("python", 10_000, |size| {
+            let bases: Vec<String> = (0..size)
+                .map(|position| format!("Base{position}"))
+                .collect();
+            let methods: String = (0..size)
+                .map(|position| format!("    def test_{position}(self):\n        pass\n"))
+                .collect();
+            let source = format!("class ATest({}, TestCase):\n{methods}", bases.join(", "));
+            time_of_marks(Language::Python, "src/a.py", &source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_methods_of_a_class_with_a_long_superclass_are_read_in_linear_time() {
+        assert_scales_linearly("ruby", 20_000, |size| {
+            let methods: String = (0..size)
+                .map(|position| format!("def test_{position}\nend\n"))
+                .collect();
+            let source = format!(
+                "class ATest < {}TestCase\n{methods}end\n",
+                "A".repeat(size * 10)
+            );
+            time_of_marks(Language::Ruby, "lib/a.rb", &source)
+        });
     }
 }
