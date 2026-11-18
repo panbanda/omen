@@ -401,6 +401,29 @@ pub const SPECS: &[SinkSpec] = &[
         "runInNewContext|runInThisContext|runInContext",
         Always,
     ),
+    // `new Script(code)` compiles the code. The methods of the script run it.
+    path(
+        CodeEvaluation,
+        ECMA,
+        "vm|node:vm",
+        "Script|compileFunction",
+        Always,
+    ),
+    // isolated-vm. Only a receiver that a declared type of the module gives is a sink.
+    path(
+        CodeEvaluation,
+        ECMA,
+        "isolated-vm.Context",
+        "eval|evalSync|evalIgnored|evalClosure|evalClosureSync",
+        Predicate::HasArgument { index: 0 },
+    ),
+    path(
+        CodeEvaluation,
+        ECMA,
+        "isolated-vm.Isolate",
+        "compileScript|compileScriptSync|compileModule|compileModuleSync",
+        Predicate::HasArgument { index: 0 },
+    ),
     path(UnsafeDeserialization, ECMA, "node-serialize", "unserialize", Always),
     method(
         SqlStringConstruction,

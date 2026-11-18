@@ -1080,6 +1080,22 @@ mod tests {
     }
 
     #[test]
+    fn a_script_of_the_vm_module_is_code_evaluation_ecma() {
+        let source = "import { Script, createContext, compileFunction } from \"node:vm\";\nimport * as vm from \"vm\";\nimport type ivm from \"isolated-vm\";\n\nexport function run(code: string, context: ivm.Context, isolate: ivm.Isolate) {\n  const script = new Script(code);\n  script.runInContext(createContext({}));\n  new vm.Script(code).runInThisContext();\n  compileFunction(code, []);\n  vm.compileFunction(\"return 1\");\n  context.evalSync(code);\n  isolate.compileScriptSync(code);\n  createContext({});\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [
+                (6, "code_evaluation", false),
+                (8, "code_evaluation", false),
+                (9, "code_evaluation", false),
+                (10, "code_evaluation", true),
+                (11, "code_evaluation", false),
+                (12, "code_evaluation", false),
+            ]
+        );
+    }
+
+    #[test]
     fn a_trusted_html_string_is_unsafe_html_output_csharp_and_rust() {
         let csharp = "using Microsoft.AspNetCore.Html;\n\npublic class A {\n    public object Run(string text) {\n        new HtmlString(text);\n        return new HtmlString(\"<br>\");\n    }\n}\n";
         assert_eq!(

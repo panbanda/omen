@@ -425,7 +425,13 @@ impl FileContext<'_> {
             if written.len() < 2 {
                 return Owner::Unknown;
             }
-            match local.name.type_name.as_deref().and_then(type_segments) {
+            match local
+                .name
+                .type_name
+                .as_deref()
+                .map(crate::index::calls::required_type)
+                .and_then(type_segments)
+            {
                 Some(declared) => {
                     written.splice(0..1, declared);
                 }

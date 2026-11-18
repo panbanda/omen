@@ -103,6 +103,13 @@ Node `fork` is not a sink: it runs a module of Node, not a command of a shell. A
 `const` declaration binds to `promisify(exec)` of `util` is the function `exec`. Thus a call of
 the name is a sink when a call of `exec` is.
 
+In Node, `new Script(code)` and `compileFunction(code)` of the module `vm` are sinks of the
+category `code_evaluation`. The construction compiles the code, thus the methods that run
+the script, such as `runInContext`, are not sinks again. For isolated-vm, a call of `eval`,
+`evalSync`, `evalClosure`, `compileScript`, or a similar method is a sink only when a declared
+type gives the receiver, as `context: ivm.Context` does. A receiver without such a type is not
+a sink, because the method names are common.
+
 The Go SQL sinks are methods: omen does not know the type of the receiver. The names are
 `Query`, `QueryRow`, `Exec`, `Prepare` (`database/sql`), `Queryx`, `QueryRowx`, `MustExec`,
 `NamedExec`, `NamedQuery` (sqlx), `Raw` (gorm), and `SQL` (xorm), with the SQL text first,
