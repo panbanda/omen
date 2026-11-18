@@ -153,6 +153,41 @@ It does not infer a type. The rule does not apply in these two cases:
 - The file can see a type of the repository that has the name of the wrapper.
 - The enclosing type has no member with the name of the call.
 
+### Measured results
+
+The baseline is `main` at `0d77c1d`. The two binaries are release builds. The
+numbers are the `resolution_summary` of `omen -f json impact`.
+
+| Repository | Call sites | Edges before | Edges after |
+| --- | ---: | ---: | ---: |
+| zed-industries/zed at `df5cf7b` | 706,551 | 108,911 | 209,543 |
+| omen at `0d77c1d` | 47,233 | 12,784 | 12,878 |
+| BurntSushi/ripgrep at `3fce3b5` | 14,836 | 6,362 | 6,421 |
+
+These repositories are development data, not a held-out evaluation.
+
+- A comparison of the edges of each call site on zed gave 111,283 new edges
+  and 10,165 edges that the baseline had and that are not there now.
+- 9,753 of these were edges to a test fixture of a lint tool that defines a
+  second `gpui` crate. The baseline selected its types by name.
+- 401 went to a method of a trait implementation in a different crate. The
+  call now has an edge to the method of the type itself.
+- 8 had a receiver of a different type, and the call has no edge now.
+- 3 were correct edges, and the call has no edge now. Two calls of
+  `TextSummary::from` find two `From` implementations. One call finds a
+  function that has a twin in a different file.
+- On omen and on ripgrep, no edge of the baseline is absent.
+- An author read 40 of the 80,408 new edges between crates of zed: each
+  2,010th edge in sorted order. The target was correct for each of the 40.
+  This is a sample, and it is not a measurement of all edges.
+- The entry points of zed go from 162 to 156, because six `main` functions
+  have a twin. One path from a twin of `main` to a sink in that twin is absent.
+- The paired benchmark gave no change on `corpus.json` (28 cases),
+  `scoped.json` (8 cases), and `real.json` (42 cases). These corpora have no
+  workspace case, thus they show no gain.
+- The processor time of `omen impact` on zed was 21.3 s before and 22.5 s
+  after: the median of seven runs on a host with other work.
+
 ### Limits
 
 - A path through a module in the file after the name of a crate, such as
