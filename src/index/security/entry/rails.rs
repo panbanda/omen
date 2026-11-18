@@ -4710,6 +4710,9 @@ fn is_callback_family(method: &str) -> bool {
         || matches!(
             method,
             "skip_callback"
+                | "protect_from_forgery"
+                | "skip_forgery_protection"
+                | "http_basic_authenticate_with"
                 | "set_callback"
                 | "reset_callbacks"
                 | "skip_filter"

@@ -8720,6 +8720,27 @@ func routes() {
     }
 
     #[test]
+    fn a_forgery_or_basic_authentication_call_outside_the_class_makes_the_guards_unknown() {
+        let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"a#show\"\nend\n";
+        for call in [
+            "AController.skip_forgery_protection",
+            "AController.protect_from_forgery with: :null_session",
+            "AController.http_basic_authenticate_with name: \"x\", password: \"y\"",
+        ] {
+            let classes = format!(
+                "class AController < ActionController::Base\n  protect_from_forgery\n  def show; end\nend\n{call}\n"
+            );
+            let found = rails_routes(routes, &[("controllers/a.rb", classes.as_str())]);
+            assert_eq!(found[0].guards, ["verify_authenticity_token"], "{call}");
+            assert_eq!(
+                found[0].guards_unknown_reason,
+                Some(GuardsUnknownReason::CallbackOutsideClass),
+                "{call}"
+            );
+        }
+    }
+
+    #[test]
     fn an_include_in_the_superclass_makes_the_guards_of_each_child_unknown() {
         let routes = "Rails.application.routes.draw do\n  get \"/a\", to: \"a#show\"\nend\n";
         let classes = "class ApplicationController\n  include Pundit\n  before_action :auth\nend\nclass AController < ApplicationController\n  def show; end\nend\n";
