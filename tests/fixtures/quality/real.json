@@ -61,14 +61,14 @@
       "repository": "BurntSushi/ripgrep",
       "directory": "real-ripgrep",
       "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
-      "query": "crates/globset/src/lib.rs:is_match",
+      "query": "crates/globset/src/lib.rs#GlobSet.is_match",
       "required": [
         "crates/globset/src/lib.rs:is_match_candidate"
       ],
       "forbidden": [
         "crates/globset/src/glob.rs:as_ref"
       ],
-      "oracle": "First is_match declaration, lines 342-344: self.is_match_candidate(...). Generic path.as_ref() is not glob.rs:as_ref (that implementation returns Glob, not Path). Query is ambiguous across impls; check applies to reported primary only. Other edges unreviewed."
+      "oracle": "First is_match declaration, lines 342-344: self.is_match_candidate(...). Generic path.as_ref() is not glob.rs:as_ref (that implementation returns Glob, not Path). The query is the key of `GlobSet::is_match`, because the file has nine `is_match` methods and the name alone is ambiguous. Other edges unreviewed."
     },
     {
       "id": "cobra_exact_valid",
@@ -329,13 +329,13 @@
       "repository": "BurntSushi/ripgrep",
       "directory": "real-ripgrep",
       "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
-      "query": "crates/index/src/literal.rs:union",
+      "query": "crates/index/src/literal.rs#GramQuery.union",
       "required": [
         "crates/index/src/literal.rs:or",
         "crates/index/src/literal.rs:and"
       ],
       "forbidden": [],
-      "oracle": "Label from the source. Line 156: `let (or, and) = (GramQuery::or, GramQuery::and);`. The calls `or(...)` and `and(...)` after it go to those two associated functions."
+      "oracle": "Label from the source. Line 156: `let (or, and) = (GramQuery::or, GramQuery::and);`. The calls `or(...)` and `and(...)` after it go to those two associated functions. The query is the key of `GramQuery::union`, because the file has three `union` methods."
     },
     {
       "id": "zod_validate_input_builtin",
