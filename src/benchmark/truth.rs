@@ -228,7 +228,7 @@ pub struct EntryPointLabel {
     pub path: Option<String>,
     #[serde(default)]
     pub parameters: Vec<String>,
-    /// The declared guards, in source order.
+    /// The declared guards, in the order in which omen reports them.
     #[serde(default)]
     pub guards: Vec<String>,
 }
