@@ -342,6 +342,21 @@ time. Omen gives the names only. It does not give the type or the source of a pa
   gorilla/mux. Omen models the registrations of a valid program. It does not model a
   framework panic. A program that panics at start, as chi does when `Use` follows a
   route in some versions, is out of scope.
+- A router type of the repository is a type whose route methods send their pattern to a
+  router of one of these frameworks, in a field of the type. The body of each method is the
+  evidence. A name of a type is not evidence. Gitea has such a type, `modules/web.Router`.
+- A call of a route method of such a type registers a route. The last argument is the
+  handler, and the arguments before it are guards. A group method that keeps its prefix in
+  a field adds the prefix and its guards to each route inside its function. A combo method
+  keeps the pattern for each method of its chain.
+- Omen follows such a router through parameters, returned values, and mounts in the whole
+  repository. A route gets one path for each chain of mounts and calls up to a root. A
+  router that only a parameter gives, and that no call gives, has no path. A prefix that is
+  not a string literal hides the paths below it. Omen does not read the code of a method
+  that changes the path, for example a method that removes a slash at the end.
+- A middleware that a router type adds with a method other than a group method, as
+  `AfterRouting`, is not a guard. A guard that a variadic parameter carries, as
+  `writeChecks...`, is not a guard. A test file gives no route and no mount.
 - A router is a value that the import of the framework proves. It is a constructor
   call, a group or sub-router of a router, or a parameter that has a router type. A
   variable name alone does not prove a router.

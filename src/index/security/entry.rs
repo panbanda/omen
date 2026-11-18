@@ -24,6 +24,7 @@ use crate::parser::{cfg_test_module_ranges, ParseResult};
 
 mod fastapi;
 mod go_routes;
+mod go_wrappers;
 mod persistent;
 mod rails;
 
@@ -192,6 +193,7 @@ fn callables_by_name(
 pub struct EntryShared {
     rails: std::sync::OnceLock<rails::RailsShared>,
     go_call_sites: std::sync::OnceLock<go_routes::CallSites>,
+    go_wrappers: std::sync::OnceLock<go_wrappers::WrapperRoutes>,
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
     go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
     go_packages: std::sync::OnceLock<go_routes::PackageNames>,
@@ -1675,6 +1677,7 @@ impl<'a> Context<'a> {
     fn go(&self, node: Node<'_>, out: &mut Vec<Draft>) {
         if node.kind() == "source_file" {
             go_routes::collect(self, node, out);
+            go_wrappers::collect(self, node, out);
             return;
         }
         if node.kind() != "call_expression" {
@@ -2081,7 +2084,7 @@ mod tests {
     }
 
     /// The entry points, and the time of the search for entry points alone.
-    fn entries_timed(
+    pub(super) fn entries_timed(
         language: Language,
         files: &[(&str, &str)],
         resolve: bool,
