@@ -439,7 +439,10 @@ impl Analyzer {
             recs.push("Significant code duplication. Extract common logic.".to_string());
         }
 
-        if metrics.cyclomatic_complexity > 15 {
+        // `complexity` is the largest cyclomatic complexity of one function, as
+        // in the complexity factor. An estimate from the line count is not a
+        // measure of control flow.
+        if !metrics.uses_estimated_complexity && metrics.complexity > 15.0 {
             recs.push("Complex control flow. Simplify conditional logic.".to_string());
         }
 
@@ -1096,6 +1099,37 @@ mod tests {
         };
         let recs = analyzer.generate_recommendations(&metrics, 0.5);
         assert!(recs.iter().any(|r| r.contains("complexity")));
+    }
+
+    /// The control-flow advice uses the same per-function maximum as the
+    /// complexity factor, not the sum over the file.
+    #[test]
+    fn test_control_flow_advice_uses_the_function_maximum() {
+        let analyzer = Analyzer::new();
+        let advises = |metrics: &FileMetrics| {
+            analyzer
+                .generate_recommendations(metrics, 0.5)
+                .iter()
+                .any(|r| r.contains("Complex control flow"))
+        };
+        let many_small_functions = FileMetrics {
+            cyclomatic_complexity: 40,
+            complexity: 3.0,
+            ..Default::default()
+        };
+        let one_branching_function = FileMetrics {
+            cyclomatic_complexity: 16,
+            complexity: 16.0,
+            ..Default::default()
+        };
+        let estimated = FileMetrics {
+            complexity: 16.0,
+            uses_estimated_complexity: true,
+            ..Default::default()
+        };
+        assert!(!advises(&many_small_functions));
+        assert!(advises(&one_branching_function));
+        assert!(!advises(&estimated));
     }
 
     #[test]
