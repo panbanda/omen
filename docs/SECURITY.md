@@ -386,7 +386,8 @@ a statement of the class body, or of a branch of a condition in it. A call in a 
 Omen searches the name in the class and then in each superclass in the repository. A definition
 is `def self.name` in a class body, or `def name` in `class << self`. The definition of the
 nearest class decides. Omen reads the body of the definition as it reads a class body, and it
-applies the callbacks at the place of the call.
+applies the callbacks at the place of the call. Ruby runs a class body in order. Thus a call before
+the definition in the same file uses the definition of the superclass.
 
 - A body with no callback call changes nothing, as a method that only sets a variable.
 - A body with `before_action :name` and literal options gives that callback.
@@ -399,6 +400,7 @@ The guards are not complete, with the reason `unresolved_macro`, in these condit
 
 - No class of the chain defines the name, and the name is not in the list below.
 - The class has two definitions of the name.
+- The class defines the name in a different file from the call, so the order is not known.
 - The body calls `super`, calls a different class method without a receiver, or has a callback
   call that omen cannot read, as `before_action :check, options`.
 

@@ -3081,7 +3081,8 @@ impl<'a> Context<'a> {
                 .contains(class)
                 .then_some(GuardsUnknownReason::UnresolvedSuperclass);
             let defined = self.rails_class_macros(shared, class);
-            let mut macros = program.macros.clone();
+            let inherited = program.macros.clone();
+            let mut macros = inherited.clone();
             for (name, body) in defined.iter() {
                 macros.insert(name.clone(), body.clone());
             }
@@ -3091,8 +3092,22 @@ impl<'a> Context<'a> {
                 for statement in &class_callbacks.list {
                     match statement {
                         Statement::Callback(callback) => own.push(callback.clone()),
-                        Statement::Macro { name, conditional } => {
-                            let Some(Some(body)) = macros.get(name) else {
+                        Statement::Macro {
+                            name,
+                            conditional,
+                            at,
+                        } => {
+                            // Ruby runs the class body in order, so a call before the definition
+                            // of the class calls the method of the superclass. The order of two
+                            // files is not known.
+                            let body = match defined.get(name) {
+                                Some(Some(body)) if body.place.0 != *position => None,
+                                Some(Some(body)) if body.place.1 < *at => Some(Arc::clone(body)),
+                                Some(Some(_)) => inherited.get(name).cloned().flatten(),
+                                Some(None) => None,
+                                None => inherited.get(name).cloned().flatten(),
+                            };
+                            let Some(body) = body else {
                                 gap = first_reason(gap, Some(GuardsUnknownReason::UnresolvedMacro));
                                 continue;
                             };
@@ -3225,7 +3240,11 @@ impl<'a> Context<'a> {
                     let name = reader.text(name).to_string();
                     let body = match table.get(&name) {
                         Some(_) => None,
-                        None => Some(Arc::new(reader.read_macro(definition, &name))),
+                        None => Some(Arc::new(reader.read_macro(
+                            definition,
+                            &name,
+                            (*position, definition.start_byte()),
+                        ))),
                     };
                     table.insert(name, body);
                 }
@@ -3243,7 +3262,7 @@ impl<'a> Context<'a> {
     /// body is read as a class body is read. A `before_action` call with a block and no name gets
     /// the name of the method, so the guard has a name. A `super` call, a call of another class
     /// method, and a callback that omen cannot read make the body not readable.
-    fn read_macro(&self, definition: Node<'_>, name: &str) -> MacroBody {
+    fn read_macro(&self, definition: Node<'_>, name: &str, place: (usize, usize)) -> MacroBody {
         let mut callbacks = ClassCallbacks {
             macro_name: Some(name.to_string()),
             ..ClassCallbacks::default()
@@ -3263,6 +3282,7 @@ impl<'a> Context<'a> {
         let mut body = MacroBody {
             callbacks: Vec::new(),
             gap: callbacks.gap,
+            place,
         };
         for statement in callbacks.list {
             match statement {
@@ -3549,6 +3569,7 @@ impl<'a> Context<'a> {
                     out.list.push(Statement::Macro {
                         name: name.to_string(),
                         conditional,
+                        at: node.start_byte(),
                     });
                 }
             }
@@ -3575,6 +3596,7 @@ impl<'a> Context<'a> {
                         out.list.push(Statement::Macro {
                             name: method.to_string(),
                             conditional,
+                            at: node.start_byte(),
                         });
                     }
                     let mut cursor = node.walk();
@@ -3820,6 +3842,8 @@ enum Statement {
     Macro {
         name: String,
         conditional: bool,
+        /// The byte where the call starts in its file.
+        at: usize,
     },
 }
 
@@ -3828,6 +3852,8 @@ struct MacroBody {
     callbacks: Vec<Callback>,
     /// The body has a statement that omen cannot read.
     gap: Option<GuardsUnknownReason>,
+    /// The position of the file of the definition, and the byte where the definition starts.
+    place: (usize, usize),
 }
 
 /// The class methods of one class by name. `None` is a name with two definitions.

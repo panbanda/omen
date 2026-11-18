@@ -1204,6 +1204,50 @@ fn a_class_method_of_the_chain_gives_the_callbacks_that_it_registers() {
 }
 
 #[test]
+fn a_class_method_call_uses_the_definition_that_exists_at_the_call() {
+    let routes = draw("  get \"index\" => \"a#index\"");
+    let base =
+        "class ApplicationController\n  def self.guarded\n    before_action :parent\n  end\nend\n";
+    for (child, expected) in [
+        (
+            "class AController < ApplicationController\n  guarded\n  def self.guarded\n    before_action :child\n  end\n  def index; end\nend\n",
+            "/index [parent] complete",
+        ),
+        (
+            "class AController < ApplicationController\n  def self.guarded\n    before_action :child\n  end\n  guarded\n  def index; end\nend\n",
+            "/index [child] complete",
+        ),
+    ] {
+        assert_eq!(
+            guard_rows(
+                &routes,
+                &[
+                    ("app/controllers/application_controller.rb", base),
+                    ("app/controllers/a_controller.rb", child),
+                ]
+            ),
+            [expected],
+            "{child}"
+        );
+    }
+    let reopened = guard_rows(
+        &routes,
+        &[
+            ("app/controllers/application_controller.rb", base),
+            (
+                "app/controllers/a_controller.rb",
+                "class AController < ApplicationController\n  guarded\n  def index; end\nend\n",
+            ),
+            (
+                "lib/a_patch.rb",
+                "class AController\n  def self.guarded\n    before_action :child\n  end\nend\n",
+            ),
+        ],
+    );
+    assert_eq!(reopened, ["/index [] unresolved_macro"]);
+}
+
+#[test]
 fn a_call_with_the_receiver_self_is_a_call_of_the_class() {
     for (body, index, show) in [
         (
