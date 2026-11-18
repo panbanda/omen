@@ -226,6 +226,94 @@ const ECMA_TYPES: &[&str] = &[
     "string",
 ];
 
+/// The global classes, namespaces, and objects of ECMAScript, of Node.js, and
+/// of the browser. A module of the repository that declares one of these
+/// names does not make that declaration global. Thus a file uses the
+/// repository declaration only when it imports or declares the name.
+pub(super) const ECMA_GLOBAL_NAMES: &[&str] = &[
+    "AbortController",
+    "AbortSignal",
+    "AggregateError",
+    "Array",
+    "ArrayBuffer",
+    "Atomics",
+    "BigInt",
+    "BigInt64Array",
+    "BigUint64Array",
+    "Blob",
+    "Boolean",
+    "Buffer",
+    "DOMException",
+    "DataView",
+    "Date",
+    "Document",
+    "Element",
+    "Error",
+    "EvalError",
+    "Event",
+    "EventTarget",
+    "File",
+    "FinalizationRegistry",
+    "Float32Array",
+    "Float64Array",
+    "FormData",
+    "Function",
+    "HTMLElement",
+    "Headers",
+    "Int16Array",
+    "Int32Array",
+    "Int8Array",
+    "Intl",
+    "JSON",
+    "Map",
+    "Math",
+    "MessageChannel",
+    "Number",
+    "Object",
+    "Promise",
+    "Proxy",
+    "RangeError",
+    "ReadableStream",
+    "ReferenceError",
+    "Reflect",
+    "RegExp",
+    "Request",
+    "Response",
+    "Set",
+    "SharedArrayBuffer",
+    "String",
+    "Symbol",
+    "SyntaxError",
+    "TextDecoder",
+    "TextEncoder",
+    "TypeError",
+    "URIError",
+    "URL",
+    "URLSearchParams",
+    "Uint16Array",
+    "Uint32Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "WeakMap",
+    "WeakRef",
+    "WeakSet",
+    "WebAssembly",
+    "WebSocket",
+    "Worker",
+    "WritableStream",
+    "console",
+    "document",
+    "globalThis",
+    "navigator",
+    "process",
+    "window",
+];
+
+/// Tells if `name` is a global of ECMAScript, Node.js, or the browser.
+pub(super) fn is_ecma_global(name: &str) -> bool {
+    ECMA_GLOBAL_NAMES.binary_search(&name).is_ok()
+}
+
 const JAVA_RECEIVERS: &[&str] = &[
     "Boolean",
     "Character",
@@ -647,8 +735,14 @@ impl<'a> Resolver<'a> {
     fn is_free_type_name(&self, file: usize, name: &str) -> bool {
         let php_name = self.files[file].language == Language::Php
             && self.php_names.contains(&name.to_ascii_lowercase());
+        // A declaration of an ECMAScript global in a different module is not global.
+        let declared = if self.family(file) == super::Family::Ecma && is_ecma_global(name) {
+            self.named_in(name, file).next().is_some()
+        } else {
+            self.by_name.contains_key(name)
+        };
         let taken = self.is_rebound(file, name)
-            || self.by_name.contains_key(name)
+            || declared
             || php_name
             || self.binding_of(file, name).is_some()
             || self.has_repository_wildcard(file);
@@ -908,6 +1002,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_ecma_global_names_are_sorted_and_unique() {
+        let mut sorted = ECMA_GLOBAL_NAMES.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, ECMA_GLOBAL_NAMES);
+        assert!(is_ecma_global("Set"));
+        assert!(!is_ecma_global("Circle"));
     }
 
     #[test]

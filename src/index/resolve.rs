@@ -749,6 +749,12 @@ impl<'a> Resolver<'a> {
         if !found.is_empty() || outside {
             return found;
         }
+        // An ECMAScript global is the global, unless the file imports or
+        // declares the name. A module of the repository with a class `Set`
+        // does not change the global `Set`.
+        if self.family(file) == Family::Ecma && external::is_ecma_global(name) {
+            return Vec::new();
+        }
         let found = in_files(&self.package_files(file));
         if !found.is_empty() {
             return found;
@@ -4487,5 +4493,68 @@ mod false_edge_tests {
         let rows = rows(&[("Item.cs", source)], "Item.cs");
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0].ends_with("[Item.cs#Item.Item]"), "{rows:?}");
+    }
+}
+
+#[cfg(test)]
+mod ecma_tests {
+    use super::testing::rows;
+
+    /// The rows of `file` whose callee is `callee`.
+    fn rows_for(files: &[(&str, &str)], file: &str, callee: &str) -> Vec<String> {
+        rows(files, file)
+            .into_iter()
+            .filter(|row| {
+                row.split(' ')
+                    .nth(1)
+                    .is_some_and(|call| call.ends_with(&format!(">{callee}")))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_global_builtin_does_not_bind_to_a_repository_type() {
+        let node = "export class Set {\n  constructor() {}\n  static of(): Set {\n    return new Set();\n  }\n}\nexport class Date {\n  constructor() {}\n}\n";
+        for extension in ["ts", "js", "tsx", "jsx"] {
+            let app = "export function run() {\n  const seen = new Set();\n  Set.of();\n  return new Date();\n}\n";
+            let imports = "import { Set } from './nodes/Set.node';\nexport function run() {\n  return new Set();\n}\n";
+            let declares = "class Date {\n  constructor() {}\n}\nexport function run() {\n  return new Date();\n}\n";
+            let node_file = format!("nodes/Set.node.{extension}");
+            let app_file = format!("app.{extension}");
+            let imports_file = format!("imports.{extension}");
+            let declares_file = format!("declares.{extension}");
+            let files = [
+                (node_file.as_str(), node),
+                (app_file.as_str(), app),
+                (imports_file.as_str(), imports),
+                (declares_file.as_str(), declares),
+            ];
+            for callee in ["Set", "Date"] {
+                let found = rows_for(&files, &app_file, callee);
+                assert!(
+                    !found.is_empty() && found.iter().all(|row| row.contains(" External - []")),
+                    "{extension} {callee}: {found:?}"
+                );
+            }
+            // A repository method `of` can be a static member that the source adds to `Set`.
+            let found = rows_for(&files, &app_file, "Set.of");
+            assert_eq!(found, ["3 run>Set.of Unresolved - []"], "{extension}");
+            let found = rows_for(&files, &imports_file, "Set");
+            assert_eq!(
+                found,
+                [format!(
+                    "3 run>Set UniqueCandidate QualifiedPath [{node_file}#Set.constructor]"
+                )],
+                "{extension}"
+            );
+            let found = rows_for(&files, &declares_file, "Date");
+            assert_eq!(
+                found,
+                [format!(
+                    "5 run>Date UniqueCandidate QualifiedPath [{declares_file}#Date.constructor]"
+                )],
+                "{extension}"
+            );
+        }
     }
 }
