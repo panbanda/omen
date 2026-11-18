@@ -302,7 +302,7 @@ fn observed_entry_points(
             kind: entry.kind.name().to_string(),
             framework: entry.framework,
             method: entry.route.as_ref().map(|route| route.method.clone()),
-            path: entry.route.as_ref().map(|route| route.path.clone()),
+            path: entry.route.as_ref().and_then(|route| route.path.clone()),
             parameters: entry
                 .route
                 .map(|route| route.parameters)

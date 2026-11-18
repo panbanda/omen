@@ -345,3 +345,31 @@ fn test_symbol_and_impact_have_the_security_field() {
     assert_eq!(impact["security"]["entry_point"]["framework"], "flask");
     assert_eq!(impact["security"]["reaches"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn test_the_key_of_an_inline_handler_stays_in_the_security_analysis() {
+    let route = "function setup() {\n  app.post('/run', (req, res) => { exec(req.body.c); });\n}\nsetup();\n";
+    let header = "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\n";
+    let directory = TempDir::new().expect("temporary directory");
+    let path = directory.path();
+    let first = "2024-02-01T12:00:00Z";
+    fixture::git(path, "ada", first, &["init", "--initial-branch", "main"]);
+    std::fs::write(path.join("server.js"), format!("{header}{route}")).expect("write");
+    fixture::commit(path, "ada", first, "feat: add the server");
+    let second = "2024-02-08T12:00:00Z";
+    fixture::git(path, "grace", second, &["checkout", "-b", "feature"]);
+    std::fs::write(path.join("server.js"), format!("{header}\n\n{route}")).expect("write");
+    fixture::commit(path, "grace", second, "style: add blank lines");
+
+    let security = json(path, &["security"]);
+    assert!(security.to_string().contains("<inline@"), "{security}");
+    for arguments in [
+        &["deadcode"][..],
+        &["symbol", "setup"],
+        &["impact", "setup"],
+        &["diff", "-t", "main"],
+    ] {
+        let output = json(path, arguments).to_string();
+        assert!(!output.contains("<inline@"), "{arguments:?}: {output}");
+    }
+}
