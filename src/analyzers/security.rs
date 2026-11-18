@@ -412,6 +412,7 @@ pub fn sarif(report: &Report) -> Value {
                 "properties": {
                     "basis": sink.basis.name(),
                     "in_test": sink.flags.in_test,
+                    "in_generated": sink.flags.in_generated,
                     "constant_argument": sink.flags.constant_argument,
                 },
             })

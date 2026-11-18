@@ -463,6 +463,22 @@ pub fn holds(
     }
 }
 
+/// The Go file has the standard header of generated code: a line that matches
+/// `^// Code generated .* DO NOT EDIT\.$` before the first text that is not a comment.
+pub fn has_generated_header(root: Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = root.walk();
+    let children: Vec<Node<'_>> = root.children(&mut cursor).collect();
+    children
+        .into_iter()
+        .take_while(|child| child.kind() == "comment")
+        .flat_map(|comment| text(comment, source).lines())
+        .any(|line| {
+            line.trim_end_matches('\r')
+                .strip_prefix("// Code generated ")
+                .is_some_and(|rest| rest.ends_with(" DO NOT EDIT."))
+        })
+}
+
 /// The prefix of the token format that the string literal has, if it has one.
 pub fn token_prefix(literal: &str) -> Option<&'static str> {
     let content = unquote(literal);

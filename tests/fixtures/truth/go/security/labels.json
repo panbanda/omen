@@ -77,6 +77,7 @@
     {"label": "tls_verification_disabled.safe_variant.repository_struct", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_extra.go", "line": 15, "flagged": false},
     {"label": "tls_verification_disabled.real_call.assignment", "category": "tls_verification_disabled", "scenario": "real_call", "file": "tls_extra.go", "line": 17, "basis": "imported_symbol", "constant_argument": false},
     {"label": "tls_verification_disabled.safe_variant.assignment_false", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_extra.go", "line": 18, "flagged": false},
+    {"label": "command_execution.real_call.generated", "category": "command_execution", "scenario": "real_call", "file": "service.pb.go", "line": 9, "basis": "imported_symbol", "in_generated": true},
     {"label": "tls_verification_disabled.safe_variant.repository_assignment", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_extra.go", "line": 19, "flagged": false}
   ]
 }

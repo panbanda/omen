@@ -244,6 +244,7 @@ struct FileContext<'a> {
     specs: Vec<&'static SinkSpec>,
     source: &'a [u8],
     test_ranges: Vec<Range<usize>>,
+    generated: bool,
     call_kinds: Vec<&'static str>,
 }
 
@@ -275,6 +276,8 @@ pub(super) fn file_sinks(
             .collect(),
         source,
         test_ranges,
+        generated: language == Language::Go
+            && syntax::has_generated_header(parsed.root_node(), source),
         call_kinds: language_spec(language).call_syntax().call_kinds(),
     };
     let mut sinks = Vec::new();
@@ -784,6 +787,7 @@ impl FileContext<'_> {
             flags: SinkFlags {
                 constant_argument,
                 in_test: self.in_test(range.start_byte),
+                in_generated: self.generated,
             },
         }
     }

@@ -45,7 +45,11 @@ The MCP tool `security` has the same sections and filters. The tools `symbol` an
 
 A sink has a basis: `imported_symbol` (an import binds the callee), `builtin` (the
 language gives the name), or `name_only` (only the name is evidence). A sink in test
-code has the flag `in_test`.
+code has the flag `in_test`. A sink in a Go file with the standard header of generated
+code has the flag `in_generated`. The header is a line that matches
+`^// Code generated .* DO NOT EDIT\.$` before the first text that is not a comment. A
+path does not start at an entry point in test code, and it does not end at a sink with
+either flag.
 
 The flag `constant_argument` tells that the value that makes the sink is a constant. A
 constant is a literal, or literals that an operator joins, as in `"SELECT a " + "FROM t"`.
