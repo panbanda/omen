@@ -20,7 +20,7 @@ use std::rc::Rc;
 
 use tree_sitter::Node;
 
-use super::Context;
+use super::{first_reason, Context, GuardsUnknownReason};
 use crate::index::model::{ImportBinding, ImportKind};
 
 const FRAMEWORK_MODULES: [&str; 2] = ["fastapi", "starlette"];
@@ -76,14 +76,40 @@ struct Outer {
     /// The guards of the routers around the router that gets the routes. The link shares the
     /// lists of a chain of routers, so a chain costs the sum of its lists and not the square.
     above: Option<Rc<Outer>>,
+    /// The nearest link of `above` and the links above it that has guards. A route skips the
+    /// links without guards, so its list costs the guards and not the depth of the chain.
+    above_with_guards: Option<Rc<Outer>>,
 }
 
 impl Outer {
+    fn new(start: usize, scope: usize, guards: Vec<String>, above: Option<Rc<Outer>>) -> Self {
+        let above_with_guards = above.as_ref().and_then(|link| {
+            if link.guards.is_empty() {
+                link.above_with_guards.clone()
+            } else {
+                Some(Rc::clone(link))
+            }
+        });
+        Self {
+            start,
+            scope,
+            guards,
+            above,
+            above_with_guards,
+        }
+    }
+
     /// The guards of each router around the router, from the outer router to the inner one.
     fn guards(&self) -> Vec<String> {
-        let mut links = vec![self];
-        while let Some(above) = links[links.len() - 1].above.as_deref() {
-            links.push(above);
+        let mut links: Vec<&Outer> = Vec::new();
+        let mut current = if self.guards.is_empty() {
+            self.above_with_guards.as_deref()
+        } else {
+            Some(self)
+        };
+        while let Some(link) = current {
+            links.push(link);
+            current = link.above_with_guards.as_deref();
         }
         links
             .into_iter()
@@ -129,6 +155,16 @@ pub(super) struct Scopes<'a> {
     /// The positions of the `include_router` calls that include a router, by its binding.
     includes_of: OnceCell<HashMap<BindingKey<'a>, Vec<usize>>>,
     outer: RefCell<HashMap<BindingKey<'a>, Option<Rc<Outer>>>>,
+    /// Why the guards of the routers around a router are not complete, by the binding of the
+    /// router.
+    outer_gaps: RefCell<HashMap<BindingKey<'a>, Option<GuardsUnknownReason>>>,
+    /// The file calls `add_middleware` or `middleware`, or it gives `FastAPI` a middleware
+    /// argument. Omen does not read a middleware.
+    middleware: bool,
+    /// The file uses the `dependencies` attribute of an object, as `router.dependencies.clear()`.
+    /// FastAPI copies the dependencies of a router at each registration, so a change makes
+    /// the dependencies of the constructor not known.
+    dependencies_changed: bool,
 }
 
 /// What a parameter of a handler is for FastAPI.
@@ -155,6 +191,12 @@ fn named_children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
 }
 
 impl<'a> Context<'a> {
+    /// Notes why the guards of the route that omen reads now are not complete.
+    fn note_guard_gap(&self, reason: GuardsUnknownReason) {
+        self.guard_gap
+            .set(first_reason(self.guard_gap.get(), Some(reason)));
+    }
+
     fn scopes(&self) -> &Scopes<'a> {
         self.python_scopes.get_or_init(|| self.read_scopes())
     }
@@ -283,6 +325,19 @@ impl<'a> Context<'a> {
                             plain,
                         });
                     }
+                    scopes.middleware |= node
+                        .child_by_field_name("function")
+                        .filter(|function| function.kind() == "attribute")
+                        .and_then(|function| function.child_by_field_name("attribute"))
+                        .is_some_and(|attribute| {
+                            matches!(self.text(attribute), "add_middleware" | "middleware")
+                        });
+                    scopes.middleware |= self.has_middleware_argument(node);
+                }
+                "attribute" => {
+                    scopes.dependencies_changed |= node
+                        .child_by_field_name("attribute")
+                        .is_some_and(|attribute| self.text(attribute) == "dependencies");
                 }
                 _ => {}
             }
@@ -309,6 +364,37 @@ impl<'a> Context<'a> {
             }
         }
         scopes
+    }
+
+    /// Tells if the call is `FastAPI(...)` with a `middleware=` argument that can hold a
+    /// middleware: a value other than `None` and an empty list or tuple.
+    fn has_middleware_argument(&self, call: Node<'_>) -> bool {
+        let is_application = call
+            .child_by_field_name("function")
+            .is_some_and(|function| match function.kind() {
+                "identifier" => self.text(function) == "FastAPI",
+                "attribute" => function
+                    .child_by_field_name("attribute")
+                    .is_some_and(|attribute| self.text(attribute) == "FastAPI"),
+                _ => false,
+            });
+        if !is_application {
+            return false;
+        }
+        let Some(arguments) = call.child_by_field_name("arguments") else {
+            return false;
+        };
+        named_children(arguments).into_iter().any(|argument| {
+            argument.kind() == "keyword_argument"
+                && argument
+                    .child_by_field_name("name")
+                    .is_some_and(|name| self.text(name) == "middleware")
+                && argument.child_by_field_name("value").is_some_and(|value| {
+                    !(value.kind() == "none"
+                        || (matches!(value.kind(), "list" | "tuple")
+                            && value.named_child_count() == 0))
+                })
+        })
     }
 
     fn bind(
@@ -507,11 +593,19 @@ impl<'a> Context<'a> {
             return Vec::new();
         };
         if !matches!(list.kind(), "list" | "tuple") {
+            self.note_guard_gap(GuardsUnknownReason::UnreadableDependency);
             return Vec::new();
         }
         named_children(list)
             .into_iter()
-            .filter_map(|item| self.dependency_of(scope, item).flatten())
+            .filter(|item| item.kind() != "comment")
+            .filter_map(|item| {
+                let name = self.dependency_of(scope, item).flatten();
+                if name.is_none() {
+                    self.note_guard_gap(GuardsUnknownReason::UnreadableDependency);
+                }
+                name
+            })
             .collect()
     }
 
@@ -603,27 +697,64 @@ impl<'a> Context<'a> {
         }
         for (key, parent) in chain.into_iter().rev() {
             let include = self.sole_include(key).filter(|_| !cyclic);
+            // The calls below note a gap for the route that asks. The gap belongs to the
+            // router, so it goes to `outer_gaps`, and the note of the route comes back.
+            let noted = self.guard_gap.replace(None);
+            let included = self.includes_of().get(&key).map_or(0, Vec::len);
+            if cyclic || (included > 0 && include.is_none()) {
+                self.note_guard_gap(GuardsUnknownReason::UnreadableInclude);
+            } else if included == 0 {
+                let is_application = scopes
+                    .bindings
+                    .get(&key)
+                    .and_then(|binding| binding.value)
+                    .and_then(|call| self.marker_of(key.0, call))
+                    == Some("FastAPI");
+                if !is_application {
+                    self.note_guard_gap(GuardsUnknownReason::IncludedElsewhere);
+                }
+            }
             let outer = include.and_then(|(include, parent_name)| {
                 // A receiver that is not a router of FastAPI can have a method with the same
                 // name. Its call adds no guard.
-                let (owner, call) = self.router_of(include.scope, parent_name)?;
+                let Some((owner, call)) = self.router_of(include.scope, parent_name) else {
+                    self.note_guard_gap(self.router_gap(include.scope, parent_name));
+                    return None;
+                };
                 let start = include.call.start_byte();
-                let above = parent
+                let parent_outer = parent
                     .and_then(|parent| scopes.outer.borrow().get(&parent).cloned())
-                    .flatten()
+                    .flatten();
+                let above = parent_outer
+                    .clone()
                     .filter(|above| above.start > start && above.scope == include.scope);
+                if parent_outer.is_some() && above.is_none() {
+                    self.note_guard_gap(GuardsUnknownReason::UnreadableInclude);
+                }
+                if let Some(gap) = scopes.outer_gaps.borrow().get(&owner).copied().flatten() {
+                    self.note_guard_gap(gap);
+                }
                 let mut guards = self.dependencies_of(owner.0, call);
                 guards.extend(self.dependencies_of(include.scope, include.call));
-                Some(Rc::new(Outer {
-                    start,
-                    scope: include.scope,
-                    guards,
-                    above,
-                }))
+                Some(Rc::new(Outer::new(start, include.scope, guards, above)))
             });
             scopes.outer.borrow_mut().insert(key, outer);
+            let gap = self.guard_gap.replace(noted);
+            scopes.outer_gaps.borrow_mut().insert(key, gap);
+        }
+        if let Some(gap) = scopes.outer_gaps.borrow().get(&router).copied().flatten() {
+            self.note_guard_gap(gap);
         }
         scopes.outer.borrow().get(&router).cloned().flatten()
+    }
+
+    /// Why omen cannot read the router with the name: an import binds the name, or the name has
+    /// no single assignment of a `FastAPI` or an `APIRouter` call.
+    fn router_gap(&self, scope: usize, name: &'a str) -> GuardsUnknownReason {
+        match self.bindings_of(scope, name) {
+            Some((_, binding)) if binding.imported => GuardsUnknownReason::ImportedRouter,
+            _ => GuardsUnknownReason::UnresolvedRouter,
+        }
     }
 
     /// The scope of the names in an `Annotated` type, its base type, and its metadata. The type
@@ -751,18 +882,42 @@ impl<'a> Context<'a> {
     ) -> (Vec<String>, Vec<String>) {
         let scopes = self.scopes();
         let Some(scope) = scopes.sites.get(&definition.id()).copied() else {
+            self.note_guard_gap(GuardsUnknownReason::UnresolvedRouter);
             return (Vec::new(), Vec::new());
         };
+        if scopes.middleware {
+            self.note_guard_gap(GuardsUnknownReason::LayerNotRead);
+        }
+        if scopes.dependencies_changed {
+            self.note_guard_gap(GuardsUnknownReason::UnreadableDependency);
+        }
+        if self
+            .file
+            .imports
+            .iter()
+            .any(|import| import.kind == ImportKind::Wildcard)
+        {
+            self.note_guard_gap(GuardsUnknownReason::WildcardImport);
+        }
         let mut guards = Vec::new();
-        if receiver.kind() == "identifier" {
-            if let Some((router, call)) = self.router_of(scope, self.text(receiver)) {
+        let router = (receiver.kind() == "identifier")
+            .then(|| self.router_of(scope, self.text(receiver)))
+            .flatten();
+        match router {
+            Some((router, call)) => {
                 if let Some(outer) = self.outer_guards(router) {
                     if outer.start > decorator.start_byte() && outer.scope == scope {
                         guards.extend(outer.guards());
+                    } else {
+                        self.note_guard_gap(GuardsUnknownReason::UnreadableInclude);
                     }
                 }
                 guards.extend(self.dependencies_of(router.0, call));
             }
+            None if receiver.kind() == "identifier" => {
+                self.note_guard_gap(self.router_gap(scope, self.text(receiver)));
+            }
+            None => self.note_guard_gap(GuardsUnknownReason::UnresolvedRouter),
         }
         guards.extend(self.dependencies_of(scope, route_call));
         let mut parameters = Vec::new();
@@ -790,7 +945,10 @@ impl<'a> Context<'a> {
             match self.parameter_kind(scope, annotation, default) {
                 Parameter::Request => parameters.push(self.text(name).to_string()),
                 Parameter::Dependency(Some(dependency)) => guards.push(dependency),
-                Parameter::Dependency(None) | Parameter::FrameworkObject => {}
+                Parameter::Dependency(None) => {
+                    self.note_guard_gap(GuardsUnknownReason::UnreadableDependency);
+                }
+                Parameter::FrameworkObject => {}
             }
         }
         (guards, parameters)
@@ -1215,6 +1373,43 @@ mod tests {
         a_chain_with_one_route_at(30, false);
     }
 
+    /// A chain of `count` routers without dependencies, and `count` routes on the innermost
+    /// router. Each route has no guard, so the work must not grow with the depth of the chain
+    /// for each route.
+    fn a_chain_without_dependencies_at(count: usize) -> std::time::Duration {
+        let mut source =
+            String::from("from fastapi import APIRouter, FastAPI\n\napp = FastAPI()\n");
+        for number in 0..count {
+            source.push_str(&format!("r{number} = APIRouter()\n"));
+        }
+        for number in 0..count {
+            source.push_str(&format!(
+                "\n@r0.get(\"/p{number}\")\nasync def h{number}():\n    return 1\n"
+            ));
+        }
+        for number in 1..count {
+            source.push_str(&format!("r{number}.include_router(r{})\n", number - 1));
+        }
+        source.push_str(&format!("app.include_router(r{})\n", count - 1));
+        let (found, elapsed) = entries_lean(Language::Python, &[("main.py", &source)]);
+        assert_eq!(found.len(), count);
+        assert!(found
+            .iter()
+            .all(|entry| entry.guards.is_empty() && entry.guards_complete));
+        elapsed
+    }
+
+    #[test]
+    fn a_chain_without_dependencies_gives_no_guard() {
+        a_chain_without_dependencies_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_chain_without_dependencies_resolves_in_linear_time() {
+        assert_scales_linearly("no dependency", 20_000, a_chain_without_dependencies_at);
+    }
+
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_chain_of_included_routers_resolves_in_linear_time() {
@@ -1272,5 +1467,176 @@ mod tests {
     #[ignore = "timing: run in release"]
     fn timing_fastapi_dependencies_resolve_in_linear_time() {
         assert_scales_linearly("many routes", 10_000, many_routes_of_one_router_at);
+    }
+    /// The path of each route of the source, with `complete` or the reason.
+    fn states(source: &str) -> Vec<(String, String)> {
+        routes(source)
+            .into_iter()
+            .map(|entry| {
+                assert_eq!(entry.guards_complete, entry.guards_unknown_reason.is_none());
+                (
+                    entry.route.unwrap().path_text().to_string(),
+                    entry
+                        .guards_unknown_reason
+                        .map_or("complete", |reason| reason.name())
+                        .to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn expected_states(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+        rows.iter()
+            .map(|(path, state)| (path.to_string(), state.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn the_guards_of_an_application_that_omen_reads_in_full_are_complete() {
+        let source = "from fastapi import APIRouter, Depends, FastAPI\n\napp = FastAPI(dependencies=[Depends(count_request)])\nrouter = APIRouter(dependencies=[Depends(verify_key)])\n\n@app.get(\"/a\")\nasync def a(user=Depends(current_user)):\n    return 1\n\n@router.get(\"/b\", dependencies=[Depends(verify_admin)])\nasync def b():\n    return 2\n\napp.include_router(router)\n";
+        assert_eq!(
+            states(source),
+            expected_states(&[("/a", "complete"), ("/b", "complete")])
+        );
+    }
+
+    #[test]
+    fn a_dependency_that_omen_cannot_read_makes_the_guards_not_complete() {
+        for (decorator, parameters) in [
+            ("dependencies=DEPENDENCIES", ""),
+            ("dependencies=[Depends(make_guard(\"admin\"))]", ""),
+            ("dependencies=[Depends(verify_key), GUARD]", ""),
+            ("dependencies=[*GUARDS]", ""),
+            ("", "user=Depends(guards[0])"),
+            ("", "user=Depends(lambda: 1)"),
+        ] {
+            let separator = if decorator.is_empty() { "" } else { ", " };
+            let source = format!(
+                "from fastapi import Depends, FastAPI\n\napp = FastAPI()\n\n@app.get(\"/a\"{separator}{decorator})\nasync def a({parameters}):\n    return 1\n\n@app.get(\"/b\")\nasync def b():\n    return 2\n"
+            );
+            assert_eq!(
+                states(&source),
+                expected_states(&[("/a", "unreadable_dependency"), ("/b", "complete")]),
+                "{decorator} {parameters}"
+            );
+        }
+        let router = "from fastapi import APIRouter, Depends, FastAPI\n\napp = FastAPI()\nrouter = APIRouter(dependencies=GUARDS)\n\n@router.get(\"/a\")\nasync def a():\n    return 1\n\napp.include_router(router)\n";
+        assert_eq!(
+            states(router),
+            expected_states(&[("/a", "unreadable_dependency")])
+        );
+        let include = "from fastapi import APIRouter, Depends, FastAPI\n\napp = FastAPI()\nrouter = APIRouter()\n\n@router.get(\"/a\")\nasync def a():\n    return 1\n\napp.include_router(router, dependencies=[Depends(pick())])\n";
+        assert_eq!(
+            states(include),
+            expected_states(&[("/a", "unreadable_dependency")])
+        );
+    }
+
+    #[test]
+    fn a_router_that_omen_cannot_follow_makes_the_guards_not_complete() {
+        let twice = "from fastapi import APIRouter\n\nrouter = APIRouter()\nrouter = APIRouter()\n\n@router.get(\"/a\")\nasync def a():\n    return 1\n";
+        assert_eq!(
+            states(twice),
+            expected_states(&[("/a", "unresolved_router")])
+        );
+        let elsewhere = "from fastapi import APIRouter\n\nrouter = APIRouter()\n\n@router.get(\"/a\")\nasync def a():\n    return 1\n";
+        assert_eq!(
+            states(elsewhere),
+            expected_states(&[("/a", "included_elsewhere")])
+        );
+        let repeated = "from fastapi import APIRouter, Depends, FastAPI\n\napp = FastAPI()\nrouter = APIRouter()\n\n@router.get(\"/a\")\nasync def a():\n    return 1\n\napp.include_router(router)\napp.include_router(router, dependencies=[Depends(verify_key)])\n";
+        assert_eq!(
+            states(repeated),
+            expected_states(&[("/a", "unreadable_include")])
+        );
+        let conditional = "from fastapi import APIRouter, Depends, FastAPI\n\napp = FastAPI()\nrouter = APIRouter()\n\n@router.get(\"/a\")\nasync def a():\n    return 1\n\nif ENABLED:\n    app.include_router(router, dependencies=[Depends(verify_key)])\n";
+        assert_eq!(
+            states(conditional),
+            expected_states(&[("/a", "unreadable_include")])
+        );
+        let late = "from fastapi import APIRouter, Depends, FastAPI\n\napp = FastAPI()\nrouter = APIRouter()\n\napp.include_router(router, dependencies=[Depends(verify_key)])\n\n@router.get(\"/a\")\nasync def a():\n    return 1\n";
+        assert_eq!(
+            states(late),
+            expected_states(&[("/a", "unreadable_include")])
+        );
+        let parent = "from fastapi import APIRouter, Depends\nfrom .main import app\n\nrouter = APIRouter()\n\n@router.get(\"/a\")\nasync def a():\n    return 1\n\napp.include_router(router)\n";
+        assert_eq!(
+            states(parent),
+            expected_states(&[("/a", "imported_router")])
+        );
+        let chain = "from fastapi import APIRouter, Depends\n\nouter = APIRouter()\ninner = APIRouter()\n\n@inner.get(\"/a\")\nasync def a():\n    return 1\n\nouter.include_router(inner)\n";
+        assert_eq!(
+            states(chain),
+            expected_states(&[("/a", "included_elsewhere")])
+        );
+    }
+
+    #[test]
+    fn a_wildcard_import_or_a_middleware_makes_the_guards_not_complete() {
+        let wildcard = "from fastapi import FastAPI\nfrom .guards import *\n\napp = FastAPI()\n\n@app.get(\"/a\")\nasync def a():\n    return 1\n";
+        assert_eq!(
+            states(wildcard),
+            expected_states(&[("/a", "wildcard_import")])
+        );
+        for middleware in [
+            "app.add_middleware(AuthMiddleware)",
+            "@app.middleware(\"http\")\nasync def check(request, call_next):\n    return await call_next(request)",
+        ] {
+            let source = format!(
+                "from fastapi import FastAPI\n\napp = FastAPI()\n\n{middleware}\n\n@app.get(\"/a\")\nasync def a():\n    return 1\n"
+            );
+            assert_eq!(
+                states(&source),
+                expected_states(&[("/a", "layer_not_read")]),
+                "{middleware}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_change_of_the_dependencies_attribute_makes_the_guards_not_complete() {
+        for change in [
+            "router.dependencies.clear()",
+            "router.dependencies = []",
+            "router.dependencies.append(Depends(other))",
+            "router.dependencies += [Depends(other)]",
+            "app.router.dependencies.clear()",
+        ] {
+            let source = format!(
+                "from fastapi import APIRouter, Depends, FastAPI\n\napp = FastAPI()\nrouter = APIRouter(dependencies=[Depends(verify)])\n\n@router.get(\"/first\")\nasync def first():\n    return 1\n\n{change}\n\n@router.get(\"/second\")\nasync def second():\n    return 2\n\napp.include_router(router)\n"
+            );
+            let found = states(&source);
+            assert_eq!(found.len(), 2, "{change}");
+            assert!(
+                found.iter().all(|(_, state)| state != "complete"),
+                "{change}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_middleware_argument_of_the_application_makes_the_guards_not_complete() {
+        let route = "\n\n@app.get(\"/a\")\nasync def a():\n    return 1\n";
+        for (application, state) in [
+            (
+                "app = FastAPI(middleware=[Middleware(AuthMiddleware)])",
+                "layer_not_read",
+            ),
+            (
+                "app = fastapi.FastAPI(title=\"x\", middleware=MIDDLEWARE)",
+                "layer_not_read",
+            ),
+            ("app = FastAPI(middleware=[])", "complete"),
+            ("app = FastAPI(middleware=None)", "complete"),
+            ("app = FastAPI(title=\"x\")", "complete"),
+        ] {
+            let source =
+                format!("import fastapi\nfrom fastapi import FastAPI\n\n{application}{route}");
+            assert_eq!(
+                states(&source),
+                expected_states(&[("/a", state)]),
+                "{application}"
+            );
+        }
     }
 }

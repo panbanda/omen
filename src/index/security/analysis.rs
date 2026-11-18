@@ -925,6 +925,8 @@ mod tests {
                     framework: "express".to_string(),
                     route: None,
                     guards: Vec::new(),
+                    guards_complete: true,
+                    guards_unknown_reason: None,
                     basis: EntryBasis::Registered,
                     in_test: false,
                     inline_handler: Some(InlineHandler {

@@ -40,7 +40,7 @@ use crate::core::{
 use crate::index::model::Symbol;
 use crate::parser::queries::{
     get_decision_node_types, get_flat_node_types, get_nested_scope_node_types,
-    get_nesting_node_types, get_operator,
+    get_nesting_node_types, get_operator, is_default_branch,
 };
 use crate::parser::{self, ParseResult, Parser};
 
@@ -524,7 +524,10 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
         let kind = current.kind();
 
         // Count decision points
-        if current.is_named() && decision_types.contains(&kind) {
+        if current.is_named()
+            && decision_types.contains(&kind)
+            && !is_default_branch(&current, source, lang)
+        {
             count += 1;
         }
 
@@ -552,6 +555,98 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
                 return count;
             }
         }
+    }
+}
+
+const IF_KINDS: &[&str] = &["if_statement", "if_expression"];
+
+/// The part that a node has in an `if` chain. `field` is the field name of
+/// the node in its parent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChainBranch {
+    /// An `if` that is all of the `else` branch of another `if`.
+    ElseIf,
+    /// An `else` body that the grammar puts directly in the `alternative`
+    /// field of the `if`, without an `else` clause node (Go, Java, C#).
+    BareElse,
+    None,
+}
+
+fn chain_branch(kind: &str, parent_kind: &str, field: Option<&str>, lang: Language) -> ChainBranch {
+    // These grammars have a clause kind for `else if`. An `if` in their
+    // `else` body is a nested `if`.
+    if matches!(lang, Language::Python | Language::Ruby | Language::Bash) {
+        return ChainBranch::None;
+    }
+    let is_if = IF_KINDS.contains(&kind);
+    if is_if && parent_kind == "else_clause" {
+        return ChainBranch::ElseIf;
+    }
+    if field != Some("alternative") || !IF_KINDS.contains(&parent_kind) {
+        return ChainBranch::None;
+    }
+    if is_if {
+        ChainBranch::ElseIf
+    } else if matches!(kind, "else_clause" | "else_if_clause" | "else") {
+        // The clause adds its own 1 as a flat kind.
+        ChainBranch::None
+    } else {
+        ChainBranch::BareElse
+    }
+}
+
+/// Whether the node is the `else` of a Ruby `case`. The `case` adds 1 for
+/// all of its branches, and Ruby uses one `else` kind for `if` and `case`.
+fn is_else_of_case(kind: &str, parent_kind: &str) -> bool {
+    kind == "else" && matches!(parent_kind, "case" | "case_match")
+}
+
+/// Whether the node is a `break` or `continue` that does not go to a label.
+/// SonarSource counts only a jump to a label. PHP `break 2` leaves two loops,
+/// as a jump to a label does. A Rust `break value` is not a label.
+fn is_jump_without_label(node: &tree_sitter::Node<'_>, source: &[u8], lang: Language) -> bool {
+    const JUMP_KINDS: &[&str] = &[
+        "break_statement",
+        "continue_statement",
+        "break_expression",
+        "continue_expression",
+    ];
+    if !JUMP_KINDS.contains(&node.kind()) {
+        return false;
+    }
+    let mut cursor = node.walk();
+    let has_label = node
+        .named_children(&mut cursor)
+        .any(|child| match child.kind() {
+            "statement_identifier" | "label" | "label_name" => true,
+            "identifier" => lang == Language::Java,
+            "integer" | "parenthesized_expression" => php_jump_level(child, source) != Some(1),
+            _ => false,
+        });
+    !has_label
+}
+
+/// The number of loops that a PHP `break` or `continue` leaves, such as 2 in
+/// `break 2`, `break (2)`, or `break 0b10`.
+fn php_jump_level(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<u64> {
+    match node.kind() {
+        "parenthesized_expression" => php_jump_level(node.named_child(0)?, source),
+        "integer" => {
+            let text = node.utf8_text(source).ok()?.replace('_', "").to_lowercase();
+            let (digits, radix) = if let Some(hex) = text.strip_prefix("0x") {
+                (hex.to_string(), 16)
+            } else if let Some(binary) = text.strip_prefix("0b") {
+                (binary.to_string(), 2)
+            } else if let Some(octal) = text.strip_prefix("0o") {
+                (octal.to_string(), 8)
+            } else if text.len() > 1 && text.starts_with('0') {
+                (text[1..].to_string(), 8)
+            } else {
+                (text, 10)
+            };
+            u64::from_str_radix(&digits, radix).ok()
+        }
+        _ => None,
     }
 }
 
@@ -584,6 +679,9 @@ fn calculate_cognitive_complexity(
     // Track nesting depth separately from cursor depth
     // Use a small stack to track depth changes at each cursor level
     let mut depth_at_level: Vec<u32> = vec![initial_depth; 64]; // Pre-allocate for typical depths
+                                                                // The kind of the node at each cursor level. `Node::parent` searches from
+                                                                // the root, so a call for each node is quadratic in a deep tree.
+    let mut kind_at_level: Vec<&str> = vec![""; 64];
 
     loop {
         let current = cursor.node();
@@ -594,16 +692,42 @@ fn calculate_cognitive_complexity(
         // Ensure we have space for this level
         if level >= depth_at_level.len() {
             depth_at_level.resize(level + 16, initial_depth);
+            kind_at_level.resize(level + 16, "");
         }
+        kind_at_level[level] = kind;
+        let parent_kind = if level == 0 {
+            ""
+        } else {
+            kind_at_level[level - 1]
+        };
 
         let current_depth = depth_at_level[level];
+        let branch = if current.is_named() && cursor_depth != start_depth {
+            chain_branch(kind, parent_kind, cursor.field_name(), lang)
+        } else {
+            ChainBranch::None
+        };
 
         // Check if this is a complexity-adding construct. Requires
         // `is_named()`: in grammars where a statement kind is a bare
         // keyword (e.g. Ruby's "if"/"while"/"case"), the anonymous keyword
         // token itself shares that kind string with its parent statement
         // node, and must not be double-counted as a second construct.
-        if current.is_named() && nesting_types.contains(&kind) {
+        // An `else` body without braces adds 1 for the `else`, and the body
+        // then gets its own score below.
+        if branch == ChainBranch::BareElse {
+            complexity += 1;
+        }
+        if branch == ChainBranch::ElseIf {
+            // SonarSource gives `else if` +1, with no nesting increment. An
+            // `else_clause` parent already added the +1.
+            if parent_kind != "else_clause" {
+                complexity += 1;
+            }
+            if level + 1 < depth_at_level.len() {
+                depth_at_level[level + 1] = current_depth;
+            }
+        } else if current.is_named() && nesting_types.contains(&kind) {
             // Nesting constructs: +1 base plus nesting penalty
             complexity += 1 + current_depth;
             // Children will have increased depth
@@ -612,7 +736,10 @@ fn calculate_cognitive_complexity(
             }
         } else if current.is_named() && flat_types.contains(&kind) {
             // Flat constructs: +1 only, NO nesting penalty per SonarSource spec
-            complexity += 1;
+            if !is_jump_without_label(&current, source, lang) && !is_else_of_case(kind, parent_kind)
+            {
+                complexity += 1;
+            }
             // Children stay at same depth
             if level + 1 < depth_at_level.len() {
                 depth_at_level[level + 1] = current_depth;
@@ -681,8 +808,9 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
         "switch_statement",
         "match_expression",
         "case",
-        "try_statement",
-        "begin",
+        "catch_clause",
+        "except_clause",
+        "rescue",
     ];
 
     let boundary_types = get_nested_scope_node_types(lang);
@@ -692,6 +820,7 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
 
     // Track nesting depth at each cursor level
     let mut depth_at_level: Vec<u32> = vec![initial_depth; 64];
+    let mut kind_at_level: Vec<&str> = vec![""; 64];
 
     loop {
         let current = cursor.node();
@@ -701,7 +830,14 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
 
         if level >= depth_at_level.len() {
             depth_at_level.resize(level + 16, initial_depth);
+            kind_at_level.resize(level + 16, "");
         }
+        kind_at_level[level] = kind;
+        let parent_kind = if level == 0 {
+            ""
+        } else {
+            kind_at_level[level - 1]
+        };
 
         let current_depth = depth_at_level[level];
 
@@ -714,7 +850,12 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
         // as `count_decision_points`: Ruby's bare-keyword statement kinds
         // (e.g. "if") collide with their own anonymous keyword token, which
         // must not be treated as a second nesting construct.
-        let child_depth = if current.is_named() && NESTING_KINDS.contains(&kind) {
+        let is_else_if = current.is_named()
+            && cursor_depth != start_depth
+            && chain_branch(kind, parent_kind, cursor.field_name(), lang) == ChainBranch::ElseIf;
+        let child_depth = if is_else_if {
+            current_depth
+        } else if current.is_named() && NESTING_KINDS.contains(&kind) {
             current_depth + 1
         } else {
             current_depth
@@ -1392,6 +1533,275 @@ fn third() { for i in 0..10 { println!("{}", i); } }
         assert!(names.contains(&"third"));
     }
 
+    /// Each probe has `if`, two `else if` branches, an `if` in the body of
+    /// the second `else if`, and a last `else`. SonarSource gives the
+    /// cognitive complexity 1 + 1 + 1 + (1 + 1) + 1 = 6. The nested `if` is
+    /// at nesting level 1, so its body is at level 2.
+    fn assert_else_if_chain(code: &str, lang: Language, filename: &str) {
+        let result = parse_and_analyze(code.as_bytes(), lang, filename);
+        assert_eq!(result.functions.len(), 1, "{filename}");
+        let metrics = &result.functions[0].metrics;
+        assert_eq!(metrics.cyclomatic, 5, "cyclomatic of {filename}");
+        assert_eq!(metrics.cognitive, 6, "cognitive of {filename}");
+        assert_eq!(metrics.max_nesting, 2, "max_nesting of {filename}");
+    }
+
+    #[test]
+    fn test_else_if_chain_go() {
+        assert_else_if_chain(
+            "package p\nfunc f(x, y int) int {\n\tif x == 1 {\n\t\treturn 1\n\t} else if x == 2 {\n\t\treturn 2\n\t} else if x == 3 {\n\t\tif y == 1 {\n\t\t\treturn 4\n\t\t}\n\t\treturn 3\n\t} else {\n\t\treturn 0\n\t}\n}\n",
+            Language::Go,
+            "a.go",
+        );
+    }
+
+    #[test]
+    fn test_else_if_chain_rust() {
+        assert_else_if_chain(
+            "fn f(x: i32, y: i32) -> i32 {\n    if x == 1 { 1 } else if x == 2 { 2 } else if x == 3 { if y == 1 { return 4; } 3 } else { 0 }\n}\n",
+            Language::Rust,
+            "a.rs",
+        );
+    }
+
+    #[test]
+    fn test_else_if_chain_python() {
+        assert_else_if_chain(
+            "def f(x, y):\n    if x == 1:\n        return 1\n    elif x == 2:\n        return 2\n    elif x == 3:\n        if y == 1:\n            return 4\n        return 3\n    else:\n        return 0\n",
+            Language::Python,
+            "a.py",
+        );
+    }
+
+    const ECMASCRIPT_ELSE_IF_CHAIN: &str = "function f(x, y) {\n  if (x == 1) { return 1; } else if (x == 2) { return 2; } else if (x == 3) { if (y == 1) { return 4; } return 3; } else { return 0; }\n}\n";
+
+    #[test]
+    fn test_else_if_chain_typescript() {
+        assert_else_if_chain(ECMASCRIPT_ELSE_IF_CHAIN, Language::TypeScript, "a.ts");
+    }
+
+    #[test]
+    fn test_else_if_chain_tsx() {
+        assert_else_if_chain(ECMASCRIPT_ELSE_IF_CHAIN, Language::Tsx, "a.tsx");
+    }
+
+    #[test]
+    fn test_else_if_chain_javascript() {
+        assert_else_if_chain(ECMASCRIPT_ELSE_IF_CHAIN, Language::JavaScript, "a.js");
+    }
+
+    #[test]
+    fn test_else_if_chain_jsx() {
+        assert_else_if_chain(ECMASCRIPT_ELSE_IF_CHAIN, Language::Jsx, "a.jsx");
+    }
+
+    const BRACE_ELSE_IF_CHAIN: &str = "if (x == 1) { return 1; } else if (x == 2) { return 2; } else if (x == 3) { if (y == 1) { return 4; } return 3; } else { return 0; }";
+
+    #[test]
+    fn test_else_if_chain_java() {
+        let code =
+            format!("class A {{\n  int f(int x, int y) {{\n    {BRACE_ELSE_IF_CHAIN}\n  }}\n}}\n");
+        assert_else_if_chain(&code, Language::Java, "A.java");
+    }
+
+    #[test]
+    fn test_else_if_chain_csharp() {
+        let code =
+            format!("class A {{\n  int F(int x, int y) {{\n    {BRACE_ELSE_IF_CHAIN}\n  }}\n}}\n");
+        assert_else_if_chain(&code, Language::CSharp, "A.cs");
+    }
+
+    #[test]
+    fn test_else_if_chain_c() {
+        let code = format!("int f(int x, int y) {{\n  {BRACE_ELSE_IF_CHAIN}\n}}\n");
+        assert_else_if_chain(&code, Language::C, "a.c");
+    }
+
+    #[test]
+    fn test_else_if_chain_cpp() {
+        let code = format!("int f(int x, int y) {{\n  {BRACE_ELSE_IF_CHAIN}\n}}\n");
+        assert_else_if_chain(&code, Language::Cpp, "a.cpp");
+    }
+
+    #[test]
+    fn test_else_if_chain_ruby() {
+        assert_else_if_chain(
+            "def f(x, y)\n  if x == 1\n    1\n  elsif x == 2\n    2\n  elsif x == 3\n    if y == 1\n      return 4\n    end\n    3\n  else\n    0\n  end\nend\n",
+            Language::Ruby,
+            "a.rb",
+        );
+    }
+
+    #[test]
+    fn test_else_if_chain_php_elseif() {
+        assert_else_if_chain(
+            "<?php\nfunction f($x, $y) {\n  if ($x == 1) { return 1; } elseif ($x == 2) { return 2; } elseif ($x == 3) { if ($y == 1) { return 4; } return 3; } else { return 0; }\n}\n",
+            Language::Php,
+            "a.php",
+        );
+    }
+
+    #[test]
+    fn test_else_if_chain_php_else_if() {
+        assert_else_if_chain(
+            "<?php\nfunction f($x, $y) {\n  if ($x == 1) { return 1; } else if ($x == 2) { return 2; } else if ($x == 3) { if ($y == 1) { return 4; } return 3; } else { return 0; }\n}\n",
+            Language::Php,
+            "a.php",
+        );
+    }
+
+    #[test]
+    fn test_else_if_chain_bash() {
+        assert_else_if_chain(
+            "f() {\n  if [ \"$1\" = 1 ]; then\n    echo 1\n  elif [ \"$1\" = 2 ]; then\n    echo 2\n  elif [ \"$1\" = 3 ]; then\n    if [ \"$2\" = 1 ]; then\n      echo 4\n    fi\n    echo 3\n  else\n    echo 0\n  fi\n}\n",
+            Language::Bash,
+            "a.sh",
+        );
+    }
+
+    /// An `if` in a braced `else` block is a real nested `if`. It is not an
+    /// `else if`, so it gets the nesting increment.
+    #[test]
+    fn test_if_in_else_block_is_nested() {
+        let code = "function f(x) {\n  if (x == 1) { return 1; } else { if (x == 2) { return 2; } }\n  return 0;\n}\n";
+        let result = parse_and_analyze(code.as_bytes(), Language::TypeScript, "a.ts");
+        let metrics = &result.functions[0].metrics;
+        // if +1, else +1, nested if +1 +1 for nesting level 1.
+        assert_eq!(metrics.cognitive, 4);
+        assert_eq!(metrics.max_nesting, 2);
+    }
+
+    /// Each probe has an `if` in the `try` body, the `catch` body, and the
+    /// `finally` body. SonarSource gives `try` and `finally` nothing and no
+    /// nesting. A `catch` adds 1 and nests. The cognitive complexity is
+    /// 1 + 1 + (1 + 1) + 1 = 5, and the `if` in the `catch` body has its body
+    /// at nesting level 2.
+    fn assert_try_catch(code: &str, lang: Language, filename: &str, expected: (u32, u32)) {
+        let result = parse_and_analyze(code.as_bytes(), lang, filename);
+        assert_eq!(result.functions.len(), 1, "{filename}");
+        let metrics = &result.functions[0].metrics;
+        assert_eq!(
+            (metrics.cyclomatic, metrics.cognitive),
+            expected,
+            "cyclomatic and cognitive of {filename}"
+        );
+        assert_eq!(metrics.max_nesting, 2, "max_nesting of {filename}");
+    }
+
+    #[test]
+    fn test_try_catch_python() {
+        assert_try_catch(
+            "def f(a, b, c):\n    try:\n        if a:\n            g()\n    except E:\n        if b:\n            h()\n    finally:\n        if c:\n            k()\n",
+            Language::Python,
+            "a.py",
+            (5, 5),
+        );
+    }
+
+    #[test]
+    fn test_try_catch_ecmascript() {
+        let code = "function f(a, b, c) {\n  try { if (a) { g(); } } catch (e) { if (b) { h(); } } finally { if (c) { k(); } }\n}\n";
+        for (lang, filename) in [
+            (Language::TypeScript, "a.ts"),
+            (Language::Tsx, "a.tsx"),
+            (Language::JavaScript, "a.js"),
+            (Language::Jsx, "a.jsx"),
+        ] {
+            assert_try_catch(code, lang, filename, (5, 5));
+        }
+    }
+
+    #[test]
+    fn test_try_catch_java_and_csharp() {
+        let code = "class A {\n  void f(boolean a, boolean b, boolean c) {\n    try { if (a) { g(); } } catch (E e) { if (b) { h(); } } finally { if (c) { k(); } }\n  }\n}\n";
+        assert_try_catch(code, Language::Java, "A.java", (5, 5));
+        assert_try_catch(code, Language::CSharp, "A.cs", (5, 5));
+    }
+
+    #[test]
+    fn test_try_catch_cpp() {
+        // C++ has no `finally`: 1 + 1 + (1 + 1) = 4.
+        assert_try_catch(
+            "void f(bool a, bool b) {\n  try { if (a) { g(); } } catch (int e) { if (b) { h(); } }\n}\n",
+            Language::Cpp,
+            "a.cpp",
+            (4, 4),
+        );
+    }
+
+    #[test]
+    fn test_try_catch_ruby() {
+        assert_try_catch(
+            "def f(a, b, c)\n  begin\n    if a\n      g\n    end\n  rescue E\n    if b\n      h\n    end\n  ensure\n    if c\n      k\n    end\n  end\nend\n",
+            Language::Ruby,
+            "a.rb",
+            (5, 5),
+        );
+    }
+
+    #[test]
+    fn test_try_catch_ruby_method_rescue() {
+        // 1 + 1 + (1 + 1) = 4.
+        assert_try_catch(
+            "def f(a, b)\n  if a\n    g\n  end\nrescue E\n  if b\n    h\n  end\nend\n",
+            Language::Ruby,
+            "a.rb",
+            (4, 4),
+        );
+    }
+
+    #[test]
+    fn test_try_catch_php() {
+        assert_try_catch(
+            "<?php\nfunction f($a, $b, $c) {\n  try { if ($a) { g(); } } catch (E $e) { if ($b) { h(); } } finally { if ($c) { k(); } }\n}\n",
+            Language::Php,
+            "a.php",
+            (5, 5),
+        );
+    }
+
+    fn assert_cognitive(code: &str, lang: Language, filename: &str, expected: u32) {
+        let result = parse_and_analyze(code.as_bytes(), lang, filename);
+        assert_eq!(result.functions.len(), 1, "{filename}: {code}");
+        assert_eq!(
+            result.functions[0].metrics.cognitive, expected,
+            "{filename}: {code}"
+        );
+    }
+
+    /// SonarSource adds 1 for a `goto` and for a `break` or `continue` to a
+    /// label. A plain `break` or `continue` adds nothing. Each probe has one
+    /// loop, which adds 1.
+    #[test]
+    fn test_jump_counts_only_with_a_label() {
+        let cases: &[(Language, &str, &str, u32)] = &[
+            (Language::TypeScript, "a.ts", "function f(xs) { for (const x of xs) { if (x) continue; break; } }", 3),
+            (Language::JavaScript, "a.js", "function f(xs) { outer: for (const x of xs) { break outer; } }", 2),
+            (Language::Java, "A.java", "class A { void f(int[] xs) { for (int x : xs) { continue; } } }", 1),
+            (Language::Java, "A.java", "class A { void f(int[] xs) { outer: for (int x : xs) { continue outer; } } }", 2),
+            (Language::CSharp, "A.cs", "class A { void F() { for (;;) { break; } } }", 1),
+            (Language::CSharp, "A.cs", "class A { void F() { for (;;) { goto done; } done: ; } }", 2),
+            (Language::C, "a.c", "void f(void) { for (;;) { break; } }", 1),
+            (Language::C, "a.c", "void f(void) { for (;;) { goto done; } done: ; }", 2),
+            (Language::Cpp, "a.cpp", "void f() { for (;;) { continue; } }", 1),
+            (Language::Go, "a.go", "package p\nfunc f() { for { break } }\n", 1),
+            (Language::Go, "a.go", "package p\nfunc f() {\nouter:\n\tfor { break outer }\n}\n", 2),
+            (Language::Go, "a.go", "package p\nfunc f() {\n\tfor { goto done }\ndone:\n}\n", 2),
+            (Language::Rust, "a.rs", "fn f() { loop { break; } }", 1),
+            (Language::Rust, "a.rs", "fn f() -> i32 { loop { break 5; } }", 1),
+            (Language::Rust, "a.rs", "fn f(x: i32) -> i32 { loop { break x; } }", 1),
+            (Language::Rust, "a.rs", "fn f() { 'outer: loop { break 'outer; } }", 2),
+            (Language::Python, "a.py", "def f(xs):\n    for x in xs:\n        break\n", 1),
+            (Language::Ruby, "a.rb", "def f(x)\n  while x\n    break\n  end\nend\n", 1),
+            (Language::Php, "a.php", "<?php\nfunction f($xs) { foreach ($xs as $x) { break; } }\n", 1),
+            (Language::Php, "a.php", "<?php\nfunction f($xs) { foreach ($xs as $x) { continue 1; } }\n", 1),
+            (Language::Php, "a.php", "<?php\nfunction f($xs) { foreach ($xs as $x) { foreach ($xs as $y) { break 2; } } }\n", 4),
+        ];
+        for (lang, filename, code, expected) in cases {
+            assert_cognitive(code, *lang, filename, *expected);
+        }
+    }
+
     // SonarSource Cognitive Complexity specification tests
     // These tests verify the fix for:
     // 1. else/elif adding +1 only (no nesting penalty)
@@ -1508,56 +1918,6 @@ fn complex(a: bool, b: bool, c: bool) {
         assert_eq!(
             result.functions[0].metrics.cognitive, 6,
             "3 nested ifs should equal 6 (1+2+3)"
-        );
-    }
-
-    #[test]
-    fn test_cognitive_catch_no_nesting_penalty() {
-        // Per SonarSource spec: catch adds +1 only, no nesting penalty
-        // (similar to else - it's already inside a nesting structure)
-        let code = br#"
-function safeParse(json) {
-    try {
-        if (json) {
-            return JSON.parse(json);
-        }
-    } catch (e) {
-        return null;
-    }
-}
-"#;
-        let result = parse_and_analyze(code, Language::JavaScript, "test.js");
-        assert_eq!(result.functions.len(), 1);
-        // try = +1 (nesting construct)
-        // if (inside try, depth 1) = +1 + 1 = 2
-        // catch = +1 (flat, no depth penalty per SonarSource spec)
-        // Total = 4
-        assert_eq!(
-            result.functions[0].metrics.cognitive, 4,
-            "try + nested if + catch should equal 4 (catch should not get nesting penalty)"
-        );
-    }
-
-    #[test]
-    fn test_cognitive_python_except_no_nesting_penalty() {
-        // Python's except is equivalent to catch - should be flat
-        let code = br#"
-def safe_parse(data):
-    try:
-        if data:
-            return json.loads(data)
-    except ValueError:
-        return None
-"#;
-        let result = parse_and_analyze(code, Language::Python, "test.py");
-        assert_eq!(result.functions.len(), 1);
-        // try = +1
-        // if (depth 1) = +1 + 1 = 2
-        // except = +1 (flat)
-        // Total = 4
-        assert_eq!(
-            result.functions[0].metrics.cognitive, 4,
-            "try + nested if + except should equal 4 (except should not get nesting penalty)"
         );
     }
 
@@ -1696,50 +2056,253 @@ fn drain(v: &mut Vec<i32>) {
         );
     }
 
+    /// Each probe has a `switch` or `match` with two cases and a default.
+    /// McCabe gives one decision point for each case that is not the
+    /// default, and none for the `switch` node, so the cyclomatic
+    /// complexity is 1 + 2 = 3.
+    /// SonarSource adds 1 and the nesting for the whole `switch`, `match`, or
+    /// `case`, and nothing for each case. Each probe has a switch of three
+    /// branches in an `if`: 1 for the `if` and 1 + 1 for the switch.
     #[test]
-    fn test_complexity_go_case_clauses() {
-        let code = br#"
-package main
-
-func classify(x int) string {
-    switch x {
-    case 0:
-        return "zero"
-    case 1:
-        return "one"
-    default:
-        return "other"
+    fn test_cognitive_switch_counts_once() {
+        let cases: &[(Language, &str, &str)] = &[
+            (Language::TypeScript, "a.ts", "function f(c, x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } }"),
+            (Language::JavaScript, "a.js", "function f(c, x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } }"),
+            (Language::Tsx, "a.tsx", "function f(c, x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } }"),
+            (Language::Java, "A.java", "class A { void f(boolean c, int x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } } }"),
+            (Language::Java, "A.java", "class A { void f(boolean c, int x) { if (c) { switch (x) { case 0 -> g(); case 1 -> g(); default -> g(); } } } }"),
+            (Language::Java, "A.java", "class A { int f(boolean c, int x) { if (c) { return switch (x) { case 0 -> 1; case 1 -> 2; default -> 3; }; } return 0; } }"),
+            (Language::CSharp, "A.cs", "class A { void F(bool c, int x) { if (c) { switch (x) { case 0: G(); break; case 1: G(); break; default: G(); break; } } } }"),
+            (Language::CSharp, "A.cs", "class A { int F(bool c, int x) { if (c) { return x switch { 0 => 1, 1 => 2, _ => 3 }; } return 0; } }"),
+            (Language::C, "a.c", "void f(int c, int x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } }"),
+            (Language::Cpp, "a.cpp", "void f(int c, int x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } }"),
+            (Language::Go, "a.go", "package p\nfunc f(c bool, x int) { if c { switch x { case 0: g() ; case 1: g() ; default: g() } } }\n"),
+            (Language::Go, "a.go", "package p\nfunc f(c bool, v any) { if c { switch v.(type) { case int: g() ; case string: g() ; default: g() } } }\n"),
+            (Language::Go, "a.go", "package p\nfunc f(c bool, a, b chan int) { if c { select { case <-a: g() ; case <-b: g() ; default: g() } } }\n"),
+            (Language::Rust, "a.rs", "fn f(c: bool, x: i32) { if c { match x { 0 => a(), 1 => b(), _ => d() } } }"),
+            (Language::Python, "a.py", "def f(c, x):\n    if c:\n        match x:\n            case 0:\n                g()\n            case 1:\n                g()\n            case _:\n                g()\n"),
+            (Language::Ruby, "a.rb", "def f(c, x)\n  if c\n    case x\n    when 0 then g\n    when 1 then g\n    else g\n    end\n  end\nend\n"),
+            (Language::Ruby, "a.rb", "def f(c, x)\n  if c\n    case x\n    in 0 then g\n    in 1 then g\n    else g\n    end\n  end\nend\n"),
+            (Language::Php, "a.php", "<?php\nfunction f($c, $x) { if ($c) { switch ($x) { case 0: g(); break; case 1: g(); break; default: g(); } } }\n"),
+            (Language::Php, "a.php", "<?php\nfunction f($c, $x) { if ($c) { return match ($x) { 0 => 1, 1 => 2, default => 3 }; } return 0; }\n"),
+            (Language::Bash, "a.sh", "f() {\n  if [ \"$c\" ]; then\n    case \"$x\" in\n      a) g ;;\n      b) g ;;\n      *) g ;;\n    esac\n  fi\n}\n"),
+        ];
+        let mut failures = Vec::new();
+        for (lang, filename, code) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            let cognitive: Vec<u32> = result
+                .functions
+                .iter()
+                .map(|f| f.metrics.cognitive)
+                .collect();
+            if cognitive != [3] {
+                failures.push(format!("{lang:?} {cognitive:?}: {code}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
-}
-"#;
-        let result = parse_and_analyze(code, Language::Go, "test.go");
-        assert_eq!(result.functions.len(), 1);
-        // baseline 1 + expression_switch_statement 1 + expression_case * 2 = 4
-        // (default_case is not counted)
+
+    /// A C# `foreach` is a loop: 1 decision point, and 1 + nesting for
+    /// cognitive. A Python `with` is not a branch: it adds nothing.
+    #[test]
+    fn test_csharp_foreach_and_python_with() {
+        let cases: &[(Language, &str, &str, u32, u32)] = &[
+            (Language::CSharp, "A.cs", "class A { void F(bool c, int[] xs) { if (c) { foreach (var x in xs) { G(x); } } } }", 3, 3),
+            (Language::Python, "a.py", "def f(c, p):\n    if c:\n        with open(p) as handle:\n            g(handle)\n", 2, 1),
+        ];
+        for (lang, filename, code, cyclomatic, cognitive) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            assert_eq!(result.functions.len(), 1, "{code}");
+            let metrics = &result.functions[0].metrics;
+            assert_eq!(
+                (metrics.cyclomatic, metrics.cognitive),
+                (*cyclomatic, *cognitive),
+                "{code}"
+            );
+        }
+    }
+
+    /// The default branch is the one that matches each remaining value: no
+    /// guard, and a pattern that cannot fail.
+    #[test]
+    fn test_default_branch_shapes() {
+        let cases: &[(Language, &str, &str, u32)] = &[
+            (Language::Python, "a.py", "def f(x):\n    match x:\n        case 0:\n            pass\n        case _, _:\n            pass\n", 3),
+            (Language::Python, "a.py", "def f(x):\n    match x:\n        case 0:\n            pass\n        case rest:\n            pass\n", 2),
+            (Language::Python, "a.py", "def f(x):\n    match x:\n        case 0:\n            pass\n        case Color.RED:\n            pass\n", 3),
+            (Language::Python, "a.py", "def f(x, y):\n    match x:\n        case 0:\n            pass\n        case rest if y:\n            pass\n", 3),
+            (Language::CSharp, "A.cs", "class A { int F(int x) { return x switch { 0 => 1, var rest => rest }; } }", 2),
+            (Language::CSharp, "A.cs", "class A { int F((int, int) x) { return x switch { (0, 0) => 1, var (a, b) => a }; } }", 3),
+            (Language::CSharp, "A.cs", "class A { int F(int x) { return x switch { _ when x > 0 => 1, _ => 0 }; } }", 2),
+            (Language::Bash, "a.sh", "f() {\n  case \"$x\" in\n    a) g ;;\n    b|*) g ;;\n  esac\n}\n", 2),
+        ];
+        let mut failures = Vec::new();
+        for (lang, filename, code, expected) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            let cyclomatic: Vec<u32> = result
+                .functions
+                .iter()
+                .map(|f| f.metrics.cyclomatic)
+                .collect();
+            if cyclomatic != [*expected] {
+                failures.push(format!(
+                    "{lang:?} {cyclomatic:?}, expected {expected}: {code}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// An `else` without braces adds 1, and its body keeps its own score.
+    /// A PHP jump level is a number: `break (2)` leaves two loops, and
+    /// `continue 0x1` leaves one.
+    #[test]
+    fn test_bare_else_and_php_jump_levels() {
+        let cases: &[(Language, &str, &str, u32)] = &[
+            (Language::Java, "A.java", "class A { void f(boolean a, boolean b) { if (a) { g(); } else while (b) { g(); } } }", 4),
+            (Language::Java, "A.java", "class A { void f(boolean a, boolean b) { while (a) { if (b) g(); else break; } } }", 4),
+            (Language::CSharp, "A.cs", "class A { void F(bool a, bool b) { if (a) { G(); } else while (b) { G(); } } }", 4),
+            (Language::CSharp, "A.cs", "class A { void F(bool a) { if (a) { G(); } else goto done; done: ; } }", 3),
+            (Language::Php, "a.php", "<?php\nfunction f() { while (1) { while (1) { break (2); } } }\n", 4),
+            (Language::Php, "a.php", "<?php\nfunction f() { while (1) { continue 0x1; } }\n", 1),
+            (Language::Php, "a.php", "<?php\nfunction f() { while (1) { while (1) { continue 0b10; } } }\n", 4),
+        ];
+        let mut failures = Vec::new();
+        for (lang, filename, code, expected) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            let cognitive: Vec<u32> = result
+                .functions
+                .iter()
+                .map(|f| f.metrics.cognitive)
+                .collect();
+            if cognitive != [*expected] {
+                failures.push(format!(
+                    "{lang:?} {cognitive:?}, expected {expected}: {code}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    fn assert_two_case_switch(code: &str, lang: Language, filename: &str) {
+        let result = parse_and_analyze(code.as_bytes(), lang, filename);
+        assert_eq!(result.functions.len(), 1, "{filename}: {code}");
         assert_eq!(
-            result.functions[0].metrics.cyclomatic, 4,
-            "Go switch with 2 case clauses: 1 base + 1 switch + 2 cases = 4"
+            result.functions[0].metrics.cyclomatic, 3,
+            "{filename}: {code}"
         );
     }
 
     #[test]
-    fn test_complexity_typescript_switch_case() {
-        let code = br#"
-function classify(x: number): string {
-    switch (x) {
-        case 0: return "zero";
-        case 1: return "one";
-        default: return "other";
+    fn test_switch_cases_go() {
+        for body in [
+            "switch x { case 0: g() ; case 1, 2: g() ; default: g() }",
+            "switch v.(type) { case int: g() ; case string: g() ; default: g() }",
+            "select { case <-c: g() ; case c <- 1: g() ; default: g() }",
+        ] {
+            let code = format!("package p\nfunc f(x int, v any, c chan int) {{ {body} }}\n");
+            assert_two_case_switch(&code, Language::Go, "a.go");
+        }
     }
-}
-"#;
-        let result = parse_and_analyze(code, Language::TypeScript, "test.ts");
-        assert_eq!(result.functions.len(), 1);
-        // baseline 1 + switch_statement 1 + switch_case * 2 = 4
-        // (default_clause is not a switch_case, so not counted)
-        assert!(
-            result.functions[0].metrics.cyclomatic >= 4,
-            "TypeScript switch with 2 case clauses should count each case as a decision point"
+
+    #[test]
+    fn test_switch_cases_rust() {
+        // A `match` is exhaustive, so its last arm is the default.
+        for body in [
+            "match x { 0 => a(), 1 | 2 => b(), _ => c() }",
+            "match x { 0 => a(), 1 => b(), n => c(n) }",
+        ] {
+            let code = format!("fn f(x: i32) {{ {body} }}\n");
+            assert_two_case_switch(&code, Language::Rust, "a.rs");
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_python() {
+        assert_two_case_switch(
+            "def f(x):\n    match x:\n        case 0:\n            pass\n        case 1 | 2:\n            pass\n        case _:\n            pass\n",
+            Language::Python,
+            "a.py",
+        );
+    }
+
+    #[test]
+    fn test_switch_cases_python_guarded_wildcard_is_a_case() {
+        let code = "def f(x, y):\n    match x:\n        case 0:\n            pass\n        case _ if y:\n            pass\n";
+        assert_two_case_switch(code, Language::Python, "a.py");
+    }
+
+    #[test]
+    fn test_switch_cases_ecmascript() {
+        let code = "function f(x) { switch (x) { case 0: a(); break; case 1: b(); break; default: c(); } }\n";
+        for (lang, filename) in [
+            (Language::TypeScript, "a.ts"),
+            (Language::Tsx, "a.tsx"),
+            (Language::JavaScript, "a.js"),
+            (Language::Jsx, "a.jsx"),
+        ] {
+            assert_two_case_switch(code, lang, filename);
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_java() {
+        for body in [
+            "switch (x) { case 0: a(); break; case 1: b(); break; default: c(); }",
+            "switch (x) { case 0 -> a(); case 1, 2 -> b(); default -> c(); }",
+            "int y = switch (x) { case 0 -> 1; case 1 -> 2; default -> 0; };",
+        ] {
+            let code = format!("class A {{ void f(int x) {{ {body} }} }}\n");
+            assert_two_case_switch(&code, Language::Java, "A.java");
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_csharp() {
+        for body in [
+            "switch (x) { case 0: A(); break; case int n when n > 2: B(); break; default: C(); break; }",
+            "var y = x switch { 0 => 1, 1 => 2, _ => 0 };",
+        ] {
+            let code = format!("class A {{ void F(int x) {{ {body} }} }}\n");
+            assert_two_case_switch(&code, Language::CSharp, "A.cs");
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_c_and_cpp() {
+        let code = "void f(int x) { switch (x) { case 0: a(); break; case 1: b(); break; default: c(); } }\n";
+        assert_two_case_switch(code, Language::C, "a.c");
+        assert_two_case_switch(code, Language::Cpp, "a.cpp");
+    }
+
+    #[test]
+    fn test_switch_cases_ruby() {
+        for body in [
+            "case x\n  when 0 then a\n  when 1, 2 then b\n  else c\n  end",
+            "case x\n  in 0 then a\n  in Integer then b\n  else c\n  end",
+        ] {
+            let code = format!("def f(x)\n  {body}\nend\n");
+            assert_two_case_switch(&code, Language::Ruby, "a.rb");
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_php() {
+        for body in [
+            "switch ($x) { case 0: a(); break; case 1: b(); break; default: c(); }",
+            "$y = match($x) { 0 => 1, 1, 2 => 2, default => 0 };",
+        ] {
+            let code = format!("<?php\nfunction f($x) {{ {body} }}\n");
+            assert_two_case_switch(&code, Language::Php, "a.php");
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_bash() {
+        assert_two_case_switch(
+            "f() {\n  case \"$1\" in\n    a) echo 0 ;;\n    b|c) echo 1 ;;\n    *) echo 2 ;;\n  esac\n}\n",
+            Language::Bash,
+            "a.sh",
         );
     }
 

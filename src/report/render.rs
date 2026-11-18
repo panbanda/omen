@@ -570,6 +570,9 @@ fn build_security_json(report: &SecurityData) -> serde_json::Value {
                 "route": entry.route.as_ref().map(|route| format!("{} {}", route.method, route.path_text())),
                 "handler": entry.symbol.as_deref().map(symbol_name),
                 "guards": entry.guards,
+                "guards_text": entry.guards_text(),
+                "guards_complete": entry.guards_complete,
+                "guards_unknown_reason": entry.guards_unknown_reason.map(|reason| reason.name()),
                 "categories": reached,
                 "shortest": shortest,
                 "hops": hops,
@@ -1842,6 +1845,10 @@ mod tests {
         assert!(html.contains("entry: http_handler"));
         assert!(html.contains("component: src"));
         assert!(html.contains("Declared guards"));
+        assert!(
+            html.contains("unknown (layer_not_read)"),
+            "the state of a guard list that is not complete"
+        );
     }
 
     #[test]

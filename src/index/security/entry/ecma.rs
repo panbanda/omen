@@ -29,7 +29,7 @@ use tree_sitter::Node;
 
 use super::{
     join_path, route, route_parameters, syntax, Context, Draft, EntryBasis, EntryKind,
-    InlineHandler, Route, HTTP_VERBS,
+    GuardsUnknownReason, InlineHandler, Route, HTTP_VERBS,
 };
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ImportBinding, ImportKind, ImportTarget, Span, SymbolKind};
@@ -2027,6 +2027,15 @@ impl<'a> Context<'a> {
             .filter(|argument| matches!(argument.kind(), "identifier" | "member_expression"))
             .map(|argument| self.text(*argument).to_string())
             .collect();
+        // A middleware that is a call or a function has no name to report. The options object
+        // of Fastify is not a middleware.
+        let is_options = |argument: Node<'_>| {
+            framework == Framework::Fastify && unwrap(argument).kind() == "object"
+        };
+        let unread = arguments[1..arguments.len() - 1].iter().any(|argument| {
+            let named = matches!(argument.kind(), "identifier" | "member_expression");
+            !named && !is_options(*argument)
+        });
         let (symbol, inline_handler) = self.ecma_handler(handler);
         let method = method_of(verb);
         let routes: Vec<Route> = match self.mount_prefixes(unit, receiver) {
@@ -2047,6 +2056,7 @@ impl<'a> Context<'a> {
                 basis: EntryBasis::Registered,
                 variant: None,
                 inline_handler: inline_handler.clone(),
+                unknown: unread.then_some(GuardsUnknownReason::UnreadMiddleware),
             });
         }
     }
@@ -2362,6 +2372,7 @@ impl<'a> Context<'a> {
                         basis: EntryBasis::Declared,
                         variant: None,
                         inline_handler: None,
+                        unknown: None,
                     });
                 }
             }
@@ -2462,7 +2473,7 @@ impl<'a> Context<'a> {
 mod tests {
     use super::super::tests::{assert_scales_linearly, entries, entries_timed};
     use crate::core::Language;
-    use crate::index::security::entry::{EntryKind, EntryPoint};
+    use crate::index::security::entry::{EntryKind, EntryPoint, GuardsUnknownReason};
 
     /// The method, the path, the handler symbol, the guards, and the framework of each route.
     type Row = (String, Option<String>, Option<String>, Vec<String>, String);
@@ -3061,6 +3072,63 @@ mod tests {
             .join()
             .expect("no stack overflow");
         assert_eq!(found, 1);
+    }
+
+    fn completeness(files: &[(&str, &str)]) -> Vec<(String, bool, Option<GuardsUnknownReason>)> {
+        http(files)
+            .into_iter()
+            .map(|entry| {
+                (
+                    entry.framework,
+                    entry.guards_complete,
+                    entry.guards_unknown_reason,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn each_typescript_framework_has_a_guard_layer_that_omen_does_not_read() {
+        let layer = Some(GuardsUnknownReason::LayerNotRead);
+        let express = "import express from 'express';\nconst app = express();\napp.use(auth);\napp.get('/a', handler);\nfunction auth() {}\nfunction handler() {}\n";
+        let fastify = "import fastify from 'fastify';\nconst server = fastify();\nserver.get('/a', handler);\nfunction handler() {}\n";
+        let koa = "import Router from '@koa/router';\nconst router = new Router();\nrouter.get('/a', handler);\nfunction handler() {}\n";
+        let nest = "import { Controller, Get } from '@nestjs/common';\n@Controller('c')\nexport class C {\n  @Get('a')\n  a() {}\n}\n";
+        let route = "type Method = 'get';\nconst RouteFactory = (method: Method) => (path: string) => () => {};\nexport const Get = RouteFactory('get');\n";
+        let mine =
+            "import { Get } from './route';\nexport class Mine {\n  @Get('/a')\n  a() {}\n}\n";
+        for (files, framework) in [
+            (vec![("src/a.ts", express)], "express"),
+            (vec![("src/a.ts", fastify)], "fastify"),
+            (vec![("src/a.ts", koa)], "koa"),
+            (vec![("src/a.ts", nest)], "nestjs"),
+            (
+                vec![("src/route.ts", route), ("src/mine.ts", mine)],
+                "repository_decorators",
+            ),
+        ] {
+            assert_eq!(
+                completeness(&files),
+                [(framework.to_string(), false, layer)],
+                "{framework}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_middleware_of_a_route_that_is_not_a_name_is_unread() {
+        let source = "import express from 'express';\nimport fastify from 'fastify';\nconst app = express();\napp.get('/call', limit(5), handler);\napp.get('/inline', (req, res, next) => next(), handler);\napp.get('/name', auth, handler);\nconst server = fastify();\nserver.get('/options', { schema: {} }, handler);\nfunction auth() {}\nfunction limit(count: number) { return auth; }\nfunction handler() {}\n";
+        let unread = Some(GuardsUnknownReason::UnreadMiddleware);
+        let layer = Some(GuardsUnknownReason::LayerNotRead);
+        assert_eq!(
+            completeness(&[("src/a.ts", source)]),
+            [
+                ("express".to_string(), false, unread),
+                ("express".to_string(), false, unread),
+                ("express".to_string(), false, layer),
+                ("fastify".to_string(), false, layer),
+            ]
+        );
     }
 
     fn routes_on_a_small_stack(source: String) -> usize {

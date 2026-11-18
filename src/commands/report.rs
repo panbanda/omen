@@ -369,6 +369,7 @@ fn generate_with(
     // Group B: Git-heavy analyzers (I/O-bound, overlap with CPU work)
     // Group C: Mixed analyzers (benefit from warm OS caches)
     let security_analyzer = crate::analyzers::security::Analyzer::from_config(config)?;
+    let clones_analyzer = crate::analyzers::duplicates::Analyzer::from_config(config);
 
     std::thread::scope(|s| {
         // Group A: file-based analyzers
@@ -386,11 +387,7 @@ fn generate_with(
                 "deadcode",
                 "deadcode"
             );
-            run_analyzer!(
-                crate::analyzers::duplicates::Analyzer::default(),
-                "clones",
-                "clones"
-            );
+            run_analyzer!(clones_analyzer, "clones", "clones");
             run_analyzer!(
                 crate::analyzers::cohesion::Analyzer::default(),
                 "cohesion",

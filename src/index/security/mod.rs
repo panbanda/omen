@@ -39,6 +39,10 @@ pub struct EntrySummary {
     pub framework: String,
     pub route: Option<String>,
     pub guards: Vec<String>,
+    /// `false` when code that omen did not read can add a guard or remove one.
+    pub guards_complete: bool,
+    /// Why the guard list is not complete.
+    pub guards_unknown_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +69,10 @@ pub fn symbol_security(analysis: &analysis::Analysis, symbol_key: &str) -> Symbo
                 .as_ref()
                 .map(|route| format!("{} {}", route.method, route.path_text())),
             guards: entry.guards.clone(),
+            guards_complete: entry.guards_complete,
+            guards_unknown_reason: entry
+                .guards_unknown_reason
+                .map(|reason| reason.name().to_string()),
         });
     let sinks_in_body = analysis
         .sinks

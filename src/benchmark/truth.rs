@@ -291,16 +291,27 @@ pub struct EntryPointLabel {
     /// The declared guards, in the order in which omen reports them.
     #[serde(default)]
     pub guards: Vec<String>,
+    /// The key of the handler symbol. `null` states that the entry point has no symbol. Without
+    /// the field, the symbol is not checked.
+    #[serde(default, deserialize_with = "present")]
+    pub symbol: Option<Option<String>>,
+    /// Whether the guard list is complete. Without the field, the state is not checked.
+    #[serde(default)]
+    pub guards_complete: Option<bool>,
+    /// The reason when the guard list is not complete. `null` states that omen gives no reason.
+    /// Without the field, the reason is not checked.
+    #[serde(default, deserialize_with = "present")]
+    pub guards_unknown_reason: Option<Option<String>>,
 }
 
-/// A field that is present in the JSON, also with the value `null`. With `#[serde(default)]`, an
-/// omitted field stays `None`.
-fn present<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+/// Reads a field that is in the label, also when its value is `null`. Thus a label can tell
+/// `null` from a field that it does not have.
+fn present<'de, D, T>(deserializer: D) -> std::result::Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
 {
-    T::deserialize(deserializer).map(Some)
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// One call, member access, or literal that is a sink or must not be one.
@@ -488,6 +499,9 @@ pub struct ObservedEntryPoint {
     pub path: Option<String>,
     pub parameters: Vec<String>,
     pub guards: Vec<String>,
+    pub symbol: Option<String>,
+    pub guards_complete: bool,
+    pub guards_unknown_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1015,6 +1029,33 @@ fn compare_entry_points(
                 mismatch(format!("{:?}", label.guards), format!("{:?}", entry.guards))
             }),
         ));
+        if let Some(symbol) = &label.symbol {
+            out.push(check(
+                "symbol",
+                found.and_then(|entry| {
+                    mismatch(format!("{symbol:?}"), format!("{:?}", entry.symbol))
+                }),
+            ));
+        }
+        if let Some(complete) = label.guards_complete {
+            out.push(check(
+                "guards_complete",
+                found.and_then(|entry| {
+                    mismatch(complete.to_string(), entry.guards_complete.to_string())
+                }),
+            ));
+        }
+        if let Some(reason) = &label.guards_unknown_reason {
+            out.push(check(
+                "guards_unknown_reason",
+                found.and_then(|entry| {
+                    mismatch(
+                        format!("{reason:?}"),
+                        format!("{:?}", entry.guards_unknown_reason),
+                    )
+                }),
+            ));
+        }
     }
     let closed = labels
         .entry_points_closed_world
@@ -2288,6 +2329,9 @@ mod tests {
             path: Some("/u/<id>".to_string()),
             parameters: vec!["id".to_string()],
             guards: vec!["login_required".to_string()],
+            symbol: Some("app.py#update".to_string()),
+            guards_complete: false,
+            guards_unknown_reason: Some("layer_not_read".to_string()),
         }
     }
 
@@ -2307,6 +2351,52 @@ mod tests {
             ..Observed::default()
         };
         assert_eq!(entry_failures(&observed), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_label_checks_the_symbol_and_the_guard_state_only_when_it_has_the_fields() {
+        let mut labels = entry_labels();
+        let mut wrong = observed_entry();
+        wrong.symbol = None;
+        wrong.guards_complete = true;
+        wrong.guards_unknown_reason = None;
+        let observed = Observed {
+            entry_points: vec![wrong],
+            ..Observed::default()
+        };
+        let failures = |labels: &Labels| -> Vec<String> {
+            compare("python/entry_points", labels, &observed)
+                .unwrap()
+                .into_iter()
+                .filter(|assertion| !assertion.passed)
+                .map(|assertion| assertion.id)
+                .collect()
+        };
+        assert_eq!(failures(&labels), Vec::<String>::new());
+        labels.entry_points[0].symbol = Some(Some("app.py#update".to_string()));
+        labels.entry_points[0].guards_complete = Some(false);
+        labels.entry_points[0].guards_unknown_reason = Some(Some("layer_not_read".to_string()));
+        assert_eq!(
+            failures(&labels),
+            [
+                "python/entry_points/entry_points/update/symbol",
+                "python/entry_points/entry_points/update/guards_complete",
+                "python/entry_points/entry_points/update/guards_unknown_reason",
+            ]
+        );
+        let stated: Labels = serde_json::from_value(serde_json::json!({
+            "version": 1, "language": "python", "split": "development", "oracle": "x",
+            "closed_world": true,
+            "entry_points": [
+                {"label": "update", "file": "app.py", "line": 7, "kind": "http_handler",
+                 "framework": "flask", "method": "POST", "path": "/u/<id>",
+                 "parameters": ["id"], "guards": ["login_required"], "symbol": null,
+                 "guards_complete": true, "guards_unknown_reason": null}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(stated.entry_points[0].symbol, Some(None));
+        assert_eq!(failures(&stated), Vec::<String>::new());
     }
 
     #[test]
