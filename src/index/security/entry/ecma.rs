@@ -1,0 +1,2388 @@
+//! TypeScript and JavaScript routes. The section "TypeScript and JavaScript routes" in
+//! `docs/SECURITY.md` lists each form that omen reads and each form that it skips.
+//!
+//! - Registrations. `receiver.verb(path, ...middleware, handler)` registers a route when the
+//!   receiver is a framework value: an Express application or router, a Fastify instance, or a
+//!   Koa router. A framework value is a constructor call of the framework, a name that one
+//!   declaration binds to a framework value, a parameter or a field with a framework type, or
+//!   `this.name` for a field of the class or of a superclass.
+//! - Decorators. A class decorator gives a prefix, and a method decorator gives a verb and a path.
+//!   The decorators of NestJS, routing-controllers, and tsoa come from an import of the package. A
+//!   decorator of the repository is a verb when its definition is a call `factory("verb")`.
+//! - Paths. A string, a template, a `+` of strings, and a `const` name that the scope or an import
+//!   resolves give the path. A part that omen cannot resolve makes the path `None`. The template
+//!   keeps that part as `${expression}`.
+//! - Mounts. `parent.use(prefix, router)` in the file of the router adds the prefix to the routes
+//!   of the router.
+//! - Inline handlers. A function value without a name gets a key that the security analysis
+//!   gives to a node of its own in the call graph.
+
+use std::cell::{OnceCell, RefCell};
+use std::collections::HashMap;
+use std::ops::Range;
+use std::rc::Rc;
+use std::sync::OnceLock;
+
+use tree_sitter::Node;
+
+use super::{
+    join_path, route, route_parameters, syntax, Context, Draft, EntryBasis, EntryKind,
+    InlineHandler, Route, HTTP_VERBS,
+};
+use crate::index::extract::FileSymbols;
+use crate::index::model::{ImportBinding, ImportKind, ImportTarget, Span, SymbolKind};
+
+/// The longest chain of names, imports, mounts, and superclasses that omen follows.
+const MAX_HOPS: usize = 16;
+
+/// The framework name of a route that a decorator of the repository declares.
+const REPOSITORY_DECORATORS: &str = "repository_decorators";
+
+const FUNCTIONS: [&str; 7] = [
+    "function_declaration",
+    "function_expression",
+    "function",
+    "arrow_function",
+    "method_definition",
+    "generator_function",
+    "generator_function_declaration",
+];
+
+/// The functions that give `this` a new value. An arrow function keeps the `this` of its scope.
+const THIS_BINDERS: [&str; 5] = [
+    "function_declaration",
+    "function_expression",
+    "function",
+    "generator_function",
+    "generator_function_declaration",
+];
+
+const BLOCKS: [&str; 7] = [
+    "program",
+    "statement_block",
+    "class_static_block",
+    "for_statement",
+    "for_in_statement",
+    "catch_clause",
+    "switch_body",
+];
+
+const CLASSES: [&str; 3] = ["class_declaration", "class", "abstract_class_declaration"];
+
+/// The expressions that give the value of the expression in them.
+const WRAPPERS: [&str; 5] = [
+    "parenthesized_expression",
+    "as_expression",
+    "satisfies_expression",
+    "non_null_expression",
+    "type_assertion",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Framework {
+    Express,
+    Fastify,
+    Koa,
+}
+
+impl Framework {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Express => "express",
+            Self::Fastify => "fastify",
+            Self::Koa => "koa",
+        }
+    }
+}
+
+/// A package whose decorators declare routes.
+struct DecoratorPackage {
+    module: &'static str,
+    framework: &'static str,
+    /// The class decorators that give a prefix.
+    prefixes: &'static [&'static str],
+    /// The method decorators that give a route, with the method.
+    verbs: &'static [(&'static str, &'static str)],
+    /// The decorators whose arguments are guards, as `UseGuards(AuthGuard)`.
+    guard_lists: &'static [&'static str],
+    /// The decorators that are a guard themselves, as `Authorized()`.
+    guard_markers: &'static [&'static str],
+}
+
+const PACKAGES: [DecoratorPackage; 3] = [
+    DecoratorPackage {
+        module: "@nestjs/common",
+        framework: "nestjs",
+        prefixes: &["Controller"],
+        verbs: &[
+            ("Get", "GET"),
+            ("Post", "POST"),
+            ("Put", "PUT"),
+            ("Patch", "PATCH"),
+            ("Delete", "DELETE"),
+            ("Head", "HEAD"),
+            ("Options", "OPTIONS"),
+            ("All", "ANY"),
+        ],
+        guard_lists: &["UseGuards"],
+        guard_markers: &[],
+    },
+    DecoratorPackage {
+        module: "routing-controllers",
+        framework: "routing-controllers",
+        prefixes: &["Controller", "JsonController"],
+        verbs: &[
+            ("Get", "GET"),
+            ("Post", "POST"),
+            ("Put", "PUT"),
+            ("Patch", "PATCH"),
+            ("Delete", "DELETE"),
+            ("Head", "HEAD"),
+            ("All", "ANY"),
+        ],
+        guard_lists: &["UseBefore"],
+        guard_markers: &["Authorized"],
+    },
+    DecoratorPackage {
+        module: "tsoa",
+        framework: "tsoa",
+        prefixes: &["Route"],
+        verbs: &[
+            ("Get", "GET"),
+            ("Post", "POST"),
+            ("Put", "PUT"),
+            ("Patch", "PATCH"),
+            ("Delete", "DELETE"),
+            ("Head", "HEAD"),
+            ("Options", "OPTIONS"),
+        ],
+        guard_lists: &["Middlewares"],
+        guard_markers: &["Security"],
+    },
+];
+
+/// How one scope binds a name. A range is the range of a node in the file of the scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Declared {
+    /// `const name = value`, with the range of the value.
+    Const(Range<usize>),
+    /// `let` or `var` with a value, with the range of the value.
+    Variable(Range<usize>),
+    /// A parameter, with the range of its type annotation.
+    Parameter(Option<Range<usize>>),
+    /// A class declaration, with the range of the class.
+    Class(Range<usize>),
+    /// A function declaration.
+    Function,
+    /// An import or a `require` call. The index has the binding.
+    Import,
+    /// Any other binding, or more than one binding in the scope.
+    Other,
+}
+
+type Declarations = HashMap<String, Declared>;
+
+/// The key of a binding: the id of the scope node and the name.
+type BindingKey = (usize, String);
+
+/// A part of a path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Part {
+    Text(String),
+    /// The source text of an expression that omen cannot resolve.
+    Unknown(String),
+}
+
+/// A `use` call that mounts a router of the file.
+struct Mount {
+    /// The receiver of the `use` call, when it is a name of the file.
+    parent: Option<BindingKey>,
+    prefix: Vec<Part>,
+}
+
+/// The positions of the import bindings of a file, by the local name.
+type ImportsByName = HashMap<String, Vec<usize>>;
+
+/// The facts of one file that the search of its routes reads more than one time.
+#[derive(Default)]
+pub(super) struct State {
+    /// The bindings of each scope, by the position of the file and the id of the scope node.
+    scopes: RefCell<HashMap<(usize, usize), Rc<Declarations>>>,
+    /// The imports of each file, by the position of the file and then by the local name.
+    imports: RefCell<HashMap<usize, Rc<ImportsByName>>>,
+    mounts: OnceCell<HashMap<BindingKey, Vec<Mount>>>,
+    /// The positions of the symbols of the file, by the end of their range.
+    symbol_ends: OnceCell<HashMap<usize, Vec<usize>>>,
+}
+
+/// The facts that the searches of all files share.
+#[derive(Default)]
+pub(super) struct Shared {
+    positions: OnceLock<HashMap<String, usize>>,
+    /// The framework of a field, by the position of the file, the start of the class, and the
+    /// name of the field.
+    fields: parking_lot::Mutex<HashMap<(usize, usize, String), Option<Framework>>>,
+}
+
+/// A file and its syntax tree.
+#[derive(Clone, Copy)]
+struct Unit<'t> {
+    position: usize,
+    source: &'t [u8],
+    root: Node<'t>,
+}
+
+/// One decorator call: `@name(arguments)` or `@name`.
+struct DecoratorCall<'t> {
+    node: Node<'t>,
+    callee: Node<'t>,
+    arguments: Vec<Node<'t>>,
+}
+
+/// Where the definition of a decorator is.
+enum Origin {
+    Package(&'static DecoratorPackage, String),
+    /// A definition of the repository. `module` is the import path, or empty for a definition of
+    /// the same file.
+    Repository {
+        module: String,
+        position: usize,
+        declared: Declared,
+    },
+}
+
+impl Origin {
+    fn module(&self) -> &str {
+        match self {
+            Self::Package(package, _) => package.module,
+            Self::Repository { module, .. } => module,
+        }
+    }
+}
+
+fn text<'t>(node: Node<'_>, source: &'t [u8]) -> &'t str {
+    syntax::text(node, source)
+}
+
+fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).collect()
+}
+
+fn children(node: Node<'_>) -> Vec<Node<'_>> {
+    let mut cursor = node.walk();
+    node.children(&mut cursor).collect()
+}
+
+/// The expression in the wrappers that do not change its value.
+fn unwrap(node: Node<'_>) -> Node<'_> {
+    let mut node = node;
+    while WRAPPERS.contains(&node.kind()) {
+        match node.named_child(0) {
+            Some(inner) => node = inner,
+            None => break,
+        }
+    }
+    node
+}
+
+/// The node with the range. Of two nodes with the same range, the outer one.
+fn node_at<'t>(root: Node<'t>, range: &Range<usize>) -> Option<Node<'t>> {
+    let mut node = root.descendant_for_byte_range(range.start, range.end)?;
+    while let Some(parent) = node.parent() {
+        if parent.byte_range() != *range {
+            break;
+        }
+        node = parent;
+    }
+    (node.byte_range() == *range).then_some(node)
+}
+
+/// The value of one escape sequence of a string, as ECMAScript gives it. A legacy octal escape
+/// gives `None`.
+fn escape_value(escape: &str) -> Option<String> {
+    let body = escape.strip_prefix('\\')?;
+    let mut characters = body.chars();
+    let first = characters.next()?;
+    let rest: &str = characters.as_str();
+    let hex = |digits: &str| {
+        u32::from_str_radix(digits, 16)
+            .ok()
+            .and_then(char::from_u32)
+    };
+    let value = match first {
+        'n' => '\n',
+        't' => '\t',
+        'r' => '\r',
+        'b' => '\u{8}',
+        'f' => '\u{c}',
+        'v' => '\u{b}',
+        '0' if rest.is_empty() => '\0',
+        '1'..='9' => return None,
+        'x' => hex(rest)?,
+        'u' => hex(rest.trim_start_matches('{').trim_end_matches('}'))?,
+        '\r' | '\n' | '\u{2028}' | '\u{2029}' => return Some(String::new()),
+        other => other,
+    };
+    Some(value.to_string())
+}
+
+/// The value of a string literal, or `None` when it has a part that omen does not evaluate.
+fn string_value(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut value = String::new();
+    for child in named_children(node) {
+        match child.kind() {
+            "string_fragment" => value.push_str(text(child, source)),
+            "escape_sequence" => value.push_str(&escape_value(text(child, source))?),
+            _ => return None,
+        }
+    }
+    Some(value)
+}
+
+/// The text of the parts, when each part is a text.
+fn resolved(parts: &[Part]) -> Option<String> {
+    parts
+        .iter()
+        .map(|part| match part {
+            Part::Text(text) => Some(text.as_str()),
+            Part::Unknown(_) => None,
+        })
+        .collect()
+}
+
+/// The outer prefix and then the inner prefix, with one `/` between them.
+fn joined(mut outer: Vec<Part>, inner: &[Part]) -> Vec<Part> {
+    let outer_slash = matches!(outer.last(), Some(Part::Text(text)) if text.ends_with('/'));
+    let inner_slash = matches!(inner.first(), Some(Part::Text(text)) if text.starts_with('/'));
+    match (
+        outer.is_empty() || inner.is_empty(),
+        outer_slash,
+        inner_slash,
+    ) {
+        (true, _, _) => {}
+        (false, true, true) => {
+            if let Some(Part::Text(text)) = outer.last_mut() {
+                text.pop();
+            }
+        }
+        (false, false, false) => outer.push(Part::Text("/".to_string())),
+        _ => {}
+    }
+    outer.extend(inner.iter().cloned());
+    outer
+}
+
+/// The parts with each unknown part as `${expression}`, and with each unknown part as a mark that
+/// no path parameter contains.
+fn rendered(parts: &[Part]) -> (String, String) {
+    let mut template = String::new();
+    let mut marked = String::new();
+    for part in parts {
+        match part {
+            Part::Text(text) => {
+                template.push_str(text);
+                marked.push_str(text);
+            }
+            Part::Unknown(expression) => {
+                template.push_str(&format!("${{{expression}}}"));
+                marked.push('\u{1}');
+            }
+        }
+    }
+    (template, marked)
+}
+
+/// The route of the parts. With a prefix, the prefix and the path join as `join_path` joins
+/// them. Without a prefix, the path is as the source writes it.
+fn route_of(method: &str, prefix: Option<&[Part]>, path: &[Part]) -> Route {
+    let (template, marked) = rendered(path);
+    let (template, marked) = match prefix {
+        Some(prefix) => {
+            let (prefix_template, prefix_marked) = rendered(prefix);
+            (
+                join_path(&prefix_template, &template),
+                join_path(&prefix_marked, &marked),
+            )
+        }
+        None => (template, marked),
+    };
+    let known = resolved(path).is_some() && prefix.is_none_or(|prefix| resolved(prefix).is_some());
+    if known {
+        return route(method, template);
+    }
+    Route {
+        method: method.to_uppercase(),
+        parameters: route_parameters(&marked),
+        path: None,
+        path_template: Some(template),
+    }
+}
+
+/// Adds the identifiers that a pattern binds.
+fn pattern_names<'t>(pattern: Node<'t>, out: &mut Vec<Node<'t>>) {
+    match pattern.kind() {
+        "identifier" | "shorthand_property_identifier_pattern" => out.push(pattern),
+        "pair_pattern" => {
+            if let Some(value) = pattern.child_by_field_name("value") {
+                pattern_names(value, out);
+            }
+        }
+        "assignment_pattern" | "object_assignment_pattern" => {
+            if let Some(left) = pattern.child_by_field_name("left") {
+                pattern_names(left, out);
+            }
+        }
+        _ => {
+            for child in named_children(pattern) {
+                pattern_names(child, out);
+            }
+        }
+    }
+}
+
+fn is_require(value: Node<'_>, source: &[u8]) -> bool {
+    value.kind() == "call_expression"
+        && value
+            .child_by_field_name("function")
+            .is_some_and(|function| {
+                function.kind() == "identifier" && text(function, source) == "require"
+            })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Const,
+    Let,
+    Var,
+}
+
+/// Collects the bindings of one scope.
+struct Collector<'s> {
+    source: &'s [u8],
+    found: HashMap<String, Vec<Declared>>,
+    /// The local name and the exported name of `export { local as exported }`.
+    aliases: Vec<(String, String)>,
+}
+
+impl<'s> Collector<'s> {
+    fn add(&mut self, name: Node<'_>, declared: Declared) {
+        self.found
+            .entry(text(name, self.source).to_string())
+            .or_default()
+            .push(declared);
+    }
+
+    fn declarator(&mut self, declarator: Node<'_>, mode: Mode) {
+        let Some(name) = declarator.child_by_field_name("name") else {
+            return;
+        };
+        let value = declarator.child_by_field_name("value");
+        let required = value.is_some_and(|value| is_require(value, self.source));
+        if name.kind() == "identifier" {
+            let declared = match (required, mode, value) {
+                (true, _, _) => Declared::Import,
+                (false, Mode::Const, Some(value)) => Declared::Const(value.byte_range()),
+                (false, _, Some(value)) => Declared::Variable(value.byte_range()),
+                (false, _, None) => Declared::Other,
+            };
+            self.add(name, declared);
+            return;
+        }
+        let mut names = Vec::new();
+        pattern_names(name, &mut names);
+        for name in names {
+            let declared = if required {
+                Declared::Import
+            } else {
+                Declared::Other
+            };
+            self.add(name, declared);
+        }
+    }
+
+    fn declaration(&mut self, node: Node<'_>, mode: Mode) {
+        for child in named_children(node) {
+            if child.kind() == "variable_declarator" {
+                self.declarator(child, mode);
+            }
+        }
+    }
+
+    fn lexical(&mut self, node: Node<'_>) {
+        let mode = match node.child(0).map(|keyword| keyword.kind()) {
+            Some("const") => Mode::Const,
+            _ => Mode::Let,
+        };
+        self.declaration(node, mode);
+    }
+
+    /// A statement of a block that binds a name in the block.
+    fn statement(&mut self, node: Node<'_>) {
+        match node.kind() {
+            "lexical_declaration" => self.lexical(node),
+            "function_declaration" | "generator_function_declaration" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    self.add(name, Declared::Function);
+                }
+            }
+            "class_declaration" | "abstract_class_declaration" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    self.add(name, Declared::Class(node.byte_range()));
+                }
+            }
+            "enum_declaration" | "internal_module" | "module" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    self.add(name, Declared::Other);
+                }
+            }
+            "import_statement" => self.import(node),
+            "export_statement" => {
+                if let Some(declaration) = node.child_by_field_name("declaration") {
+                    self.statement(declaration);
+                } else if node.child_by_field_name("source").is_some() {
+                    for clause in named_children(node) {
+                        match clause.kind() {
+                            "export_clause" => {
+                                for specifier in named_children(clause) {
+                                    let name = specifier
+                                        .child_by_field_name("alias")
+                                        .or_else(|| specifier.child_by_field_name("name"));
+                                    if let Some(name) = name {
+                                        self.add(name, Declared::Import);
+                                    }
+                                }
+                            }
+                            "namespace_export" => {
+                                if let Some(name) = clause.named_child(0) {
+                                    self.add(name, Declared::Import);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                } else {
+                    for clause in named_children(node) {
+                        if clause.kind() != "export_clause" {
+                            continue;
+                        }
+                        for specifier in named_children(clause) {
+                            let name = specifier.child_by_field_name("name");
+                            let alias = specifier.child_by_field_name("alias");
+                            if let (Some(name), Some(alias)) = (name, alias) {
+                                self.aliases.push((
+                                    text(name, self.source).to_string(),
+                                    text(alias, self.source).to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn import(&mut self, node: Node<'_>) {
+        for clause in named_children(node) {
+            match clause.kind() {
+                "import_clause" => {
+                    for part in named_children(clause) {
+                        match part.kind() {
+                            "identifier" => self.add(part, Declared::Import),
+                            "namespace_import" => {
+                                if let Some(name) = part.named_child(0) {
+                                    self.add(name, Declared::Import);
+                                }
+                            }
+                            "named_imports" => {
+                                for specifier in named_children(part) {
+                                    let name = specifier
+                                        .child_by_field_name("alias")
+                                        .or_else(|| specifier.child_by_field_name("name"));
+                                    if let Some(name) = name {
+                                        self.add(name, Declared::Import);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                "import_require_clause" => {
+                    if let Some(name) = clause.named_child(0) {
+                        self.add(name, Declared::Import);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The `var` declarations in the body of a function or of the program. They do not enter a
+    /// nested function or class.
+    fn hoisted(&mut self, body: Node<'_>) {
+        let mut stack = vec![body];
+        while let Some(node) = stack.pop() {
+            if node.kind() == "variable_declaration" {
+                self.declaration(node, Mode::Var);
+            }
+            for child in named_children(node) {
+                if !FUNCTIONS.contains(&child.kind())
+                    && !CLASSES.contains(&child.kind())
+                    && child.kind() != "class_body"
+                {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+
+    fn parameters(&mut self, parameters: Node<'_>) {
+        for parameter in named_children(parameters) {
+            match parameter.kind() {
+                "required_parameter" | "optional_parameter" => {
+                    let Some(pattern) = parameter.child_by_field_name("pattern") else {
+                        continue;
+                    };
+                    if pattern.kind() == "identifier" {
+                        let annotation = parameter
+                            .child_by_field_name("type")
+                            .map(|annotation| annotation.byte_range());
+                        self.add(pattern, Declared::Parameter(annotation));
+                    } else {
+                        let mut names = Vec::new();
+                        pattern_names(pattern, &mut names);
+                        for name in names {
+                            self.add(name, Declared::Other);
+                        }
+                    }
+                }
+                "identifier" => self.add(parameter, Declared::Parameter(None)),
+                _ => {
+                    let mut names = Vec::new();
+                    pattern_names(parameter, &mut names);
+                    for name in names {
+                        self.add(name, Declared::Other);
+                    }
+                }
+            }
+        }
+    }
+
+    fn finish(self) -> Declarations {
+        let mut declarations: Declarations = self
+            .found
+            .into_iter()
+            .map(|(name, mut found)| {
+                let declared = if found.len() == 1 {
+                    found.remove(0)
+                } else {
+                    Declared::Other
+                };
+                (name, declared)
+            })
+            .collect();
+        for (local, exported) in self.aliases {
+            if let Some(declared) = declarations.get(&local).cloned() {
+                declarations.entry(exported).or_insert(declared);
+            }
+        }
+        declarations
+    }
+}
+
+/// The bindings of one scope node.
+fn scope_bindings(node: Node<'_>, source: &[u8]) -> Declarations {
+    let mut collector = Collector {
+        source,
+        found: HashMap::new(),
+        aliases: Vec::new(),
+    };
+    let kind = node.kind();
+    if FUNCTIONS.contains(&kind) {
+        if let Some(parameters) = node.child_by_field_name("parameters") {
+            collector.parameters(parameters);
+        }
+        if let Some(parameter) = node.child_by_field_name("parameter") {
+            collector.add(parameter, Declared::Parameter(None));
+        }
+        if matches!(
+            kind,
+            "function_expression" | "function" | "generator_function"
+        ) {
+            if let Some(name) = node.child_by_field_name("name") {
+                collector.add(name, Declared::Function);
+            }
+        }
+        if let Some(body) = node.child_by_field_name("body") {
+            collector.hoisted(body);
+        }
+        return collector.finish();
+    }
+    if kind == "program" {
+        collector.hoisted(node);
+    }
+    match kind {
+        "for_statement" => {
+            if let Some(initializer) = node.child_by_field_name("initializer") {
+                collector.statement(initializer);
+            }
+        }
+        "for_in_statement" => {
+            if let Some(left) = node.child_by_field_name("left") {
+                let mut names = Vec::new();
+                pattern_names(left, &mut names);
+                for name in names {
+                    collector.add(name, Declared::Other);
+                }
+            }
+        }
+        "catch_clause" => {
+            if let Some(parameter) = node.child_by_field_name("parameter") {
+                let mut names = Vec::new();
+                pattern_names(parameter, &mut names);
+                for name in names {
+                    collector.add(name, Declared::Other);
+                }
+            }
+        }
+        _ => {}
+    }
+    let statements = if kind == "switch_body" {
+        named_children(node)
+            .into_iter()
+            .flat_map(named_children)
+            .collect()
+    } else {
+        named_children(node)
+    };
+    for statement in statements {
+        collector.statement(statement);
+    }
+    collector.finish()
+}
+
+/// The identifier of a decorator and its arguments.
+fn decorator_call<'t>(decorator: Node<'t>) -> Option<DecoratorCall<'t>> {
+    let expression = decorator.named_child(0)?;
+    let (callee, arguments) = match expression.kind() {
+        "call_expression" => (
+            expression.child_by_field_name("function")?,
+            Context::arguments_of(expression),
+        ),
+        "identifier" => (expression, Vec::new()),
+        _ => return None,
+    };
+    (callee.kind() == "identifier").then_some(DecoratorCall {
+        node: decorator,
+        callee,
+        arguments,
+    })
+}
+
+/// The text of a node with each run of white space as one space.
+fn compact(node: Node<'_>, source: &[u8]) -> String {
+    text(node, source)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The decorator as the source writes it, without `@`.
+fn decorator_label(call: &DecoratorCall<'_>, source: &[u8]) -> String {
+    call.node
+        .named_child(0)
+        .map(|expression| compact(expression, source))
+        .unwrap_or_default()
+}
+
+/// The method that a verb name gives.
+fn method_of(verb: &str) -> String {
+    if verb.eq_ignore_ascii_case("all") {
+        "ANY".to_string()
+    } else {
+        verb.to_uppercase()
+    }
+}
+
+impl<'a> Context<'a> {
+    fn unit(&self) -> Unit<'a> {
+        Unit {
+            position: self.position,
+            source: self.source,
+            root: self.parsed.root_node(),
+        }
+    }
+
+    /// Runs `read` on the file at `position`.
+    fn with_unit<R>(&self, position: usize, read: impl FnOnce(Unit<'_>) -> Option<R>) -> Option<R> {
+        if position == self.position {
+            return read(self.unit());
+        }
+        let tree = self.all_parsed.tree(position)?;
+        read(Unit {
+            position,
+            source: &tree.source,
+            root: tree.root_node(),
+        })
+    }
+
+    fn position_of(&self, file: &str) -> Option<usize> {
+        self.all_parsed
+            .shared()
+            .ecma
+            .positions
+            .get_or_init(|| {
+                self.all
+                    .iter()
+                    .enumerate()
+                    .map(|(position, file)| (file.file.clone(), position))
+                    .collect()
+            })
+            .get(file)
+            .copied()
+    }
+
+    fn target_position(&self, binding: &ImportBinding) -> Option<usize> {
+        match &binding.target_file {
+            ImportTarget::Resolved(file) => self.position_of(file),
+            ImportTarget::Package(files) if files.len() == 1 => self.position_of(&files[0]),
+            _ => None,
+        }
+    }
+
+    fn scope_declarations(&self, unit: Unit<'_>, scope: Node<'_>) -> Rc<Declarations> {
+        let key = (unit.position, scope.id());
+        if let Some(found) = self.ecma.scopes.borrow().get(&key) {
+            return Rc::clone(found);
+        }
+        let found = Rc::new(scope_bindings(scope, unit.source));
+        self.ecma.scopes.borrow_mut().insert(key, Rc::clone(&found));
+        found
+    }
+
+    /// The scope and the binding of the name at its use, as the scopes of ECMAScript give it.
+    fn declared(&self, unit: Unit<'_>, at: Node<'_>, name: &str) -> Option<(usize, Declared)> {
+        let mut current = at.parent();
+        while let Some(node) = current {
+            let kind = node.kind();
+            if BLOCKS.contains(&kind) || FUNCTIONS.contains(&kind) {
+                if let Some(found) = self.scope_declarations(unit, node).get(name) {
+                    return Some((node.id(), found.clone()));
+                }
+            }
+            current = node.parent();
+        }
+        None
+    }
+
+    /// The one import binding of the file with the local name.
+    fn import_named(&self, position: usize, name: &str) -> Option<&'a ImportBinding> {
+        let file: &'a FileSymbols = &self.all[position];
+        let table = {
+            let mut imports = self.ecma.imports.borrow_mut();
+            Rc::clone(imports.entry(position).or_insert_with(|| {
+                let mut table: ImportsByName = HashMap::new();
+                for (index, binding) in file.imports.iter().enumerate() {
+                    if let Some(local) = &binding.local_name {
+                        table.entry(local.clone()).or_default().push(index);
+                    }
+                }
+                Rc::new(table)
+            }))
+        };
+        let indexes = table.get(name)?;
+        let first = &file.imports[*indexes.first()?];
+        indexes
+            .iter()
+            .map(|index| &file.imports[*index])
+            .all(|binding| {
+                binding.module_path == first.module_path
+                    && binding.imported_name == first.imported_name
+            })
+            .then_some(first)
+    }
+
+    /// The declaration of a name that the file at `position` exports, through the re-exports.
+    fn exported(&self, position: usize, name: &str, hops: usize) -> Option<(usize, Declared)> {
+        if hops > MAX_HOPS {
+            return None;
+        }
+        let top = self.with_unit(position, |unit| {
+            Some(self.scope_declarations(unit, unit.root))
+        })?;
+        match top.get(name) {
+            Some(Declared::Import) => {
+                let binding = self.import_named(position, name)?;
+                let imported = binding
+                    .imported_name
+                    .as_deref()
+                    .filter(|imported| !matches!(*imported, "*" | "default"))?;
+                let target = self.target_position(binding)?;
+                self.exported(target, imported, hops + 1)
+            }
+            Some(found) => Some((position, found.clone())),
+            None => {
+                let targets: Vec<usize> = self.all[position]
+                    .imports
+                    .iter()
+                    .filter(|binding| binding.kind == ImportKind::ReExportWildcard)
+                    .filter_map(|binding| self.target_position(binding))
+                    .collect();
+                let mut found = targets
+                    .into_iter()
+                    .filter_map(|target| self.exported(target, name, hops + 1));
+                let first = found.next()?;
+                found.next().is_none().then_some(first)
+            }
+        }
+    }
+
+    /// The parts of the path that the expression gives.
+    fn path_of(&self, unit: Unit<'_>, node: Node<'_>, hops: usize) -> Vec<Part> {
+        let node = unwrap(node);
+        let unknown = || vec![Part::Unknown(compact(node, unit.source))];
+        let mut parts = match node.kind() {
+            "string" => match string_value(node, unit.source) {
+                Some(value) => vec![Part::Text(value)],
+                None => unknown(),
+            },
+            "template_string" => {
+                let mut parts = Vec::new();
+                for child in named_children(node) {
+                    match child.kind() {
+                        "string_fragment" => {
+                            parts.push(Part::Text(text(child, unit.source).to_string()))
+                        }
+                        "escape_sequence" => match escape_value(text(child, unit.source)) {
+                            Some(value) => parts.push(Part::Text(value)),
+                            None => return unknown(),
+                        },
+                        "template_substitution" => {
+                            let Some(inner) = child.named_child(0) else {
+                                return unknown();
+                            };
+                            let inner_parts = self.path_of(unit, inner, hops);
+                            match resolved(&inner_parts) {
+                                Some(value) => parts.push(Part::Text(value)),
+                                None => parts.push(Part::Unknown(compact(inner, unit.source))),
+                            }
+                        }
+                        _ => return unknown(),
+                    }
+                }
+                parts
+            }
+            "binary_expression"
+                if node
+                    .child_by_field_name("operator")
+                    .is_some_and(|operator| operator.kind() == "+") =>
+            {
+                let (Some(left), Some(right)) = (
+                    node.child_by_field_name("left"),
+                    node.child_by_field_name("right"),
+                ) else {
+                    return unknown();
+                };
+                let mut parts = self.path_of(unit, left, hops);
+                parts.extend(self.path_of(unit, right, hops));
+                parts
+            }
+            "identifier" => match self.constant_text(unit, node, hops) {
+                Some(value) => vec![Part::Text(value)],
+                None => unknown(),
+            },
+            _ => unknown(),
+        };
+        let mut merged: Vec<Part> = Vec::new();
+        for part in parts.drain(..) {
+            match (merged.last_mut(), part) {
+                (Some(Part::Text(previous)), Part::Text(next)) => previous.push_str(&next),
+                (_, part) => merged.push(part),
+            }
+        }
+        merged
+    }
+
+    /// The text of a `const` name, in its scope or through an import.
+    fn constant_text(&self, unit: Unit<'_>, name: Node<'_>, hops: usize) -> Option<String> {
+        if hops >= MAX_HOPS {
+            return None;
+        }
+        let (position, declared) = match self.declared(unit, name, text(name, unit.source))? {
+            (_, Declared::Import) => {
+                let binding = self.import_named(unit.position, text(name, unit.source))?;
+                let imported = binding
+                    .imported_name
+                    .as_deref()
+                    .filter(|imported| !matches!(*imported, "*" | "default"))?;
+                let target = self.target_position(binding)?;
+                self.exported(target, imported, hops + 1)?
+            }
+            (_, declared) => (unit.position, declared),
+        };
+        let Declared::Const(range) = declared else {
+            return None;
+        };
+        self.with_unit(position, |unit| {
+            let value = node_at(unit.root, &range)?;
+            resolved(&self.path_of(unit, value, hops + 1))
+        })
+    }
+
+    /// The framework of the value of the expression.
+    fn framework_of(&self, unit: Unit<'_>, node: Node<'_>, hops: usize) -> Option<Framework> {
+        if hops > MAX_HOPS {
+            return None;
+        }
+        let node = unwrap(node);
+        match node.kind() {
+            "call_expression" => {
+                self.constructed(unit, node.child_by_field_name("function")?, false)
+            }
+            "new_expression" => {
+                self.constructed(unit, node.child_by_field_name("constructor")?, true)
+            }
+            "identifier" => {
+                let name = text(node, unit.source);
+                match self.declared(unit, node, name)?.1 {
+                    Declared::Const(range) | Declared::Variable(range) => {
+                        let value = node_at(unit.root, &range)?;
+                        self.framework_of(unit, value, hops + 1)
+                    }
+                    Declared::Parameter(Some(range)) => {
+                        self.framework_of_type(unit, node_at(unit.root, &range)?)
+                    }
+                    Declared::Import => {
+                        let binding = self.import_named(unit.position, name)?;
+                        let imported = binding.imported_name.as_deref()?;
+                        let target = self.target_position(binding)?;
+                        let (position, declared) = self.exported(target, imported, hops + 1)?;
+                        let (Declared::Const(range) | Declared::Variable(range)) = declared else {
+                            return None;
+                        };
+                        self.with_unit(position, |unit| {
+                            let value = node_at(unit.root, &range)?;
+                            self.framework_of(unit, value, hops + 1)
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            "member_expression" => {
+                let object = node.child_by_field_name("object")?;
+                if object.kind() != "this" {
+                    return None;
+                }
+                let name = text(node.child_by_field_name("property")?, unit.source);
+                let class = Self::class_of_this(node)?;
+                self.class_field(unit, class, name, hops + 1)
+            }
+            _ => None,
+        }
+    }
+
+    /// The framework that a call of the callee, or a `new` of it, gives.
+    fn constructed(&self, unit: Unit<'_>, callee: Node<'_>, is_new: bool) -> Option<Framework> {
+        let (name, member) = match callee.kind() {
+            "identifier" => (callee, None),
+            "member_expression" => {
+                let object = callee.child_by_field_name("object")?;
+                let property = callee.child_by_field_name("property")?;
+                if object.kind() != "identifier" {
+                    return None;
+                }
+                (object, Some(text(property, unit.source)))
+            }
+            _ => return None,
+        };
+        let local = text(name, unit.source);
+        if self.declared(unit, name, local)?.1 != Declared::Import {
+            return None;
+        }
+        let binding = self.import_named(unit.position, local)?;
+        let itself = binding.kind == ImportKind::Module
+            || matches!(binding.imported_name.as_deref(), Some("default" | "*"));
+        let imported = binding.imported_name.as_deref();
+        match (binding.module_path.as_str(), member, is_new) {
+            ("express", None, false) if itself || imported == Some("Router") => {
+                Some(Framework::Express)
+            }
+            ("express", Some("Router"), false) if itself => Some(Framework::Express),
+            ("fastify", None, false) if itself || imported == Some("fastify") => {
+                Some(Framework::Fastify)
+            }
+            ("@koa/router" | "koa-router", None, true) if itself || imported == Some("Router") => {
+                Some(Framework::Koa)
+            }
+            _ => None,
+        }
+    }
+
+    /// The framework that a type annotation names.
+    fn framework_of_type(&self, unit: Unit<'_>, annotation: Node<'_>) -> Option<Framework> {
+        let mut node = if annotation.kind() == "type_annotation" {
+            annotation.named_child(0)?
+        } else {
+            annotation
+        };
+        if node.kind() == "generic_type" {
+            node = node.child_by_field_name("name")?;
+        }
+        let (local, name) = match node.kind() {
+            "type_identifier" => (text(node, unit.source), None),
+            "nested_type_identifier" => {
+                let module = node.child_by_field_name("module")?;
+                let name = node.child_by_field_name("name")?;
+                if module.kind() != "identifier" {
+                    return None;
+                }
+                (text(module, unit.source), Some(text(name, unit.source)))
+            }
+            _ => return None,
+        };
+        let binding = self.import_named(unit.position, local)?;
+        let itself = binding.kind == ImportKind::Module
+            || matches!(binding.imported_name.as_deref(), Some("default" | "*"));
+        let type_name = match name {
+            Some(name) if itself => name,
+            Some(_) => return None,
+            None => binding.imported_name.as_deref()?,
+        };
+        match (binding.module_path.as_str(), type_name) {
+            ("express", "Application" | "Express" | "Router" | "IRouter") => {
+                Some(Framework::Express)
+            }
+            ("fastify", "FastifyInstance") => Some(Framework::Fastify),
+            ("@koa/router" | "koa-router", "default" | "Router") => Some(Framework::Koa),
+            _ => None,
+        }
+    }
+
+    /// The class whose instance `this` is at the node.
+    fn class_of_this<'t>(node: Node<'t>) -> Option<Node<'t>> {
+        let mut current = node.parent();
+        while let Some(ancestor) = current {
+            if THIS_BINDERS.contains(&ancestor.kind()) {
+                return None;
+            }
+            if ancestor.kind() == "class_body" {
+                return ancestor.parent();
+            }
+            current = ancestor.parent();
+        }
+        None
+    }
+
+    /// The framework of a field of the class or of its nearest superclass that declares or
+    /// assigns the field.
+    fn class_field(
+        &self,
+        unit: Unit<'_>,
+        class: Node<'_>,
+        name: &str,
+        hops: usize,
+    ) -> Option<Framework> {
+        if hops > MAX_HOPS {
+            return None;
+        }
+        let key = (unit.position, class.start_byte(), name.to_string());
+        if let Some(found) = self.all_parsed.shared().ecma.fields.lock().get(&key) {
+            return *found;
+        }
+        let found = self.read_class_field(unit, class, name, hops);
+        self.all_parsed
+            .shared()
+            .ecma
+            .fields
+            .lock()
+            .insert(key, found);
+        found
+    }
+
+    fn read_class_field(
+        &self,
+        unit: Unit<'_>,
+        class: Node<'_>,
+        name: &str,
+        hops: usize,
+    ) -> Option<Framework> {
+        let body = class.child_by_field_name("body")?;
+        let mut typed: Vec<Option<Framework>> = Vec::new();
+        let mut values: Vec<Option<Framework>> = Vec::new();
+        for member in named_children(body) {
+            match member.kind() {
+                "public_field_definition" | "field_definition" => {
+                    let field_name = member
+                        .child_by_field_name("name")
+                        .or_else(|| member.child_by_field_name("property"));
+                    if field_name.is_none_or(|field| text(field, unit.source) != name) {
+                        continue;
+                    }
+                    if let Some(annotation) = member.child_by_field_name("type") {
+                        typed.push(self.framework_of_type(unit, annotation));
+                    }
+                    if let Some(value) = member.child_by_field_name("value") {
+                        values.push(self.framework_of(unit, value, hops + 1));
+                    }
+                }
+                "method_definition" => {
+                    let is_constructor = member
+                        .child_by_field_name("name")
+                        .is_some_and(|method| text(method, unit.source) == "constructor");
+                    let parameters = member.child_by_field_name("parameters");
+                    let (true, Some(parameters)) = (is_constructor, parameters) else {
+                        continue;
+                    };
+                    for parameter in named_children(parameters) {
+                        let declares = children(parameter).iter().any(|child| {
+                            matches!(child.kind(), "accessibility_modifier" | "readonly")
+                        });
+                        let pattern = parameter.child_by_field_name("pattern");
+                        if declares
+                            && pattern.is_some_and(|pattern| text(pattern, unit.source) == name)
+                        {
+                            if let Some(annotation) = parameter.child_by_field_name("type") {
+                                typed.push(self.framework_of_type(unit, annotation));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut stack = vec![body];
+        while let Some(node) = stack.pop() {
+            if node.kind() == "assignment_expression" {
+                let left = node.child_by_field_name("left").map(unwrap);
+                let assigns = left.is_some_and(|left| {
+                    left.kind() == "member_expression"
+                        && left
+                            .child_by_field_name("object")
+                            .is_some_and(|object| object.kind() == "this")
+                        && left
+                            .child_by_field_name("property")
+                            .is_some_and(|property| text(property, unit.source) == name)
+                });
+                if assigns {
+                    if let Some(right) = node.child_by_field_name("right") {
+                        values.push(self.framework_of(unit, right, hops + 1));
+                    }
+                }
+            }
+            for child in named_children(node) {
+                if !THIS_BINDERS.contains(&child.kind()) && child.kind() != "class_body" {
+                    stack.push(child);
+                }
+            }
+        }
+        if let Some(found) = typed.iter().flatten().next() {
+            return Some(*found);
+        }
+        if !values.is_empty() {
+            let first = values[0]?;
+            return values
+                .iter()
+                .all(|value| *value == Some(first))
+                .then_some(first);
+        }
+        if !typed.is_empty() {
+            return None;
+        }
+        self.superclass_field(unit, class, name, hops)
+    }
+
+    fn superclass_field(
+        &self,
+        unit: Unit<'_>,
+        class: Node<'_>,
+        name: &str,
+        hops: usize,
+    ) -> Option<Framework> {
+        let heritage = named_children(class)
+            .into_iter()
+            .find(|child| child.kind() == "class_heritage")?;
+        let extends = named_children(heritage).into_iter().next()?;
+        let superclass = if extends.kind() == "extends_clause" {
+            extends.child_by_field_name("value")?
+        } else {
+            extends
+        };
+        if superclass.kind() != "identifier" {
+            return None;
+        }
+        let local = text(superclass, unit.source);
+        let (position, declared) = match self.declared(unit, superclass, local)?.1 {
+            Declared::Import => {
+                let binding = self.import_named(unit.position, local)?;
+                let imported = binding
+                    .imported_name
+                    .as_deref()
+                    .filter(|imported| !matches!(*imported, "*" | "default"))?;
+                let target = self.target_position(binding)?;
+                self.exported(target, imported, hops + 1)?
+            }
+            declared => (unit.position, declared),
+        };
+        let Declared::Class(range) = declared else {
+            return None;
+        };
+        self.with_unit(position, |unit| {
+            let parent = node_at(unit.root, &range)?;
+            self.class_field(unit, parent, name, hops + 1)
+        })
+    }
+
+    /// The key of the binding of a name of this file.
+    fn binding_key(&self, unit: Unit<'_>, node: Node<'_>) -> Option<BindingKey> {
+        let node = unwrap(node);
+        if node.kind() != "identifier" {
+            return None;
+        }
+        let name = text(node, unit.source);
+        let (scope, _) = self.declared(unit, node, name)?;
+        Some((scope, name.to_string()))
+    }
+
+    /// The prefix of a `use` call, or `None` when the first argument is not a path. An expression
+    /// that omen cannot tell from a middleware gives an unknown prefix.
+    fn use_prefix(&self, unit: Unit<'_>, first: Node<'_>) -> Option<Vec<Part>> {
+        let first = unwrap(first);
+        let is_function = |value: Node<'_>| {
+            matches!(
+                unwrap(value).kind(),
+                "arrow_function" | "function_expression" | "function" | "call_expression" | "array"
+            )
+        };
+        match first.kind() {
+            "string" | "template_string" | "binary_expression" => {
+                Some(self.path_of(unit, first, 0))
+            }
+            "identifier" => {
+                if self.framework_of(unit, first, 0).is_some() {
+                    return None;
+                }
+                match self
+                    .declared(unit, first, text(first, unit.source))
+                    .map(|found| found.1)
+                {
+                    Some(Declared::Function | Declared::Class(_)) => None,
+                    Some(Declared::Const(range) | Declared::Variable(range))
+                        if node_at(unit.root, &range).is_some_and(is_function) =>
+                    {
+                        None
+                    }
+                    _ => Some(self.path_of(unit, first, 0)),
+                }
+            }
+            "member_expression" => {
+                if self.framework_of(unit, first, 0).is_some() {
+                    return None;
+                }
+                Some(self.path_of(unit, first, 0))
+            }
+            _ => None,
+        }
+    }
+
+    /// The `use` calls of the file that mount a router of the file, by the router.
+    fn mounts(&self) -> &HashMap<BindingKey, Vec<Mount>> {
+        self.ecma.mounts.get_or_init(|| {
+            let unit = self.unit();
+            let mut mounts: HashMap<BindingKey, Vec<Mount>> = HashMap::new();
+            let mut stack = vec![unit.root];
+            let mut calls = Vec::new();
+            while let Some(node) = stack.pop() {
+                if node.kind() == "call_expression" {
+                    calls.push(node);
+                }
+                stack.extend(named_children(node).into_iter().rev());
+            }
+            for call in calls {
+                let Some(callee) = call.child_by_field_name("function") else {
+                    continue;
+                };
+                let property = callee.child_by_field_name("property");
+                if callee.kind() != "member_expression"
+                    || property.is_none_or(|property| text(property, unit.source) != "use")
+                {
+                    continue;
+                }
+                let Some(receiver) = callee.child_by_field_name("object") else {
+                    continue;
+                };
+                let arguments = Self::arguments_of(call);
+                let Some(first) = arguments.first() else {
+                    continue;
+                };
+                if self.framework_of(unit, receiver, 0).is_none() {
+                    continue;
+                }
+                let (prefix, routers) = match self.use_prefix(unit, *first) {
+                    Some(prefix) => (prefix, &arguments[1..]),
+                    None => (Vec::new(), &arguments[..]),
+                };
+                let parent = self.binding_key(unit, receiver);
+                for router in routers {
+                    if self.framework_of(unit, *router, 0).is_none() {
+                        continue;
+                    }
+                    if let Some(key) = self.binding_key(unit, *router) {
+                        mounts.entry(key).or_default().push(Mount {
+                            parent: parent.clone(),
+                            prefix: prefix.clone(),
+                        });
+                    }
+                }
+            }
+            mounts
+        })
+    }
+
+    /// The prefixes of the routes of a router, one for each chain of mounts. `None` when no
+    /// `use` call of the file mounts the router.
+    fn mount_prefixes(&self, unit: Unit<'_>, receiver: Node<'_>) -> Option<Vec<Vec<Part>>> {
+        let key = self.binding_key(unit, receiver)?;
+        self.mounts().get(&key)?;
+        Some(self.chains(&key, 0))
+    }
+
+    fn chains(&self, key: &BindingKey, depth: usize) -> Vec<Vec<Part>> {
+        let Some(mounts) = self.mounts().get(key) else {
+            return vec![Vec::new()];
+        };
+        if depth > MAX_HOPS {
+            return vec![vec![Part::Unknown("...".to_string())]];
+        }
+        let mut chains = Vec::new();
+        for mount in mounts {
+            let outer = match &mount.parent {
+                Some(parent) => self.chains(parent, depth + 1),
+                None => vec![Vec::new()],
+            };
+            for chain in outer {
+                chains.push(joined(chain, &mount.prefix));
+            }
+        }
+        chains
+    }
+
+    /// The nearest symbol that contains the node, other than a field.
+    fn enclosing_symbol(&self, node: Node<'_>) -> Option<&'a crate::index::model::Symbol> {
+        let ends = self.ecma.symbol_ends.get_or_init(|| {
+            let mut ends: HashMap<usize, Vec<usize>> = HashMap::new();
+            for (position, symbol) in self.file.symbols.iter().enumerate() {
+                if symbol.kind != SymbolKind::Field {
+                    ends.entry(symbol.range.end_byte)
+                        .or_default()
+                        .push(position);
+                }
+            }
+            ends
+        });
+        let mut current = node.parent();
+        while let Some(ancestor) = current {
+            let found = ends.get(&ancestor.end_byte()).and_then(|positions| {
+                positions
+                    .iter()
+                    .map(|position| &self.file.symbols[*position])
+                    .filter(|symbol| symbol.range.start_byte <= ancestor.start_byte())
+                    .max_by_key(|symbol| symbol.range.start_byte)
+            });
+            if found.is_some() {
+                return found;
+            }
+            current = ancestor.parent();
+        }
+        None
+    }
+
+    /// The symbol of the handler, or the key and the facts of an inline handler.
+    fn ecma_handler(&self, handler: Node<'_>) -> (Option<String>, Option<InlineHandler>) {
+        let handler = unwrap(handler);
+        if !matches!(
+            handler.kind(),
+            "arrow_function" | "function_expression" | "function"
+        ) {
+            return (self.handler_symbol(handler), None);
+        }
+        let enclosing = self
+            .enclosing_symbol(handler)
+            .map(|symbol| symbol.key.to_string());
+        let start = handler.start_position();
+        let place = format!("<inline@{}:{}>", start.row + 1, start.column);
+        let key = match &enclosing {
+            Some(enclosing) => format!("{enclosing}.{place}"),
+            None => format!("{}#{place}", self.file.file),
+        };
+        (
+            Some(key),
+            Some(InlineHandler {
+                range: Span::of(&handler),
+                enclosing,
+            }),
+        )
+    }
+
+    pub(super) fn ecma(&self, node: Node<'_>, out: &mut Vec<Draft>) {
+        match node.kind() {
+            "call_expression" => self.ecma_registration(node, out),
+            kind if CLASSES.contains(&kind) => self.ecma_class(node, out),
+            _ => {}
+        }
+    }
+
+    fn ecma_registration(&self, node: Node<'_>, out: &mut Vec<Draft>) {
+        let Some(callee) = node.child_by_field_name("function") else {
+            return;
+        };
+        if callee.kind() != "member_expression" {
+            return;
+        }
+        let Some(property) = callee.child_by_field_name("property") else {
+            return;
+        };
+        let verb = self.text(property);
+        if !HTTP_VERBS.contains(&verb) {
+            return;
+        }
+        let arguments = Self::arguments_of(node);
+        if arguments.len() < 2 {
+            return;
+        }
+        let Some(receiver) = callee.child_by_field_name("object") else {
+            return;
+        };
+        let unit = self.unit();
+        let Some(framework) = self.framework_of(unit, receiver, 0) else {
+            return;
+        };
+        let path = self.path_of(unit, arguments[0], 0);
+        if resolved(&path).is_some_and(|path| !path.starts_with('/')) {
+            return;
+        }
+        let handler = arguments[arguments.len() - 1];
+        let guards: Vec<String> = arguments[1..arguments.len() - 1]
+            .iter()
+            .filter(|argument| matches!(argument.kind(), "identifier" | "member_expression"))
+            .map(|argument| self.text(*argument).to_string())
+            .collect();
+        let (symbol, inline_handler) = self.ecma_handler(handler);
+        let method = method_of(verb);
+        let routes: Vec<Route> = match self.mount_prefixes(unit, receiver) {
+            Some(prefixes) => prefixes
+                .iter()
+                .map(|prefix| route_of(&method, Some(prefix), &path))
+                .collect(),
+            None => vec![route_of(&method, None, &path)],
+        };
+        for route in routes {
+            out.push(Draft {
+                range: Span::of(&node),
+                kind: EntryKind::HttpHandler,
+                symbol: symbol.clone(),
+                framework: framework.name(),
+                route: Some(route),
+                guards: guards.clone(),
+                basis: EntryBasis::Registered,
+                variant: None,
+                inline_handler: inline_handler.clone(),
+            });
+        }
+    }
+
+    /// Where the definition of the decorator is.
+    fn decorator_origin(&self, unit: Unit<'_>, call: &DecoratorCall<'_>) -> Option<Origin> {
+        let name = text(call.callee, unit.source);
+        match self.declared(unit, call.callee, name)?.1 {
+            Declared::Import => {
+                let binding = self.import_named(unit.position, name)?;
+                let imported = binding.imported_name.clone()?;
+                if let Some(package) = PACKAGES
+                    .iter()
+                    .find(|package| package.module == binding.module_path)
+                {
+                    return Some(Origin::Package(package, imported));
+                }
+                if matches!(imported.as_str(), "*" | "default") {
+                    return None;
+                }
+                let target = self.target_position(binding)?;
+                let (position, declared) = self.exported(target, &imported, 0)?;
+                Some(Origin::Repository {
+                    module: binding.module_path.clone(),
+                    position,
+                    declared,
+                })
+            }
+            declared @ Declared::Const(_) => Some(Origin::Repository {
+                module: String::new(),
+                position: unit.position,
+                declared,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The method of a decorator of the repository whose definition is `factory("verb")`.
+    fn repository_verb(&self, position: usize, declared: &Declared) -> Option<String> {
+        let Declared::Const(range) = declared else {
+            return None;
+        };
+        self.with_unit(position, |unit| {
+            let value = unwrap(node_at(unit.root, range)?);
+            if value.kind() != "call_expression" {
+                return None;
+            }
+            let first = *Self::arguments_of(value).first()?;
+            if first.kind() != "string" {
+                return None;
+            }
+            let verb = string_value(first, unit.source)?;
+            HTTP_VERBS
+                .contains(&verb.to_ascii_lowercase().as_str())
+                .then(|| method_of(&verb))
+        })
+    }
+
+    /// The default value of the first parameter of a decorator of the repository, as a path.
+    fn repository_default_path(&self, position: usize, declared: &Declared) -> Option<Vec<Part>> {
+        let Declared::Const(range) = declared else {
+            return None;
+        };
+        self.with_unit(position, |unit| {
+            let value = unwrap(node_at(unit.root, range)?);
+            if !matches!(
+                value.kind(),
+                "arrow_function" | "function_expression" | "function"
+            ) {
+                return None;
+            }
+            let parameters = value.child_by_field_name("parameters")?;
+            let first = named_children(parameters).into_iter().next()?;
+            let default = match first.kind() {
+                "required_parameter" | "optional_parameter" => first.child_by_field_name("value"),
+                "assignment_pattern" => first.child_by_field_name("right"),
+                _ => None,
+            }?;
+            let parts = self.path_of(unit, default, 0);
+            resolved(&parts).is_some().then_some(parts)
+        })
+    }
+
+    /// The paths that a decorator argument gives: a path, a list of paths, or an object with the
+    /// key `path`. No argument gives the empty path.
+    fn decorator_paths(&self, unit: Unit<'_>, argument: Option<Node<'_>>) -> Vec<Vec<Part>> {
+        let Some(argument) = argument.map(unwrap) else {
+            return vec![Vec::new()];
+        };
+        match argument.kind() {
+            "array" => named_children(argument)
+                .into_iter()
+                .map(|element| self.path_of(unit, element, 0))
+                .collect(),
+            "object" => {
+                let path = named_children(argument).into_iter().find_map(|pair| {
+                    let key = pair.child_by_field_name("key")?;
+                    (pair.kind() == "pair" && text(key, unit.source) == "path")
+                        .then(|| pair.child_by_field_name("value"))
+                        .flatten()
+                });
+                match path {
+                    Some(path) => self.decorator_paths(unit, Some(path)),
+                    None => vec![Vec::new()],
+                }
+            }
+            _ => vec![self.path_of(unit, argument, 0)],
+        }
+    }
+
+    /// The guards that the options object of a verb decorator of the repository declares: each
+    /// key with the value `true`, and each element of a `middlewares` list, or the name that is
+    /// the value of `middlewares`.
+    fn option_guards(&self, unit: Unit<'_>, options: Node<'_>) -> Vec<String> {
+        let mut guards = Vec::new();
+        if unwrap(options).kind() != "object" {
+            return guards;
+        }
+        for pair in named_children(unwrap(options)) {
+            if pair.kind() != "pair" {
+                continue;
+            }
+            let (Some(key), Some(value)) = (
+                pair.child_by_field_name("key"),
+                pair.child_by_field_name("value"),
+            ) else {
+                continue;
+            };
+            let key = text(key, unit.source);
+            match value.kind() {
+                "true" => guards.push(format!("{key}: true")),
+                "array" if key == "middlewares" => guards.extend(
+                    named_children(value)
+                        .into_iter()
+                        .map(|element| compact(element, unit.source)),
+                ),
+                "identifier" | "member_expression" if key == "middlewares" => {
+                    guards.push(compact(value, unit.source));
+                }
+                _ => {}
+            }
+        }
+        guards
+    }
+
+    /// The guards of a decorator of a package: the arguments of a guard list, or the decorator.
+    fn package_guards(
+        package: &DecoratorPackage,
+        imported: &str,
+        call: &DecoratorCall<'_>,
+        source: &[u8],
+    ) -> Vec<String> {
+        if package.guard_lists.contains(&imported) {
+            return call
+                .arguments
+                .iter()
+                .map(|argument| compact(*argument, source))
+                .collect();
+        }
+        if package.guard_markers.contains(&imported) {
+            return vec![decorator_label(call, source)];
+        }
+        Vec::new()
+    }
+
+    /// The decorators of the class: on the class and on the export statement around it.
+    fn class_decorators<'t>(class: Node<'t>) -> Vec<Node<'t>> {
+        let mut decorators = Vec::new();
+        if let Some(parent) = class
+            .parent()
+            .filter(|parent| parent.kind() == "export_statement")
+        {
+            decorators.extend(
+                children(parent)
+                    .into_iter()
+                    .filter(|child| child.kind() == "decorator"),
+            );
+        }
+        decorators.extend(
+            children(class)
+                .into_iter()
+                .filter(|child| child.kind() == "decorator"),
+        );
+        decorators
+    }
+
+    /// Each method of the class body with its decorators. In TypeScript a decorator of a method
+    /// is a node of the class body before the method. In JavaScript it is a child of the method.
+    fn decorated_methods<'t>(body: Node<'t>) -> Vec<(Node<'t>, Vec<Node<'t>>)> {
+        let mut methods = Vec::new();
+        let mut pending = Vec::new();
+        for child in children(body) {
+            match child.kind() {
+                "decorator" => pending.push(child),
+                "method_definition" => {
+                    let mut decorators = std::mem::take(&mut pending);
+                    decorators.extend(
+                        children(child)
+                            .into_iter()
+                            .filter(|inner| inner.kind() == "decorator"),
+                    );
+                    if !decorators.is_empty() {
+                        methods.push((child, decorators));
+                    }
+                }
+                "comment" | ";" | "{" | "}" => {}
+                _ => pending.clear(),
+            }
+        }
+        methods
+    }
+
+    fn ecma_class(&self, class: Node<'_>, out: &mut Vec<Draft>) {
+        let Some(body) = class.child_by_field_name("body") else {
+            return;
+        };
+        let methods = Self::decorated_methods(body);
+        if methods.is_empty() {
+            return;
+        }
+        let unit = self.unit();
+        let class_calls: Vec<(DecoratorCall<'_>, Option<Origin>)> = Self::class_decorators(class)
+            .into_iter()
+            .filter_map(decorator_call)
+            .map(|call| {
+                let origin = self.decorator_origin(unit, &call);
+                (call, origin)
+            })
+            .collect();
+        for (method, decorators) in methods {
+            let calls: Vec<(DecoratorCall<'_>, Option<Origin>)> = decorators
+                .into_iter()
+                .filter_map(decorator_call)
+                .map(|call| {
+                    let origin = self.decorator_origin(unit, &call);
+                    (call, origin)
+                })
+                .collect();
+            self.decorated_method(unit, method, &class_calls, &calls, out);
+        }
+    }
+
+    /// The routes of one decorated method.
+    fn decorated_method(
+        &self,
+        unit: Unit<'_>,
+        method: Node<'_>,
+        class_calls: &[(DecoratorCall<'_>, Option<Origin>)],
+        calls: &[(DecoratorCall<'_>, Option<Origin>)],
+        out: &mut Vec<Draft>,
+    ) {
+        for (index, (call, origin)) in calls.iter().enumerate() {
+            let Some(origin) = origin else {
+                continue;
+            };
+            let (verb, framework) = match origin {
+                Origin::Package(package, imported) => {
+                    let Some((_, verb)) = package
+                        .verbs
+                        .iter()
+                        .find(|(name, _)| *name == imported.as_str())
+                    else {
+                        continue;
+                    };
+                    (verb.to_string(), package.framework)
+                }
+                Origin::Repository {
+                    position, declared, ..
+                } => {
+                    let Some(verb) = self.repository_verb(*position, declared) else {
+                        continue;
+                    };
+                    (verb, REPOSITORY_DECORATORS)
+                }
+            };
+            let module = origin.module();
+            let prefixes = self.class_prefixes(unit, origin, class_calls);
+            let mut guards = Vec::new();
+            for (class_call, class_origin) in class_calls {
+                if prefixes.1.contains(&class_call.node.id()) {
+                    continue;
+                }
+                guards.extend(self.guards_of(unit, origin, class_call, class_origin.as_ref()));
+            }
+            for (other_index, (other, other_origin)) in calls.iter().enumerate() {
+                if other_index == index {
+                    if let (Origin::Repository { .. }, Some(options)) =
+                        (origin, call.arguments.get(1))
+                    {
+                        guards.extend(self.option_guards(unit, *options));
+                    }
+                    continue;
+                }
+                let is_verb = match other_origin {
+                    Some(Origin::Package(package, imported)) if package.module == module => {
+                        package.verbs.iter().any(|(name, _)| name == imported)
+                    }
+                    Some(Origin::Repository {
+                        module: other_module,
+                        position,
+                        declared,
+                    }) if other_module == module => {
+                        self.repository_verb(*position, declared).is_some()
+                    }
+                    _ => false,
+                };
+                if !is_verb {
+                    guards.extend(self.guards_of(unit, origin, other, other_origin.as_ref()));
+                }
+            }
+            let symbol = method
+                .child_by_field_name("name")
+                .and_then(|name| self.symbol_at(name));
+            for prefix in &prefixes.0 {
+                for path in self.decorator_paths(unit, call.arguments.first().copied()) {
+                    out.push(Draft {
+                        range: Span::of(&method),
+                        kind: EntryKind::HttpHandler,
+                        symbol: symbol.clone(),
+                        framework,
+                        route: Some(route_of(&verb, Some(prefix), &path)),
+                        guards: guards.clone(),
+                        basis: EntryBasis::Declared,
+                        variant: None,
+                        inline_handler: None,
+                    });
+                }
+            }
+        }
+    }
+
+    /// The guards that one decorator gives to a route of `route_origin`.
+    fn guards_of(
+        &self,
+        unit: Unit<'_>,
+        route_origin: &Origin,
+        call: &DecoratorCall<'_>,
+        origin: Option<&Origin>,
+    ) -> Vec<String> {
+        match (route_origin, origin) {
+            (Origin::Package(package, _), Some(Origin::Package(other, imported)))
+                if package.module == other.module =>
+            {
+                Self::package_guards(other, imported, call, unit.source)
+            }
+            (Origin::Repository { module, .. }, Some(Origin::Repository { module: other, .. }))
+                if module == other =>
+            {
+                vec![decorator_label(call, unit.source)]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The prefixes of the class for a route of `origin`, and the ids of the decorators that give
+    /// them. A class without a prefix decorator has the empty prefix.
+    fn class_prefixes(
+        &self,
+        unit: Unit<'_>,
+        origin: &Origin,
+        class_calls: &[(DecoratorCall<'_>, Option<Origin>)],
+    ) -> (Vec<Vec<Part>>, Vec<usize>) {
+        let mut candidates: Vec<(usize, Vec<Vec<Part>>)> = Vec::new();
+        for (call, class_origin) in class_calls {
+            let Some(class_origin) = class_origin else {
+                continue;
+            };
+            match (origin, class_origin) {
+                (Origin::Package(package, _), Origin::Package(other, imported))
+                    if package.module == other.module
+                        && other.prefixes.contains(&imported.as_str()) =>
+                {
+                    candidates.push((
+                        call.node.id(),
+                        self.decorator_paths(unit, call.arguments.first().copied()),
+                    ));
+                }
+                (
+                    Origin::Repository { module, .. },
+                    Origin::Repository {
+                        module: other,
+                        position,
+                        declared,
+                    },
+                ) if module == other => {
+                    if self.repository_verb(*position, declared).is_some() {
+                        continue;
+                    }
+                    let prefix = match call.arguments.first() {
+                        Some(first) => {
+                            let first = unwrap(*first);
+                            let parts = self.path_of(unit, first, 0);
+                            let is_path = matches!(
+                                first.kind(),
+                                "string" | "template_string" | "binary_expression"
+                            ) || resolved(&parts).is_some();
+                            is_path.then_some(parts)
+                        }
+                        None => self.repository_default_path(*position, declared),
+                    };
+                    if let Some(prefix) = prefix {
+                        candidates.push((call.node.id(), vec![prefix]));
+                    }
+                }
+                _ => {}
+            }
+        }
+        match candidates.len() {
+            0 => (vec![Vec::new()], Vec::new()),
+            1 => {
+                let (id, prefixes) = candidates.remove(0);
+                (prefixes, vec![id])
+            }
+            _ => (
+                vec![vec![Part::Unknown("prefix".to_string())]],
+                candidates.iter().map(|(id, _)| *id).collect(),
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{assert_scales_linearly, entries, entries_timed};
+    use crate::core::Language;
+    use crate::index::security::entry::{EntryKind, EntryPoint};
+
+    /// The method, the path, the handler symbol, the guards, and the framework of each route.
+    type Row = (String, Option<String>, Option<String>, Vec<String>, String);
+
+    fn http(files: &[(&str, &str)]) -> Vec<EntryPoint> {
+        entries(Language::TypeScript, files)
+            .into_iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .collect()
+    }
+
+    fn rows(files: &[(&str, &str)]) -> Vec<Row> {
+        http(files)
+            .into_iter()
+            .map(|entry| {
+                let route = entry.route.expect("a route");
+                (
+                    route.method,
+                    route.path,
+                    entry.symbol,
+                    entry.guards,
+                    entry.framework,
+                )
+            })
+            .collect()
+    }
+
+    fn row(
+        method: &str,
+        path: Option<&str>,
+        symbol: Option<&str>,
+        guards: &[&str],
+        framework: &str,
+    ) -> Row {
+        (
+            method.to_string(),
+            path.map(str::to_string),
+            symbol.map(str::to_string),
+            guards.iter().map(|guard| guard.to_string()).collect(),
+            framework.to_string(),
+        )
+    }
+
+    /// The method and the path, or the template, of each route.
+    fn paths(files: &[(&str, &str)]) -> Vec<(String, Option<String>, Option<String>)> {
+        http(files)
+            .into_iter()
+            .map(|entry| {
+                let route = entry.route.expect("a route");
+                (route.method, route.path, route.path_template)
+            })
+            .collect()
+    }
+
+    fn known(method: &str, path: &str) -> (String, Option<String>, Option<String>) {
+        (method.to_string(), Some(path.to_string()), None)
+    }
+
+    fn unknown(method: &str, template: &str) -> (String, Option<String>, Option<String>) {
+        (method.to_string(), None, Some(template.to_string()))
+    }
+
+    const NEST: &str = "import { Controller, Get, Post, UseGuards } from '@nestjs/common';\nimport express from 'express';\nimport { exec } from 'child_process';\nconst PATH = '/metrics';\n@Controller('cats')\nexport class CatsController {\n  @Get(':id') find() { return 1; }\n  @UseGuards(AuthGuard) @Post() run(cmd: string) { exec(cmd); }\n}\nexport class Server {\n  app = express();\n  setup() {\n    const app = this.app; app.get('/health', (_req, res) => res.send('ok'));\n    this.app.post(PATH, (req, res) => { exec(req.body.cmd); res.end(); });\n  }\n}\n";
+
+    /// The key of the inline handler that starts at the first `marker` on the line.
+    fn inline_key(source: &str, enclosing: &str, line: usize, marker: &str) -> String {
+        let text = source.lines().nth(line - 1).expect("the line");
+        let column = text.find(marker).expect("the marker");
+        format!("{enclosing}.<inline@{line}:{column}>")
+    }
+
+    #[test]
+    fn a_nest_controller_and_express_registrations_through_a_field_are_routes() {
+        let found = rows(&[("src/c.ts", NEST)]);
+        assert_eq!(
+            found,
+            [
+                row(
+                    "GET",
+                    Some("/cats/:id"),
+                    Some("src/c.ts#CatsController.find"),
+                    &[],
+                    "nestjs"
+                ),
+                row(
+                    "POST",
+                    Some("/cats"),
+                    Some("src/c.ts#CatsController.run"),
+                    &["AuthGuard"],
+                    "nestjs"
+                ),
+                row(
+                    "GET",
+                    Some("/health"),
+                    Some(&inline_key(NEST, "src/c.ts#Server.setup", 13, "(_req")),
+                    &[],
+                    "express"
+                ),
+                row(
+                    "POST",
+                    Some("/metrics"),
+                    Some(&inline_key(NEST, "src/c.ts#Server.setup", 14, "(req")),
+                    &[],
+                    "express"
+                ),
+            ]
+        );
+        let inline = http(&[("src/c.ts", NEST)])[3]
+            .inline_handler
+            .clone()
+            .expect("an inline handler");
+        assert_eq!(inline.enclosing.as_deref(), Some("src/c.ts#Server.setup"));
+        assert_eq!(inline.range.start_line, 14);
+    }
+
+    #[test]
+    fn nest_paths_join_the_controller_prefix_and_each_path_of_a_list() {
+        let source = "import { All, Controller, Delete, Get, UseGuards } from '@nestjs/common';\n@UseGuards(RolesGuard)\n@Controller({ path: 'dogs' })\nexport class DogsController {\n  @Get(['a', 'b/:id'])\n  many() {}\n  @UseGuards(AuthGuard, OtherGuard)\n  @All()\n  any() {}\n}\n@Controller()\nexport class RootController {\n  @Delete('/x')\n  remove() {}\n}\n";
+        let found = rows(&[("src/dogs.ts", source)]);
+        assert_eq!(
+            found,
+            [
+                row(
+                    "GET",
+                    Some("/dogs/a"),
+                    Some("src/dogs.ts#DogsController.many"),
+                    &["RolesGuard"],
+                    "nestjs"
+                ),
+                row(
+                    "GET",
+                    Some("/dogs/b/:id"),
+                    Some("src/dogs.ts#DogsController.many"),
+                    &["RolesGuard"],
+                    "nestjs"
+                ),
+                row(
+                    "ANY",
+                    Some("/dogs"),
+                    Some("src/dogs.ts#DogsController.any"),
+                    &["RolesGuard", "AuthGuard", "OtherGuard"],
+                    "nestjs"
+                ),
+                row(
+                    "DELETE",
+                    Some("/x"),
+                    Some("src/dogs.ts#RootController.remove"),
+                    &[],
+                    "nestjs"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn routing_controllers_and_tsoa_decorators_are_routes() {
+        let users = "import { Authorized, Get, JsonController, Post, UseBefore } from 'routing-controllers';\n@JsonController('/users')\nexport class UserController {\n  @Authorized()\n  @Get('/:id')\n  one() {}\n  @UseBefore(rateLimit)\n  @Post('/')\n  create() {}\n}\n";
+        let items = "import { Get, Route, Security } from 'tsoa';\n@Route('items')\n@Security('api_key')\nexport class ItemsController {\n  @Get('{itemId}')\n  public async item() {}\n}\n";
+        let found = rows(&[("src/users.ts", users), ("src/items.ts", items)]);
+        assert_eq!(
+            found,
+            [
+                row(
+                    "GET",
+                    Some("/items/{itemId}"),
+                    Some("src/items.ts#ItemsController.item"),
+                    &["Security('api_key')"],
+                    "tsoa"
+                ),
+                row(
+                    "GET",
+                    Some("/users/:id"),
+                    Some("src/users.ts#UserController.one"),
+                    &["Authorized()"],
+                    "routing-controllers"
+                ),
+                row(
+                    "POST",
+                    Some("/users/"),
+                    Some("src/users.ts#UserController.create"),
+                    &["rateLimit"],
+                    "routing-controllers"
+                ),
+            ]
+        );
+        let parameters = http(&[("src/items.ts", items)])[0]
+            .route
+            .clone()
+            .unwrap()
+            .parameters;
+        assert_eq!(parameters, ["itemId"]);
+    }
+
+    const ROUTE_FACTORY: &str = "type Method = 'get' | 'post' | 'delete';\nconst RouteFactory =\n  (method: Method) =>\n  (path: string, options: { skipAuth?: boolean; middlewares?: unknown[] } = {}): MethodDecorator =>\n  (target, handlerName) => {};\nexport const Get = RouteFactory('get');\nexport const Post = RouteFactory('post');\nexport const Delete = RouteFactory('delete');\nexport const Fetch = RouteFactory('fetch' as Method);\n";
+    const REST_CONTROLLER: &str = "export const RestController =\n  (basePath: `/${string}` = '/'): ClassDecorator =>\n  (target) => target;\n";
+    const SCOPED: &str = "export const GlobalScope = (scope: string): MethodDecorator => () => {};\nexport const Licensed = (feature: string): MethodDecorator => () => {};\n";
+    const DECORATORS_INDEX: &str = "export { Get, Post, Delete, Fetch } from './route';\nexport { RestController } from './rest-controller';\nexport * from './scoped';\n";
+    const WORKFLOWS: &str = "import { Delete, Fetch, Get, GlobalScope, Licensed, Post, RestController } from '../decorators';\nimport { Service } from '../di';\n@RestController('/workflows')\n@Service()\nexport class WorkflowsController {\n  @Get('/:id')\n  @GlobalScope('workflow:read')\n  async one() {}\n  @Post('/', { skipAuth: true, middlewares: [audit] })\n  @Licensed('feat:sharing')\n  async create() {}\n  @Fetch('/never')\n  async never() {}\n}\n@RestController()\nexport class RootController {\n  @Delete('/x')\n  async remove() {}\n}\n";
+
+    #[test]
+    fn a_decorator_of_the_repository_is_a_verb_when_a_factory_call_with_a_verb_defines_it() {
+        let found = rows(&[
+            ("src/decorators/route.ts", ROUTE_FACTORY),
+            ("src/decorators/rest-controller.ts", REST_CONTROLLER),
+            ("src/decorators/scoped.ts", SCOPED),
+            ("src/decorators/index.ts", DECORATORS_INDEX),
+            (
+                "src/di.ts",
+                "export const Service = () => (target: unknown) => target;\n",
+            ),
+            ("src/controllers/workflows.ts", WORKFLOWS),
+        ]);
+        assert_eq!(
+            found,
+            [
+                row(
+                    "GET",
+                    Some("/workflows/:id"),
+                    Some("src/controllers/workflows.ts#WorkflowsController.one"),
+                    &["GlobalScope('workflow:read')"],
+                    "repository_decorators"
+                ),
+                row(
+                    "POST",
+                    Some("/workflows/"),
+                    Some("src/controllers/workflows.ts#WorkflowsController.create"),
+                    &["skipAuth: true", "audit", "Licensed('feat:sharing')"],
+                    "repository_decorators"
+                ),
+                row(
+                    "DELETE",
+                    Some("/x"),
+                    Some("src/controllers/workflows.ts#RootController.remove"),
+                    &[],
+                    "repository_decorators"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_decorator_named_like_a_verb_without_evidence_is_not_a_route() {
+        let cache = "export function Get(key: string) {\n  return (target: unknown) => target;\n}\nexport const Post = memo;\n";
+        let source = "import { Get, Post } from './cache';\nimport { Put } from 'some-library';\nimport { Controller } from '@nestjs/common';\n@Controller('a')\nexport class Store {\n  @Get('/x')\n  one() {}\n  @Post('/y')\n  two() {}\n  @Put('/z')\n  three() {}\n  // @Get('/comment')\n  four() { return \"@Get('/string')\"; }\n}\n";
+        assert!(http(&[("src/cache.ts", cache), ("src/store.ts", source)]).is_empty());
+    }
+
+    #[test]
+    fn a_member_receiver_is_a_framework_value_by_its_field_its_type_or_its_superclass() {
+        let source = "import express, { Router } from 'express';\nclass A { app = express(); start() { this.app.get('/a', a); } }\nclass B {\n  private app: express.Application;\n  constructor() { this.app = express(); }\n  start() { this.app.post('/b', b); }\n}\nclass C {\n  constructor(private readonly router: Router) {}\n  start() { this.router.put('/c', c); }\n}\nclass D { cache = new Map(); start() { this.cache.get('/d', d); } }\nclass E { app = express(); start() { [1].forEach(function () { this.app.get('/e', e); }); } }\nclass F { app = express(); start() { const app = this.app; app.patch('/f', f); } }\n";
+        let base = "import express from 'express';\nexport abstract class AbstractServer {\n  protected app: express.Application;\n  constructor() { this.app = express(); }\n}\n";
+        let server = "import { AbstractServer } from './base';\nexport class Server extends AbstractServer {\n  configure() { this.app.delete('/s', handler); }\n}\n";
+        assert_eq!(
+            paths(&[
+                ("src/a.ts", source),
+                ("src/base.ts", base),
+                ("src/server.ts", server)
+            ]),
+            [
+                known("GET", "/a"),
+                known("POST", "/b"),
+                known("PUT", "/c"),
+                known("PATCH", "/f"),
+                known("DELETE", "/s"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_path_of_constants_resolves_and_any_other_part_stays_in_the_template() {
+        let constants = "export const METRICS_PATH = '/metrics';\n";
+        let source = "import express from 'express';\nimport { METRICS_PATH } from './constants';\nconst BASE = '/api';\nconst app = express();\napp.get(METRICS_PATH, one);\napp.get(`${BASE}/users/:id`, two);\napp.get(BASE + '/x', three);\nlet mutable = '/m';\napp.get(mutable, four);\napp.get(`/${config.rest}/e2e/:id`, five);\nfunction mount(prefix: string) {\n  const BASE = prefix;\n  app.get(BASE, six);\n}\napp.get('/a\\u0062', seven);\n";
+        assert_eq!(
+            paths(&[("src/constants.ts", constants), ("src/app.ts", source)]),
+            [
+                known("GET", "/metrics"),
+                known("GET", "/api/users/:id"),
+                known("GET", "/api/x"),
+                unknown("GET", "${mutable}"),
+                unknown("GET", "/${config.rest}/e2e/:id"),
+                unknown("GET", "${BASE}"),
+                known("GET", "/ab"),
+            ]
+        );
+        let parameters: Vec<Vec<String>> =
+            http(&[("src/constants.ts", constants), ("src/app.ts", source)])
+                .into_iter()
+                .map(|entry| entry.route.unwrap().parameters)
+                .collect();
+        assert_eq!(parameters[4], ["id"]);
+    }
+
+    #[test]
+    fn a_mount_prefix_joins_the_routes_of_the_router_of_the_file() {
+        let source = "import express from 'express';\nconst app = express();\nconst api = express.Router();\nconst admin = express.Router();\napi.get('/users', list);\nadmin.post('/reset', reset);\napi.use('/admin', admin);\napp.use('/api', api);\napp.use(`/${rest}/v2`, api);\nconst lone = express.Router();\nlone.get('/lone', single);\n";
+        assert_eq!(
+            paths(&[("src/app.ts", source)]),
+            [
+                unknown("GET", "/${rest}/v2/users"),
+                known("GET", "/api/users"),
+                unknown("POST", "/${rest}/v2/admin/reset"),
+                known("POST", "/api/admin/reset"),
+                known("GET", "/lone"),
+            ]
+        );
+    }
+
+    #[test]
+    fn fastify_and_koa_router_registrations_are_routes() {
+        let source = "import Fastify from 'fastify';\nimport Router from '@koa/router';\nconst server = Fastify();\nserver.get('/f', handlerF);\nconst router = new Router();\nrouter.post('/k', auth, handlerK);\n";
+        let found: Vec<(String, String, Vec<String>)> = http(&[("src/app.ts", source)])
+            .into_iter()
+            .map(|entry| {
+                (
+                    entry.route.unwrap().path_text().to_string(),
+                    entry.framework,
+                    entry.guards,
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("/f".to_string(), "fastify".to_string(), Vec::new()),
+                (
+                    "/k".to_string(),
+                    "koa".to_string(),
+                    vec!["auth".to_string()]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_top_level_inline_handler_has_a_key_without_an_enclosing_symbol() {
+        let source = "const express = require('express');\nconst app = express();\napp.post('/y', (req, res) => {});\n";
+        let found = entries(Language::JavaScript, &[("server.js", source)]);
+        assert_eq!(found[0].symbol.as_deref(), Some("server.js#<inline@3:15>"));
+        assert_eq!(found[0].inline_handler.as_ref().unwrap().enclosing, None);
+    }
+
+    /// `count` routes in one function, each with a constant path, a mount, and an inline
+    /// handler.
+    fn many_routes(count: usize) -> std::time::Duration {
+        let mut source = String::from("import express from 'express';\nconst BASE = '/api';\nexport class Server {\n  app = express();\n  setup() {\n");
+        for index in 0..count {
+            source.push_str(&format!(
+                "    const r{index} = express.Router();\n    r{index}.get(`${{BASE}}/{index}`, (req, res) => res.end());\n    this.app.use('/m{index}', r{index});\n"
+            ));
+        }
+        source.push_str("  }\n}\n");
+        let (found, took) =
+            entries_timed(Language::TypeScript, &[("src/server.ts", &source)], true);
+        assert_eq!(found.len(), count);
+        assert_eq!(
+            found[count - 1].route.as_ref().unwrap().path.as_deref(),
+            Some(format!("/m{}/api/{}", count - 1, count - 1).as_str())
+        );
+        took
+    }
+
+    #[test]
+    fn many_routes_in_one_function_resolve() {
+        many_routes(50);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_routes_in_one_function_resolve_in_linear_time() {
+        assert_scales_linearly("express routes in one function", 4_000, many_routes);
+    }
+}

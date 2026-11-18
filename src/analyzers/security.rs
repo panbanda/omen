@@ -479,7 +479,7 @@ pub fn mermaid(report: &Report, limit: usize) -> String {
             continue;
         };
         let entry_label = match &entry.route {
-            Some(route) => format!("{} {}", route.method, route.path),
+            Some(route) => format!("{} {}", route.method, route.path_text()),
             None => format!("{} {}", entry.framework, entry.kind.name()),
         };
         let mut previous = node(format!("entry:{}", entry.key), entry_label, &mut text);

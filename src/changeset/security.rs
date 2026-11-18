@@ -88,7 +88,7 @@ fn entry_id(entry: &EntryPoint, renames: &BTreeMap<String, String>) -> String {
     let route = entry
         .route
         .as_ref()
-        .map(|route| format!("{} {}", route.method, route.path))
+        .map(|route| format!("{} {}", route.method, route.path_text()))
         .unwrap_or_default();
     format!(
         "{}|{}|{}|{}",
@@ -150,7 +150,7 @@ fn path_identity(
 
 fn entry_label(entry: &EntryPoint) -> String {
     match &entry.route {
-        Some(route) => format!("{} {}", route.method, route.path),
+        Some(route) => format!("{} {}", route.method, route.path_text()),
         None => format!("{} {}", entry.framework, entry.kind.name()),
     }
 }
@@ -377,7 +377,7 @@ impl SecuritySection<'_> {
             let route = entry
                 .route
                 .as_ref()
-                .map(|route| code(&format!("{} {}", route.method, route.path)))
+                .map(|route| code(&format!("{} {}", route.method, route.path_text())))
                 .unwrap_or_default();
             text.push_str(&format!(
                 "| {} | {} | {} | {} | {} |\n",
@@ -543,7 +543,11 @@ mod tests {
         assert!(found.sinks_removed.is_empty());
         assert_eq!(found.entry_points_added.len(), 1);
         assert_eq!(
-            found.entry_points_added[0].route.as_ref().unwrap().path,
+            found.entry_points_added[0]
+                .route
+                .as_ref()
+                .unwrap()
+                .path_text(),
             "/b"
         );
         assert_eq!(

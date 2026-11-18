@@ -1911,7 +1911,7 @@ impl CallSites {
             let Some(tree) = trees.tree(position) else {
                 continue;
             };
-            let context = Context::new(&tree, file, files, trees, &[]);
+            let context = Context::new(position, &tree, file, files, trees, &[]);
             let directory = directory_of(&file.file);
             for (name, alias) in collect_aliases(tree.root_node(), &tree.source) {
                 let entry = types
@@ -2022,7 +2022,7 @@ impl CallSites {
             if sites.is_empty() {
                 continue;
             }
-            let context = Context::new(&tree, file, files, trees, &[]);
+            let context = Context::new(position, &tree, file, files, trees, &[]);
             let own_index = FileUses::new(tree.root_node(), &tree.source, file, &context, false);
             let mut other_index: Option<FileUses<'_, '_>> = None;
             for (reference, keys) in sites {
@@ -4605,11 +4605,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 route: Some(Route {
                     method: record.method.clone(),
                     parameters: path_parameters(framework, &path),
-                    path,
+                    path: Some(path),
+                    path_template: None,
                 }),
                 guards,
                 basis: EntryBasis::Registered,
                 variant: None,
+                inline_handler: None,
             };
             let last = drafts.len() - 1;
             drafts[last] = Some((draft, duplicate));
@@ -5075,7 +5077,7 @@ fn mux_order(
             if record.opaque {
                 return None;
             }
-            let path = draft.route.as_ref()?.path.as_str();
+            let path = draft.route.as_ref()?.path.as_deref()?;
             let (literal, kind) = mux_literal(path, record.prefix);
             Some((literal, kind, record.method.as_str()))
         };
@@ -5279,7 +5281,7 @@ fn echo_precedence(
                 return None;
             }
             let (draft, _) = drafts[index].as_ref()?;
-            let path = &draft.route.as_ref()?.path;
+            let path = draft.route.as_ref()?.path.as_deref()?;
             Some((root, echo_tokens(path)))
         })
         .collect();

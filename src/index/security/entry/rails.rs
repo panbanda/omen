@@ -1164,6 +1164,7 @@ impl<'a> Context<'a> {
                     guards,
                     basis: EntryBasis::Registered,
                     variant: Some(format!("{action}@{name}@{variant_path}")),
+                    inline_handler: None,
                 });
             }
         }
@@ -1352,6 +1353,7 @@ impl<'a> Context<'a> {
                 guards: guards.clone(),
                 basis: EntryBasis::Registered,
                 variant: None,
+                inline_handler: None,
             });
         }
     }
@@ -2034,6 +2036,7 @@ impl<'a> Context<'a> {
             node = parent;
         }
         let reader = Context::new(
+            position,
             &parsed,
             &self.all[position],
             self.all,
