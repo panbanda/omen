@@ -249,20 +249,16 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
 /// Per SonarSource cognitive complexity spec, these constructs add +1 to complexity
 /// but do NOT increment the nesting level. This includes:
 /// - else/elif/elseif clauses (already inside a nesting if)
-/// - break/continue/goto (flow-breaking statements)
+/// - `goto`, and `break` or `continue` to a label (see `is_jump_without_label`)
 ///
 /// Reference: https://www.sonarsource.com/docs/CognitiveComplexity.pdf
 pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
-        Language::Ruby => &["elsif", "else", "when", "break", "next", "redo"],
-        Language::Python => &[
-            "else_clause",
-            "elif_clause",
-            "break_statement",
-            "continue_statement",
-        ],
+        // Ruby, Python, C#, C, and C++ have no `break` or `continue` to a label.
+        Language::Ruby => &["elsif", "else", "when"],
+        Language::Python => &["else_clause", "elif_clause"],
         // Go keeps the `else` body in the `alternative` field of `if_statement`.
-        Language::Go => &[],
+        Language::Go => &["break_statement", "continue_statement", "goto_statement"],
         Language::Rust => &[
             "else_clause",
             // match_arm contributes to flat complexity (each arm is +1 like case)
@@ -275,14 +271,9 @@ pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
             "break_statement",
             "continue_statement",
         ],
-        Language::Java | Language::CSharp => &["break_statement", "continue_statement"],
-        Language::C | Language::Cpp => &[
-            "else_clause",
-            "case_statement",
-            "break_statement",
-            "continue_statement",
-            "goto_statement",
-        ],
+        Language::Java => &["break_statement", "continue_statement"],
+        Language::CSharp => &["goto_statement"],
+        Language::C | Language::Cpp => &["else_clause", "case_statement", "goto_statement"],
         Language::Php => &[
             "else_clause",
             "else_if_clause",
@@ -487,10 +478,11 @@ mod tests {
         }
     }
 
-    /// Each language except Go has flat kinds. The Go `else` body is not a separate kind.
+    /// Every language must have an explicit arm in get_flat_node_types (no catch-all).
     #[test]
     fn test_flat_node_types_per_language() {
         let all_languages = [
+            Language::Go,
             Language::Rust,
             Language::Python,
             Language::TypeScript,
@@ -545,8 +537,9 @@ mod tests {
         assert!(rust_types.contains(&"continue_expression"));
         assert!(!rust_types.contains(&"break_statement"));
 
-        // The Go grammar has no `else_clause` kind.
-        assert!(get_flat_node_types(Language::Go).is_empty());
+        // The Go grammar has no `else_clause` kind. Go has jumps to a label.
+        assert!(!get_flat_node_types(Language::Go).contains(&"else_clause"));
+        assert!(get_flat_node_types(Language::Go).contains(&"goto_statement"));
 
         // Ruby has elsif. A `rescue` nests, as a `catch` does.
         let ruby_types = get_flat_node_types(Language::Ruby);

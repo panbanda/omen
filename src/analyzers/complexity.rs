@@ -592,6 +592,31 @@ fn chain_branch(
     }
 }
 
+/// Whether the node is a `break` or `continue` that does not go to a label.
+/// SonarSource counts only a jump to a label. PHP `break 2` leaves two loops,
+/// as a jump to a label does. A Rust `break value` is not a label.
+fn is_jump_without_label(node: &tree_sitter::Node<'_>, source: &[u8], lang: Language) -> bool {
+    const JUMP_KINDS: &[&str] = &[
+        "break_statement",
+        "continue_statement",
+        "break_expression",
+        "continue_expression",
+    ];
+    if !JUMP_KINDS.contains(&node.kind()) {
+        return false;
+    }
+    let mut cursor = node.walk();
+    let has_label = node
+        .named_children(&mut cursor)
+        .any(|child| match child.kind() {
+            "statement_identifier" | "label" | "label_name" => true,
+            "identifier" => lang == Language::Java,
+            "integer" => child.utf8_text(source).is_ok_and(|text| text.trim() != "1"),
+            _ => false,
+        });
+    !has_label
+}
+
 /// Calculate cognitive complexity with nesting penalties.
 /// Uses iterative cursor traversal with depth tracking for performance.
 ///
@@ -665,7 +690,9 @@ fn calculate_cognitive_complexity(
             }
         } else if current.is_named() && flat_types.contains(&kind) {
             // Flat constructs: +1 only, NO nesting penalty per SonarSource spec
-            complexity += 1;
+            if !is_jump_without_label(&current, source, lang) {
+                complexity += 1;
+            }
             // Children stay at same depth
             if level + 1 < depth_at_level.len() {
                 depth_at_level[level + 1] = current_depth;
@@ -1671,6 +1698,48 @@ fn third() { for i in 0..10 { println!("{}", i); } }
             "a.php",
             (5, 5),
         );
+    }
+
+    fn assert_cognitive(code: &str, lang: Language, filename: &str, expected: u32) {
+        let result = parse_and_analyze(code.as_bytes(), lang, filename);
+        assert_eq!(result.functions.len(), 1, "{filename}: {code}");
+        assert_eq!(
+            result.functions[0].metrics.cognitive, expected,
+            "{filename}: {code}"
+        );
+    }
+
+    /// SonarSource adds 1 for a `goto` and for a `break` or `continue` to a
+    /// label. A plain `break` or `continue` adds nothing. Each probe has one
+    /// loop, which adds 1.
+    #[test]
+    fn test_jump_counts_only_with_a_label() {
+        let cases: &[(Language, &str, &str, u32)] = &[
+            (Language::TypeScript, "a.ts", "function f(xs) { for (const x of xs) { if (x) continue; break; } }", 3),
+            (Language::JavaScript, "a.js", "function f(xs) { outer: for (const x of xs) { break outer; } }", 2),
+            (Language::Java, "A.java", "class A { void f(int[] xs) { for (int x : xs) { continue; } } }", 1),
+            (Language::Java, "A.java", "class A { void f(int[] xs) { outer: for (int x : xs) { continue outer; } } }", 2),
+            (Language::CSharp, "A.cs", "class A { void F() { for (;;) { break; } } }", 1),
+            (Language::CSharp, "A.cs", "class A { void F() { for (;;) { goto done; } done: ; } }", 2),
+            (Language::C, "a.c", "void f(void) { for (;;) { break; } }", 1),
+            (Language::C, "a.c", "void f(void) { for (;;) { goto done; } done: ; }", 2),
+            (Language::Cpp, "a.cpp", "void f() { for (;;) { continue; } }", 1),
+            (Language::Go, "a.go", "package p\nfunc f() { for { break } }\n", 1),
+            (Language::Go, "a.go", "package p\nfunc f() {\nouter:\n\tfor { break outer }\n}\n", 2),
+            (Language::Go, "a.go", "package p\nfunc f() {\n\tfor { goto done }\ndone:\n}\n", 2),
+            (Language::Rust, "a.rs", "fn f() { loop { break; } }", 1),
+            (Language::Rust, "a.rs", "fn f() -> i32 { loop { break 5; } }", 1),
+            (Language::Rust, "a.rs", "fn f(x: i32) -> i32 { loop { break x; } }", 1),
+            (Language::Rust, "a.rs", "fn f() { 'outer: loop { break 'outer; } }", 2),
+            (Language::Python, "a.py", "def f(xs):\n    for x in xs:\n        break\n", 1),
+            (Language::Ruby, "a.rb", "def f(x)\n  while x\n    break\n  end\nend\n", 1),
+            (Language::Php, "a.php", "<?php\nfunction f($xs) { foreach ($xs as $x) { break; } }\n", 1),
+            (Language::Php, "a.php", "<?php\nfunction f($xs) { foreach ($xs as $x) { continue 1; } }\n", 1),
+            (Language::Php, "a.php", "<?php\nfunction f($xs) { foreach ($xs as $x) { foreach ($xs as $y) { break 2; } } }\n", 4),
+        ];
+        for (lang, filename, code, expected) in cases {
+            assert_cognitive(code, *lang, filename, *expected);
+        }
     }
 
     // SonarSource Cognitive Complexity specification tests
