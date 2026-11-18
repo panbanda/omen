@@ -31,6 +31,10 @@
     {"label": "command_execution.in_test.smol", "category": "command_execution", "scenario": "in_test", "file": "commands.rs", "line": 43, "basis": "imported_symbol", "in_test": true},
     {"label": "command_execution.in_test.async_process", "category": "command_execution", "scenario": "in_test", "file": "commands.rs", "line": 44, "basis": "imported_symbol", "in_test": true},
     {"label": "command_execution.in_test.async_std", "category": "command_execution", "scenario": "in_test", "file": "commands.rs", "line": 45, "basis": "imported_symbol", "in_test": true},
-    {"label": "command_execution.same_name_symbol.process_type", "category": "command_execution", "scenario": "same_name_symbol", "file": "decoys.rs", "line": 4, "flagged": false}
+    {"label": "command_execution.same_name_symbol.process_type", "category": "command_execution", "scenario": "same_name_symbol", "file": "decoys.rs", "line": 4, "flagged": false},
+    {"label": "command_execution.real_call.std_glob_import", "category": "command_execution", "scenario": "real_call", "file": "globs.rs", "line": 5, "basis": "imported_symbol"},
+    {"label": "command_execution.real_call.tokio_glob_import", "category": "command_execution", "scenario": "real_call", "file": "globs.rs", "line": 13, "basis": "imported_symbol"},
+    {"label": "command_execution.real_call.std_path_after_other_glob", "category": "command_execution", "scenario": "real_call", "file": "globs.rs", "line": 21, "basis": "imported_symbol"},
+    {"label": "command_execution.real_call.tokio_path_after_other_glob", "category": "command_execution", "scenario": "real_call", "file": "globs.rs", "line": 22, "basis": "imported_symbol"}
   ]
 }

@@ -570,6 +570,18 @@ mod tests {
     }
 
     #[test]
+    fn a_glob_import_of_another_crate_does_not_hide_a_full_path() {
+        let source = "use remote_storage::*;\n\npub fn run(program: &str) {\n    std::process::Command::new(program);\n    tokio::process::Command::new(program);\n}\n";
+        assert_eq!(
+            found(Language::Rust, &[("a.rs", source)]),
+            [
+                one("a.rs", 4, "command_execution", "imported_symbol"),
+                one("a.rs", 5, "command_execution", "imported_symbol"),
+            ]
+        );
+    }
+
+    #[test]
     fn a_java_receiver_chain_resolves_unless_the_class_is_a_repository_class() {
         let real = "public class A {\n    void run(String command) throws Exception {\n        Runtime.getRuntime().exec(command);\n    }\n}\n";
         assert_eq!(

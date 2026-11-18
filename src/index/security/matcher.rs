@@ -455,7 +455,7 @@ impl FileContext<'_> {
         if repository_wildcard || self.defined_near(&head) {
             return Owner::Repository;
         }
-        let external: Vec<Vec<String>> = wildcards
+        let mut external: Vec<Vec<String>> = wildcards
             .iter()
             .filter(|binding| !Self::is_repository_target(&binding.target_file))
             .map(|binding| {
@@ -465,6 +465,14 @@ impl FileContext<'_> {
             })
             .collect();
         if !external.is_empty() {
+            // A glob import gives the head of a path only if its module exports a module
+            // with the name of a root, such as `std`. Thus the matcher also keeps the written path.
+            if written.len() > 1
+                && self.is_root(&head)
+                && !self.repository.all.contains(head.as_str())
+            {
+                external.push(written.clone());
+            }
             return Owner::Paths {
                 paths: external,
                 imported: true,
