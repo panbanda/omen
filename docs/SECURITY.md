@@ -488,6 +488,9 @@ do not know the symbol.
 - A guard that a middleware of the application adds, as `app.use(auth)`, is not a guard of the
   route.
 - Omen follows at most 16 names, imports, mounts, and superclasses for one value.
+- A router has at most 64 prefixes from its chains of mounts. A router with more prefixes has
+  the prefix `${prefix}`, and its routes have no path. A router in a cycle of mounts has the
+  prefix `${mount cycle}`.
 
 ## Limits
 
