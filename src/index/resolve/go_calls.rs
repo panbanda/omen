@@ -159,6 +159,27 @@ fn test_interface_call_offers_the_implementations() {
     );
 }
 
+/// A struct that embeds an interface has the methods of the interface. Its
+/// own method of a name of the interface is an implementation.
+#[test]
+fn test_struct_that_embeds_the_interface_is_an_implementation() {
+    let files = [
+        ("go.mod", "module example.com/shop\n"),
+        (
+            "storage/storage.go",
+            "package storage\n\ntype store interface {\n\tload() error\n\tdestroy() error\n}\n\nfunc run(s store) {\n\t_ = s.destroy()\n}\n",
+        ),
+        (
+            "storage/storage_test.go",
+            "package storage\n\ntype failing struct {\n\tstore\n}\n\nfunc (f *failing) destroy() error { return f.store.destroy() }\n",
+        ),
+    ];
+    assert_eq!(
+        rows(&files, "storage/storage.go"),
+        ["9 run>s.destroy Ambiguous Implementation [storage/storage.go#store.destroy, storage/storage_test.go#failing.destroy]"]
+    );
+}
+
 /// Two structs that embed a pointer to each other are a cycle. The search for
 /// the methods of an implementation stops at the cycle.
 #[test]

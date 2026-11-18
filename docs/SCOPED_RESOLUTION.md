@@ -235,8 +235,9 @@ is worse than no edge. The call is ambiguous, with the basis
 - The method of each repository type that implements the interface.
 
 A type implements the interface when it has each method name of the
-interface: its own method, or a method that an embedded field promotes. The
-rule does not compare the signatures, and an embedded interface outside the
+interface: its own method, or a method that an embedded field promotes.
+An embedded interface of the repository gives the methods that it declares.
+The rule does not compare the signatures, and an embedded interface outside the
 repository adds no name. Thus the candidates can include a type that the
 compiler does not accept. The argument types and the `cfg` twins do not
 select one candidate. Dead code counts each candidate as used.

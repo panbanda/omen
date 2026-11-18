@@ -2450,12 +2450,37 @@ impl<'a> Resolver<'a> {
         promoted
     }
 
-    /// For each Go type, the methods that it has itself.
+    /// For each Go type, the methods that it has itself. The methods of an
+    /// interface are the methods that it declares, thus a struct that embeds
+    /// the interface has them.
     fn methods_of_go_types(&self) -> BTreeMap<Id, Vec<Id>> {
         let mut methods: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
         for (file, facts) in self.files.iter().enumerate() {
             if self.family(file) != Family::Go {
                 continue;
+            }
+            let mut declared: HashMap<&[String], Vec<usize>> = HashMap::new();
+            for (position, (symbol, link)) in
+                facts.symbols.iter().zip(&facts.link_facts).enumerate()
+            {
+                if symbol.kind == SymbolKind::Method && symbol.receiver_type.is_none() {
+                    declared
+                        .entry(link.container_path.as_slice())
+                        .or_default()
+                        .push(position);
+                }
+            }
+            for (position, symbol) in facts.symbols.iter().enumerate() {
+                if symbol.kind != SymbolKind::Interface {
+                    continue;
+                }
+                let path = self.member_path((file, position));
+                for method in declared.get(path.as_slice()).into_iter().flatten() {
+                    methods
+                        .entry((file, position))
+                        .or_default()
+                        .push((file, *method));
+                }
             }
             for (position, symbol) in facts.symbols.iter().enumerate() {
                 if !is_callable(symbol) || symbol.receiver_type.is_none() {
