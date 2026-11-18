@@ -89,6 +89,9 @@ impl EntryBasis {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardsUnknownReason {
+    /// A loop around the route has more work than omen expands. Omen read the block of the loop
+    /// one time, and the values of the loop parameters are not known.
+    UnexpandedLoop,
     /// Omen did not find the controller or the action of the route.
     UnresolvedController,
     /// The method of the action is not public, or omen cannot read its visibility.
@@ -134,6 +137,7 @@ pub enum GuardsUnknownReason {
 impl GuardsUnknownReason {
     pub fn name(self) -> &'static str {
         match self {
+            Self::UnexpandedLoop => "unexpanded_loop",
             Self::UnresolvedController => "unresolved_controller",
             Self::UnreadableAction => "unreadable_action",
             Self::RackEndpoint => "rack_endpoint",
@@ -656,6 +660,8 @@ struct Context<'a> {
         std::cell::RefCell<std::collections::HashMap<usize, rails::ScopedController>>,
     /// The names that a Rails routes file assigns a value to.
     rails_assigned: std::sync::OnceLock<std::collections::HashSet<String>>,
+    /// The work that the expansion of Rails loops can still add to the walks of the file.
+    rails_loop_work: std::cell::Cell<usize>,
     /// The position of the first symbol of the file for each start of a name.
     symbol_starts: std::sync::OnceLock<std::collections::HashMap<usize, usize>>,
     /// The positions of the functions, the methods, and the constructors of the file, by name.
@@ -721,6 +727,7 @@ impl<'a> Context<'a> {
             rails_known: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_module_controllers: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_assigned: std::sync::OnceLock::new(),
+            rails_loop_work: std::cell::Cell::new(rails::LOOP_WORK_LIMIT),
             symbol_starts: std::sync::OnceLock::new(),
             callables_here: std::sync::OnceLock::new(),
             go_locals: std::sync::OnceLock::new(),

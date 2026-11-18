@@ -366,17 +366,143 @@ fn the_entries_of_a_loop_have_keys_that_differ() {
 }
 
 #[test]
-fn loops_that_expand_to_more_than_the_limit_give_no_route() {
+fn loops_in_loops_under_the_limit_give_each_route() {
     let items: Vec<String> = (0..40).map(|number| format!("i{number}")).collect();
     let list = format!("%w[{}]", items.join(" "));
     let two = draw(&format!(
         "  {list}.each do |a|\n    {list}.each do |b|\n      get \"#{{a}}/#{{b}}\" => \"webhooks#show\"\n    end\n  end"
     ));
     assert_eq!(rows(&two, &[WEBHOOKS]).len(), 1_600);
-    let three = draw(&format!(
-        "  {list}.each do |a|\n    get \"#{{a}}\" => \"webhooks#show\"\n    {list}.each do |b|\n      {list}.each do |c|\n        get \"#{{a}}/#{{b}}/#{{c}}\" => \"webhooks#show\"\n      end\n    end\n  end"
-    ));
-    assert_eq!(rows(&three, &[WEBHOOKS]).len(), 40);
+}
+
+/// A list of 4,096 literal items.
+fn long_list(hash: bool) -> String {
+    let items: Vec<String> = (0..4_096)
+        .map(|number| {
+            if hash {
+                format!("\"i{number}\" => \"webhooks#show\"")
+            } else {
+                format!("i{number}")
+            }
+        })
+        .collect();
+    if hash {
+        format!("{{ {} }}", items.join(", "))
+    } else {
+        format!("%w[{}]", items.join(" "))
+    }
+}
+
+/// A loop of 4,096 items around `size` routes that use the loop parameter, and a route after the
+/// loop.
+fn a_long_loop_around(size: usize) -> String {
+    let mut body = format!("  {}.each do |name|\n", long_list(false));
+    for number in 0..size {
+        body.push_str(&format!(
+            "    get \"#{{name}}/r{number}\" => \"webhooks#show\"\n"
+        ));
+    }
+    body.push_str("  end\n  get \"after\" => \"webhooks#index\"");
+    draw(&body)
+}
+
+fn assert_unexpanded(found: &[EntryPoint], path: &str) {
+    for entry in found {
+        let route = entry.route.as_ref().expect("a Rails entry has a route");
+        if route.path.contains('[') {
+            assert!(!entry.guards_complete, "{}", route.path);
+            assert_eq!(
+                entry.guards_unknown_reason,
+                Some(super::GuardsUnknownReason::UnexpandedLoop),
+                "{}",
+                route.path
+            );
+        } else {
+            assert_eq!(route.path, path);
+            assert_ne!(
+                entry.guards_unknown_reason,
+                Some(super::GuardsUnknownReason::UnexpandedLoop)
+            );
+        }
+    }
+}
+
+#[test]
+fn a_loop_over_the_expansion_limit_gives_each_route_one_time_with_an_unknown_segment() {
+    let routes = a_long_loop_around(200);
+    let found = rails(&[("config/routes.rb", &routes), WEBHOOKS]);
+    let mut expected: Vec<String> = (0..200)
+        .map(|number| format!("GET /[name]/r{number} WebhooksController.show [check]"))
+        .collect();
+    expected.push(String::from("GET /after WebhooksController.index [check]"));
+    expected.sort();
+    assert_eq!(rows_of(&found), expected);
+    assert_unexpanded(&found, "/after");
+}
+
+#[test]
+fn a_long_loop_in_a_short_loop_gives_the_routes_of_each_outer_item() {
+    let mut body = format!(
+        "  %w[a b].each do |outer|\n    scope outer do\n      {}.each do |name|\n",
+        long_list(false)
+    );
+    for number in 0..200 {
+        body.push_str(&format!(
+            "        get \"#{{name}}/r{number}\" => \"webhooks#show\"\n"
+        ));
+    }
+    body.push_str("      end\n    end\n  end");
+    let found = rails(&[("config/routes.rb", &draw(&body)), WEBHOOKS]);
+    let mut expected: Vec<String> = ["a", "b"]
+        .iter()
+        .flat_map(|outer| {
+            (0..200).map(move |number| {
+                format!("GET /{outer}/[name]/r{number} WebhooksController.show [check]")
+            })
+        })
+        .collect();
+    expected.sort();
+    assert_eq!(rows_of(&found), expected);
+    assert_unexpanded(&found, "");
+}
+
+#[test]
+fn a_long_hash_loop_gives_each_route_with_an_unknown_target() {
+    let mut body = format!("  {}.each do |path, action|\n", long_list(true));
+    for number in 0..200 {
+        body.push_str(&format!("    get \"#{{path}}/r{number}\", to: action\n"));
+    }
+    body.push_str("  end");
+    let found = rails(&[("config/routes.rb", &draw(&body)), WEBHOOKS]);
+    let mut expected: Vec<String> = (0..200)
+        .map(|number| format!("GET /[path]/r{number} - []"))
+        .collect();
+    expected.sort();
+    assert_eq!(rows_of(&found), expected);
+    assert_unexpanded(&found, "");
+}
+
+#[test]
+fn a_mount_in_a_loop_over_the_expansion_limit_is_not_read() {
+    let mut body = format!(
+        "  {}.each do |name|\n    mount Blog::Engine, at: name\n",
+        long_list(false)
+    );
+    for number in 0..200 {
+        body.push_str(&format!(
+            "    get \"#{{name}}/r{number}\" => \"webhooks#show\"\n"
+        ));
+    }
+    body.push_str("  end");
+    let routes = draw(&body);
+    let found = rails(&[
+        ("config/routes.rb", &routes),
+        WEBHOOKS,
+        BLOG_ENGINE,
+        BLOG_ROUTES,
+    ]);
+    assert_eq!(found.len(), 200);
+    assert_unexpanded(&found, "");
 }
 
 #[test]
@@ -652,12 +778,51 @@ fn many_mounted_engines_at(size: usize) -> std::time::Duration {
     elapsed
 }
 
+/// One loop of 4,096 items around `size` routes.
+fn a_long_loop_at(size: usize) -> std::time::Duration {
+    let routes = a_long_loop_around(size);
+    let (found, elapsed) = entries_lean(Language::Ruby, &[("config/routes.rb", &routes), WEBHOOKS]);
+    assert_eq!(found.len(), size + 1);
+    elapsed
+}
+
+/// `size` loops of 4,096 items, each around one route. The first loops expand, until the work of
+/// the expansion gets to the limit.
+fn long_sibling_loops_at(size: usize) -> std::time::Duration {
+    let list = long_list(false);
+    let mut body = String::new();
+    for number in 0..size {
+        body.push_str(&format!(
+            "  {list}.each do |name|\n    get \"#{{name}}/r{number}\" => \"webhooks#show\"\n  end\n"
+        ));
+    }
+    let routes = draw(&body);
+    let (found, elapsed) = entries_lean(Language::Ruby, &[("config/routes.rb", &routes), WEBHOOKS]);
+    assert!(found.len() >= size);
+    assert!(found.len() < size + 100 * 4_096);
+    elapsed
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_a_long_loop_around_many_routes_resolves_in_linear_time() {
+    assert_scales_linearly("long loop", 20_000, a_long_loop_at);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_many_long_loops_resolve_in_linear_time() {
+    assert_scales_linearly("long sibling loops", 200, long_sibling_loops_at);
+}
+
 #[test]
 fn the_linear_cases_give_each_route() {
     sibling_loops_at(20);
     nested_loops_at(20);
     nested_constrained_scopes_at(20);
     many_mounted_engines_at(10);
+    a_long_loop_at(100);
+    long_sibling_loops_at(20);
 }
 
 #[test]

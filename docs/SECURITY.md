@@ -110,6 +110,7 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 
 | Reason | Framework | Meaning |
 | --- | --- | --- |
+| `unexpanded_loop` | Rails | A loop around the route has more work than omen expands. Omen reads its block one time, and each loop parameter is an unknown path segment, as `[name]`. See "Loops over literal lists". |
 | `unresolved_controller` | Rails | Omen did not find the controller class or the action of the route. |
 | `unreadable_action` | Rails | The method of the action is not public, or omen cannot read its visibility. |
 | `rack_endpoint` | Rails | The target of the route is an object that is not a controller action, as a Rack application or a lambda. |
@@ -273,8 +274,20 @@ Omen does not read a loop in these conditions:
   or for `each_with_index`.
 - The file assigns a value to a name of a parameter in any place, or uses the name as the receiver
   of a call or of `<<`. Then the value can change in the block.
-- The loops around a route run it more than 4,096 times. Loops in each other multiply their sizes,
-  and this limit keeps the cost in proportion to the size of the file.
+
+The expansion of a loop costs the number of its items times the number of syntax nodes in its
+block. Each walk of a file can add a total of 1,048,576 node visits for its loops. The loops take
+their costs in the order of the walk. If the remaining total is less than the cost of a loop, omen
+does not expand the loop:
+
+- Omen reads the block one time.
+- Each loop parameter has the value `[name]`, where `name` is the name of the parameter. Thus a
+  path has the unknown segment `/[name]`.
+- Each route of the block has `guards_complete: false` with the reason `unexpanded_loop`. A target
+  or a controller that uses the parameter is not known, so the route has no symbol.
+- A `mount` call in the block makes the mount of the engine unknown.
+
+This limit keeps the work and the number of routes in proportion to the size of the file.
 
 Each entry point of a loop has the range of its call. The key of an entry point has its path when
 two entry points of one call have one method.

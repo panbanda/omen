@@ -214,8 +214,9 @@ pub(super) struct Scope {
     bindings: Bindings,
     /// The request constraints of the blocks around the route.
     constraints: Constraints,
-    /// The number of times that the loops around the route run the route.
-    runs: Runs,
+    /// A loop around the route has more work than `LOOP_WORK_LIMIT` allows. Omen reads its block
+    /// one time, and each loop parameter has an unknown value.
+    unexpanded: bool,
     /// The `format:` option of the blocks around the route.
     format: Format,
     /// The request methods that a definition in the `draw` block disables.
@@ -302,20 +303,12 @@ impl Constraints {
     }
 }
 
-/// The largest number of times that the loops around a route can run it. Loops in each other
-/// multiply their sizes, so a loop that goes above this number is skipped. Thus omen visits a
-/// node at most this number of times.
-const LOOP_RUN_LIMIT: usize = 4_096;
-
-/// The number of times that the loops around a node run it.
-#[derive(Clone, Copy)]
-pub(super) struct Runs(usize);
-
-impl Default for Runs {
-    fn default() -> Self {
-        Self(1)
-    }
-}
+/// The largest number of node visits that the expansion of loops adds to one walk of a file. The
+/// expansion of a loop costs the number of its items times the number of nodes in its block, and
+/// each expansion takes its cost from this total. When the remaining total is too small, omen
+/// reads the block one time with unknown values. Thus the work and the number of routes stay in
+/// proportion to the size of the file.
+pub(super) const LOOP_WORK_LIMIT: usize = 1 << 20;
 
 /// The `format:` option of a route or of the blocks around it.
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -1025,9 +1018,16 @@ impl<'a> Context<'a> {
         if scope.is_disabled(name, node.start_byte()) {
             return;
         }
+        let first = out.len();
         match name {
             "resources" | "resource" => self.rails_resources(node, name == "resource", scope, out),
             _ => self.rails_plain_route(node, name, scope, out),
+        }
+        if scope.unexpanded {
+            for draft in &mut out[first..] {
+                draft.unknown =
+                    first_reason(draft.unknown, Some(GuardsUnknownReason::UnexpandedLoop));
+            }
         }
     }
 
@@ -1251,9 +1251,11 @@ impl<'a> Context<'a> {
 
     /// The scopes of the block of a loop over a literal list: one scope for each item, with the
     /// values of the block parameters. The outer `None` tells that the call is not such a loop.
-    /// The inner `None` tells that omen cannot expand the loop: an item is not a literal string or
-    /// symbol, the block parameters are not plain names of the right number, the file assigns a
-    /// value to a parameter name, or the loops around the block run it too many times.
+    /// The inner `None` tells that omen cannot read the loop: an item is not a literal string or
+    /// symbol, the block parameters are not plain names of the right number, or the file assigns a
+    /// value to a parameter name. When the expansion costs more than the remaining work of
+    /// `LOOP_WORK_LIMIT`, the result is one scope: each parameter has the value `[name]`, and the
+    /// scope is `unexpanded`.
     ///
     /// Omen reads `each` and `each_with_index` on an array, and `each` and `each_pair` on a hash.
     fn rails_loop(&self, call: Node<'_>, outer: &Rc<Scope>) -> Option<Option<Vec<Rc<Scope>>>> {
@@ -1298,10 +1300,6 @@ impl<'a> Context<'a> {
         }
         let mut cursor = receiver.walk();
         let items: Vec<Node<'_>> = receiver.named_children(&mut cursor).collect();
-        let runs = outer.runs.0.checked_mul(items.len().max(1))?;
-        if runs > LOOP_RUN_LIMIT {
-            return None;
-        }
         let mut rows: Vec<Vec<Value>> = Vec::with_capacity(items.len());
         for (place, item) in items.into_iter().enumerate() {
             let row = if is_hash {
@@ -1322,11 +1320,30 @@ impl<'a> Context<'a> {
             };
             rows.push(row);
         }
+        let cost = rows.len().saturating_mul(block.descendant_count());
+        let remaining = self.rails_loop_work.get();
+        if cost > remaining {
+            let mut scope = (**outer).clone();
+            scope.unexpanded = true;
+            for (place, name) in names.iter().enumerate() {
+                let text = format!("[{name}]");
+                let symbols = rows
+                    .iter()
+                    .all(|row| matches!(row[place], Value::Symbol(_)));
+                let value = if symbols {
+                    Value::Symbol(text)
+                } else {
+                    Value::Text(text)
+                };
+                scope.bindings.insert(name.clone(), value);
+            }
+            return Some(vec![Rc::new(scope)]);
+        }
+        self.rails_loop_work.set(remaining - cost);
         Some(
             rows.into_iter()
                 .map(|row| {
                     let mut scope = (**outer).clone();
-                    scope.runs = Runs(runs);
                     for (name, value) in names.iter().zip(row) {
                         scope.bindings.insert(name.clone(), value);
                     }
@@ -1680,13 +1697,13 @@ impl<'a> Context<'a> {
         let block = call.child_by_field_name("block")?;
         let lexical = scope.lexical.clone();
         let bindings = scope.bindings.clone();
-        let runs = scope.runs;
+        let unexpanded = scope.unexpanded;
         scope = Scope {
             prefix: Some(Prefix::root()),
             draw: true,
             lexical,
             bindings,
-            runs,
+            unexpanded,
             disabled: self.rails_draw_definitions(block)?,
             api_only: self.rails_api_only(&owner),
             ..Scope::default()
@@ -1941,6 +1958,7 @@ impl<'a> Context<'a> {
             if !Self::rails_positional(rest).is_empty()
                 || scope.resource.is_some()
                 || scope.method_scope
+                || scope.unexpanded
             {
                 return None;
             }
