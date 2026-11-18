@@ -1300,6 +1300,23 @@ impl<'a> Resolver<'a> {
                 SymbolKind::Interface | SymbolKind::Trait
             )
         });
+        // Two Rust items of one name under different `cfg` attributes, as
+        // `#[cfg(unix)] mod a` and `#[cfg(windows)] mod a`, are one item.
+        let one_rust_file =
+            self.family(file) == Family::Rust && types.iter().all(|owner| owner.0 == types[0].0);
+        if !dynamic && types.len() > 1 && one_rust_file {
+            // The members of one type can include the members of the types
+            // with its name and container.
+            let mut members: Vec<Id> = types
+                .iter()
+                .flat_map(|owner| self.members(*owner, name, arity, &mut BTreeSet::new()))
+                .collect();
+            members.sort();
+            members.dedup();
+            if self.are_condition_twins(&members) {
+                return Outcome::offered(basis, members);
+            }
+        }
         if dynamic || types.len() > 1 {
             return Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file));
         }
@@ -3218,6 +3235,36 @@ mod false_edge_tests {
         let rows = rows_of(&[("a.rs", traits)], "a.rs", "poll");
         assert_eq!(rows.len(), 1);
         assert!(rows[0].contains(" Ambiguous "), "{rows:?}");
+    }
+
+    /// The functions of two modules with one name under different `cfg`
+    /// attributes are twins, also when the functions have no attribute.
+    #[test]
+    fn test_rust_functions_of_cfg_twin_modules_are_twins() {
+        let source = "#[cfg(unix)]\nmod a {\n    pub fn f() {}\n}\n\n#[cfg(windows)]\nmod a {\n    pub fn f() {}\n}\n\nfn run() {\n    a::f();\n}\n";
+        assert_eq!(
+            rows_of(&[("a.rs", source)], "a.rs", "f"),
+            ["12 run>a::f UniqueCandidate QualifiedPath [a.rs#a.f, a.rs#a.f~2]"]
+        );
+        let one_condition = source.replace("windows", "unix");
+        let rows = rows_of(&[("a.rs", one_condition.as_str())], "a.rs", "f");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].contains(" Ambiguous NameOnly "), "{rows:?}");
+    }
+
+    /// The condition of each item level has its own ID. Thus `#[cfg(a)]` on a
+    /// module and `#[cfg(b)]` on its function is a different condition from
+    /// `#[cfg(a)] #[cfg(b)]` on one module, although Rust gives them one
+    /// condition. The two definitions are then twins. Two definitions with one
+    /// condition are in one build, and `rustc` rejects that code, thus the
+    /// extra edge occurs only in code that does not compile.
+    #[test]
+    fn test_rust_one_condition_split_over_two_levels_is_twins_only_in_code_that_does_not_compile() {
+        let source = "#[cfg(a)]\nmod m {\n    #[cfg(b)]\n    pub fn f() {}\n}\n\n#[cfg(a)]\n#[cfg(b)]\nmod m {\n    pub fn f() {}\n}\n\nfn run() {\n    m::f();\n}\n";
+        assert_eq!(
+            rows_of(&[("a.rs", source)], "a.rs", "f"),
+            ["14 run>m::f UniqueCandidate QualifiedPath [a.rs#m.f, a.rs#m.f~2]"]
+        );
     }
 
     /// An `impl` block under one `cfg` attribute of `64 * size` bytes has
