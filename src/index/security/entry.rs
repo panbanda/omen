@@ -323,7 +323,9 @@ pub struct EntryShared {
 }
 
 /// The syntax trees that the entry point rules ask for in other files. The source
-/// parses a file when a rule asks, and it keeps the tree for the next question.
+/// parses a file when a rule asks. It keeps the tree only while a rule uses it: the
+/// rules that read each file of a language would otherwise keep a tree of each file
+/// until the end of the analysis.
 pub struct OnDemandTrees<'a> {
     parse_file: &'a (dyn Fn(usize) -> crate::core::Result<Option<ParseResult>> + Sync),
     error: parking_lot::Mutex<Option<crate::core::Error>>,
@@ -331,9 +333,9 @@ pub struct OnDemandTrees<'a> {
     shared: EntryShared,
 }
 
-/// The one parse of a file. The first thread that asks parses the file, and the other
+/// The parse of a file. The first thread that asks parses the file, and the other
 /// threads wait for the result. A file that cannot be parsed stays without a tree.
-type Cell = std::sync::Arc<std::sync::OnceLock<Option<std::sync::Arc<ParseResult>>>>;
+type Cell = std::sync::Arc<std::sync::OnceLock<Option<std::sync::Weak<ParseResult>>>>;
 
 impl<'a> OnDemandTrees<'a> {
     pub fn new(
@@ -359,7 +361,6 @@ impl<'a> OnDemandTrees<'a> {
 
 impl TreeSource for OnDemandTrees<'_> {
     fn tree(&self, position: usize) -> Option<TreeRef<'_>> {
-        let cell = std::sync::Arc::clone(self.parsed.lock().entry(position).or_default());
         let parse = || match (self.parse_file)(position) {
             Ok(tree) => tree.map(std::sync::Arc::new),
             Err(error) => {
@@ -367,9 +368,29 @@ impl TreeSource for OnDemandTrees<'_> {
                 None
             }
         };
-        cell.get_or_init(parse)
-            .as_ref()
-            .map(|tree| TreeRef::Shared(std::sync::Arc::clone(tree)))
+        let cell = {
+            let mut parsed = self.parsed.lock();
+            let cell = parsed.entry(position).or_default();
+            let released = matches!(cell.get(), Some(Some(tree)) if tree.strong_count() == 0);
+            if released {
+                *cell = Cell::default();
+            }
+            std::sync::Arc::clone(cell)
+        };
+        let mut parsed_here = None;
+        let stored = cell.get_or_init(|| {
+            let tree = parse()?;
+            let weak = std::sync::Arc::downgrade(&tree);
+            parsed_here = Some(tree);
+            Some(weak)
+        });
+        let tree = match (parsed_here, stored) {
+            (Some(tree), _) => tree,
+            (None, None) => return None,
+            // The thread that parsed the tree can release it before this thread reads it.
+            (None, Some(weak)) => weak.upgrade().or_else(parse)?,
+        };
+        Some(TreeRef::Shared(tree))
     }
 
     fn shared(&self) -> &EntryShared {
@@ -2285,11 +2306,53 @@ mod tests {
                 .ok())
         };
         let trees = OnDemandTrees::new(&parse_file);
+        // Each thread keeps its tree until all threads have one, so the tree is in use
+        // during each request.
+        let barrier = std::sync::Barrier::new(8);
         std::thread::scope(|scope| {
             for _ in 0..8 {
-                scope.spawn(|| assert!(trees.tree(0).is_some()));
+                scope.spawn(|| {
+                    let tree = trees.tree(0);
+                    assert!(tree.is_some());
+                    barrier.wait();
+                });
             }
         });
+        assert_eq!(parses.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_tree_that_no_rule_uses_is_not_kept() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let parses = AtomicUsize::new(0);
+        let parse_file = |_: usize| {
+            parses.fetch_add(1, Ordering::SeqCst);
+            Ok(Parser::new()
+                .parse(b"x = 1\n", Language::Python, Path::new("a.py"))
+                .ok())
+        };
+        let trees = OnDemandTrees::new(&parse_file);
+        let Some(TreeRef::Shared(tree)) = trees.tree(0) else {
+            panic!("a shared tree");
+        };
+        let released = std::sync::Arc::downgrade(&tree);
+        drop(tree);
+        assert!(released.upgrade().is_none());
+        assert!(trees.tree(0).is_some());
+        assert_eq!(parses.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_file_without_a_tree_is_not_parsed_again() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let parses = AtomicUsize::new(0);
+        let parse_file = |_: usize| {
+            parses.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        };
+        let trees = OnDemandTrees::new(&parse_file);
+        assert!(trees.tree(0).is_none());
+        assert!(trees.tree(0).is_none());
         assert_eq!(parses.load(Ordering::SeqCst), 1);
     }
 
