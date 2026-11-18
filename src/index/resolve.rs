@@ -221,9 +221,43 @@ struct Resolver<'a> {
     /// The results of `types`, `package_files`, and `visible_files`. The
     /// resolution of one call asks for the same facts many times.
     types_cache: RwLock<HashMap<TypeQuery, Vec<Id>>>,
+    /// The results of `exported`, by the file and the name.
+    exported_cache: RwLock<HashMap<ExportQuery, Arc<Vec<Id>>>>,
     package_cache: RwLock<HashMap<usize, Arc<Vec<usize>>>>,
     visible_cache: RwLock<HashMap<usize, Arc<Vec<usize>>>>,
+    /// The `cfg` twins that `twin_members` found, or an empty list when the
+    /// members are not twins.
+    twin_members_cache: RwLock<HashMap<TwinQuery, Arc<Vec<Id>>>>,
+    /// The results of `module_scopes`, by the file.
+    module_scopes_cache: RwLock<HashMap<usize, Arc<ModuleScopes>>>,
 }
+
+/// The traits whose methods `Arc` and `Rc` have only when the trait is in
+/// scope: the name of the method, the name of the trait, and the modules
+/// that export the trait.
+const SCOPED_WRAPPER_TRAITS: [(&str, &str, &[&str]); 3] = [
+    (
+        "borrow",
+        "Borrow",
+        &["std::borrow", "core::borrow", "alloc::borrow"],
+    ),
+    ("deref", "Deref", &["std::ops", "core::ops"]),
+    ("type_id", "Any", &["std::any", "core::any"]),
+];
+
+/// The imports of each module scope of a Rust file, by the position of the
+/// inline module, or `None` for the file. A scope has the traits of
+/// `SCOPED_WRAPPER_TRAITS` that it imports, and the paths of the modules of
+/// the file that it imports with a wildcard, as `self::a` for `use super::*`
+/// in the module `a::b`.
+type ModuleScopes = HashMap<Option<usize>, ([bool; 3], Vec<String>)>;
+
+/// The types, the name, and the number of arguments of one lookup of the
+/// members of `cfg` twin types.
+type TwinQuery = (Vec<Id>, String, usize);
+
+/// The file and the name of one lookup of an exported name.
+type ExportQuery = (usize, String);
 
 /// The file, the name, and the qualifier of one type lookup.
 type TypeQuery = (usize, String, Option<String>);
@@ -334,6 +368,9 @@ impl<'a> Resolver<'a> {
             references_by_start,
             ruby_children: OnceLock::new(),
             types_cache: RwLock::new(HashMap::new()),
+            twin_members_cache: RwLock::new(HashMap::new()),
+            module_scopes_cache: RwLock::new(HashMap::new()),
+            exported_cache: RwLock::new(HashMap::new()),
             package_cache: RwLock::new(HashMap::new()),
             visible_cache: RwLock::new(HashMap::new()),
         }
@@ -412,9 +449,15 @@ impl<'a> Resolver<'a> {
         if let Some(found) = self.package_cache.read().get(&file) {
             return Arc::clone(found);
         }
+        // Only these families have a package of files. For a different
+        // family, a comparison with each file gives no file.
+        let has_packages = matches!(
+            self.family(file),
+            Family::Go | Family::Java | Family::CSharp | Family::Php
+        );
         let found: Arc<Vec<usize>> = Arc::new(
             (0..self.files.len())
-                .filter(|other| self.same_package(file, *other))
+                .filter(|other| has_packages && self.same_package(file, *other))
                 .collect(),
         );
         self.package_cache.write().insert(file, Arc::clone(&found));
@@ -526,6 +569,24 @@ impl<'a> Resolver<'a> {
         found
     }
 
+    /// The definitions that `exported_name` gives for a name of a file. Many
+    /// files can import one module with a wildcard, and each asks for the
+    /// same names. Thus the function keeps each result.
+    fn exported(&self, file: usize, name: &str) -> Arc<Vec<Id>> {
+        let query = (file, name.to_string());
+        if let Some(found) = self.exported_cache.read().get(&query) {
+            return Arc::clone(found);
+        }
+        let mut found = self.exported_name(file, name, &mut BTreeSet::new());
+        found.sort();
+        found.dedup();
+        let found = Arc::new(found);
+        self.exported_cache
+            .write()
+            .insert(query, Arc::clone(&found));
+        found
+    }
+
     /// The types that a name can refer to in `file`. The first rule that
     /// finds a type gives the result.
     fn types(&self, name: &str, qualifier: Option<&str>, file: usize) -> Vec<Id> {
@@ -533,7 +594,10 @@ impl<'a> Resolver<'a> {
         if let Some(found) = self.types_cache.read().get(&query) {
             return found.clone();
         }
-        let found = self.types_of_query(name, qualifier, file);
+        // Two imports of one file can give one type. It is one type.
+        let mut found = self.types_of_query(name, qualifier, file);
+        found.sort();
+        found.dedup();
         self.types_cache.write().insert(query, found.clone());
         found
     }
@@ -579,10 +643,24 @@ impl<'a> Resolver<'a> {
                 .copied()
                 .skip_while(|segment| ["crate", "self", "super"].contains(segment))
                 .collect();
-            let module_file = self.files[file].path_targets.get(&path.join("::"));
+            // The module file defines the type, or it exports the type again.
+            let exported: Vec<Id> = self.files[file]
+                .path_targets
+                .get(&path.join("::"))
+                .and_then(|module| self.by_file.get(module.as_str()))
+                .map(|module| self.exported(*module, name).to_vec())
+                .unwrap_or_default();
+            // `pub use inner::Original as Public` exports a type whose name
+            // is not the name of the path.
+            found.extend(
+                exported
+                    .iter()
+                    .copied()
+                    .filter(|id| is_container(self.symbol(*id)) || self.facts(*id).defined_type),
+            );
             found.retain(|id| {
                 (!relative.is_empty() && containers(id).ends_with(&relative))
-                    || module_file.is_some_and(|module| *module == self.files[id.0].file)
+                    || exported.contains(id)
             });
             return found;
         }
@@ -629,12 +707,18 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .filter(|binding| binding.local_name.as_deref() == Some(last))
                 .peekable();
-            // A qualifier that is an import selects only the files of that import.
+            // A qualifier that is an import selects only the files of that
+            // import. A file can export a type with a different name, as
+            // `pub use inner::Original as Public`.
             if bindings.peek().is_some() {
                 let imported: Vec<usize> = bindings
                     .flat_map(|binding| self.target_files(binding))
                     .collect();
-                return in_files(&imported);
+                let mut found = in_files(&imported);
+                for target in &imported {
+                    found.extend(self.exported(*target, name).iter().copied().filter(is_type));
+                }
+                return found;
             }
         }
         let found = in_files(&[file]);
@@ -653,7 +737,8 @@ impl<'a> Resolver<'a> {
             outside |= targets.is_empty();
             for target in targets {
                 found.extend(
-                    self.exported_name(target, imported, &mut BTreeSet::new())
+                    self.exported(target, imported)
+                        .to_vec()
                         .into_iter()
                         .filter(is_type),
                 );
@@ -668,9 +753,22 @@ impl<'a> Resolver<'a> {
         if !found.is_empty() {
             return found;
         }
-        let found = in_files(&self.visible_files(file));
+        let visible = self.visible_files(file);
+        let found = in_files(&visible);
         if !found.is_empty() {
             return found;
+        }
+        // A Rust module that a wildcard import names can export the type
+        // again from a different module, as a prelude does.
+        if self.family(file) == Family::Rust {
+            let found: Vec<Id> = visible
+                .iter()
+                .flat_map(|module| self.exported(*module, name).to_vec())
+                .filter(is_type)
+                .collect();
+            if !found.is_empty() {
+                return found;
+            }
         }
         self.named(name, file).filter(is_type).collect()
     }
@@ -919,7 +1017,27 @@ impl<'a> Resolver<'a> {
             if let Some(container) = &symbol.container {
                 let parent = self.facts(*id).parent.map(|position| (id.0, position));
                 if let Some(parent) = parent.filter(|parent| is_container(self.symbol(*parent))) {
-                    return Some(parent);
+                    if self.symbol(parent).name == *container {
+                        return Some(parent);
+                    }
+                    // A Rust `impl` block is not a symbol. The parent of its
+                    // method is the module that has the `impl` block, and the
+                    // type is in that module.
+                    if self.symbol(parent).kind == SymbolKind::Module {
+                        let owned: Vec<Id> = self
+                            .named(container, id.0)
+                            .filter(|owner| {
+                                owner.0 == id.0
+                                    && is_container(self.symbol(*owner))
+                                    && self.facts(*owner).parent == Some(parent.1)
+                            })
+                            .collect();
+                        if let [only] = owned.as_slice() {
+                            return Some(*only);
+                        }
+                    } else {
+                        return Some(parent);
+                    }
                 }
                 let types = self.types(container, None, id.0);
                 if let [only] = types.as_slice() {
@@ -1279,6 +1397,49 @@ impl<'a> Resolver<'a> {
         Some(self.types_of_text(declared, callee.0, element))
     }
 
+    /// The members with the name `name` of the types, when they are `cfg`
+    /// twins, or an empty list. Two Rust items of one name under different
+    /// `cfg` attributes, as `#[cfg(unix)] mod a` and `#[cfg(windows)] mod a`,
+    /// are one item.
+    ///
+    /// The members of one type include the members of each type of the file
+    /// with its kind, name, and path. Thus a search for each type costs the
+    /// square of the number of the types. `members` reads only the kind, the
+    /// name, the path, the parent types, and the prepended modules of a type,
+    /// and a search in a different file finds types with one name and one
+    /// path together. Thus the function searches once for each group of types
+    /// with the same values, and each later call of one path reads the result.
+    fn twin_members(&self, types: &[Id], name: &str, arity: usize) -> Arc<Vec<Id>> {
+        let query = (types.to_vec(), name.to_string(), arity);
+        if let Some(found) = self.twin_members_cache.read().get(&query) {
+            return found.clone();
+        }
+        let mut groups: BTreeMap<_, Id> = BTreeMap::new();
+        for owner in types {
+            let symbol = self.symbol(*owner);
+            let facts = self.facts(*owner);
+            let key = (
+                symbol.kind,
+                self.member_path(*owner),
+                &symbol.supertypes,
+                &facts.prepends,
+            );
+            groups.entry(key).or_insert(*owner);
+        }
+        let mut members: Vec<Id> = groups
+            .values()
+            .flat_map(|owner| self.members(*owner, name, arity, &mut BTreeSet::new()))
+            .collect();
+        members.sort();
+        members.dedup();
+        if !self.are_condition_twins(&members) {
+            members.clear();
+        }
+        let found = Arc::new(members);
+        self.twin_members_cache.write().insert(query, found.clone());
+        found
+    }
+
     fn on_types(
         &self,
         types: &[Id],
@@ -1301,6 +1462,14 @@ impl<'a> Resolver<'a> {
                 SymbolKind::Interface | SymbolKind::Trait
             )
         });
+        let one_rust_file =
+            self.family(file) == Family::Rust && types.iter().all(|owner| owner.0 == types[0].0);
+        if !dynamic && types.len() > 1 && one_rust_file {
+            let twins = self.twin_members(types, name, arity);
+            if !twins.is_empty() {
+                return Outcome::offered(basis, twins.to_vec());
+            }
+        }
         if dynamic || types.len() > 1 {
             return Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file));
         }
@@ -1367,18 +1536,17 @@ impl<'a> Resolver<'a> {
     }
 
     /// The definitions `name` in the modules that a Rust path names inside
-    /// the file of the binding, as `self::outer::name` does. The path has no
-    /// module of the file when the result is `None`.
+    /// the file of the binding, as `self::outer::name` and `outer::name` do.
+    /// The path has no module of the file when the result is `None`.
     fn inline_module_items(&self, binding: &ImportBinding, name: &str) -> Option<Vec<Id>> {
         let file = *self.by_file.get(binding.file.as_str())?;
         if self.family(file) != Family::Rust {
             return None;
         }
         let mut path: Vec<&str> = binding.module_path.split("::").collect();
-        if path.first() != Some(&"self") {
-            return None;
+        if path.first() == Some(&"self") {
+            path.remove(0);
         }
-        path.remove(0);
         if path.last() == Some(&name) {
             path.pop();
         }
@@ -1424,7 +1592,7 @@ impl<'a> Resolver<'a> {
             Some(inside) => inside,
             None => targets
                 .iter()
-                .flat_map(|target| self.exported_name(*target, name, &mut BTreeSet::new()))
+                .flat_map(|target| self.exported(*target, name).to_vec())
                 .collect(),
         };
         found.retain(|id| is_callable(self.symbol(*id)) || is_container(self.symbol(*id)));
@@ -1441,6 +1609,219 @@ impl<'a> Resolver<'a> {
         }
         Outcome::of(basis, self.preferred(found, arity))
             .unwrap_or_else(|| Outcome::none(Status::Unresolved))
+    }
+
+    /// Tells if `name` is a method of the standard `Arc` or `Rc` that a call
+    /// on the wrapper finds before the methods of its content. Rust searches
+    /// the methods of the wrapper first: its inherent methods, then the
+    /// methods of the traits in scope. These methods do not call the method
+    /// of the content with the same name.
+    fn is_wrapper_method(&self, file: usize, chain: &[Id], name: &str) -> bool {
+        // The traits of the Rust 2021 prelude: `AsRef`, `Clone`, `Into`,
+        // `ToOwned`, and `TryInto`.
+        const PRELUDE: [&str; 6] = [
+            "as_ref",
+            "clone",
+            "clone_from",
+            "into",
+            "to_owned",
+            "try_into",
+        ];
+        if PRELUDE.contains(&name) {
+            return true;
+        }
+        let Some(index) = SCOPED_WRAPPER_TRAITS
+            .iter()
+            .position(|(method, ..)| *method == name)
+        else {
+            return false;
+        };
+        // A module does not get the imports of its parent, but `use super::*`
+        // gives them.
+        let scopes = self.module_scopes(file);
+        let mut module = chain
+            .iter()
+            .find(|id| self.symbol(**id).kind == SymbolKind::Module)
+            .map(|id| id.1);
+        while let Some(position) = module {
+            let Some((traits, wildcards)) = scopes.get(&module) else {
+                return false;
+            };
+            if traits[index] {
+                return true;
+            }
+            let parent = self.enclosing_module((file, position));
+            let parent_path = match parent {
+                Some(parent) => format!("self::{}", self.member_path((file, parent)).join("::")),
+                None => "self".to_string(),
+            };
+            if !wildcards.contains(&parent_path) {
+                return false;
+            }
+            module = parent;
+        }
+        scopes.get(&None).is_some_and(|(traits, _)| traits[index])
+    }
+
+    /// The nearest inline module that contains the symbol `id`, or `None`
+    /// for the file.
+    fn enclosing_module(&self, id: Id) -> Option<usize> {
+        let mut current = self.facts(id).parent;
+        while let Some(position) = current {
+            if self.symbol((id.0, position)).kind == SymbolKind::Module {
+                return Some(position);
+            }
+            current = self.files[id.0].link_facts[position].parent;
+        }
+        None
+    }
+
+    /// The imports of each module scope of `file`. The search goes through
+    /// the imports and the modules in the order of their start, thus it costs
+    /// the number of the imports and modules, and not their product.
+    fn module_scopes(&self, file: usize) -> Arc<ModuleScopes> {
+        if let Some(found) = self.module_scopes_cache.read().get(&file) {
+            return Arc::clone(found);
+        }
+        let facts = &self.files[file];
+        let mut modules: Vec<(usize, std::cmp::Reverse<usize>, usize)> = facts
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, symbol)| symbol.kind == SymbolKind::Module)
+            .map(|(position, symbol)| {
+                (
+                    symbol.range.start_byte,
+                    std::cmp::Reverse(symbol.range.end_byte),
+                    position,
+                )
+            })
+            .collect();
+        modules.sort();
+        let mut imports: Vec<&ImportBinding> = facts.imports.iter().collect();
+        imports.sort_by_key(|binding| binding.range.start_byte);
+        let mut scopes = ModuleScopes::new();
+        let mut open: Vec<(usize, usize)> = Vec::new();
+        let mut next = 0;
+        for binding in imports {
+            let start = binding.range.start_byte;
+            while let Some((module_start, std::cmp::Reverse(end), position)) = modules.get(next) {
+                if *module_start > start {
+                    break;
+                }
+                while open
+                    .last()
+                    .is_some_and(|(open_end, _)| open_end <= module_start)
+                {
+                    open.pop();
+                }
+                open.push((*end, *position));
+                next += 1;
+            }
+            while open.last().is_some_and(|(open_end, _)| *open_end <= start) {
+                open.pop();
+            }
+            let module = open.last().map(|(_, position)| *position);
+            let scope = scopes.entry(module).or_default();
+            let wildcard = matches!(
+                binding.kind,
+                ImportKind::Wildcard | ImportKind::ReExportWildcard
+            );
+            if wildcard
+                && (binding.module_path == "self" || binding.module_path.starts_with("self::"))
+            {
+                scope.1.push(binding.module_path.clone());
+            }
+            for (index, (_, trait_name, paths)) in SCOPED_WRAPPER_TRAITS.iter().enumerate() {
+                scope.0[index] |= paths.iter().any(|path| {
+                    if wildcard {
+                        binding.module_path == *path
+                    } else {
+                        binding.module_path == format!("{path}::{trait_name}")
+                    }
+                });
+            }
+        }
+        let scopes = Arc::new(scopes);
+        self.module_scopes_cache
+            .write()
+            .insert(file, Arc::clone(&scopes));
+        scopes
+    }
+
+    /// The wrapper type of the `self` parameter of the nearest method in
+    /// `chain`, as `Arc` for `self: &Arc<Self>`. A type of the repository
+    /// with the name of the wrapper is a different type, thus it gives `None`.
+    fn self_parameter_wrapper(&self, file: usize, chain: &[Id]) -> Option<&'static str> {
+        let method = chain
+            .iter()
+            .take_while(|id| !is_container(self.symbol(**id)))
+            .find(|id| self.symbol(**id).kind == SymbolKind::Method)?;
+        let wrapper = self.facts(*method).self_wrapper?;
+        self.types(wrapper, None, file)
+            .is_empty()
+            .then_some(wrapper)
+    }
+
+    /// The member of the enclosing type that a call on a local name gets
+    /// when the first value of the name is the object in a wrapper, as Rust
+    /// `let this = Arc::new(self);` gives. `Arc` and `Rc` give the methods of
+    /// their content, but not the methods that they define themselves. A type
+    /// of the repository with the name of the wrapper is a different type,
+    /// thus it gives `None`. `self.clone()` gives the wrapper when the `self`
+    /// parameter is in a wrapper, and else the object only when the `clone`
+    /// of the type returns `Self`.
+    fn on_wrapped_self(
+        &self,
+        local: &Local,
+        file: usize,
+        chain: &[Id],
+        name: &str,
+        arity: usize,
+    ) -> Option<Outcome> {
+        let wrapper = local.self_wrapper.as_deref()?;
+        let owner = self.enclosing_type(chain)?;
+        let wrapper = match wrapper {
+            "" => self.self_parameter_wrapper(file, chain).unwrap_or_default(),
+            _ if !self.types(wrapper, None, file).is_empty() => return None,
+            _ => wrapper,
+        };
+        if !wrapper.is_empty() && self.is_wrapper_method(file, chain, name) {
+            return Some(Outcome::none(Status::External));
+        }
+        if wrapper.is_empty() {
+            let owner_name = self.symbol(owner).name.as_str();
+            let clones = self.members(owner, "clone", 0, &mut BTreeSet::new());
+            let other_type = clones.iter().any(|clone| {
+                let returned = self
+                    .facts(*clone)
+                    .return_type
+                    .as_deref()
+                    .unwrap_or_default();
+                let returned = returned.split('<').next().unwrap_or_default().trim();
+                returned != "Self" && returned != owner_name
+            });
+            if other_type {
+                return None;
+            }
+        }
+        let members = self.members(owner, name, arity, &mut BTreeSet::new());
+        Outcome::of(Basis::EnclosingType, members)
+    }
+
+    /// Tells if the candidates are the definitions of one item under
+    /// different `cfg` conditions. A build has one of them, thus a call of
+    /// the item is a call of each of them.
+    fn are_condition_twins(&self, candidates: &[Id]) -> bool {
+        let Some((file, _)) = candidates.first() else {
+            return false;
+        };
+        let positions: Vec<usize> = candidates
+            .iter()
+            .filter(|id| id.0 == *file)
+            .map(|id| id.1)
+            .collect();
+        positions.len() == candidates.len() && self.files[*file].are_condition_twins(&positions)
     }
 
     fn with_receiver(
@@ -1480,6 +1861,9 @@ impl<'a> Resolver<'a> {
             .local(chain, file, x, Some(at))
             .filter(|local| binding.is_none() || local.owner.is_some());
         if let Some(local) = local {
+            if let Some(outcome) = self.on_wrapped_self(local, file, chain, name, arity) {
+                return outcome;
+            }
             // The members of an object literal have the name of the variable in their key.
             let literal: Vec<Id> = self
                 .named_in(name, file)
@@ -1531,7 +1915,7 @@ impl<'a> Resolver<'a> {
             if !spaces.is_empty() {
                 let found: Vec<Id> = spaces
                     .iter()
-                    .flat_map(|space| self.exported_name(*space, name, &mut BTreeSet::new()))
+                    .flat_map(|space| self.exported(*space, name).to_vec())
                     .collect();
                 return Outcome::of(Basis::ImportedModule, self.preferred(found, arity))
                     .unwrap_or_else(|| Outcome::none(Status::Unresolved));
@@ -1592,7 +1976,7 @@ impl<'a> Resolver<'a> {
             let aliased: Vec<Id> = self
                 .target_files(binding)
                 .into_iter()
-                .flat_map(|target| self.exported_name(target, imported, &mut BTreeSet::new()))
+                .flat_map(|target| self.exported(target, imported).to_vec())
                 .filter(|id| is_container(self.symbol(*id)))
                 .collect();
             if !aliased.is_empty() {
@@ -1604,6 +1988,20 @@ impl<'a> Resolver<'a> {
                 return outcome;
             }
         }
+        // A Rust path that names a module file or a crate comes before a type
+        // with the last name of the path. A module in a file of a different
+        // crate can have the name of a crate, and it is not the target.
+        if let Some(target) = facts.path_targets.get(qualifier) {
+            let found: Vec<Id> = self
+                .by_file
+                .get(target.as_str())
+                .into_iter()
+                .flat_map(|target| self.exported(*target, name).to_vec())
+                .filter(|id| is_callable(self.symbol(*id)) || is_container(self.symbol(*id)))
+                .collect();
+            return Outcome::of(Basis::QualifiedPath, self.preferred(found, reference.arity))
+                .unwrap_or_else(|| Outcome::none(Status::Unresolved));
+        }
         if let Some(last) = path.last() {
             let before = (path.len() > 1).then(|| path[..path.len() - 1].join("."));
             let types = self.types(last, before.as_deref(), file);
@@ -1611,16 +2009,9 @@ impl<'a> Resolver<'a> {
                 return self.on_types(&types, name, reference.arity, Basis::QualifiedPath, file);
             }
         }
-        if let Some(target) = facts.path_targets.get(qualifier) {
-            let found: Vec<Id> = self
-                .by_file
-                .get(target.as_str())
-                .into_iter()
-                .flat_map(|target| self.exported_name(*target, name, &mut BTreeSet::new()))
-                .filter(|id| is_callable(self.symbol(*id)) || is_container(self.symbol(*id)))
-                .collect();
-            return Outcome::of(Basis::QualifiedPath, self.preferred(found, reference.arity))
-                .unwrap_or_else(|| Outcome::none(Status::Unresolved));
+        // A Rust file declares no package, thus no file can match the path.
+        if self.family(file) == Family::Rust {
+            return Outcome::none(Status::Unresolved);
         }
         let modules: Vec<usize> = (0..self.files.len())
             .filter(|other| {
@@ -2066,6 +2457,12 @@ impl<'a> Resolver<'a> {
                 outcome.candidates = vec![only];
             }
         }
+        if outcome.status == Status::Ambiguous
+            && outcome.basis != Some(Basis::NameOnly)
+            && self.are_condition_twins(&outcome.candidates)
+        {
+            outcome.status = Status::UniqueCandidate;
+        }
         outcome
     }
 
@@ -2170,6 +2567,13 @@ impl<'a> Resolver<'a> {
                 if self.family(file) == Family::Ruby && name == "new" {
                     return Outcome::of(Basis::EnclosingType, self.constructors(owner, arity))
                         .unwrap_or_else(|| Outcome::none(Status::Unresolved));
+                }
+                // `self.clone()` with `self: &Arc<Self>` calls `Arc::clone`.
+                if self.family(file) == Family::Rust
+                    && self.self_parameter_wrapper(file, &chain).is_some()
+                    && self.is_wrapper_method(file, &chain, name)
+                {
+                    return Outcome::none(Status::External);
                 }
                 let members = self.members(owner, name, arity, &mut BTreeSet::new());
                 Outcome::of(Basis::EnclosingType, members).unwrap_or_else(|| {
@@ -3282,6 +3686,666 @@ mod false_edge_tests {
         let rows = rows(&[("a.rs", source)], "a.rs");
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0].ends_with("[a.rs#outer.target]"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_rust_cfg_twins_are_one_callee() {
+        let source = "#[cfg(unix)]\nfn open() {}\n\n#[cfg(not(unix))]\nfn open() {}\n\nfn run() {\n    open();\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    fn check() {\n        open();\n    }\n}\n";
+        assert_eq!(
+            rows_of(&[("a.rs", source)], "a.rs", "open"),
+            [
+                "8 run>open UniqueCandidate SameFile [a.rs#open, a.rs#open~2]",
+                "16 tests.check>open UniqueCandidate SameFile [a.rs#open, a.rs#open~2]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_rust_cfg_twins_in_impl_blocks() {
+        let source = "struct Disk;\n\nimpl Disk {\n    #[cfg(unix)]\n    fn sync(&self) {}\n\n    #[cfg(windows)]\n    fn sync(&self) {}\n\n    fn flush(&self) {\n        self.sync();\n    }\n}\n\n#[cfg(unix)]\nimpl Disk {\n    fn wake(&self) {}\n}\n\n#[cfg(windows)]\nimpl Disk {\n    fn wake(&self) {}\n}\n\nimpl Disk {\n    fn run(&self) {\n        self.wake();\n    }\n}\n";
+        assert_eq!(
+            rows_of(&[("a.rs", source)], "a.rs", "sync"),
+            ["11 Disk.flush>self.sync UniqueCandidate EnclosingType [a.rs#Disk.sync, a.rs#Disk.sync~2]"]
+        );
+        assert_eq!(
+            rows_of(&[("a.rs", source)], "a.rs", "wake"),
+            ["27 Disk.run>self.wake UniqueCandidate EnclosingType [a.rs#Disk.wake, a.rs#Disk.wake~2]"]
+        );
+    }
+
+    /// Two definitions are one item only when each has a `cfg` attribute, the
+    /// attributes are different, and the `impl` blocks have one text.
+    #[test]
+    fn test_rust_definitions_that_are_not_cfg_twins_stay_ambiguous() {
+        let one_condition = "#[cfg(unix)]\nfn open() {}\n\n#[cfg(unix)]\nfn open() {}\n\nfn run() {\n    open();\n}\n";
+        let no_condition =
+            "fn open() {}\n\n#[cfg(unix)]\nfn open() {}\n\nfn run() {\n    open();\n}\n";
+        for source in [one_condition, no_condition] {
+            let rows = rows_of(&[("a.rs", source)], "a.rs", "open");
+            assert_eq!(rows.len(), 1, "{source}");
+            assert!(rows[0].contains(" Ambiguous SameFile "), "{rows:?}");
+        }
+        let traits = "struct Disk;\n\n#[cfg(unix)]\nimpl Read for Disk {\n    fn poll(&self) {}\n}\n\n#[cfg(feature = \"write\")]\nimpl Write for Disk {\n    fn poll(&self) {}\n}\n\nimpl Disk {\n    fn run(&self) {\n        self.poll();\n    }\n}\n";
+        let rows = rows_of(&[("a.rs", traits)], "a.rs", "poll");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].contains(" Ambiguous "), "{rows:?}");
+    }
+
+    /// The functions of two modules with one name under different `cfg`
+    /// attributes are twins, also when the functions have no attribute.
+    #[test]
+    fn test_rust_functions_of_cfg_twin_modules_are_twins() {
+        let source = "#[cfg(unix)]\nmod a {\n    pub fn f() {}\n}\n\n#[cfg(windows)]\nmod a {\n    pub fn f() {}\n}\n\nfn run() {\n    a::f();\n}\n";
+        assert_eq!(
+            rows_of(&[("a.rs", source)], "a.rs", "f"),
+            ["12 run>a::f UniqueCandidate QualifiedPath [a.rs#a.f, a.rs#a.f~2]"]
+        );
+        let one_condition = source.replace("windows", "unix");
+        let rows = rows_of(&[("a.rs", one_condition.as_str())], "a.rs", "f");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].contains(" Ambiguous NameOnly "), "{rows:?}");
+    }
+
+    /// The condition of each item level has its own ID. Thus `#[cfg(a)]` on a
+    /// module and `#[cfg(b)]` on its function is a different condition from
+    /// `#[cfg(a)] #[cfg(b)]` on one module, although Rust gives them one
+    /// condition. The two definitions are then twins. Two definitions with one
+    /// condition are in one build, and `rustc` rejects that code, thus the
+    /// extra edge occurs only in code that does not compile.
+    #[test]
+    fn test_rust_one_condition_split_over_two_levels_is_twins_only_in_code_that_does_not_compile() {
+        let source = "#[cfg(a)]\nmod m {\n    #[cfg(b)]\n    pub fn f() {}\n}\n\n#[cfg(a)]\n#[cfg(b)]\nmod m {\n    pub fn f() {}\n}\n\nfn run() {\n    m::f();\n}\n";
+        assert_eq!(
+            rows_of(&[("a.rs", source)], "a.rs", "f"),
+            ["14 run>m::f UniqueCandidate QualifiedPath [a.rs#m.f, a.rs#m.f~2]"]
+        );
+    }
+
+    /// `modules` modules `a` under different `cfg` attributes, each with
+    /// `f` and `members` other functions, and `calls` calls of `a::f`.
+    fn calls_into_twin_modules_resolve_at(
+        modules: usize,
+        members: usize,
+        calls: usize,
+    ) -> std::time::Duration {
+        let mut source = String::new();
+        for module in 0..modules {
+            source.push_str(&format!(
+                "#[cfg(feature = \"f{module}\")]\nmod a {{\n    pub fn f() {{}}\n"
+            ));
+            for member in 0..members {
+                source.push_str(&format!("    pub fn g{member}() {{}}\n"));
+            }
+            source.push_str("}\n");
+        }
+        source.push_str("fn run() {\n");
+        source.push_str(&"    a::f();\n".repeat(calls));
+        source.push_str("}\n");
+        let files = [("a.rs", source.as_str())];
+        let started = std::time::Instant::now();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let twins = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| {
+                reference.resolution.status == super::Status::UniqueCandidate
+                    && reference.resolution.candidates.len() == modules
+            })
+            .count();
+        assert_eq!(twins, calls);
+        elapsed
+    }
+
+    #[test]
+    fn test_calls_into_many_twin_modules_resolve_to_each_twin() {
+        calls_into_twin_modules_resolve_at(20, 20, 20);
+    }
+
+    /// The best time of two runs at `size` and at `2 * size` of the parameter
+    /// that `run` grows.
+    fn assert_doubles_at_most(
+        label: &str,
+        size: usize,
+        run: impl Fn(usize) -> std::time::Duration,
+    ) {
+        let best = |size: usize| (0..2).map(|_| run(size)).min().expect("two runs");
+        let small = best(size);
+        let large = best(size * 2);
+        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
+        assert!(
+            large < allowed,
+            "{label}: {small:?} at {size}, {large:?} at {}",
+            size * 2
+        );
+        assert!(large.as_secs() < 60, "{label}: {large:?}");
+    }
+
+    /// Each call has an edge to each module, thus the edges are
+    /// `calls * modules`. The time must grow with the edges, also when the
+    /// modules have many members.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_calls_into_twin_modules_resolve_in_linear_time() {
+        assert_doubles_at_most("modules", 800, |size| {
+            calls_into_twin_modules_resolve_at(size, 10, 800)
+        });
+        assert_doubles_at_most("members", 10_000, |size| {
+            calls_into_twin_modules_resolve_at(20, size, 2_000)
+        });
+    }
+
+    /// `modules` modules `a` under different `cfg` attributes, each with the
+    /// functions `f0` to `f{names - 1}`, and one call of `a::fN` for each name.
+    fn calls_of_many_names_into_twin_modules_resolve_at(
+        modules: usize,
+        names: usize,
+    ) -> std::time::Duration {
+        let functions: String = (0..names)
+            .map(|name| format!("    pub fn f{name}() {{}}\n"))
+            .collect();
+        let mut source = String::new();
+        for module in 0..modules {
+            source.push_str(&format!(
+                "#[cfg(feature = \"f{module}\")]\nmod a {{\n{functions}}}\n"
+            ));
+        }
+        source.push_str("fn run() {\n");
+        for name in 0..names {
+            source.push_str(&format!("    a::f{name}();\n"));
+        }
+        source.push_str("}\n");
+        let files = [("a.rs", source.as_str())];
+        let started = std::time::Instant::now();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let twins = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| {
+                reference.resolution.status == super::Status::UniqueCandidate
+                    && reference.resolution.candidates.len() == modules
+            })
+            .count();
+        assert_eq!(twins, names);
+        elapsed
+    }
+
+    #[test]
+    fn test_calls_of_many_names_into_twin_modules_resolve_to_each_twin() {
+        calls_of_many_names_into_twin_modules_resolve_at(20, 20);
+    }
+
+    /// The input has `modules * names` functions, and the edges are
+    /// `modules * names`. The first search for each name must not cost the
+    /// square of the number of the modules.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_calls_of_many_names_into_twin_modules_resolve_in_linear_time() {
+        assert_doubles_at_most("modules", 400, |size| {
+            calls_of_many_names_into_twin_modules_resolve_at(size, 400)
+        });
+    }
+
+    /// An `impl` block under one `cfg` attribute of `64 * size` bytes has
+    /// `size` methods, and each method calls a function with a twin.
+    fn methods_under_a_long_condition_resolve_at(size: usize) -> std::time::Duration {
+        let features: Vec<String> = (0..size)
+            .map(|number| format!("feature = \"feature_with_a_long_name_{number:020}\""))
+            .collect();
+        let features = features.join(", ");
+        let mut source = format!("struct Engine;\n\n#[cfg(any({features}))]\nimpl Engine {{\n");
+        source.push_str("    fn step(&self) {}\n");
+        for number in 0..size {
+            source.push_str(&format!(
+                "    fn run{number}(&self) {{\n        self.step();\n    }}\n"
+            ));
+        }
+        source.push_str(&format!(
+            "}}\n\n#[cfg(not(any({features})))]\nimpl Engine {{\n    fn step(&self) {{}}\n}}\n"
+        ));
+        let files = [("a.rs", source.as_str())];
+        let started = std::time::Instant::now();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let twins = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| {
+                reference.resolution.status == super::Status::UniqueCandidate
+                    && reference.resolution.candidates.len() == 2
+            })
+            .count();
+        assert_eq!(twins, size);
+        elapsed
+    }
+
+    #[test]
+    fn test_methods_under_a_long_condition_resolve_to_the_twins() {
+        methods_under_a_long_condition_resolve_at(50);
+    }
+
+    /// Each method must not copy or compare the text of the `cfg` attribute of
+    /// its `impl` block.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_methods_under_a_long_condition_resolve_in_linear_time() {
+        let size = 8_000;
+        let best = |size: usize| {
+            (0..2)
+                .map(|_| methods_under_a_long_condition_resolve_at(size))
+                .min()
+                .expect("two runs")
+        };
+        let small = best(size);
+        let large = best(size * 2);
+        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
+        assert!(
+            large < allowed,
+            "{small:?} at {size} methods, {large:?} at {} methods",
+            size * 2
+        );
+        assert!(large.as_secs() < 60, "{large:?}");
+    }
+
+    #[test]
+    fn test_rust_local_that_wraps_self_calls_the_enclosing_type() {
+        let source = "use std::sync::Arc;\n\nstruct Node;\n\nstruct Other;\n\nimpl Other {\n    fn start(&self) {}\n}\n\nimpl Node {\n    fn start(&self) {}\n\n    fn run(self, text: String) {\n        let this = Arc::new(self);\n        this.start();\n    }\n\n    fn share(self: &Arc<Self>) {\n        let again = Arc::clone(&self);\n        again.start();\n        let copy = self.clone();\n        copy.start();\n    }\n\n    fn chain(self, other: Other) {\n        let that = Arc::new(other);\n        that.start();\n        let late = Arc::new(self).start();\n        late.start();\n    }\n}\n";
+        let rows = rows_of(&[("a.rs", source)], "a.rs", "start");
+        assert_eq!(
+            rows,
+            [
+                "16 Node.run>this.start UniqueCandidate EnclosingType [a.rs#Node.start]",
+                "21 Node.share>again.start UniqueCandidate EnclosingType [a.rs#Node.start]",
+                "23 Node.share>copy.start UniqueCandidate EnclosingType [a.rs#Node.start]",
+                "28 Node.chain>that.start Ambiguous NameOnly [a.rs#Node.start, a.rs#Other.start]",
+                "29 Node.chain>(..).start Ambiguous NameOnly [a.rs#Node.start, a.rs#Other.start]",
+                "30 Node.chain>late.start Ambiguous NameOnly [a.rs#Node.start, a.rs#Other.start]",
+            ]
+        );
+    }
+
+    /// `self.clone()` gives `Self` only when the `clone` of the type returns
+    /// `Self`. An inherent `clone` can return a different type.
+    #[test]
+    fn test_rust_clone_of_self_has_the_return_type_of_the_clone_of_the_type() {
+        let other = "struct Node;\n\nstruct Other;\n\nimpl Other {\n    fn start(&self) {}\n}\n\nimpl Node {\n    fn start(&self) {}\n\n    fn clone(&self) -> Other {\n        Other\n    }\n\n    fn share(&self) {\n        let copy = self.clone();\n        copy.start();\n    }\n}\n";
+        let rows = rows_of(&[("a.rs", other)], "a.rs", "start");
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].contains("[a.rs#Node.start]"), "{rows:?}");
+        for clone in [
+            "impl Clone for Node {\n    fn clone(&self) -> Self {\n        Node\n    }\n}\n",
+            "impl Clone for Node {\n    fn clone(&self) -> Node {\n        Node\n    }\n}\n",
+            "",
+        ] {
+            let source = format!("struct Node;\n\nimpl Node {{\n    fn start(&self) {{}}\n\n    fn share(&self) {{\n        let copy = self.clone();\n        copy.start();\n    }}\n}}\n\n{clone}");
+            assert_eq!(
+                rows_of(&[("a.rs", source.as_str())], "a.rs", "start"),
+                ["8 Node.share>copy.start UniqueCandidate EnclosingType [a.rs#Node.start]"],
+                "{clone}"
+            );
+        }
+    }
+
+    /// `Arc` and `Rc` have their own `clone`, `as_ref`, and other methods. A
+    /// call of one of them on the wrapper is not a call of the method of the
+    /// content.
+    #[test]
+    fn test_rust_method_of_the_wrapper_is_not_a_method_of_self() {
+        let source = "use std::sync::Arc;\n\nstruct Node;\n\nimpl Clone for Node {\n    fn clone(&self) -> Self {\n        Node\n    }\n}\n\nimpl AsRef<Node> for Node {\n    fn as_ref(&self) -> &Node {\n        self\n    }\n}\n\nimpl Node {\n    fn start(&self) {}\n\n    fn run(self) {\n        let this = Arc::new(self);\n        this.clone();\n        this.as_ref();\n        this.start();\n    }\n}\n";
+        assert_eq!(
+            rows(&[("a.rs", source)], "a.rs"),
+            [
+                "21 Node.run>Arc::new External - []",
+                "22 Node.run>this.clone External - []",
+                "23 Node.run>this.as_ref External - []",
+                "24 Node.run>this.start UniqueCandidate EnclosingType [a.rs#Node.start]",
+            ]
+        );
+    }
+
+    /// A method of a trait of `Arc` is the method of the wrapper only when the
+    /// trait is in scope. `Borrow`, `Deref`, and `Any` are not in the prelude,
+    /// thus without an import the call reaches the content.
+    #[test]
+    fn test_rust_trait_method_of_the_wrapper_needs_the_trait_in_scope() {
+        let body = "struct Node;\n\nimpl Node {\n    fn borrow(&self) {}\n\n    fn deref(&self) {}\n\n    fn type_id(&self) {}\n\n    fn run(self) {\n        let this = Arc::new(self);\n        this.borrow();\n        this.deref();\n        this.type_id();\n    }\n}\n";
+        let without = format!("use std::sync::Arc;\n\n{body}");
+        assert_eq!(
+            rows_of(&[("a.rs", without.as_str())], "a.rs", "borrow"),
+            ["14 Node.run>this.borrow UniqueCandidate EnclosingType [a.rs#Node.borrow]"]
+        );
+        assert_eq!(
+            rows_of(&[("a.rs", without.as_str())], "a.rs", "deref"),
+            ["15 Node.run>this.deref UniqueCandidate EnclosingType [a.rs#Node.deref]"]
+        );
+        assert_eq!(
+            rows_of(&[("a.rs", without.as_str())], "a.rs", "type_id"),
+            ["16 Node.run>this.type_id UniqueCandidate EnclosingType [a.rs#Node.type_id]"]
+        );
+        let imported = format!(
+            "use std::any::Any;\nuse std::borrow::Borrow;\nuse std::sync::Arc;\nuse core::ops::*;\n\n{body}"
+        );
+        for name in ["borrow", "deref", "type_id"] {
+            let rows = rows_of(&[("a.rs", imported.as_str())], "a.rs", name);
+            assert_eq!(rows.len(), 1, "{name}");
+            assert!(rows[0].ends_with(" External - []"), "{rows:?}");
+        }
+    }
+
+    /// With `self: &Arc<Self>` or `self: Rc<Self>`, `self.clone()` is the
+    /// `clone` of the wrapper, also when the type has an inherent `clone`.
+    /// A lifetime and `mut` in the reference do not change this.
+    #[test]
+    fn test_rust_clone_of_a_wrapped_self_parameter_is_the_wrapper() {
+        for receiver in [
+            "self: &Arc<Self>",
+            "self: Arc<Self>",
+            "mut self: Arc<Self>",
+            "self: &std::rc::Rc<Self>",
+            "self: &'a Arc<Self>",
+            "self: &'a mut Rc<Node>",
+            "self: &mut Arc<Self>",
+        ] {
+            let source = format!("use std::sync::Arc;\n\nstruct Node;\n\nstruct Other;\n\nimpl Other {{\n    fn start(&self) {{}}\n}}\n\nimpl Node {{\n    fn start(&self) {{}}\n\n    fn clone(&self) -> Other {{\n        Other\n    }}\n\n    fn share<'a>({receiver}) {{\n        let copy = self.clone();\n        copy.start();\n        copy.clone();\n    }}\n}}\n");
+            assert_eq!(
+                rows_of(&[("a.rs", source.as_str())], "a.rs", "start"),
+                ["20 Node.share>copy.start UniqueCandidate EnclosingType [a.rs#Node.start]"],
+                "{receiver}"
+            );
+            assert_eq!(
+                rows_of(&[("a.rs", source.as_str())], "a.rs", "clone"),
+                [
+                    "19 Node.share>self.clone External - []",
+                    "21 Node.share>copy.clone External - []",
+                ],
+                "{receiver}"
+            );
+        }
+    }
+
+    /// The `impl` block of a type in an inline module is not a symbol, thus
+    /// the parent of its method is the module. The type of the method is the
+    /// type of the `impl` block, not the module.
+    #[test]
+    fn test_rust_self_call_in_an_impl_block_of_an_inline_module() {
+        let source = "mod shapes {\n    pub struct Circle;\n\n    impl Circle {\n        fn area(&self) {}\n\n        fn run(&self) {\n            self.area();\n        }\n    }\n}\n\nstruct Square;\n\nimpl Square {\n    fn area(&self) {}\n}\n";
+        assert_eq!(
+            rows_of(&[("a.rs", source)], "a.rs", "area"),
+            ["8 shapes.Circle.run>self.area UniqueCandidate EnclosingType [a.rs#shapes.Circle.area]"]
+        );
+    }
+
+    /// A `use` of a parent module is not in scope in an inline child module,
+    /// but `use super::*` brings it into scope.
+    #[test]
+    fn test_rust_trait_of_the_wrapper_in_scope_of_the_module_of_the_call() {
+        let item = |name: &str| {
+            format!("    struct {name};\n\n    impl {name} {{\n        fn borrow(&self) {{}}\n\n        fn run(self) {{\n            let this = Arc::new(self);\n            this.borrow();\n        }}\n    }}\n")
+        };
+        let source = format!(
+            "use std::borrow::Borrow;\nuse std::sync::Arc;\n\nmod plain {{\n    use std::sync::Arc;\n\n{}}}\n\nmod glob {{\n    use super::*;\n\n{}}}\n\nmod own {{\n    use std::sync::Arc;\n\n    mod deeper {{\n        use std::borrow::Borrow;\n    }}\n\n{}}}\n\nmod outer {{\n    use super::*;\n\n    mod inner {{\n        use super::*;\n\n{}    }}\n}}\n",
+            item("Plain"),
+            item("Glob"),
+            item("Own"),
+            item("Deep")
+        );
+        assert_eq!(
+            rows_of(&[("a.rs", source.as_str())], "a.rs", "borrow"),
+            [
+                "14 plain.Plain.run>this.borrow UniqueCandidate EnclosingType [a.rs#plain.Plain.borrow]",
+                "29 glob.Glob.run>this.borrow External - []",
+                "48 own.Own.run>this.borrow UniqueCandidate EnclosingType [a.rs#own.Own.borrow]",
+                "66 outer.inner.Deep.run>this.borrow External - []",
+            ]
+        );
+    }
+
+    /// A type of the repository with the name `Arc` is not the standard type.
+    #[test]
+    fn test_rust_repository_type_named_arc_is_not_a_wrapper_of_self() {
+        let source = "struct Arc;\n\nimpl Arc {\n    fn new(node: Node) -> Arc {\n        Arc\n    }\n\n    fn start(&self) {}\n}\n\nstruct Node;\n\nimpl Node {\n    fn start(&self) {}\n\n    fn run(self) {\n        let this = Arc::new(self);\n        this.start();\n    }\n}\n";
+        let rows = rows_of(&[("a.rs", source)], "a.rs", "start");
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].contains("EnclosingType"), "{rows:?}");
+    }
+
+    #[test]
+    fn test_rust_workspace_crates_resolve_through_their_manifests() {
+        let files = [
+            ("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies]\nutil = { path = \"crates/util\" }\nlog = \"0.4\"\n"),
+            ("crates/util/Cargo.toml", "[package]\nname = \"util\"\n\n[lib]\npath = \"src/util.rs\"\n"),
+            ("crates/util/src/util.rs", "pub mod command;\nmod cache;\nmod store;\n\npub use cache::*;\npub use store::Store;\n\npub fn init() {\n    command::new_command();\n}\n"),
+            ("crates/util/src/store.rs", "pub struct Store;\n\nimpl Store {\n    pub fn global() {}\n}\n\npub struct Hidden;\n\nimpl Hidden {\n    pub fn global() {}\n}\n"),
+            ("crates/util/src/cache.rs", "pub struct Cache;\n\nimpl Cache {\n    pub fn global() {}\n}\n"),
+            ("crates/util/src/command.rs", "pub fn new_command() {\n    crate::init();\n    super::init();\n}\n"),
+            ("crates/gadget-kit/Cargo.toml", "[package]\nname = \"gadget-kit\"\n"),
+            ("crates/gadget-kit/src/lib.rs", "pub fn init() {}\n"),
+            ("crates/log/Cargo.toml", "[package]\nname = \"log\"\n"),
+            // A module in a file of a different crate has the name of the crate `util`.
+            ("crates/log/src/lib.rs", "pub fn init() {}\n\npub mod util {\n    pub fn other() {}\n}\n"),
+            ("crates/shapes/Cargo.toml", "[package]\nname = \"shapes-pkg\"\n\n[lib]\nname = \"shapes\"\n"),
+            ("crates/shapes/src/lib.rs", "pub fn init() {}\n"),
+            ("crates/app/Cargo.toml", "[package]\nname = \"app\"\n\n[dependencies]\nutil.workspace = true\nlog.workspace = true\nkit = { package = \"gadget-kit\", path = \"../gadget-kit\" }\nshapes-pkg = { path = \"../shapes\" }\n"),
+            ("crates/app/src/main.rs", "use util::command::new_command;\n\nfn main() {\n    new_command();\n    util::command::new_command();\n    util::init();\n    kit::init();\n    log::init();\n    gadget_kit::init();\n    shapes::init();\n    util::Store::global();\n    util::Cache::global();\n    util::Hidden::global();\n}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "crates/app/src/main.rs"),
+            [
+                "4 main>new_command UniqueCandidate ImportedName [crates/util/src/command.rs#new_command]",
+                "5 main>util::command::new_command UniqueCandidate QualifiedPath [crates/util/src/command.rs#new_command]",
+                "6 main>util::init UniqueCandidate QualifiedPath [crates/util/src/util.rs#init]",
+                "7 main>kit::init UniqueCandidate QualifiedPath [crates/gadget-kit/src/lib.rs#init]",
+                "8 main>log::init External - []",
+                "9 main>gadget_kit::init Unresolved - []",
+                "10 main>shapes::init UniqueCandidate QualifiedPath [crates/shapes/src/lib.rs#init]",
+                "11 main>util::Store::global UniqueCandidate QualifiedPath [crates/util/src/store.rs#Store.global]",
+                "12 main>util::Cache::global UniqueCandidate QualifiedPath [crates/util/src/cache.rs#Cache.global]",
+                "13 main>util::Hidden::global Unresolved - []",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "crates/util/src/command.rs"),
+            [
+                "2 new_command>crate::init UniqueCandidate QualifiedPath [crates/util/src/util.rs#init]",
+                "3 new_command>super::init UniqueCandidate QualifiedPath [crates/util/src/util.rs#init]",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "crates/util/src/util.rs"),
+            ["9 init>command::new_command UniqueCandidate QualifiedPath [crates/util/src/command.rs#new_command]"]
+        );
+    }
+
+    /// The time to index a workspace of `crates` crates. Each crate has a
+    /// library with a named root file, two modules, and a binary in the same
+    /// directory. It calls four other crates by a path and by an import. It
+    /// gets one type from the prelude of a crate with a wildcard import.
+    fn workspace_crates_resolve_at(crates: usize) -> std::time::Duration {
+        const NEIGHBORS: usize = 4;
+        let mut files: Vec<(String, String)> = Vec::new();
+        let mut shared =
+            String::from("[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies]\n");
+        for number in 0..crates {
+            let name = format!("unit{number}");
+            shared.push_str(&format!("{name} = {{ path = \"crates/{name}\" }}\n"));
+            let mut manifest = format!(
+                "[package]\nname = \"{name}\"\n\n[lib]\npath = \"src/{name}.rs\"\n\n[dependencies]\n"
+            );
+            // The type and its method have a different name in each crate.
+            // A method name that each crate has costs the number of the
+            // crates for each call, and that cost is not the cost of the paths.
+            let next = (number + 1) % crates;
+            let mut root = format!(
+                "pub mod part;\npub mod prelude;\n\nuse unit{next}::prelude::*;\n\npub fn start() {{}}\n\npub fn typed(thing: &Thing{next}) {{\n    thing.go{next}();\n}}\n\npub fn run() {{\n"
+            );
+            let mut imports = String::new();
+            let mut part = format!(
+                "pub struct Thing{number};\n\nimpl Thing{number} {{\n    pub fn go{number}(&self) {{}}\n}}\n\npub fn work() {{\n"
+            );
+            for step in 1..=NEIGHBORS {
+                let other = format!("unit{}", (number + step) % crates);
+                manifest.push_str(&format!("{other}.workspace = true\n"));
+                root.push_str(&format!(
+                    "    {other}::start();\n    {other}::part::work();\n"
+                ));
+                imports.push_str(&format!("use {other}::start as start{step};\n"));
+                part.push_str(&format!("    start{step}();\n"));
+            }
+            root.push_str("}\n");
+            part.push_str("}\n");
+            let directory = format!("crates/{name}");
+            files.push((format!("{directory}/Cargo.toml"), manifest));
+            files.push((format!("{directory}/src/{name}.rs"), root));
+            files.push((
+                format!("{directory}/src/part.rs"),
+                format!("{imports}\n{part}"),
+            ));
+            files.push((
+                format!("{directory}/src/prelude.rs"),
+                format!("pub use crate::part::Thing{number};\n"),
+            ));
+            files.push((
+                format!("{directory}/src/main.rs"),
+                format!("fn main() {{\n    {name}::run();\n}}\n"),
+            ));
+        }
+        files.push(("Cargo.toml".to_string(), shared));
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let edges = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| reference.resolution.status == super::Status::UniqueCandidate)
+            .count();
+        assert_eq!(edges, crates * (3 * NEIGHBORS + 2));
+        elapsed
+    }
+
+    #[test]
+    fn test_each_call_between_the_crates_of_a_workspace_resolves() {
+        workspace_crates_resolve_at(12);
+    }
+
+    /// The cost for each crate must not grow with the number of the crates.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_calls_between_the_crates_of_a_workspace_resolve_in_linear_time() {
+        let size = 1_500;
+        let best = |size: usize| {
+            (0..2)
+                .map(|_| workspace_crates_resolve_at(size))
+                .min()
+                .expect("two runs")
+        };
+        let small = best(size);
+        let large = best(size * 2);
+        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
+        assert!(
+            large < allowed,
+            "{small:?} at {size} crates, {large:?} at {} crates",
+            size * 2
+        );
+        assert!(large.as_secs() < 60, "{large:?}");
+    }
+
+    /// Two modules of one file can import one type. The type is one type.
+    #[test]
+    fn test_rust_type_that_two_modules_of_a_file_import_is_one_type() {
+        let files = [
+            ("src/lib.rs", "pub mod shapes;\npub mod user;\n"),
+            ("src/shapes.rs", "pub struct Circle;\n\nimpl Circle {\n    pub fn area(&self) {}\n}\n"),
+            ("src/user.rs", "mod first {\n    use crate::shapes::Circle;\n\n    fn run(circle: &Circle) {\n        circle.area();\n    }\n}\n\nmod second {\n    use crate::shapes::Circle;\n\n    fn run(circle: &Circle) {\n        circle.area();\n    }\n}\n"),
+        ];
+        assert_eq!(
+            rows_of(&files, "src/user.rs", "area"),
+            [
+                "5 first.run>circle.area UniqueCandidate ReceiverDeclaredType [src/shapes.rs#Circle.area]",
+                "13 second.run>circle.area UniqueCandidate ReceiverDeclaredType [src/shapes.rs#Circle.area]",
+            ]
+        );
+    }
+
+    /// `use kit::prelude::*` gives each name that the prelude exports, also a
+    /// name that the prelude exports again from a different module.
+    #[test]
+    fn test_rust_type_from_a_wildcard_import_of_a_module_that_exports_it_again() {
+        let files = [
+            ("Cargo.toml", "[package]\nname = \"kit\"\n\n[lib]\npath = \"src/kit.rs\"\n"),
+            ("src/kit.rs", "mod app;\npub mod prelude;\npub mod user;\n\npub use app::*;\n"),
+            ("src/app.rs", "pub struct App;\n\nimpl App {\n    pub fn quit(&self) {}\n}\n"),
+            ("src/prelude.rs", "pub use crate::App;\n"),
+            ("src/user.rs", "use crate::prelude::*;\n\nfn run(cx: &App) {\n    cx.quit();\n    cx.theme();\n}\n\npub trait Themed {\n    fn theme(&self);\n}\n\nimpl Themed for App {\n    fn theme(&self) {}\n}\n"),
+            ("other/src/lib.rs", "pub struct App;\n\nimpl App {\n    pub fn quit(&self) {}\n}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "src/user.rs"),
+            [
+                "4 run>cx.quit UniqueCandidate ReceiverDeclaredType [src/app.rs#App.quit]",
+                "5 run>cx.theme UniqueCandidate ReceiverDeclaredType [src/user.rs#App.theme]",
+            ]
+        );
+    }
+
+    /// `pub use inner::Original as Public` gives the type `Original` to the
+    /// path `dep::Public`, which has no type with the name `Public`.
+    #[test]
+    fn test_rust_path_to_a_type_that_a_module_exports_with_a_different_name() {
+        let files = [
+            ("Cargo.toml", "[package]\nname = \"kit\"\n"),
+            ("src/lib.rs", "pub mod dep;\nmod user;\n\nfn run() {\n    dep::Public::make();\n}\n\nfn typed(value: dep::Public) {\n    value.size();\n}\n"),
+            ("src/user.rs", "fn run() {\n    crate::dep::Public::make();\n}\n"),
+            ("src/dep.rs", "mod inner;\n\npub use inner::Original as Public;\n"),
+            ("src/dep/inner.rs", "pub struct Original;\n\nimpl Original {\n    pub fn make() {}\n\n    pub fn size(&self) {}\n}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "src/lib.rs"),
+            [
+                "5 run>dep::Public::make UniqueCandidate QualifiedPath [src/dep/inner.rs#Original.make]",
+                "9 typed>value.size UniqueCandidate ReceiverDeclaredType [src/dep/inner.rs#Original.size]",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "src/user.rs"),
+            ["2 run>crate::dep::Public::make UniqueCandidate QualifiedPath [src/dep/inner.rs#Original.make]"]
+        );
+    }
+
+    /// The first name of a path can be a module in the file. A crate or a
+    /// function of the file with a name of the path is not the target.
+    #[test]
+    fn test_rust_path_that_starts_at_a_module_in_the_file() {
+        let source = "use perf as backend;\nuse perf::reset;\n\npub fn run() {\n    backend::open();\n    reset();\n}\n\nfn events() {}\n\npub mod perf {\n    use super::*;\n\n    pub fn open() {\n        perf::events();\n    }\n\n    pub fn reset() {}\n\n    pub fn events() {}\n}\n";
+        let files = [
+            ("Cargo.toml", "[workspace]\nmembers = [\"app\", \"perf\"]\n"),
+            (
+                "app/Cargo.toml",
+                "[package]\nname = \"app\"\n\n[lib]\npath = \"src/app.rs\"\n",
+            ),
+            ("app/src/app.rs", source),
+            ("perf/Cargo.toml", "[package]\nname = \"perf\"\n"),
+            (
+                "perf/src/lib.rs",
+                "pub fn open() {}\n\npub fn events() {}\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "app/src/app.rs"),
+            [
+                "5 run>backend::open UniqueCandidate QualifiedPath [app/src/app.rs#perf.open]",
+                "6 run>reset UniqueCandidate ImportedName [app/src/app.rs#perf.reset]",
+                "15 perf.open>perf::events UniqueCandidate QualifiedPath [app/src/app.rs#perf.events]",
+            ]
+        );
     }
 
     #[test]

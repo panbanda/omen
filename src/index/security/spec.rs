@@ -627,7 +627,13 @@ pub const SPECS: &[SinkSpec] = &[
     ),
     // Rust
     // A command is built here. The sink does not say that the command runs.
-    path(CommandExecution, RUST, "std::process::Command", "new", command(0, 1)),
+    path(
+        CommandExecution,
+        RUST,
+        "std::process::Command|tokio::process::Command|smol::process::Command|async_process::Command|async_std::process::Command",
+        "new",
+        command(0, 1),
+    ),
     path(
         SqlStringConstruction,
         RUST,
