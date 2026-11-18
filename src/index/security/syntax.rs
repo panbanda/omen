@@ -79,6 +79,10 @@ pub fn arguments<'tree>(call: Node<'tree>, language: Language) -> Vec<Node<'tree
         let mut cursor = call.walk();
         nodes.extend(call.children_by_field_name("argument", &mut cursor));
     } else if let Some(list) = call.child_by_field_name("arguments") {
+        // The template of a tagged template is the one argument.
+        if list.kind() == "template_string" {
+            return vec![list];
+        }
         let mut cursor = list.walk();
         nodes.extend(list.named_children(&mut cursor));
     }
@@ -175,6 +179,14 @@ pub fn key_value(node: Node<'_>, source: &[u8]) -> Option<(String, String)> {
         _ => return None,
     };
     Some((clean(text(key, source)), clean(text(value, source))))
+}
+
+/// The expression of a Go `literal_element`, which wraps the key and the value of a field.
+pub fn literal_value(node: Node<'_>) -> Node<'_> {
+    if node.kind() == "literal_element" && node.named_child_count() == 1 {
+        return node.named_child(0).unwrap_or(node);
+    }
+    node
 }
 
 fn has_descendant(node: Node<'_>, test: &dyn Fn(Node<'_>) -> bool) -> bool {
@@ -289,18 +301,91 @@ pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -
         | "member_call_expression" => {
             FORMAT_CALLEES.contains(&callee_name(node, source)) && !is_composed_format(node, source)
         }
+        // A tag function gets the parts and the values of a template apart, as
+        // `String.raw` and `sql` do. Thus a tagged template does not build a string.
+        "template_string"
+            if node.parent().is_some_and(|parent| {
+                parent.kind() == "call_expression"
+                    && parent.child_by_field_name("arguments") == Some(node)
+            }) =>
+        {
+            false
+        }
+        // An array of strings is not one string, as `git.raw(["log", `${name}`])` shows.
+        "array" | "list" | "tuple" | "array_expression" | "array_creation_expression" => false,
         _ => has_interpolation(node),
     }
 }
 
-/// A literal without an interpolation.
+/// The interpolations of a string that are not in another interpolation.
+fn outer_interpolations<'tree>(node: Node<'tree>, found: &mut Vec<Node<'tree>>) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if is_interpolation(child.kind()) {
+            found.push(child);
+        } else {
+            outer_interpolations(child, found);
+        }
+    }
+}
+
+/// A literal without an interpolation, or an operation whose operands are all such literals,
+/// as `"a " + "b"` is.
 pub fn is_literal(node: Node<'_>) -> bool {
     let kind = node.kind();
     if matches!(kind, "parenthesized_expression" | "argument") {
         return node.named_child(0).is_some_and(is_literal);
     }
+    if matches!(
+        kind,
+        "binary_expression" | "binary_operator" | "binary" | "additive_expression"
+    ) {
+        let mut cursor = node.walk();
+        let operands: Vec<Node<'_>> = node
+            .named_children(&mut cursor)
+            .filter(|operand| !operand.kind().contains("comment"))
+            .collect();
+        return !operands.is_empty() && operands.into_iter().all(is_literal);
+    }
+    // A list of literals, as `["ls", "-l"]` or Go `[]string{"ls"}`, is a constant.
+    if kind == "composite_literal" {
+        return node.child_by_field_name("body").is_some_and(is_literal);
+    }
+    if matches!(
+        kind,
+        "array"
+            | "list"
+            | "tuple"
+            | "array_creation_expression"
+            | "array_element_initializer"
+            | "literal_value"
+            | "literal_element"
+            | "initializer_list"
+            | "array_initializer"
+    ) {
+        let mut cursor = node.walk();
+        return node
+            .named_children(&mut cursor)
+            .filter(|element| !element.kind().contains("comment"))
+            .all(is_literal);
+    }
     if kind.contains("string") {
-        return !has_interpolation(node);
+        if node.kind() == "encapsed_string"
+            && has_descendant(node, &|child| child.kind() == "variable_name")
+        {
+            return false;
+        }
+        // An interpolation of literals only, as `${"users"}`, gives a constant.
+        let mut interpolations = Vec::new();
+        outer_interpolations(node, &mut interpolations);
+        return interpolations.into_iter().all(|interpolation| {
+            let mut cursor = interpolation.walk();
+            let values: Vec<Node<'_>> = interpolation
+                .named_children(&mut cursor)
+                .filter(|value| !value.kind().contains("comment"))
+                .collect();
+            !values.is_empty() && values.into_iter().all(is_literal)
+        });
     }
     [
         "integer", "float", "number", "true", "false", "null", "nil", "none", "char", "boolean",
@@ -308,6 +393,134 @@ pub fn is_literal(node: Node<'_>) -> bool {
     ]
     .iter()
     .any(|word| kind.contains(word))
+}
+
+/// The pairs of a call: each argument that is a pair, and each direct member of an object
+/// literal that is an argument. A pair in a nested value, such as `env={"shell": True}`, does
+/// not count.
+fn pairs<'tree>(arguments: &[Node<'tree>]) -> Vec<Node<'tree>> {
+    let mut found = Vec::new();
+    for argument in arguments {
+        if matches!(argument.kind(), "object" | "hash") {
+            let mut cursor = argument.walk();
+            found.extend(argument.named_children(&mut cursor));
+        } else {
+            found.push(*argument);
+        }
+    }
+    found
+}
+
+/// The value node of the last pair with the key, in lower case.
+fn keyword_value<'tree>(
+    arguments: &[Node<'tree>],
+    name: &str,
+    source: &[u8],
+) -> Option<Node<'tree>> {
+    pairs(arguments).into_iter().rev().find_map(|pair| {
+        let (key, _) = key_value(pair, source)?;
+        if key != name {
+            return None;
+        }
+        pair.child_by_field_name("value")
+    })
+}
+
+/// The value turns the check off: it is one of the values, or it is not a literal.
+fn is_disabled_setting(value: Node<'_>, disabled: &[&str], source: &[u8]) -> bool {
+    let found = unquote(text(value, source)).to_lowercase();
+    disabled.contains(&found.as_str()) || !is_literal(value)
+}
+
+/// An argument that gives options and not a part of a command: an object, a hash, a
+/// dictionary, or a keyword argument.
+fn is_option(node: Node<'_>) -> bool {
+    matches!(
+        node.kind(),
+        "object" | "hash" | "dictionary" | "keyword_argument" | "pair"
+    )
+}
+
+/// The shells that read a command from the argument after `-c`.
+const SHELLS: [&str; 5] = ["sh", "bash", "zsh", "dash", "ksh"];
+
+/// The node after `-c` in a call that runs a shell, or the array when nothing follows `-c`.
+/// `None` means that the call does not run a shell with `-c`.
+fn shell_command<'tree>(
+    arguments: &[Node<'tree>],
+    program: usize,
+    list: usize,
+    source: &[u8],
+) -> Option<Node<'tree>> {
+    let array = arguments
+        .get(list)
+        .filter(|node| matches!(node.kind(), "array" | "list"))?;
+    let mut cursor = array.walk();
+    let elements: Vec<Node<'tree>> = array
+        .named_children(&mut cursor)
+        .filter(|node| !node.kind().contains("comment"))
+        .collect();
+    let (shell, rest) = if program == list {
+        let (shell, rest) = elements.split_first()?;
+        (*shell, rest)
+    } else {
+        (*arguments.get(program)?, elements.as_slice())
+    };
+    let is_text = |node: Node<'_>, wanted: &dyn Fn(&str) -> bool| {
+        node.kind().contains("string") && is_literal(node) && wanted(unquote(text(node, source)))
+    };
+    let is_shell = |name: &str| SHELLS.contains(&name.rsplit('/').next().unwrap_or(name));
+    let (flag, after) = rest.split_first()?;
+    (is_text(shell, &is_shell) && is_text(*flag, &|name| name == "-c"))
+        .then(|| after.first().copied().unwrap_or(*array))
+}
+
+/// The arguments that make the call a sink, when the predicate names them: the SQL text, or
+/// the value of a setting. `None` means that the predicate names no argument, and then each
+/// argument counts.
+pub fn subject<'tree>(
+    predicate: &Predicate,
+    arguments: &[Node<'tree>],
+    source: &[u8],
+    syntax: &LanguageSyntax,
+) -> Option<Vec<Node<'tree>>> {
+    match predicate {
+        Predicate::BuiltString { index }
+        | Predicate::ArgNotLiteral { index }
+        | Predicate::HasArgument { index }
+        | Predicate::ArgSetting { index, .. } => {
+            Some(arguments.get(*index).copied().into_iter().collect())
+        }
+        Predicate::KeywordSetting { name, .. } => {
+            Some(keyword_value(arguments, name, source).into_iter().collect())
+        }
+        // The matcher gives the receiver as the only argument.
+        Predicate::Receiver => Some(arguments.to_vec()),
+        Predicate::Command { from, to } => Some(
+            arguments
+                .iter()
+                .enumerate()
+                .filter(|(position, node)| (*from..*to).contains(position) && !is_option(**node))
+                .map(|(_, node)| *node)
+                .collect(),
+        ),
+        Predicate::ShellArgv { program, list } => {
+            shell_command(arguments, *program, *list, source).map(|command| vec![command])
+        }
+        Predicate::All(all) => {
+            let named: Vec<Node<'tree>> = all
+                .iter()
+                .filter_map(|inner| subject(inner, arguments, source, syntax))
+                .flatten()
+                .collect();
+            (!named.is_empty()).then_some(named)
+        }
+        Predicate::AnyOf(any) => any
+            .iter()
+            .find(|inner| holds(inner, arguments, source, syntax))
+            .and_then(|inner| subject(inner, arguments, source, syntax)),
+        _ => None,
+    }
 }
 
 /// Tells if the predicate holds for the arguments of a call.
@@ -320,20 +533,14 @@ pub fn holds(
     let argument_text = |node: &Node<'_>| unquote(text(*node, source)).to_lowercase();
     match predicate {
         Predicate::Always => true,
-        Predicate::Keyword { name, value } => arguments.iter().any(|argument| {
-            let is_pair = |node: Node<'_>| {
-                key_value(node, source).is_some_and(|(key, found)| key == *name && found == *value)
-            };
-            // A pair is an argument, or a direct member of an object literal that is an argument.
-            // A pair in a nested value, such as `env={"shell": True}`, does not count.
-            if matches!(argument.kind(), "object" | "hash") {
-                let mut cursor = argument.walk();
-                let members: Vec<Node<'_>> = argument.named_children(&mut cursor).collect();
-                members.into_iter().any(is_pair)
-            } else {
-                is_pair(*argument)
-            }
+        Predicate::Keyword { name, value } => pairs(arguments).into_iter().any(|pair| {
+            key_value(pair, source).is_some_and(|(key, found)| key == *name && found == *value)
         }),
+        Predicate::ArgSetting { index, disabled } => arguments
+            .get(*index)
+            .is_some_and(|node| is_disabled_setting(*node, disabled, source)),
+        Predicate::KeywordSetting { name, disabled } => keyword_value(arguments, name, source)
+            .is_some_and(|value| is_disabled_setting(value, disabled, source)),
         Predicate::ArgIn { index, values } => arguments
             .get(*index)
             .is_some_and(|node| values.contains(&argument_text(node).as_str())),
@@ -357,6 +564,10 @@ pub fn holds(
         Predicate::Without(inner) => !holds(inner, arguments, source, syntax),
         Predicate::HasArgument { index } => arguments.get(*index).is_some(),
         Predicate::BlockPass => arguments.iter().any(|node| node.kind() == "block_argument"),
+        Predicate::Receiver | Predicate::Command { .. } => true,
+        Predicate::ShellArgv { program, list } => {
+            shell_command(arguments, *program, *list, source).is_some()
+        }
         Predicate::AnyArgStartsWith(prefixes) => arguments.iter().any(|node| {
             let found = argument_text(node);
             prefixes.iter().any(|prefix| found.starts_with(prefix))
@@ -376,6 +587,22 @@ pub fn holds(
             .iter()
             .all(|inner| holds(inner, arguments, source, syntax)),
     }
+}
+
+/// The Go file has the standard header of generated code: a line that matches
+/// `^// Code generated .* DO NOT EDIT\.$` before the first text that is not a comment.
+pub fn has_generated_header(root: Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = root.walk();
+    let children: Vec<Node<'_>> = root.children(&mut cursor).collect();
+    children
+        .into_iter()
+        .take_while(|child| child.kind() == "comment")
+        .flat_map(|comment| text(comment, source).lines())
+        .any(|line| {
+            line.trim_end_matches('\r')
+                .strip_prefix("// Code generated ")
+                .is_some_and(|rest| rest.ends_with(" DO NOT EDIT."))
+        })
 }
 
 /// The prefix of the token format that the string literal has, if it has one.

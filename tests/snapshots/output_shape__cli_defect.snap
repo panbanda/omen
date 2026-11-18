@@ -20,6 +20,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
         "ownership": "number"
       },
       "file": "string",
+      "is_test": "bool",
       "probability": "number",
       "recommendations": [
         "string"

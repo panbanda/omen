@@ -3,6 +3,7 @@
 mod analyzer;
 mod atomic_file;
 mod content_source;
+pub mod decimal;
 mod error;
 mod file_set;
 mod language;

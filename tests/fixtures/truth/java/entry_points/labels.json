@@ -6,7 +6,7 @@
   "closed_world": false,
   "entry_points_closed_world": true,
   "entry_points": [
-    {"label": "spring_show", "file": "UserController.java", "line": 4, "kind": "http_handler", "framework": "spring", "method": "GET", "path": "/api/users/{id}", "parameters": ["id"], "guards": ["PreAuthorize"]},
-    {"label": "java_main", "file": "UserController.java", "line": 10, "kind": "cli_main", "framework": "java"}
+    {"label": "spring_show", "file": "UserController.java", "line": 4, "kind": "http_handler", "framework": "spring", "method": "GET", "path": "/api/users/{id}", "parameters": ["id"], "guards": ["PreAuthorize"], "guards_complete": false, "guards_unknown_reason": "layer_not_read"},
+    {"label": "java_main", "file": "UserController.java", "line": 10, "kind": "cli_main", "framework": "java", "guards_complete": true, "guards_unknown_reason": null}
   ]
 }

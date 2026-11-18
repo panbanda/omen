@@ -73,6 +73,14 @@
     {"label": "memory_unsafe.name_in_comment", "category": "memory_unsafe", "scenario": "name_in_comment", "file": "UnsafeCode.cs", "line": 22, "flagged": false},
     {"label": "memory_unsafe.in_test", "category": "memory_unsafe", "scenario": "in_test", "file": "tests/UnsafeTests.cs", "line": 5, "basis": "builtin", "in_test": true},
     {"label": "tls_verification_disabled.safe_variant.conjunction", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "Validators.cs", "line": 8, "flagged": false},
-    {"label": "tls_verification_disabled.real_call.block_body", "category": "tls_verification_disabled", "scenario": "real_call", "file": "Validators.cs", "line": 9, "basis": "imported_symbol"}
+    {"label": "tls_verification_disabled.real_call.block_body", "category": "tls_verification_disabled", "scenario": "real_call", "file": "Validators.cs", "line": 9, "basis": "imported_symbol"},
+    {"label": "unsafe_html_output.real_call", "category": "unsafe_html_output", "scenario": "real_call", "file": "Html.cs", "line": 9, "basis": "imported_symbol", "constant_argument": false},
+    {"label": "unsafe_html_output.aliased_import", "category": "unsafe_html_output", "scenario": "aliased_import", "file": "Html.cs", "line": 10, "basis": "imported_symbol"},
+    {"label": "unsafe_html_output.safe_variant", "category": "unsafe_html_output", "scenario": "safe_variant", "file": "Html.cs", "line": 11, "flagged": false},
+    {"label": "unsafe_html_output.name_in_string", "category": "unsafe_html_output", "scenario": "name_in_string", "file": "Html.cs", "line": 12, "flagged": false},
+    {"label": "unsafe_html_output.name_in_comment", "category": "unsafe_html_output", "scenario": "name_in_comment", "file": "Html.cs", "line": 13, "flagged": false},
+    {"label": "unsafe_html_output.real_call.constant", "category": "unsafe_html_output", "scenario": "real_call", "file": "Html.cs", "line": 14, "basis": "imported_symbol", "constant_argument": true},
+    {"label": "unsafe_html_output.same_name_symbol", "category": "unsafe_html_output", "scenario": "same_name_symbol", "file": "HtmlDecoys.cs", "line": 7, "flagged": false},
+    {"label": "unsafe_html_output.in_test", "category": "unsafe_html_output", "scenario": "in_test", "file": "tests/HtmlTests.cs", "line": 7, "basis": "imported_symbol", "in_test": true}
   ]
 }

@@ -23,6 +23,7 @@ expression: "shape(&response, &dynamic_key_objects)"
               {
                 "category": "string",
                 "file": "string",
+                "is_test": "bool",
                 "line": "number",
                 "marker": "string",
                 "severity": "string",

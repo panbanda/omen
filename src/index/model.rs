@@ -185,6 +185,27 @@ impl Span {
     }
 }
 
+/// The relation of a definition to test code.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum TestRole {
+    /// The definition is not test code.
+    #[default]
+    None,
+    /// The definition is in test code, and no test runner calls it by its syntax.
+    Support,
+    /// A test runner calls the definition: a test, a benchmark, a fixture, or a hook.
+    Entry,
+}
+
+impl TestRole {
+    pub fn is_none(&self) -> bool {
+        *self == Self::None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Symbol {
     /// `rel/path#Container.name`. See [`symbol_key`].
@@ -208,9 +229,17 @@ pub struct Symbol {
     pub exported: Exported,
     /// The SCIP symbol. The tree-sitter extraction does not supply it.
     pub scip_symbol: Option<String>,
+    /// The relation of the definition to test code. See `crate::index::test_code`.
+    #[serde(default, skip_serializing_if = "TestRole::is_none")]
+    pub test_role: TestRole,
 }
 
 impl Symbol {
+    /// The definition is test code: a test, or a definition that only test code can use.
+    pub fn is_test(&self) -> bool {
+        self.test_role != TestRole::None
+    }
+
     /// The symbol is a function, a method, or a constructor.
     pub fn is_callable(&self) -> bool {
         matches!(

@@ -6,11 +6,11 @@
   "closed_world": false,
   "entry_points_closed_world": true,
   "entry_points": [
-    {"label": "echo_health", "file": "main.go", "line": 14, "kind": "http_handler", "framework": "echo", "method": "GET", "path": "/health", "guards": ["middleware.Logger"]},
-    {"label": "echo_user", "file": "main.go", "line": 17, "kind": "http_handler", "framework": "echo", "method": "GET", "path": "/api/users/:id", "parameters": ["id"], "guards": ["middleware.Logger", "auth", "audit"]},
-    {"label": "echo_admin_create", "file": "main.go", "line": 20, "kind": "http_handler", "framework": "echo", "method": "POST", "path": "/api/admin/users", "guards": ["middleware.Logger", "auth", "requireRoot", "extra"]},
-    {"label": "echo_late", "file": "main.go", "line": 21, "kind": "http_handler", "framework": "echo", "method": "PUT", "path": "/api/late", "guards": ["middleware.Logger", "auth"]},
-    {"label": "echo_multi_get", "file": "main.go", "line": 22, "kind": "http_handler", "framework": "echo", "method": "GET", "path": "/multi", "guards": ["middleware.Logger"]},
-    {"label": "echo_multi_post", "file": "main.go", "line": 22, "kind": "http_handler", "framework": "echo", "method": "POST", "path": "/multi", "guards": ["middleware.Logger"]}
+    {"label": "echo_health", "file": "main.go", "line": 14, "kind": "http_handler", "framework": "echo", "method": "GET", "path": "/health", "guards": ["middleware.Logger"], "guards_complete": true, "guards_unknown_reason": null},
+    {"label": "echo_user", "file": "main.go", "line": 17, "kind": "http_handler", "framework": "echo", "method": "GET", "path": "/api/users/:id", "parameters": ["id"], "guards": ["middleware.Logger", "auth", "audit"], "guards_complete": true, "guards_unknown_reason": null},
+    {"label": "echo_admin_create", "file": "main.go", "line": 20, "kind": "http_handler", "framework": "echo", "method": "POST", "path": "/api/admin/users", "guards": ["middleware.Logger", "auth", "requireRoot", "extra"], "guards_complete": true, "guards_unknown_reason": null},
+    {"label": "echo_late", "file": "main.go", "line": 21, "kind": "http_handler", "framework": "echo", "method": "PUT", "path": "/api/late", "guards": ["middleware.Logger", "auth"], "guards_complete": true, "guards_unknown_reason": null},
+    {"label": "echo_multi_get", "file": "main.go", "line": 22, "kind": "http_handler", "framework": "echo", "method": "GET", "path": "/multi", "guards": ["middleware.Logger"], "guards_complete": true, "guards_unknown_reason": null},
+    {"label": "echo_multi_post", "file": "main.go", "line": 22, "kind": "http_handler", "framework": "echo", "method": "POST", "path": "/multi", "guards": ["middleware.Logger"], "guards_complete": true, "guards_unknown_reason": null}
   ]
 }

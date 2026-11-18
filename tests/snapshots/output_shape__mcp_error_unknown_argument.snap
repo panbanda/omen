@@ -5,7 +5,7 @@ expression: body
 {
   "error": {
     "code": "unknown_argument",
-    "expected": "one of: path, limit, offset",
+    "expected": "one of: path, exclude_tests, limit, offset",
     "message": "The tool `complexity` has no argument `pth`.",
     "next": "Use a name from `suggestions`.",
     "param": "pth",

@@ -24,7 +24,9 @@ source code, and do not run other tools.
 - Do not write "vulnerable", "exploitable", or "secure". The data does not show a vulnerability, and it does not show safety.
 - A sink with no known entry is not safe. The graph has only the calls and the function references that the index resolves, and the table has only the frameworks in `coverage`. Say what is missing.
 - A path with `function_references` says that the entry point can cause the sink to run. It does not say that the entry point calls the sink. Read the source before you say that the function runs.
-- A declared guard is a decorator, an annotation, a middleware name, or a declared dependency of FastAPI. It does not mean that the handler is authenticated. A dependency such as `get_db` does not authenticate.
+- A declared guard is a decorator, an annotation, a middleware name, a route constraint, or a declared dependency of FastAPI. It does not mean that the handler is authenticated. A dependency such as `get_db` does not authenticate.
+- An entry point with `guards_complete: false` has guards that omen did not read. Do not write that such an entry point has no guard, or that it is not authenticated. Give its `guards_unknown_reason`. Only an entry point with `guards_complete: true` and an empty `guards` list has no declared guard.
+- Give the number `summary.entry_points_with_incomplete_guards`, and the reasons in `summary.incomplete_guards_by_reason`.
 - A path with the weakest basis `name_only` or `same_package` is weaker evidence than a path with `imported_name`. Say which kind of evidence you have.
 - Start with the coverage: which languages and frameworks omen recognised, and which it did not.
 

@@ -2,7 +2,7 @@
 
 use super::{
     Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolOutput, ToolSpec, COMPACT,
-    MAX_COUNT, PATH,
+    EXCLUDE_TESTS, MAX_COUNT, PATH,
 };
 use crate::mcp::error::{ErrorCode, ToolError};
 use crate::mcp::McpServer;
@@ -35,11 +35,13 @@ fn window_days(arguments: &Arguments, default_days: u32) -> Result<u32, ToolErro
 pub(super) static COMPLEXITY: ToolSpec = ToolSpec {
     name: "complexity",
     description: "Gives the cyclomatic complexity and the cognitive complexity of each function. \
-        The limit applies to the functions.",
-    params: &[PATH],
-    paginated: Pagination::Nested {
-        parents: &["files"],
+        The limit applies to the functions. The function with the highest cyclomatic \
+        complexity is first, and a file without a function on the page is not in the result.",
+    params: &[PATH, EXCLUDE_TESTS],
+    paginated: Pagination::Ranked {
+        parent: "files",
         child: "functions",
+        rank: &crate::output::COMPLEXITY_RANK,
     },
     handler: |server, arguments| {
         server.analyze(arguments, crate::analyzers::complexity::Analyzer::default())
@@ -50,7 +52,7 @@ pub(super) static SATD: ToolSpec = ToolSpec {
     name: "satd",
     description: "Finds debt comments such as TODO, FIXME, and HACK. \
         The tool also finds the markers in `satd.markers` of the configuration.",
-    params: &[PATH],
+    params: &[PATH, EXCLUDE_TESTS],
     paginated: Pagination::Field("items"),
     handler: |server, arguments| {
         server.analyze(
@@ -63,7 +65,7 @@ pub(super) static SATD: ToolSpec = ToolSpec {
 pub(super) static DEADCODE: ToolSpec = ToolSpec {
     name: "deadcode",
     description: "Finds symbols that no code uses.",
-    params: &[PATH],
+    params: &[PATH, EXCLUDE_TESTS],
     paginated: Pagination::Field("items"),
     handler: |server, arguments| {
         server.analyze(arguments, crate::analyzers::deadcode::Analyzer::default())
@@ -75,7 +77,7 @@ pub(super) static STUBS: ToolSpec = ToolSpec {
     description: "Finds implementations that are not complete. \
         Examples are a `todo!()` call, a comment that replaces code, and an empty function body. \
         This tool does not apply a gate.",
-    params: &[PATH],
+    params: &[PATH, EXCLUDE_TESTS],
     paginated: Pagination::Field("stubs"),
     handler: |server, arguments| server.analyze(arguments, crate::analyzers::stubs::Analyzer),
 };
@@ -85,6 +87,7 @@ pub(super) static CHURN: ToolSpec = ToolSpec {
     description: "Finds the files that change most frequently in the git history.",
     params: &[
         PATH,
+        EXCLUDE_TESTS,
         Param::string("since", SINCE_DESCRIPTION)
             .with_default(ParamDefault::Configuration("churn.since")),
     ],
@@ -103,6 +106,7 @@ pub(super) static CLONES: ToolSpec = ToolSpec {
     description: "Finds code clones with MinHash and LSH.",
     params: &[
         PATH,
+        EXCLUDE_TESTS,
         Param::integer(
             "min_tokens",
             1,
@@ -144,26 +148,49 @@ pub(super) static DEFECT: ToolSpec = ToolSpec {
     description: "Gives the defect probability of each file from PMAT metrics.",
     params: &[
         PATH,
+        EXCLUDE_TESTS,
         Param::string("since", SINCE_DESCRIPTION)
             .with_default(ParamDefault::Configuration("defect.since")),
     ],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
         let days = window_days(arguments, server.config.defect.since.days())?;
-        server.analyze(arguments, crate::commands::analyzers::defect_analyzer(days))
+        server.analyze(
+            arguments,
+            crate::commands::analyzers::defect_analyzer_with_config(&server.config, days),
+        )
     },
 };
 
 pub(super) static CHANGES: ToolSpec = ToolSpec {
     name: "changes",
     description: "Gives the risk of each recent commit. The tool uses just-in-time risk analysis. \
-        `changes.since` of the configuration gives the window of history.",
-    params: &[PATH],
+        The commit with the highest risk is first.",
+    params: &[
+        PATH,
+        Param::string(
+            "since",
+            "The time window of git history to read, such as 30d, 3m, or 1y. \
+             The value all is not a window of this tool.",
+        )
+        .with_default(ParamDefault::Configuration("changes.since")),
+    ],
     paginated: Pagination::Field("commits"),
     handler: |server, arguments| {
+        let days = window_days(arguments, server.config.changes.since.days())?;
+        if days == u32::MAX {
+            return Err(ToolError::new(
+                ErrorCode::InvalidArgument,
+                crate::commands::analyzers::CHANGES_ALL_MESSAGE,
+            )
+            .with_param("since")
+            .with_expected("a time window such as 30d, 3m, or 1y")
+            .with_received(&serde_json::Value::String("all".to_string()))
+            .with_next("Send the call again with a window such as `30d`, `3m`, or `1y`."));
+        }
         server.analyze(
             arguments,
-            crate::commands::analyzers::changes_analyzer(&server.config),
+            crate::commands::analyzers::changes_analyzer(days),
         )
     },
 };
@@ -234,7 +261,7 @@ fn diff(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
 pub(super) static TDG: ToolSpec = ToolSpec {
     name: "tdg",
     description: "Gives the Technical Debt Gradient of each file and finds critical defects.",
-    params: &[PATH],
+    params: &[PATH, EXCLUDE_TESTS],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
         server.analyze(arguments, crate::analyzers::tdg::Analyzer::default())
@@ -245,7 +272,7 @@ pub(super) static GRAPH: ToolSpec = ToolSpec {
     name: "graph",
     description: "Gives the dependency graph of the modules, with a Mermaid diagram. \
         The limit applies to the members of the cycles.",
-    params: &[PATH],
+    params: &[PATH, EXCLUDE_TESTS],
     paginated: Pagination::Children("cycles"),
     handler: |server, arguments| {
         server.analyze(arguments, crate::analyzers::graph::Analyzer::default())
@@ -257,6 +284,7 @@ pub(super) static HOTSPOT: ToolSpec = ToolSpec {
     description: "Finds the files that have high churn and high complexity.",
     params: &[
         PATH,
+        EXCLUDE_TESTS,
         Param::string("since", SINCE_DESCRIPTION)
             .with_default(ParamDefault::Configuration("hotspot.since")),
     ],
@@ -275,6 +303,7 @@ pub(super) static TEMPORAL: ToolSpec = ToolSpec {
     description: "Finds the files that change together in the git history.",
     params: &[
         PATH,
+        EXCLUDE_TESTS,
         Param::string("since", SINCE_DESCRIPTION).with_default(ParamDefault::String("30d")),
     ],
     paginated: Pagination::Field("couplings"),
@@ -290,7 +319,7 @@ pub(super) static TEMPORAL: ToolSpec = ToolSpec {
 pub(super) static OWNERSHIP: ToolSpec = ToolSpec {
     name: "ownership",
     description: "Gives the owners of each file and the bus factor. The tool uses git blame.",
-    params: &[PATH],
+    params: &[PATH, EXCLUDE_TESTS],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
         server.analyze(arguments, crate::analyzers::ownership::Analyzer::default())
@@ -300,7 +329,7 @@ pub(super) static OWNERSHIP: ToolSpec = ToolSpec {
 pub(super) static COHESION: ToolSpec = ToolSpec {
     name: "cohesion",
     description: "Gives the CK metrics of each class: WMC, CBO, RFC, LCOM4, DIT, and NOC.",
-    params: &[PATH],
+    params: &[PATH, EXCLUDE_TESTS],
     paginated: Pagination::Field("classes"),
     handler: |server, arguments| {
         server.analyze(arguments, crate::analyzers::cohesion::Analyzer::default())
@@ -312,6 +341,7 @@ pub(super) static REPOMAP: ToolSpec = ToolSpec {
     description: "Gives the symbols of the repository in PageRank sequence, with their call graph.",
     params: &[
         PATH,
+        EXCLUDE_TESTS,
         Param::integer(
             "max_symbols",
             0,
@@ -351,7 +381,7 @@ pub(super) static REPOMAP: ToolSpec = ToolSpec {
 pub(super) static SMELLS: ToolSpec = ToolSpec {
     name: "smells",
     description: "Finds architectural smells such as dependency cycles. The tool uses Tarjan SCC.",
-    params: &[PATH],
+    params: &[PATH, EXCLUDE_TESTS],
     paginated: Pagination::Field("smells"),
     handler: |server, arguments| {
         server.analyze(arguments, crate::analyzers::smells::Analyzer::default())
@@ -418,6 +448,7 @@ const SECURITY_CATEGORIES: &[&str] = &[
     "tls_verification_disabled",
     "hardcoded_credential",
     "memory_unsafe",
+    "unsafe_html_output",
 ];
 
 pub(super) static SECURITY: ToolSpec = ToolSpec {
@@ -430,6 +461,7 @@ pub(super) static SECURITY: ToolSpec = ToolSpec {
         The limit applies to the sinks.",
     params: &[
         PATH,
+        EXCLUDE_TESTS,
         Param::choice(
             "section",
             &["all", "sinks", "surface", "paths"],
@@ -499,6 +531,11 @@ fn security(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         arguments.string("entry"),
         arguments.string("sink"),
     );
+    let report = if arguments.excludes_tests() {
+        report.without_tests()
+    } else {
+        report
+    };
     data.result = report.section(section);
     Ok(ToolOutput::Data(data))
 }

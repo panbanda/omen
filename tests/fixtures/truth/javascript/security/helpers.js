@@ -29,3 +29,9 @@ export class Gateway {
 }
 
 export default { createHash, request, unserialize };
+
+export class Panel {
+  insertAdjacentHTML(position, text) {
+    return text;
+  }
+}

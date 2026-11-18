@@ -78,6 +78,34 @@ not report one. The security cases are in the directories `security` and
   resolver of the index can select it. For this reason, Ruby, PHP, C, C++, and
   Bash keep the `same_name_symbol` rows in the case `security_decoys`.
 
+## Entry point labels
+
+An `entry_points` label can state three more facts. A label without one of these fields does
+not check that fact.
+
+- `symbol` is the key of the handler symbol. `null` states that the entry point has no symbol.
+- `guards_complete` tells if the guard list is complete.
+- `guards_unknown_reason` is the reason for a list that is not complete. `null` states that
+  omen gives no reason.
+
+## Test labels
+
+A `tests` label states the relation of one definition, or of one line, to test
+code. The cases are in the directories `test_code`. `docs/TEST_CODE.md` gives
+the rule for each language.
+
+- `category` is one of four rows. `entry_by_syntax` is code that a test tool
+  calls because of an attribute, an annotation, a decorator, a macro, a
+  superclass, or a test function. `entry_by_name` is a definition that a test
+  tool calls because of its name. `support` is other code in test code.
+  `not_test` is production code that has a name or a shape of a test.
+- `role` is `entry`, `support`, or `none`.
+- A label with a `name` is for the definition with that name that starts on
+  `line`. A label without a `name` is for the line. Use it for a block that
+  has no symbol, such as the callback of `it`. Its role is `support` or `none`.
+- Each language has each row. Use a `not_applicable` entry with the dimension
+  `tests` when no test tool of the language has the row.
+
 ## Path labels
 
 A `paths` label states that omen reports the shortest path from an entry point
