@@ -562,7 +562,8 @@ enum ChainBranch {
 }
 
 fn chain_branch(
-    node: &tree_sitter::Node<'_>,
+    kind: &str,
+    parent_kind: &str,
     field: Option<&str>,
     lang: Language,
     flat_types: &[&str],
@@ -572,15 +573,11 @@ fn chain_branch(
     if matches!(lang, Language::Python | Language::Ruby | Language::Bash) {
         return ChainBranch::None;
     }
-    let Some(parent) = node.parent() else {
-        return ChainBranch::None;
-    };
-    let kind = node.kind();
     let is_if = IF_KINDS.contains(&kind);
-    if is_if && parent.kind() == "else_clause" {
+    if is_if && parent_kind == "else_clause" {
         return ChainBranch::ElseIf;
     }
-    if field != Some("alternative") || !IF_KINDS.contains(&parent.kind()) {
+    if field != Some("alternative") || !IF_KINDS.contains(&parent_kind) {
         return ChainBranch::None;
     }
     if is_if {
@@ -594,11 +591,8 @@ fn chain_branch(
 
 /// Whether the node is the `else` of a Ruby `case`. The `case` adds 1 for
 /// all of its branches, and Ruby uses one `else` kind for `if` and `case`.
-fn is_else_of_case(node: &tree_sitter::Node<'_>) -> bool {
-    node.kind() == "else"
-        && node
-            .parent()
-            .is_some_and(|parent| matches!(parent.kind(), "case" | "case_match"))
+fn is_else_of_case(kind: &str, parent_kind: &str) -> bool {
+    kind == "else" && matches!(parent_kind, "case" | "case_match")
 }
 
 /// Whether the node is a `break` or `continue` that does not go to a label.
@@ -655,6 +649,9 @@ fn calculate_cognitive_complexity(
     // Track nesting depth separately from cursor depth
     // Use a small stack to track depth changes at each cursor level
     let mut depth_at_level: Vec<u32> = vec![initial_depth; 64]; // Pre-allocate for typical depths
+                                                                // The kind of the node at each cursor level. `Node::parent` searches from
+                                                                // the root, so a call for each node is quadratic in a deep tree.
+    let mut kind_at_level: Vec<&str> = vec![""; 64];
 
     loop {
         let current = cursor.node();
@@ -665,11 +662,18 @@ fn calculate_cognitive_complexity(
         // Ensure we have space for this level
         if level >= depth_at_level.len() {
             depth_at_level.resize(level + 16, initial_depth);
+            kind_at_level.resize(level + 16, "");
         }
+        kind_at_level[level] = kind;
+        let parent_kind = if level == 0 {
+            ""
+        } else {
+            kind_at_level[level - 1]
+        };
 
         let current_depth = depth_at_level[level];
         let branch = if current.is_named() && cursor_depth != start_depth {
-            chain_branch(&current, cursor.field_name(), lang, flat_types)
+            chain_branch(kind, parent_kind, cursor.field_name(), lang, flat_types)
         } else {
             ChainBranch::None
         };
@@ -682,9 +686,7 @@ fn calculate_cognitive_complexity(
         if branch != ChainBranch::None {
             // SonarSource gives `else if` and `else` +1 each, with no nesting
             // increment. An `else_clause` parent already added the +1.
-            let in_else_clause =
-                current.parent().map(|parent| parent.kind()) == Some("else_clause");
-            if !in_else_clause {
+            if parent_kind != "else_clause" {
                 complexity += 1;
             }
             if level + 1 < depth_at_level.len() {
@@ -699,7 +701,8 @@ fn calculate_cognitive_complexity(
             }
         } else if current.is_named() && flat_types.contains(&kind) {
             // Flat constructs: +1 only, NO nesting penalty per SonarSource spec
-            if !is_jump_without_label(&current, source, lang) && !is_else_of_case(&current) {
+            if !is_jump_without_label(&current, source, lang) && !is_else_of_case(kind, parent_kind)
+            {
                 complexity += 1;
             }
             // Children stay at same depth
@@ -783,6 +786,7 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
 
     // Track nesting depth at each cursor level
     let mut depth_at_level: Vec<u32> = vec![initial_depth; 64];
+    let mut kind_at_level: Vec<&str> = vec![""; 64];
 
     loop {
         let current = cursor.node();
@@ -792,7 +796,14 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
 
         if level >= depth_at_level.len() {
             depth_at_level.resize(level + 16, initial_depth);
+            kind_at_level.resize(level + 16, "");
         }
+        kind_at_level[level] = kind;
+        let parent_kind = if level == 0 {
+            ""
+        } else {
+            kind_at_level[level - 1]
+        };
 
         let current_depth = depth_at_level[level];
 
@@ -807,7 +818,8 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
         // must not be treated as a second nesting construct.
         let is_else_if = current.is_named()
             && cursor_depth != start_depth
-            && chain_branch(&current, cursor.field_name(), lang, flat_types) == ChainBranch::ElseIf;
+            && chain_branch(kind, parent_kind, cursor.field_name(), lang, flat_types)
+                == ChainBranch::ElseIf;
         let child_depth = if is_else_if {
             current_depth
         } else if current.is_named() && NESTING_KINDS.contains(&kind) {
