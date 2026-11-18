@@ -4923,11 +4923,14 @@ func routes() {
         timed_search(&[("main.go".to_string(), source)])
     }
 
-    fn assert_linear_growth(small: usize, run: fn(usize) -> Search, expected: fn(usize) -> usize) {
-        let (first_found, first) = run(small);
-        let (second_found, second) = run(small * 2);
-        assert_eq!(first_found, expected(small));
-        assert_eq!(second_found, expected(small * 2));
+    fn assert_found_counts(small: usize, run: fn(usize) -> Search, expected: fn(usize) -> usize) {
+        assert_eq!(run(small).0, expected(small));
+        assert_eq!(run(small * 2).0, expected(small * 2));
+    }
+
+    fn assert_linear_growth(small: usize, run: fn(usize) -> Search) {
+        let (_, first) = run(small);
+        let (_, second) = run(small * 2);
         let floor = std::time::Duration::from_millis(300);
         assert!(
             second < 3 * first.max(floor),
@@ -4935,16 +4938,19 @@ func routes() {
         );
     }
 
+    // The ratio check runs only in the release timing step: a debug or coverage
+    // build on a shared runner is too slow and too noisy for a ratio of times.
     macro_rules! go_timing {
         ($scenario:ident, $small_test:ident, $large_test:ident, $small:expr, $large:expr, $expected:expr) => {
             #[test]
             fn $small_test() {
-                assert_linear_growth($small, $scenario, $expected);
+                assert_found_counts($small, $scenario, $expected);
             }
 
             #[test]
             #[ignore = "timing: run in release"]
             fn $large_test() {
+                assert_linear_growth($small, $scenario);
                 let (_, took) = $scenario($large);
                 assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
             }
