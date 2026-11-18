@@ -277,6 +277,12 @@ struct Resolver<'a> {
     twin_members_cache: RwLock<HashMap<TwinQuery, Arc<Vec<Id>>>>,
     /// The results of `module_scopes`, by the file.
     module_scopes_cache: RwLock<HashMap<usize, Arc<ModuleScopes>>>,
+    /// The results of `constructor_position`, by the function and the type
+    /// parameter.
+    constructor_position_cache: RwLock<HashMap<(Id, String), Option<usize>>>,
+    /// The results of `alias_constructs`, by the alias, the position of the
+    /// type parameter, and the depth.
+    alias_constructs_cache: RwLock<HashMap<(Id, usize, usize), bool>>,
 }
 
 /// The traits whose methods `Arc` and `Rc` have only when the trait is in
@@ -425,6 +431,8 @@ impl<'a> Resolver<'a> {
             types_cache: RwLock::new(HashMap::new()),
             twin_members_cache: RwLock::new(HashMap::new()),
             module_scopes_cache: RwLock::new(HashMap::new()),
+            constructor_position_cache: RwLock::new(HashMap::new()),
+            alias_constructs_cache: RwLock::new(HashMap::new()),
             exported_cache: RwLock::new(HashMap::new()),
             package_cache: RwLock::new(HashMap::new()),
             visible_cache: RwLock::new(HashMap::new()),
@@ -1526,17 +1534,8 @@ impl<'a> Resolver<'a> {
         callee: Id,
         parameter: &str,
     ) -> Option<Vec<Id>> {
-        let declared = self.facts(callee).parameter_types.as_ref()?;
-        let positions: Vec<usize> = declared
-            .iter()
-            .enumerate()
-            .filter(|(_, text)| self.constructs(text, parameter, callee.0, 0))
-            .map(|(position, _)| position)
-            .collect();
-        let [position] = positions.as_slice() else {
-            return None;
-        };
-        let Some(Argument::Name(argument)) = site.arguments.get(*position) else {
+        let position = self.constructor_position(callee, parameter)?;
+        let Some(Argument::Name(argument)) = site.arguments.get(position) else {
             return None;
         };
         // A local value can hold a different class.
@@ -1581,6 +1580,49 @@ impl<'a> Resolver<'a> {
             .collect()
     }
 
+    /// The one position of a parameter of `callee` whose type constructs the
+    /// type parameter `parameter`. Each call of one function asks for the
+    /// same position, thus the cache keeps it.
+    fn constructor_position(&self, callee: Id, parameter: &str) -> Option<usize> {
+        let key = (callee, parameter.to_string());
+        if let Some(found) = self.constructor_position_cache.read().get(&key) {
+            return *found;
+        }
+        let positions: Vec<usize> = self
+            .facts(callee)
+            .parameter_types
+            .iter()
+            .flatten()
+            .enumerate()
+            .filter(|(_, text)| self.constructs(text, parameter, callee.0, 0))
+            .map(|(position, _)| position)
+            .collect();
+        let found = match positions.as_slice() {
+            [position] => Some(*position),
+            _ => None,
+        };
+        self.constructor_position_cache.write().insert(key, found);
+        found
+    }
+
+    /// Tells if the type alias `alias` constructs its type parameter at the
+    /// position `at`. A union can name one alias many times, and aliases can
+    /// form layers, thus the cache keeps each result. The depth is part of
+    /// the key, because the limit of the depth changes the result.
+    fn alias_constructs(&self, alias: Id, at: usize, depth: usize) -> bool {
+        let key = (alias, at, depth);
+        if let Some(found) = self.alias_constructs_cache.read().get(&key) {
+            return *found;
+        }
+        let facts = self.facts(alias);
+        let found = match (facts.return_type.as_deref(), facts.type_parameters.get(at)) {
+            (Some(aliased), Some(inner)) => self.constructs(aliased, inner, alias.0, depth),
+            _ => false,
+        };
+        self.alias_constructs_cache.write().insert(key, found);
+        found
+    }
+
     /// Tells if the declared type `text` in `file` is a constructor of the
     /// type parameter `parameter`: `new (...) => T`, `abstract new (...) => T`,
     /// a type alias of a constructor, or a union of these.
@@ -1616,13 +1658,7 @@ impl<'a> Resolver<'a> {
                 let [alias] = aliases.as_slice() else {
                     return false;
                 };
-                let facts = self.facts(*alias);
-                let (Some(aliased), Some(inner)) =
-                    (facts.return_type.as_deref(), facts.type_parameters.get(*at))
-                else {
-                    return false;
-                };
-                self.constructs(aliased, inner, alias.0, depth + 1)
+                self.alias_constructs(*alias, *at, depth + 1)
             })
     }
 
@@ -5012,6 +5048,12 @@ mod ecma_timing_tests {
 
     const DI: &str = "export type Constructable<T = unknown> = new (...args: any[]) => T;\nexport type ServiceIdentifier<T = unknown> = Constructable<T>;\n\nclass ContainerClass {\n  get<T>(type: ServiceIdentifier<T>): T {\n    return undefined as T;\n  }\n}\n\nexport const Container = new ContainerClass();\n";
 
+    /// A file with the class `S{position}`, which has `plain`, and a call of
+    /// `plain` on the result of `Container.get(S{position})`.
+    fn container_file(position: usize) -> String {
+        format!("import {{ Container }} from './di';\n\nexport class S{position} {{\n  plain(): void {{}}\n}}\nexport function run(): void {{\n  Container.get(S{position}).plain();\n}}\n")
+    }
+
     /// One class with `size` overload signatures of `find`, and ten calls of
     /// `find`. Each call has each signature as a candidate.
     fn overloads_at(size: usize) -> std::time::Duration {
@@ -5068,34 +5110,57 @@ mod ecma_timing_tests {
     /// `size` classes, and one `Container.get` call of each class.
     fn container_calls_at(size: usize) -> std::time::Duration {
         let mut owned = vec![("di.ts".to_string(), DI.to_string())];
-        let mut main = String::from("import { Container } from './di';\n");
-        let mut body = String::from("\nexport function run(): void {\n");
+        // Each file has one import, thus the cost of a call does not depend
+        // on the number of imports of its file.
         for position in 0..size {
-            owned.push((
-                format!("s{position}.ts"),
-                format!("export class S{position} {{\n  plain(): void {{}}\n}}\n"),
-            ));
-            main.push_str(&format!("import {{ S{position} }} from './s{position}';\n"));
-            body.push_str(&format!("  Container.get(S{position}).plain();\n"));
+            owned.push((format!("s{position}.ts"), container_file(position)));
         }
-        main.push_str(&body);
-        main.push_str("}\n");
-        owned.push(("main.ts".to_string(), main));
         let files: Vec<(&str, &str)> = owned
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
+        let last = format!("s{}.ts", size - 1);
         let started = std::time::Instant::now();
-        let found = rows(&files, "main.ts");
+        let found = rows(&files, &last);
         let elapsed = started.elapsed();
-        // Each class has `plain`, thus only the class argument gives one edge.
-        let last = format!(
-            "{} run>(..).plain UniqueCandidate ReceiverDeclaredType [s{}.ts#S{}.plain]",
-            2 * size + 3,
-            size - 1,
+        // Each class has `plain`, thus only the class argument gives the edge.
+        let edge = format!(
+            "7 run>(..).plain UniqueCandidate ReceiverDeclaredType [{last}#S{}.plain]",
             size - 1
         );
-        assert!(found.contains(&last), "{:?}", found.last());
+        assert!(found.contains(&edge), "{found:?}");
+        elapsed
+    }
+
+    /// Three layers of type aliases, each a union of `size` copies of the
+    /// alias of the next layer, over a constructor type, and `size` calls of
+    /// a generic `get` whose parameter has the first alias.
+    fn branching_aliases_at(size: usize) -> std::time::Duration {
+        let union = |next: &str| vec![format!("{next}<T>"); size].join(" | ");
+        let di = format!(
+            "export type E<T> = new () => T;\nexport type C<T> = {};\nexport type B<T> = {};\nexport type A<T> = {};\n\nclass ContainerClass {{\n  get<T>(type: A<T>): T {{\n    return undefined as T;\n  }}\n}}\n\nexport const Container = new ContainerClass();\n",
+            union("E"),
+            union("C"),
+            union("B")
+        );
+        let mut owned = vec![("di.ts".to_string(), di)];
+        for position in 0..size {
+            owned.push((format!("s{position}.ts"), container_file(position)));
+        }
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let last = format!("s{}.ts", size - 1);
+        let started = std::time::Instant::now();
+        let found = rows(&files, &last);
+        let elapsed = started.elapsed();
+        // Each class has `plain`, thus only the class argument gives the edge.
+        let edge = format!(
+            "7 run>(..).plain UniqueCandidate ReceiverDeclaredType [{last}#S{}.plain]",
+            size - 1
+        );
+        assert!(found.contains(&edge), "{found:?}");
         elapsed
     }
 
@@ -5104,6 +5169,7 @@ mod ecma_timing_tests {
         overloads_at(50);
         decorators_at(50);
         container_calls_at(50);
+        branching_aliases_at(20);
     }
 
     #[test]
@@ -5122,6 +5188,12 @@ mod ecma_timing_tests {
     #[ignore = "timing: run in release"]
     fn timing_typescript_container_calls_resolve_in_linear_time() {
         assert_scales_linearly("container calls", 5_000, container_calls_at);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_typescript_branching_aliases_resolve_in_linear_time() {
+        assert_scales_linearly("branching aliases", 1_000, branching_aliases_at);
     }
 }
 
