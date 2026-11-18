@@ -845,7 +845,7 @@ impl<'a> Context<'a> {
             return Some(symbol);
         }
         let name = match handler.kind() {
-            "identifier" => self.text(handler),
+            "identifier" | "shorthand_property_identifier" => self.text(handler),
             "attribute" | "member_expression" | "selector_expression" | "field_expression" => {
                 self.text(handler).rsplit(['.', ':']).next().unwrap_or("")
             }
@@ -886,6 +886,7 @@ impl<'a> Context<'a> {
         let nodes: Vec<Node<'_>> = list.named_children(&mut cursor).collect();
         nodes
             .into_iter()
+            .filter(|node| !node.is_extra())
             .map(|node| {
                 if node.kind() == "argument" {
                     node.named_child(0).unwrap_or(node)

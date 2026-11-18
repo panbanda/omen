@@ -492,6 +492,12 @@ index, and the other commands, do not know the symbol.
 - A router has at most 64 prefixes from its chains of mounts. A router with more prefixes has
   the prefix `${prefix}`, and its routes have no path. A router in a cycle of mounts has the
   prefix `${mount cycle}`.
+- In `app.use(first, router)`, a call as `first` is a middleware, as `cors()`. When the call
+  gives a path, as `readPrefix()`, omen does not see the prefix, and the routes of the router
+  keep their own paths.
+- A `let` or `var` value is its initializer when no statement writes the name, or the one
+  value that an assignment gives when the declaration has no initializer. A name with more
+  than one value has no framework.
 
 ## Limits
 

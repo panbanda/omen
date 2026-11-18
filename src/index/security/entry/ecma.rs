@@ -173,8 +173,8 @@ const PACKAGES: [DecoratorPackage; 3] = [
 enum Declared {
     /// `const name = value`, with the range of the value.
     Const(Range<usize>),
-    /// `let` or `var` with a value, with the range of the value.
-    Variable(Range<usize>),
+    /// `let` or `var`, with the range of the value that initializes it, if any.
+    Variable(Option<Range<usize>>),
     /// A parameter, with the range of its type annotation.
     Parameter(Option<Range<usize>>),
     /// A class declaration, with the range of the class.
@@ -221,28 +221,45 @@ pub(super) struct State {
     mount_chains: OnceCell<HashMap<BindingKey, Vec<Vec<Part>>>>,
     /// The positions of the symbols of the file, by the end of their range.
     symbol_ends: OnceCell<HashMap<usize, Vec<usize>>>,
+    /// The names that each file exports, by the position of the file.
+    exports: RefCell<HashMap<usize, Rc<Exports>>>,
+    /// The writes of each name of each file, by the position of the file.
+    assignments: RefCell<HashMap<usize, Rc<WritesByName>>>,
 }
 
 /// The facts that the searches of all files share.
 #[derive(Default)]
 pub(super) struct Shared {
     positions: OnceLock<HashMap<String, usize>>,
-    /// The framework of a field, by the position of the file, the start of the class, and the
-    /// name of the field.
-    fields: parking_lot::Mutex<HashMap<(usize, usize, String), Option<Framework>>>,
+    /// The framework of a field, by the position of the file, the start of the class, the name
+    /// of the field, and the hops that the search had used. A search with fewer hops left can
+    /// stop before a search with more hops, so the hops are part of the key.
+    fields: parking_lot::Mutex<HashMap<FieldKey, Option<Framework>>>,
     /// The fields of each class body, by the position of the file and the start of the body.
     classes: parking_lot::Mutex<HashMap<(usize, usize), Arc<ClassFields>>>,
 }
 
-/// The fields of one class body, by the name of the field.
+/// The fields of a class body, by the name of the field. A static field and an instance field
+/// are apart.
 #[derive(Default)]
 struct ClassFields {
+    instance: FieldTable,
+    statics: FieldTable,
+}
+
+/// The declarations and the assignments of the fields of one kind, by the name of the field.
+#[derive(Default)]
+struct FieldTable {
     /// The ranges of the type annotations of the field definitions and of the parameter
     /// properties of the constructor.
     typed: HashMap<String, Vec<Range<usize>>>,
     /// The ranges of the initializers and of the values of each `this.name = value` in the class.
     values: HashMap<String, Vec<Range<usize>>>,
 }
+
+/// A field search: the position of the file, the start of the class, the name of the field,
+/// whether the field is static, and the hops that the search had used.
+type FieldKey = (usize, usize, String, bool, usize);
 
 /// A file and its syntax tree.
 #[derive(Clone, Copy)]
@@ -307,6 +324,52 @@ fn unwrap(node: Node<'_>) -> Node<'_> {
 }
 
 /// The node with the range. Of two nodes with the same range, the outer one.
+/// Tells if a member of a class body belongs to the class and not to its instances.
+fn is_static(member: Node<'_>) -> bool {
+    member.kind() == "class_static_block"
+        || children(member)
+            .iter()
+            .any(|child| child.kind() == "static")
+}
+
+/// The static name and the value of each property of an object literal. A shorthand property
+/// `{ name }` is its own value. A computed key has no static name and is not given.
+fn object_properties<'t>(object: Node<'t>, source: &[u8]) -> Vec<(String, Node<'t>)> {
+    let mut properties = Vec::new();
+    for member in named_children(object) {
+        match member.kind() {
+            "pair" => {
+                let (Some(key), Some(value)) = (
+                    member.child_by_field_name("key"),
+                    member.child_by_field_name("value"),
+                ) else {
+                    continue;
+                };
+                let name = match key.kind() {
+                    "property_identifier" | "number" => Some(text(key, source).to_string()),
+                    "string" => string_value(key, source),
+                    _ => None,
+                };
+                if let Some(name) = name {
+                    properties.push((name, value));
+                }
+            }
+            "shorthand_property_identifier" => {
+                properties.push((text(member, source).to_string(), member));
+            }
+            _ => {}
+        }
+    }
+    properties
+}
+
+fn is_plus(node: Node<'_>) -> bool {
+    node.kind() == "binary_expression"
+        && node
+            .child_by_field_name("operator")
+            .is_some_and(|operator| operator.kind() == "+")
+}
+
 fn node_at<'t>(root: Node<'t>, range: &Range<usize>) -> Option<Node<'t>> {
     let mut node = root.descendant_for_byte_range(range.start, range.end)?;
     while let Some(parent) = node.parent() {
@@ -503,8 +566,8 @@ impl<'s> Collector<'s> {
             let declared = match (required, mode, value) {
                 (true, _, _) => Declared::Import,
                 (false, Mode::Const, Some(value)) => Declared::Const(value.byte_range()),
-                (false, _, Some(value)) => Declared::Variable(value.byte_range()),
-                (false, _, None) => Declared::Other,
+                (false, Mode::Const, None) => Declared::Other,
+                (false, _, value) => Declared::Variable(value.map(|value| value.byte_range())),
             };
             self.add(name, declared);
             return;
@@ -712,6 +775,77 @@ impl<'s> Collector<'s> {
     }
 }
 
+/// An assignment to a name: the range of the name, and the range of the value when the write
+/// gives a plain value.
+type WritesByName = HashMap<String, Vec<Write>>;
+
+struct Write {
+    target: Range<usize>,
+    value: Option<Range<usize>>,
+}
+
+/// The names that the `export` statements of a file export.
+#[derive(Default)]
+struct Exports {
+    /// The file has an `export` statement. A file without one can export with `module.exports`,
+    /// which omen does not read, so each binding at the top of such a file can be an export.
+    modular: bool,
+    names: std::collections::HashSet<String>,
+}
+
+fn exports_of(unit: Unit<'_>) -> Exports {
+    let mut exports = Exports::default();
+    for statement in named_children(unit.root) {
+        if statement.kind() != "export_statement" {
+            continue;
+        }
+        exports.modular = true;
+        if children(statement)
+            .iter()
+            .any(|child| child.kind() == "default")
+        {
+            exports.names.insert("default".to_string());
+        }
+        if let Some(declaration) = statement.child_by_field_name("declaration") {
+            let mut names = Vec::new();
+            match declaration.kind() {
+                "lexical_declaration" | "variable_declaration" => {
+                    for declarator in named_children(declaration) {
+                        if let Some(name) = declarator.child_by_field_name("name") {
+                            pattern_names(name, &mut names);
+                        }
+                    }
+                }
+                _ => names.extend(declaration.child_by_field_name("name")),
+            }
+            for name in names {
+                exports.names.insert(text(name, unit.source).to_string());
+            }
+        }
+        for clause in named_children(statement) {
+            match clause.kind() {
+                "export_clause" => {
+                    for specifier in named_children(clause) {
+                        let name = specifier
+                            .child_by_field_name("alias")
+                            .or_else(|| specifier.child_by_field_name("name"));
+                        if let Some(name) = name {
+                            exports.names.insert(text(name, unit.source).to_string());
+                        }
+                    }
+                }
+                "namespace_export" => {
+                    if let Some(name) = clause.named_child(0) {
+                        exports.names.insert(text(name, unit.source).to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    exports
+}
+
 /// The bindings of one scope node.
 fn scope_bindings(node: Node<'_>, source: &[u8]) -> Declarations {
     let mut collector = Collector {
@@ -884,17 +1018,128 @@ impl<'a> Context<'a> {
 
     /// The scope and the binding of the name at its use, as the scopes of ECMAScript give it.
     fn declared(&self, unit: Unit<'_>, at: Node<'_>, name: &str) -> Option<(usize, Declared)> {
+        self.declared_scope(unit, at, name)
+            .map(|(scope, declared)| (scope.id(), declared))
+    }
+
+    fn declared_scope<'t>(
+        &self,
+        unit: Unit<'_>,
+        at: Node<'t>,
+        name: &str,
+    ) -> Option<(Node<'t>, Declared)> {
         let mut current = at.parent();
         while let Some(node) = current {
             let kind = node.kind();
             if BLOCKS.contains(&kind) || FUNCTIONS.contains(&kind) {
                 if let Some(found) = self.scope_declarations(unit, node).get(name) {
-                    return Some((node.id(), found.clone()));
+                    return Some((node, found.clone()));
                 }
             }
             current = node.parent();
         }
         None
+    }
+
+    /// The value of a `let` or `var` binding: its initializer when no assignment in the scope
+    /// writes the name, or the one assignment when it has no initializer. Any other case has
+    /// more than one value, and omen does not choose one.
+    fn variable_value(
+        &self,
+        unit: Unit<'_>,
+        scope: Node<'_>,
+        name: &str,
+        initial: Option<Range<usize>>,
+    ) -> Option<Range<usize>> {
+        let table = self.assignments(unit);
+        let writes = table.get(name).map(Vec::as_slice).unwrap_or_default();
+        let first = writes.partition_point(|write| write.target.start < scope.start_byte());
+        let last = writes.partition_point(|write| write.target.start < scope.end_byte());
+        match (&writes[first..last], initial) {
+            ([], initial) => initial,
+            ([write], None) => {
+                let target = node_at(unit.root, &write.target)?;
+                let (found, _) = self.declared_scope(unit, target, name)?;
+                (found.id() == scope.id()).then(|| write.value.clone())?
+            }
+            _ => None,
+        }
+    }
+
+    /// Each write of a name in the file, sorted by the start of the name.
+    fn assignments(&self, unit: Unit<'_>) -> Rc<WritesByName> {
+        if let Some(found) = self.ecma.assignments.borrow().get(&unit.position) {
+            return Rc::clone(found);
+        }
+        let mut table: WritesByName = HashMap::new();
+        let mut stack = vec![unit.root];
+        while let Some(node) = stack.pop() {
+            if matches!(
+                node.kind(),
+                "assignment_expression" | "augmented_assignment_expression"
+            ) {
+                let left = node.child_by_field_name("left").map(unwrap);
+                let right = node.child_by_field_name("right");
+                // A write through a pattern or through an operator such as `+=` has no plain
+                // value, but it still is a write.
+                let plain = node.kind() == "assignment_expression"
+                    && left.is_some_and(|left| left.kind() == "identifier");
+                let mut names = Vec::new();
+                if let Some(left) = left.filter(|left| {
+                    matches!(
+                        left.kind(),
+                        "identifier" | "object_pattern" | "array_pattern"
+                    )
+                }) {
+                    pattern_names(left, &mut names);
+                }
+                for target in names {
+                    table
+                        .entry(text(target, unit.source).to_string())
+                        .or_default()
+                        .push(Write {
+                            target: target.byte_range(),
+                            value: right.filter(|_| plain).map(|right| right.byte_range()),
+                        });
+                }
+            }
+            if node.kind() == "update_expression" {
+                if let Some(argument) = node.child_by_field_name("argument") {
+                    if argument.kind() == "identifier" {
+                        table
+                            .entry(text(argument, unit.source).to_string())
+                            .or_default()
+                            .push(Write {
+                                target: argument.byte_range(),
+                                value: None,
+                            });
+                    }
+                }
+            }
+            stack.extend(named_children(node));
+        }
+        for writes in table.values_mut() {
+            writes.sort_by_key(|write| write.target.start);
+        }
+        let table = Rc::new(table);
+        self.ecma
+            .assignments
+            .borrow_mut()
+            .insert(unit.position, Rc::clone(&table));
+        table
+    }
+
+    /// The names that the file at `position` exports with `export` statements.
+    fn export_names(&self, position: usize) -> Option<Rc<Exports>> {
+        if let Some(found) = self.ecma.exports.borrow().get(&position) {
+            return Some(Rc::clone(found));
+        }
+        let found = self.with_unit(position, |unit| Some(Rc::new(exports_of(unit))))?;
+        self.ecma
+            .exports
+            .borrow_mut()
+            .insert(position, Rc::clone(&found));
+        Some(found)
     }
 
     /// The one import binding of the file with the local name.
@@ -932,7 +1177,11 @@ impl<'a> Context<'a> {
         let top = self.with_unit(position, |unit| {
             Some(self.scope_declarations(unit, unit.root))
         })?;
-        match top.get(name) {
+        let exports = self.export_names(position)?;
+        let local = top
+            .get(name)
+            .filter(|_| !exports.modular || exports.names.contains(name));
+        match local {
             Some(Declared::Import) => {
                 let binding = self.import_named(position, name)?;
                 let imported = binding
@@ -950,11 +1199,17 @@ impl<'a> Context<'a> {
                     .filter(|binding| binding.kind == ImportKind::ReExportWildcard)
                     .filter_map(|binding| self.target_position(binding))
                     .collect();
-                let mut found = targets
+                // Two `export *` that give one declaration give one export, as ECMAScript says.
+                let mut found: Vec<(usize, Declared)> = targets
                     .into_iter()
-                    .filter_map(|target| self.exported(target, name, hops + 1));
-                let first = found.next()?;
-                found.next().is_none().then_some(first)
+                    .filter_map(|target| self.exported(target, name, hops + 1))
+                    .collect();
+                found.dedup();
+                let first = found.first()?;
+                found
+                    .iter()
+                    .all(|other| other == first)
+                    .then(|| first.clone())
             }
         }
     }
@@ -962,7 +1217,7 @@ impl<'a> Context<'a> {
     /// The parts of the path that the expression gives.
     fn path_of(&self, unit: Unit<'_>, node: Node<'_>, hops: usize) -> Vec<Part> {
         let node = unwrap(node);
-        let unknown = || vec![Part::Unknown(compact(node, unit.source))];
+        let unknown = || vec![Part::Unknown(text(node, unit.source).to_string())];
         let mut parts = match node.kind() {
             "string" => match string_value(node, unit.source) {
                 Some(value) => vec![Part::Text(value)],
@@ -983,10 +1238,12 @@ impl<'a> Context<'a> {
                             let Some(inner) = child.named_child(0) else {
                                 return unknown();
                             };
-                            let inner_parts = self.path_of(unit, inner, hops);
+                            let inner_parts = self.path_of(unit, inner, hops + 1);
                             match resolved(&inner_parts) {
                                 Some(value) => parts.push(Part::Text(value)),
-                                None => parts.push(Part::Unknown(compact(inner, unit.source))),
+                                None => {
+                                    parts.push(Part::Unknown(text(inner, unit.source).to_string()))
+                                }
                             }
                         }
                         _ => return unknown(),
@@ -994,19 +1251,28 @@ impl<'a> Context<'a> {
                 }
                 parts
             }
-            "binary_expression"
-                if node
-                    .child_by_field_name("operator")
-                    .is_some_and(|operator| operator.kind() == "+") =>
-            {
-                let (Some(left), Some(right)) = (
-                    node.child_by_field_name("left"),
-                    node.child_by_field_name("right"),
-                ) else {
+            "binary_expression" if is_plus(node) => {
+                // `a + b + c` nests on the left, so a long chain is a deep tree. The left spine
+                // is read with a loop, and only a nested right operand uses a hop.
+                let mut rights = Vec::new();
+                let mut left = node;
+                while is_plus(left) {
+                    let (Some(next), Some(right)) = (
+                        left.child_by_field_name("left"),
+                        left.child_by_field_name("right"),
+                    ) else {
+                        return unknown();
+                    };
+                    rights.push(right);
+                    left = unwrap(next);
+                }
+                if hops > MAX_HOPS {
                     return unknown();
-                };
-                let mut parts = self.path_of(unit, left, hops);
-                parts.extend(self.path_of(unit, right, hops));
+                }
+                let mut parts = self.path_of(unit, left, hops + 1);
+                for right in rights.into_iter().rev() {
+                    parts.extend(self.path_of(unit, right, hops + 1));
+                }
                 parts
             }
             "identifier" => match self.constant_text(unit, node, hops) {
@@ -1066,8 +1332,14 @@ impl<'a> Context<'a> {
             }
             "identifier" => {
                 let name = text(node, unit.source);
-                match self.declared(unit, node, name)?.1 {
-                    Declared::Const(range) | Declared::Variable(range) => {
+                let (scope, declared) = self.declared_scope(unit, node, name)?;
+                match declared {
+                    Declared::Const(range) => {
+                        let value = node_at(unit.root, &range)?;
+                        self.framework_of(unit, value, hops + 1)
+                    }
+                    Declared::Variable(initial) => {
+                        let range = self.variable_value(unit, scope, name, initial)?;
                         let value = node_at(unit.root, &range)?;
                         self.framework_of(unit, value, hops + 1)
                     }
@@ -1079,10 +1351,14 @@ impl<'a> Context<'a> {
                         let imported = binding.imported_name.as_deref()?;
                         let target = self.target_position(binding)?;
                         let (position, declared) = self.exported(target, imported, hops + 1)?;
-                        let (Declared::Const(range) | Declared::Variable(range)) = declared else {
-                            return None;
-                        };
                         self.with_unit(position, |unit| {
+                            let range = match declared {
+                                Declared::Const(range) => range,
+                                Declared::Variable(initial) => {
+                                    self.variable_value(unit, unit.root, imported, initial)?
+                                }
+                                _ => return None,
+                            };
                             let value = node_at(unit.root, &range)?;
                             self.framework_of(unit, value, hops + 1)
                         })
@@ -1096,8 +1372,8 @@ impl<'a> Context<'a> {
                     return None;
                 }
                 let name = text(node.child_by_field_name("property")?, unit.source);
-                let class = Self::class_of_this(node)?;
-                self.class_field(unit, class, name, hops + 1)
+                let (class, is_static) = Self::class_of_this(node)?;
+                self.class_field(unit, class, name, is_static, hops + 1)
             }
             _ => None,
         }
@@ -1126,10 +1402,10 @@ impl<'a> Context<'a> {
             || matches!(binding.imported_name.as_deref(), Some("default" | "*"));
         let imported = binding.imported_name.as_deref();
         match (binding.module_path.as_str(), member, is_new) {
-            ("express", None, false) if itself || imported == Some("Router") => {
-                Some(Framework::Express)
-            }
-            ("express", Some("Router"), false) if itself => Some(Framework::Express),
+            ("express", None, false) if itself => Some(Framework::Express),
+            // Express makes a router with or without `new`.
+            ("express", None, _) if imported == Some("Router") => Some(Framework::Express),
+            ("express", Some("Router"), _) if itself => Some(Framework::Express),
             ("fastify", None, false) if itself || imported == Some("fastify") => {
                 Some(Framework::Fastify)
             }
@@ -1181,37 +1457,46 @@ impl<'a> Context<'a> {
     }
 
     /// The class whose instance `this` is at the node.
-    fn class_of_this<'t>(node: Node<'t>) -> Option<Node<'t>> {
+    fn class_of_this<'t>(node: Node<'t>) -> Option<(Node<'t>, bool)> {
+        let mut member = node;
         let mut current = node.parent();
         while let Some(ancestor) = current {
             if THIS_BINDERS.contains(&ancestor.kind()) {
                 return None;
             }
             if ancestor.kind() == "class_body" {
-                return ancestor.parent();
+                return Some((ancestor.parent()?, is_static(member)));
             }
+            member = ancestor;
             current = ancestor.parent();
         }
         None
     }
 
     /// The framework of a field of the class or of its nearest superclass that declares or
-    /// assigns the field.
+    /// assigns the field. A static field and an instance field with one name are two fields.
     fn class_field(
         &self,
         unit: Unit<'_>,
         class: Node<'_>,
         name: &str,
+        is_static: bool,
         hops: usize,
     ) -> Option<Framework> {
         if hops > MAX_HOPS {
             return None;
         }
-        let key = (unit.position, class.start_byte(), name.to_string());
+        let key = (
+            unit.position,
+            class.start_byte(),
+            name.to_string(),
+            is_static,
+            hops,
+        );
         if let Some(found) = self.all_parsed.shared().ecma.fields.lock().get(&key) {
             return *found;
         }
-        let found = self.read_class_field(unit, class, name, hops);
+        let found = self.read_class_field(unit, class, name, is_static, hops);
         self.all_parsed
             .shared()
             .ecma
@@ -1229,6 +1514,11 @@ impl<'a> Context<'a> {
         }
         let mut fields = ClassFields::default();
         for member in named_children(body) {
+            let table = if is_static(member) {
+                &mut fields.statics
+            } else {
+                &mut fields.instance
+            };
             match member.kind() {
                 "public_field_definition" | "field_definition" => {
                     let Some(field_name) = member
@@ -1239,14 +1529,14 @@ impl<'a> Context<'a> {
                     };
                     let field_name = text(field_name, unit.source).to_string();
                     if let Some(annotation) = member.child_by_field_name("type") {
-                        fields
+                        table
                             .typed
                             .entry(field_name.clone())
                             .or_default()
                             .push(annotation.byte_range());
                     }
                     if let Some(value) = member.child_by_field_name("value") {
-                        fields
+                        table
                             .values
                             .entry(field_name)
                             .or_default()
@@ -1272,7 +1562,7 @@ impl<'a> Context<'a> {
                         ) else {
                             continue;
                         };
-                        fields
+                        table
                             .typed
                             .entry(text(pattern, unit.source).to_string())
                             .or_default()
@@ -1282,30 +1572,38 @@ impl<'a> Context<'a> {
                 _ => {}
             }
         }
-        let mut stack = vec![body];
-        while let Some(node) = stack.pop() {
-            if node.kind() == "assignment_expression" {
-                let left = node.child_by_field_name("left").map(unwrap);
-                let property = left
-                    .filter(|left| {
-                        left.kind() == "member_expression"
-                            && left
-                                .child_by_field_name("object")
-                                .is_some_and(|object| object.kind() == "this")
-                    })
-                    .and_then(|left| left.child_by_field_name("property"));
-                if let (Some(property), Some(right)) = (property, node.child_by_field_name("right"))
-                {
-                    fields
-                        .values
-                        .entry(text(property, unit.source).to_string())
-                        .or_default()
-                        .push(right.byte_range());
+        for member in named_children(body) {
+            let table = if is_static(member) {
+                &mut fields.statics
+            } else {
+                &mut fields.instance
+            };
+            let mut stack = vec![member];
+            while let Some(node) = stack.pop() {
+                if node.kind() == "assignment_expression" {
+                    let left = node.child_by_field_name("left").map(unwrap);
+                    let property = left
+                        .filter(|left| {
+                            left.kind() == "member_expression"
+                                && left
+                                    .child_by_field_name("object")
+                                    .is_some_and(|object| object.kind() == "this")
+                        })
+                        .and_then(|left| left.child_by_field_name("property"));
+                    if let (Some(property), Some(right)) =
+                        (property, node.child_by_field_name("right"))
+                    {
+                        table
+                            .values
+                            .entry(text(property, unit.source).to_string())
+                            .or_default()
+                            .push(right.byte_range());
+                    }
                 }
-            }
-            for child in named_children(node).into_iter().rev() {
-                if !THIS_BINDERS.contains(&child.kind()) && child.kind() != "class_body" {
-                    stack.push(child);
+                for child in named_children(node).into_iter().rev() {
+                    if !THIS_BINDERS.contains(&child.kind()) && child.kind() != "class_body" {
+                        stack.push(child);
+                    }
                 }
             }
         }
@@ -1324,11 +1622,17 @@ impl<'a> Context<'a> {
         unit: Unit<'_>,
         class: Node<'_>,
         name: &str,
+        is_static: bool,
         hops: usize,
     ) -> Option<Framework> {
         let body = class.child_by_field_name("body")?;
         let fields = self.class_fields(unit, body);
-        let typed: Vec<Option<Framework>> = fields
+        let table = if is_static {
+            &fields.statics
+        } else {
+            &fields.instance
+        };
+        let typed: Vec<Option<Framework>> = table
             .typed
             .get(name)
             .into_iter()
@@ -1338,7 +1642,7 @@ impl<'a> Context<'a> {
                     .and_then(|annotation| self.framework_of_type(unit, annotation))
             })
             .collect();
-        let values: Vec<Option<Framework>> = fields
+        let values: Vec<Option<Framework>> = table
             .values
             .get(name)
             .into_iter()
@@ -1360,7 +1664,7 @@ impl<'a> Context<'a> {
         if !typed.is_empty() {
             return None;
         }
-        self.superclass_field(unit, class, name, hops)
+        self.superclass_field(unit, class, name, is_static, hops)
     }
 
     fn superclass_field(
@@ -1368,6 +1672,7 @@ impl<'a> Context<'a> {
         unit: Unit<'_>,
         class: Node<'_>,
         name: &str,
+        is_static: bool,
         hops: usize,
     ) -> Option<Framework> {
         let heritage = named_children(class)
@@ -1400,19 +1705,32 @@ impl<'a> Context<'a> {
         };
         self.with_unit(position, |unit| {
             let parent = node_at(unit.root, &range)?;
-            self.class_field(unit, parent, name, hops + 1)
+            self.class_field(unit, parent, name, is_static, hops + 1)
         })
     }
 
     /// The key of the binding of a name of this file.
     fn binding_key(&self, unit: Unit<'_>, node: Node<'_>) -> Option<BindingKey> {
-        let node = unwrap(node);
-        if node.kind() != "identifier" {
-            return None;
+        let mut node = unwrap(node);
+        // `const alias = router` names the same router, so the key is the key of `router`.
+        for _ in 0..=MAX_HOPS {
+            if node.kind() != "identifier" {
+                return None;
+            }
+            let name = text(node, unit.source);
+            let (scope, declared) = self.declared(unit, node, name)?;
+            let alias = match declared {
+                Declared::Const(range) => {
+                    node_at(unit.root, &range).filter(|value| unwrap(*value).kind() == "identifier")
+                }
+                _ => None,
+            };
+            match alias {
+                Some(value) => node = unwrap(value),
+                None => return Some((scope, name.to_string())),
+            }
         }
-        let name = text(node, unit.source);
-        let (scope, _) = self.declared(unit, node, name)?;
-        Some((scope, name.to_string()))
+        None
     }
 
     /// The prefix of a `use` call, or `None` when the first argument is not a path. An expression
@@ -1438,7 +1756,7 @@ impl<'a> Context<'a> {
                     .map(|found| found.1)
                 {
                     Some(Declared::Function | Declared::Class(_)) => None,
-                    Some(Declared::Const(range) | Declared::Variable(range))
+                    Some(Declared::Const(range) | Declared::Variable(Some(range)))
                         if node_at(unit.root, &range).is_some_and(is_function) =>
                     {
                         None
@@ -1636,9 +1954,15 @@ impl<'a> Context<'a> {
         ) {
             return (self.handler_symbol(handler), None);
         }
-        let enclosing = self
-            .enclosing_symbol(handler)
-            .map(|symbol| symbol.key.to_string());
+        let enclosing_symbol = self.enclosing_symbol(handler);
+        // The index gives the function of `{ handler: () => {} }` the symbol of its property.
+        // That symbol is the handler, not a function around it.
+        if let (Some(symbol), Some(parent)) = (enclosing_symbol, handler.parent()) {
+            if parent.kind() == "pair" && symbol.range.start_byte == parent.start_byte() {
+                return (Some(symbol.key.to_string()), None);
+            }
+        }
+        let enclosing = enclosing_symbol.map(|symbol| symbol.key.to_string());
         let start = handler.start_position();
         let place = format!("<inline@{}:{}>", start.row + 1, start.column);
         let key = match &enclosing {
@@ -1691,7 +2015,17 @@ impl<'a> Context<'a> {
         if resolved(&path).is_some_and(|path| !path.starts_with('/')) {
             return;
         }
-        let handler = arguments[arguments.len() - 1];
+        let mut handler = arguments[arguments.len() - 1];
+        if framework == Framework::Fastify && unwrap(handler).kind() == "object" {
+            // Fastify takes `get(path, { handler })` as well as `get(path, options, handler)`.
+            let Some(value) = object_properties(unwrap(handler), unit.source)
+                .into_iter()
+                .find_map(|(key, value)| (key == "handler").then_some(value))
+            else {
+                return;
+            };
+            handler = value;
+        }
         let guards: Vec<String> = arguments[1..arguments.len() - 1]
             .iter()
             .filter(|argument| matches!(argument.kind(), "identifier" | "member_expression"))
@@ -1812,12 +2146,9 @@ impl<'a> Context<'a> {
                 .map(|element| self.path_of(unit, element, 0))
                 .collect(),
             "object" => {
-                let path = named_children(argument).into_iter().find_map(|pair| {
-                    let key = pair.child_by_field_name("key")?;
-                    (pair.kind() == "pair" && text(key, unit.source) == "path")
-                        .then(|| pair.child_by_field_name("value"))
-                        .flatten()
-                });
+                let path = object_properties(argument, unit.source)
+                    .into_iter()
+                    .find_map(|(key, value)| (key == "path").then_some(value));
                 match path {
                     Some(path) => self.decorator_paths(unit, Some(path)),
                     None => vec![Vec::new()],
@@ -1835,17 +2166,8 @@ impl<'a> Context<'a> {
         if unwrap(options).kind() != "object" {
             return guards;
         }
-        for pair in named_children(unwrap(options)) {
-            if pair.kind() != "pair" {
-                continue;
-            }
-            let (Some(key), Some(value)) = (
-                pair.child_by_field_name("key"),
-                pair.child_by_field_name("value"),
-            ) else {
-                continue;
-            };
-            let key = text(key, unit.source);
+        for (key, value) in object_properties(unwrap(options), unit.source) {
+            let key = key.as_str();
             match value.kind() {
                 "true" => guards.push(format!("{key}: true")),
                 "array" if key == "middlewares" => guards.extend(
@@ -1853,7 +2175,9 @@ impl<'a> Context<'a> {
                         .into_iter()
                         .map(|element| compact(element, unit.source)),
                 ),
-                "identifier" | "member_expression" if key == "middlewares" => {
+                "identifier" | "shorthand_property_identifier" | "member_expression"
+                    if key == "middlewares" =>
+                {
                     guards.push(compact(value, unit.source));
                 }
                 _ => {}
@@ -2573,6 +2897,30 @@ mod tests {
         assert_scales_linearly("layers of mounts", 2_000, many_mounts);
     }
 
+    fn many_assigned_variables(count: usize) -> std::time::Duration {
+        let mut source = String::from("import express from 'express';\nfunction setup() {\n");
+        for index in 0..count {
+            source.push_str(&format!(
+                "  let r{index};\n  r{index} = express();\n  r{index}.get('/r{index}', handler);\n"
+            ));
+        }
+        source.push_str("}\nfunction handler() {}\n");
+        let (found, took) = entries_timed(Language::TypeScript, &[("src/a.ts", &source)], true);
+        assert_eq!(found.len(), count);
+        took
+    }
+
+    #[test]
+    fn each_variable_with_one_assignment_is_a_receiver() {
+        many_assigned_variables(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_assigned_variables_resolve_in_linear_time() {
+        assert_scales_linearly("assigned variables", 2_000, many_assigned_variables);
+    }
+
     fn many_fields(count: usize) -> std::time::Duration {
         let mut source = String::from("import express from 'express';\nexport class Server {\n");
         for index in 0..count {
@@ -2598,5 +2946,187 @@ mod tests {
     #[ignore = "timing: run in release"]
     fn timing_many_fields_of_one_class_resolve_in_linear_time() {
         assert_scales_linearly("fields of one class", 4_000, many_fields);
+    }
+
+    /// Each route as `METHOD path handler [guards]`.
+    fn lines(files: &[(&str, &str)]) -> Vec<String> {
+        http(files)
+            .into_iter()
+            .map(|entry| {
+                let route = entry.route.expect("a route");
+                format!(
+                    "{} {} {} {:?}",
+                    route.method,
+                    route.path_text(),
+                    entry.symbol.unwrap_or_default(),
+                    entry.guards
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_comment_is_not_an_argument_of_a_decorator_or_a_registration() {
+        let source = "import { Controller, Get } from '@nestjs/common';\nimport express from 'express';\n@Controller('cats')\nexport class Cats {\n  @Get(/* public */ 'health')\n  health() {}\n}\nconst app = express();\napp.get(/* public */ '/ping', ping);\nfunction ping() {}\n";
+        assert_eq!(
+            lines(&[("src/a.ts", source)]),
+            [
+                "GET /cats/health src/a.ts#Cats.health []",
+                "GET /ping src/a.ts#ping []"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_router_that_new_makes_is_a_router() {
+        let source = "import express, { Router } from 'express';\nconst one = new express.Router();\none.get('/one', handler);\nconst two = new Router();\ntwo.get('/two', handler);\nfunction handler() {}\n";
+        assert_eq!(
+            lines(&[("src/a.ts", source)]),
+            [
+                "GET /one src/a.ts#handler []",
+                "GET /two src/a.ts#handler []"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_field_that_a_long_chain_did_not_resolve_resolves_from_a_nearer_start() {
+        let mut source = String::from("import express from 'express';\nexport class Server {\n");
+        for index in 0..12 {
+            source.push_str(&format!("  f{index} = this.f{};\n", index + 1));
+        }
+        source.push_str("  f12 = express();\n  setup() {\n");
+        for index in 0..13 {
+            source.push_str(&format!("    this.f{index}.get('/f{index}', handler);\n"));
+        }
+        source.push_str("  }\n}\nfunction handler() {}\n");
+        let found = lines(&[("src/a.ts", &source)]);
+        for index in 7..13 {
+            let route = format!("GET /f{index} src/a.ts#handler []");
+            assert!(found.contains(&route), "{route}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_static_field_is_not_the_instance_field_of_the_same_name() {
+        let source = "import express from 'express';\nexport class Server {\n  app = express();\n  static app = new Map();\n  static reset() {\n    this.app = new Map();\n  }\n  setup() {\n    this.app.get('/health', handler);\n  }\n}\nfunction handler() {}\n";
+        assert_eq!(
+            lines(&[("src/a.ts", source)]),
+            ["GET /health src/a.ts#handler []"]
+        );
+    }
+
+    #[test]
+    fn a_fastify_route_reads_the_handler_of_its_options() {
+        let source = "import fastify from 'fastify';\nconst server = fastify();\nserver.get('/health', { handler: health });\nserver.post('/run', { schema: {}, handler: (request, reply) => reply.send() });\nfunction health() {}\n";
+        let found = lines(&[("src/a.ts", source)]);
+        assert_eq!(
+            found,
+            [
+                "GET /health src/a.ts#health []",
+                "POST /run src/a.ts#handler []"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_quoted_option_key_and_a_shorthand_option_are_read() {
+        let route = "type Method = 'get';\nconst RouteFactory = (method: Method) => (path: string, options = {}) => () => {};\nexport const Get = RouteFactory('get');\n";
+        let source = "import { Controller, Get as NestGet } from '@nestjs/common';\nimport { Get } from './route';\n@Controller({ 'path': 'cats' })\nexport class Cats {\n  @NestGet('all')\n  all() {}\n}\nconst middlewares = [audit];\nexport class Mine {\n  @Get('/list', { middlewares })\n  list() {}\n}\nfunction audit() {}\n";
+        assert_eq!(
+            lines(&[("src/route.ts", route), ("src/a.ts", source)]),
+            [
+                "GET /cats/all src/a.ts#Cats.all []",
+                "GET /list src/a.ts#Mine.list [\"middlewares\"]"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unresolved_part_keeps_its_source_text() {
+        let source = "import express from 'express';\nconst app = express();\napp.get(`/${config['tenant  name']}/x`, handler);\nfunction handler() {}\n";
+        assert_eq!(
+            lines(&[("src/a.ts", source)]),
+            ["GET /${config['tenant  name']}/x src/a.ts#handler []"]
+        );
+    }
+
+    #[test]
+    fn a_long_chain_of_plus_does_not_exhaust_the_stack() {
+        let terms: Vec<String> = (0..50_000).map(|index| format!("'/p{index}'")).collect();
+        let source = format!(
+            "import express from 'express';\nconst app = express();\napp.get({}, handler);\nfunction handler() {{}}\n",
+            terms.join(" + ")
+        );
+        let found = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || http(&[("src/a.ts", &source)]).len())
+            .expect("a thread")
+            .join()
+            .expect("no stack overflow");
+        assert_eq!(found, 1);
+    }
+
+    #[test]
+    fn two_re_exports_of_one_decorator_are_one_decorator() {
+        let route = "const RouteFactory = (method: string) => (path: string) => () => {};\nexport const Get = RouteFactory('get');\n";
+        let source =
+            "import { Get } from './index';\nexport class Mine {\n  @Get('/x')\n  x() {}\n}\n";
+        assert_eq!(
+            lines(&[
+                ("src/route.ts", route),
+                ("src/a.ts", "export { Get } from './route';\n"),
+                ("src/b.ts", "export { Get } from './route';\n"),
+                (
+                    "src/index.ts",
+                    "export * from './a';\nexport * from './b';\n"
+                ),
+                ("src/mine.ts", source),
+            ]),
+            ["GET /x src/mine.ts#Mine.x []"]
+        );
+    }
+
+    #[test]
+    fn a_private_binding_of_a_module_is_not_its_export() {
+        let source = "import express from 'express';\nimport { PATH } from './barrel';\nconst app = express();\napp.get(PATH, handler);\nfunction handler() {}\n";
+        assert_eq!(
+            lines(&[
+                ("src/paths.ts", "export const PATH = '/public';\n"),
+                (
+                    "src/barrel.ts",
+                    "const PATH = '/internal';\nexport * from './paths';\n"
+                ),
+                ("src/a.ts", source),
+            ]),
+            ["GET /public src/a.ts#handler []"]
+        );
+    }
+
+    #[test]
+    fn a_variable_with_one_assignment_has_the_assigned_value() {
+        let source = "import express from 'express';\nlet app;\napp = express();\napp.get('/health', handler);\nlet other;\nother = express();\nother = new Map();\nother.get('/never', handler);\nfunction handler() {}\n";
+        assert_eq!(
+            lines(&[("src/a.ts", source)]),
+            ["GET /health src/a.ts#handler []"]
+        );
+    }
+
+    #[test]
+    fn a_write_to_a_property_is_not_a_write_of_the_variable() {
+        let source = "import express from 'express';\nlet app = express();\napp.locals = {};\napp.get('/health', handler);\nlet other = express();\nother = new Map();\nother.get('/never', handler);\nfunction handler() {}\n";
+        assert_eq!(
+            lines(&[("src/a.ts", source)]),
+            ["GET /health src/a.ts#handler []"]
+        );
+    }
+
+    #[test]
+    fn an_alias_of_a_router_is_the_router_in_a_mount() {
+        let source = "import express from 'express';\nconst app = express();\nconst router = express.Router();\nconst alias = router;\napp.use('/api', alias);\nrouter.get('/health', handler);\nfunction handler() {}\n";
+        assert_eq!(
+            lines(&[("src/a.ts", source)]),
+            ["GET /api/health src/a.ts#handler []"]
+        );
     }
 }
