@@ -27,6 +27,23 @@ impl LanguageSpec for Bash {
         vec![COMMAND]
     }
 
+    fn value_kinds(&self) -> Vec<&'static str> {
+        vec![super::values::COMMAND]
+    }
+
+    fn value_hook_kinds(&self) -> Vec<&'static str> {
+        super::values::BASH_HOOK_KINDS.to_vec()
+    }
+
+    fn function_values<'tree>(
+        &self,
+        node: Node<'tree>,
+        context: &Context<'_, 'tree>,
+        out: &mut Vec<crate::index::calls::ValueUse<'tree>>,
+    ) {
+        super::values::bash(node, context, out);
+    }
+
     fn call_hook_kinds(&self) -> Vec<&'static str> {
         vec![WORD]
     }

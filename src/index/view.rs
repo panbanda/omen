@@ -105,13 +105,12 @@ impl ResolutionSummary {
     }
 }
 
-/// The evidence of one reference of `caller`, and the basis of its edges. A reference without
-/// an edge has no basis.
-fn stored_call(
+/// The candidates of a reference that are in the view, and the basis of the
+/// edge to them. Without a basis, the reference gives no edge.
+fn edge_of(
     reference: &Reference,
-    caller: usize,
     by_key: &HashMap<SharedStr, usize>,
-) -> (StoredCall, Option<ResolutionBasis>) {
+) -> (Vec<usize>, Option<ResolutionBasis>) {
     let resolution = &reference.resolution;
     let candidates: Vec<usize> = resolution
         .candidates
@@ -132,6 +131,18 @@ fn stored_call(
         (false, true) => Some(ResolutionBasis::NameOnly),
         (false, false) => None,
     };
+    (candidates, basis)
+}
+
+/// The evidence of one reference of `caller`, and the basis of its edges. A reference without
+/// an edge has no basis.
+fn stored_call(
+    reference: &Reference,
+    caller: usize,
+    by_key: &HashMap<SharedStr, usize>,
+) -> (StoredCall, Option<ResolutionBasis>) {
+    let (candidates, basis) = edge_of(reference, by_key);
+    let resolution = &reference.resolution;
     let call = match (&reference.receiver, &reference.qualifier) {
         (Some(Receiver::SelfValue), _) => format!("self.{}", reference.name),
         (Some(Receiver::Super), _) => format!("super.{}", reference.name),
@@ -160,8 +171,10 @@ pub struct FunctionValue<'r> {
     pub range: Span,
     /// The key of the definition that contains the function value.
     pub enclosing: Option<String>,
-    /// The references in the function value. The index gives them to `enclosing`.
+    /// The calls in the function value. The index gives them to `enclosing`.
     pub references: Vec<&'r Reference>,
+    /// The function references in the function value. The index gives them to `enclosing`.
+    pub function_references: Vec<&'r Reference>,
 }
 
 pub struct CallView {
@@ -175,6 +188,10 @@ pub struct CallView {
     /// with the basis `NameOnly`. It is an edge only on request.
     callees: Vec<Vec<(usize, ResolutionBasis)>>,
     callers: Vec<Vec<(usize, ResolutionBasis)>>,
+    /// For each definition, the functions that it uses as a value, with the
+    /// basis of the resolution of the name. Such a use is not a call, and it
+    /// is not in `callees`: the definition can cause the function to run.
+    function_references: Vec<Vec<(usize, ResolutionBasis)>>,
     stored_calls: Vec<StoredCall>,
     call_resolution_ranges: Vec<Range<usize>>,
     /// The counts of all call sites of the input, also of the calls that
@@ -254,6 +271,23 @@ impl CallView {
             }
             evidence[caller].push(call);
         }
+        let mut function_references: Vec<BTreeSet<(usize, ResolutionBasis)>> =
+            vec![BTreeSet::new(); symbols.len()];
+        for reference in index
+            .files
+            .iter()
+            .filter(|file| keep(&file.file))
+            .flat_map(|file| &file.function_references)
+        {
+            let user = reference
+                .enclosing
+                .as_deref()
+                .and_then(|key| by_key.get(key).copied());
+            if let (Some(user), (candidates, Some(basis))) = (user, edge_of(reference, &by_key)) {
+                function_references[user]
+                    .extend(candidates.into_iter().map(|function| (function, basis)));
+            }
+        }
         let mut stored_calls = Vec::new();
         let mut call_resolution_ranges = Vec::with_capacity(symbols.len());
         for calls in evidence {
@@ -270,6 +304,10 @@ impl CallView {
                 .map(|set| set.into_iter().collect())
                 .collect(),
             callers: callers
+                .into_iter()
+                .map(|set| set.into_iter().collect())
+                .collect(),
+            function_references: function_references
                 .into_iter()
                 .map(|set| set.into_iter().collect())
                 .collect(),
@@ -330,6 +368,14 @@ impl CallView {
             }
             self.callees.push(callees.into_iter().collect());
             self.callers.push(Vec::new());
+            let mut functions: BTreeSet<(usize, ResolutionBasis)> = BTreeSet::new();
+            for reference in &value.function_references {
+                if let (candidates, Some(basis)) = edge_of(reference, &self.by_key) {
+                    functions.extend(candidates.into_iter().map(|function| (function, basis)));
+                }
+            }
+            self.function_references
+                .push(functions.into_iter().collect());
             if let Some(enclosing) = value
                 .enclosing
                 .as_deref()
@@ -410,6 +456,12 @@ impl CallView {
     /// can occur with more than one basis. The list is in the order of the definitions.
     pub fn callee_edges(&self, symbol: usize) -> &[(usize, ResolutionBasis)] {
         &self.callees[symbol]
+    }
+
+    /// The functions that one definition uses as a value, with the basis of the resolution
+    /// of each name. These edges are not calls, and `callee_edges` does not have them.
+    pub fn function_reference_edges(&self, symbol: usize) -> &[(usize, ResolutionBasis)] {
+        &self.function_references[symbol]
     }
 
     /// The call sites in the body of one definition, in source order.

@@ -4,9 +4,14 @@
 //! each entry point. Each edge has the resolution basis of its call. The result gives the
 //! shortest path, the number of shortest paths, and the weakest basis of the path.
 //!
+//! The search also follows a function reference: a use of a function as a value, as
+//! `spawn(worker)` uses `worker`. Such an edge is not a call. It says that the symbol can
+//! cause the function to run. A step that comes from such an edge has the edge kind
+//! `function_reference`.
+//!
 //! A sink without a path has the state `no_known_entry`. That state does not say that the
-//! sink is safe. The call graph has only the calls that the index resolves, and an entry
-//! point that the table does not know has no paths.
+//! sink is safe. The graph has only the calls and the function references that the index
+//! resolves, and an entry point that the table does not know has no paths.
 //!
 //! An inline handler, as an arrow function that a route registers, is a node of the graph. A
 //! sink in the inline handler belongs to that node. The function around the inline handler has
@@ -16,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use petgraph::algo::dominators::simple_fast;
 use petgraph::graph::{DiGraph, NodeIndex};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::entry::EntryPoint;
@@ -24,13 +30,39 @@ use crate::core::Language;
 use crate::index::model::ResolutionBasis;
 use crate::index::view::CallView;
 
-/// One symbol on a path, with the basis of the call that leads to it.
+/// How one symbol on a path leads to the next symbol.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeKind {
+    /// The symbol calls the next symbol.
+    #[default]
+    Call,
+    /// The symbol uses the next symbol as a value and does not call it, as
+    /// `spawn(worker)` uses `worker`. The symbol can cause the next symbol to run.
+    FunctionReference,
+}
+
+impl EdgeKind {
+    fn is_call(&self) -> bool {
+        *self == Self::Call
+    }
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
+}
+
+/// One symbol on a path, with the basis of the edge that leads to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
     /// The key of the symbol.
     pub symbol: String,
-    /// The basis of the call from the previous step. The first step has none.
+    /// The basis of the resolution of the name in the previous step. The first step has none.
     pub basis: Option<ResolutionBasis>,
+    /// The kind of the edge from the previous step. The output has this field
+    /// only for an edge that is not a call.
+    #[serde(default, skip_serializing_if = "EdgeKind::is_call")]
+    pub edge: EdgeKind,
 }
 
 /// The shortest path from one entry point to one sink.
@@ -46,6 +78,12 @@ pub struct SinkPath {
     pub path_count: u64,
     /// The keys of the symbols on any of the shortest paths, not only on `steps`.
     pub members: Vec<String>,
+    /// The number of edges of `steps` that are function references. Such a
+    /// path says that the entry point can cause the sink to run. It does not
+    /// say that a chain of calls goes to the sink. The output has this field
+    /// only when the number is not zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub function_references: usize,
 }
 
 /// A symbol that each known path to some sinks goes through.
@@ -146,8 +184,8 @@ pub fn coverage(languages: &[Language], experimental: bool) -> Coverage {
         ));
     }
     statement.push_str(
-        "Omen does not follow data, and it follows only the calls that the index resolves. \
-         An empty result does not mean that the code is safe.",
+        "Omen does not follow data, and it follows only the calls and the function references \
+         that the index resolves. An empty result does not mean that the code is safe.",
     );
     Coverage {
         languages: names.into_iter().collect(),
@@ -159,11 +197,66 @@ pub fn coverage(languages: &[Language], experimental: bool) -> Coverage {
 }
 
 /// The distance, the number of shortest paths, and the previous step of a reached symbol.
-type Reached = (usize, u64, Option<(usize, ResolutionBasis)>);
+type Reached = (usize, u64, Option<(usize, ResolutionBasis, EdgeKind)>);
 
 /// The result of one search from one entry point.
 struct Search {
     reached: BTreeMap<usize, Reached>,
+}
+
+/// What the searches of some entry points give.
+#[derive(Default)]
+struct Found {
+    paths: Vec<SinkPath>,
+    /// For each symbol, the number of entry points that reach it. The list
+    /// is empty before the first search.
+    entries: Vec<u32>,
+}
+
+impl Found {
+    /// The results of `self` and then the results of `later`.
+    fn merge(mut self, later: Self) -> Self {
+        self.paths.extend(later.paths);
+        if self.entries.is_empty() {
+            self.entries = later.entries;
+        } else {
+            for (count, more) in self.entries.iter_mut().zip(later.entries) {
+                *count += more;
+            }
+        }
+        self
+    }
+}
+
+/// The edges from one symbol: its calls and its function references. An edge
+/// counts when the basis of its resolution is `min_basis` or a stronger basis.
+/// A target can have several edges. A call is the edge before a function
+/// reference, and then the strongest basis is the basis of the edge.
+fn edges_of(
+    view: &CallView,
+    symbol: usize,
+    min_basis: ResolutionBasis,
+) -> BTreeMap<usize, (ResolutionBasis, EdgeKind)> {
+    let mut edges: BTreeMap<usize, (ResolutionBasis, EdgeKind)> = BTreeMap::new();
+    let kinds = [
+        (EdgeKind::Call, view.callee_edges(symbol)),
+        (
+            EdgeKind::FunctionReference,
+            view.function_reference_edges(symbol),
+        ),
+    ];
+    for (kind, targets) in kinds {
+        for (target, basis) in targets {
+            if basis.rank() < min_basis.rank() {
+                continue;
+            }
+            let best = edges.entry(*target).or_insert((*basis, kind));
+            if best.1 == kind && basis.rank() > best.0.rank() {
+                best.0 = *basis;
+            }
+        }
+    }
+    edges
 }
 
 fn search(view: &CallView, start: usize, min_basis: ResolutionBasis) -> Search {
@@ -172,24 +265,23 @@ fn search(view: &CallView, start: usize, min_basis: ResolutionBasis) -> Search {
     let mut queue = VecDeque::from([start]);
     while let Some(current) = queue.pop_front() {
         let (distance, count, _) = reached[&current];
-        // A target can have several calls. The strongest basis is the basis of the edge.
-        let mut edges: BTreeMap<usize, ResolutionBasis> = BTreeMap::new();
-        for (target, basis) in view.callee_edges(current) {
-            if basis.rank() >= min_basis.rank() {
-                let best = edges.entry(*target).or_insert(*basis);
-                if basis.rank() > best.rank() {
-                    *best = *basis;
-                }
-            }
-        }
-        for (target, basis) in edges {
+        for (target, (basis, kind)) in edges_of(view, current, min_basis) {
             match reached.get_mut(&target) {
                 None => {
-                    reached.insert(target, (distance + 1, count, Some((current, basis))));
+                    reached.insert(target, (distance + 1, count, Some((current, basis, kind))));
                     queue.push_back(target);
                 }
                 Some(entry) if entry.0 == distance + 1 => {
                     entry.1 = entry.1.saturating_add(count);
+                    // The path that the result shows uses a call when a call
+                    // and a function reference go to the symbol in the same
+                    // number of steps.
+                    let by_reference = entry
+                        .2
+                        .is_some_and(|previous| previous.2 == EdgeKind::FunctionReference);
+                    if by_reference && kind == EdgeKind::Call {
+                        entry.2 = Some((current, basis, kind));
+                    }
                 }
                 Some(_) => {}
             }
@@ -210,12 +302,11 @@ fn shortest_path_members(
     let Some((total, _, _)) = result.reached.get(&target) else {
         return Vec::new();
     };
-    let minimum = min_basis.rank();
     let mut callers: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for symbol in result.reached.keys() {
-        for (callee, basis) in view.callee_edges(*symbol) {
-            if basis.rank() >= minimum && result.reached.contains_key(callee) {
-                callers.entry(*callee).or_default().push(*symbol);
+        for callee in edges_of(view, *symbol, min_basis).into_keys() {
+            if result.reached.contains_key(&callee) {
+                callers.entry(callee).or_default().push(*symbol);
             }
         }
     }
@@ -354,14 +445,18 @@ pub fn reachability(
             Some((entry, symbol))
         })
         .collect();
-    let searches: Vec<Search> = starts
-        .iter()
-        .map(|(_, start)| search(view, *start, min_basis))
-        .collect();
-
-    let mut paths = Vec::new();
-    let mut reached_sinks: BTreeSet<&str> = BTreeSet::new();
-    for ((entry, start), result) in starts.iter().zip(&searches) {
+    // Each entry point has one search. A search can reach a large part of the
+    // repository, thus the result of a search does not stay in memory: only
+    // its paths stay, and a count for each symbol that it reaches. The threads
+    // give their results in the order of the entry points.
+    let paths_of = |found: &mut Found, entry: &EntryPoint, start: usize| {
+        let result = search(view, start, min_basis);
+        if found.entries.is_empty() {
+            found.entries = vec![0; view.symbols.len()];
+        }
+        for symbol in result.reached.keys() {
+            found.entries[*symbol] += 1;
+        }
         for (sink, symbol) in &sink_symbols {
             let Some(symbol) = symbol else {
                 continue;
@@ -370,44 +465,63 @@ pub fn reachability(
                 continue;
             };
             let mut chain = vec![*symbol];
-            let mut bases = Vec::new();
+            let mut edges = Vec::new();
             let mut current = *symbol;
-            while let Some((_, _, Some((previous, basis)))) = result.reached.get(&current) {
-                bases.push(*basis);
+            while let Some((_, _, Some((previous, basis, kind)))) = result.reached.get(&current) {
+                edges.push((*basis, *kind));
                 chain.push(*previous);
                 current = *previous;
             }
-            debug_assert_eq!(current, *start);
+            debug_assert_eq!(current, start);
             chain.reverse();
-            bases.reverse();
+            edges.reverse();
             let steps = chain
                 .iter()
                 .enumerate()
-                .map(|(position, symbol)| Step {
-                    symbol: view.symbols[*symbol].qualified_name.clone(),
-                    basis: position.checked_sub(1).map(|edge| bases[edge]),
+                .map(|(position, symbol)| {
+                    let edge = position.checked_sub(1).map(|edge| edges[edge]);
+                    Step {
+                        symbol: view.symbols[*symbol].qualified_name.clone(),
+                        basis: edge.map(|(basis, _)| basis),
+                        edge: edge.map_or(EdgeKind::Call, |(_, kind)| kind),
+                    }
                 })
                 .collect();
-            reached_sinks.insert(sink.key.as_str());
-            let members = shortest_path_members(view, result, *symbol, min_basis);
-            paths.push(SinkPath {
+            let members = shortest_path_members(view, &result, *symbol, min_basis);
+            found.paths.push(SinkPath {
                 entry: entry.key.clone(),
                 sink: sink.key.clone(),
                 steps,
-                weakest_basis: bases.iter().copied().min_by_key(|basis| basis.rank()),
+                weakest_basis: edges
+                    .iter()
+                    .map(|(basis, _)| *basis)
+                    .min_by_key(|basis| basis.rank()),
                 path_count: *count,
                 members,
+                function_references: edges
+                    .iter()
+                    .filter(|(_, kind)| *kind == EdgeKind::FunctionReference)
+                    .count(),
             });
         }
-    }
+    };
+    let found = starts
+        .par_iter()
+        .fold(Found::default, |mut found, (entry, start)| {
+            paths_of(&mut found, entry, *start);
+            found
+        })
+        .reduce(Found::default, Found::merge);
+    let mut paths = found.paths;
     paths.sort_by(|left, right| (&left.sink, &left.entry).cmp(&(&right.sink, &right.entry)));
 
+    let reached_sinks: BTreeSet<&str> = paths.iter().map(|path| path.sink.as_str()).collect();
     let no_known_entry: Vec<String> = sink_symbols
         .iter()
         .filter(|(sink, _)| !reached_sinks.contains(sink.key.as_str()))
         .map(|(sink, _)| sink.key.clone())
         .collect();
-    let choke_points = choke_points(view, &sink_symbols, &starts, &searches, min_basis);
+    let choke_points = choke_points(view, &sink_symbols, &starts, &found.entries, min_basis);
     Reachability {
         paths,
         no_known_entry,
@@ -416,16 +530,19 @@ pub fn reachability(
 }
 
 /// The symbols that dominate a sink from a virtual root that has an edge to each entry point.
+/// `entries` has, for each symbol, the number of entry points that reach the symbol.
 fn choke_points(
     view: &CallView,
     sinks: &[(&Sink, Option<usize>)],
     starts: &[(&EntryPoint, usize)],
-    searches: &[Search],
+    entries: &[u32],
     min_basis: ResolutionBasis,
 ) -> Vec<ChokePoint> {
-    let reached: BTreeSet<usize> = searches
+    let reached: BTreeSet<usize> = entries
         .iter()
-        .flat_map(|search| search.reached.keys().copied())
+        .enumerate()
+        .filter(|(_, count)| **count > 0)
+        .map(|(symbol, _)| symbol)
         .collect();
     if reached.is_empty() {
         return Vec::new();
@@ -440,15 +557,10 @@ fn choke_points(
     for start in &first_starts {
         graph.add_edge(root, nodes[start], ());
     }
-    let minimum = min_basis.rank();
     for symbol in &reached {
-        let targets: BTreeSet<usize> = view
-            .callee_edges(*symbol)
-            .iter()
-            .filter(|(_, basis)| basis.rank() >= minimum)
-            .map(|(target, _)| *target)
-            .filter(|target| reached.contains(target))
-            .collect();
+        let targets = edges_of(view, *symbol, min_basis)
+            .into_keys()
+            .filter(|target| reached.contains(target));
         for target in targets {
             graph.add_edge(nodes[symbol], nodes[&target], ());
         }
@@ -477,10 +589,7 @@ fn choke_points(
         .into_iter()
         .map(|(symbol, sinks)| ChokePoint {
             symbol: view.symbols[symbol].qualified_name.clone(),
-            entries: searches
-                .iter()
-                .filter(|search| search.reached.contains_key(&symbol))
-                .count(),
+            entries: entries[symbol] as usize,
             sinks: sinks.len(),
             sink_keys: sinks.iter().map(|key| key.to_string()).collect(),
         })

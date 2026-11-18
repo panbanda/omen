@@ -140,8 +140,8 @@ pub fn analyze_with_index(
     })
 }
 
-/// The inline handlers of the entry points, each with the references in it that the index gives
-/// to the symbol around it.
+/// The inline handlers of the entry points, each with the calls and the function references in
+/// it that the index gives to the symbol around it.
 fn inline_handlers<'i>(index: &'i CodeIndex, entries: &[EntryPoint]) -> Vec<FunctionValue<'i>> {
     let mut by_file: BTreeMap<&str, Vec<(&str, &InlineHandler)>> = BTreeMap::new();
     for entry in entries {
@@ -152,34 +152,44 @@ fn inline_handlers<'i>(index: &'i CodeIndex, entries: &[EntryPoint]) -> Vec<Func
                 .push((key.as_str(), inline));
         }
     }
+    let by_start = |references: &'i [Reference]| {
+        let mut sorted: Vec<&'i Reference> = references.iter().collect();
+        sorted.sort_by_key(|reference| reference.name_range.start_byte);
+        sorted
+    };
     let mut values = Vec::new();
     for file in index
         .files
         .iter()
         .filter(|file| by_file.contains_key(file.file.as_str()))
     {
-        let mut references: Vec<&Reference> = file.references.iter().collect();
-        references.sort_by_key(|reference| reference.name_range.start_byte);
+        let calls = by_start(&file.references);
+        let function_references = by_start(&file.function_references);
         for (key, inline) in &by_file[file.file.as_str()] {
-            let first = references.partition_point(|reference| {
-                reference.name_range.start_byte < inline.range.start_byte
-            });
-            let inside: Vec<&Reference> = references[first..]
-                .iter()
-                .take_while(|reference| reference.name_range.start_byte < inline.range.end_byte)
-                .filter(|reference| reference.enclosing.as_deref() == inline.enclosing.as_deref())
-                .copied()
-                .collect();
             values.push(FunctionValue {
                 key: key.to_string(),
                 file: file.file.clone(),
                 range: inline.range,
                 enclosing: inline.enclosing.clone(),
-                references: inside,
+                references: inside(&calls, inline),
+                function_references: inside(&function_references, inline),
             });
         }
     }
     values
+}
+
+/// The references in the range of the inline handler that the index gives to the symbol around
+/// it. `references` is in the order of the start.
+fn inside<'i>(references: &[&'i Reference], inline: &InlineHandler) -> Vec<&'i Reference> {
+    let first = references
+        .partition_point(|reference| reference.name_range.start_byte < inline.range.start_byte);
+    references[first..]
+        .iter()
+        .take_while(|reference| reference.name_range.start_byte < inline.range.end_byte)
+        .filter(|reference| reference.enclosing.as_deref() == inline.enclosing.as_deref())
+        .copied()
+        .collect()
 }
 
 type Comments = Vec<(Vec<suppress::Allow>, Vec<InvalidSuppression>)>;
@@ -505,6 +515,103 @@ mod tests {
                 .filter_map(|s| s.basis)
                 .min_by_key(|b| b.rank())
         );
+    }
+
+    const CALLBACK: &str = "from fastapi import APIRouter\n\nrouter = APIRouter()\n\n\n@router.post(\"/test\")\nasync def test_code(request):\n    def load_module() -> None:\n        exec(request.code)\n\n    await call_off_loop(load_module, 5, label=\"load\")\n";
+
+    #[test]
+    fn a_nested_function_that_the_handler_gives_as_a_callback_has_a_path() {
+        use crate::index::security::reach::EdgeKind;
+        let analysis = run(&[("app.py", CALLBACK)], DEFAULT_MIN_BASIS);
+        assert!(analysis.reachability.no_known_entry.is_empty());
+        let path = &analysis.reachability.paths[0];
+        let steps: Vec<(&str, EdgeKind, Option<ResolutionBasis>)> = path
+            .steps
+            .iter()
+            .map(|step| (step.symbol.as_str(), step.edge, step.basis))
+            .collect();
+        assert_eq!(
+            steps,
+            [
+                ("app.py#test_code", EdgeKind::Call, None),
+                (
+                    "app.py#test_code.load_module",
+                    EdgeKind::FunctionReference,
+                    Some(ResolutionBasis::LexicalScope)
+                ),
+            ]
+        );
+        assert_eq!(path.function_references, 1);
+        assert_eq!(path.weakest_basis, Some(ResolutionBasis::LexicalScope));
+        let json = serde_json::to_value(path).unwrap();
+        assert_eq!(json["steps"][0].get("edge"), None);
+        assert_eq!(json["steps"][1]["edge"], "function_reference");
+        assert_eq!(json["function_references"], 1);
+    }
+
+    #[test]
+    fn an_inline_handler_follows_a_function_reference_in_it() {
+        let source = "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\nfunction worker() { exec('x'); }\napp.post('/run', (req, res) => { setImmediate(worker); });\n";
+        let analysis = run(&[("server.js", source)], DEFAULT_MIN_BASIS);
+        use crate::index::security::reach::EdgeKind;
+        let steps: Vec<Vec<(&str, EdgeKind)>> = analysis
+            .reachability
+            .paths
+            .iter()
+            .map(|path| {
+                path.steps
+                    .iter()
+                    .map(|step| (step.symbol.as_str(), step.edge))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            steps,
+            [[
+                ("server.js#<inline@5:17>", EdgeKind::Call),
+                ("server.js#worker", EdgeKind::FunctionReference),
+            ]]
+        );
+    }
+
+    #[test]
+    fn a_path_of_calls_only_has_no_function_reference_fields() {
+        let analysis = run(&[("app.py", APP)], DEFAULT_MIN_BASIS);
+        let json = serde_json::to_value(&analysis.reachability.paths[0]).unwrap();
+        assert_eq!(json.get("function_references"), None);
+        assert!(json["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|step| step.get("edge").is_none()));
+    }
+
+    #[test]
+    fn a_call_is_the_edge_when_a_function_is_also_a_value() {
+        use crate::index::security::reach::EdgeKind;
+        let source = "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.get(\"/a\")\ndef entry(pool):\n    pool.submit(leaf)\n    leaf()\n\ndef leaf():\n    os.system(\"x\" + os.environ[\"A\"])\n";
+        let analysis = run(&[("app.py", source)], DEFAULT_MIN_BASIS);
+        let path = &analysis.reachability.paths[0];
+        assert_eq!(path.steps[1].edge, EdgeKind::Call);
+        assert_eq!(path.function_references, 0);
+        assert_eq!(path.path_count, 1);
+    }
+
+    #[test]
+    fn a_function_reference_with_only_the_name_gives_no_path() {
+        let files = [
+            (
+                "app.py",
+                "from flask import Flask\n\napp = Flask(__name__)\n\n@app.get(\"/a\")\ndef entry(pool):\n    pool.submit(leaf)\n",
+            ),
+            (
+                "other.py",
+                "import os\n\ndef leaf():\n    os.system(\"x\" + os.environ[\"A\"])\n",
+            ),
+        ];
+        assert!(run(&files, DEFAULT_MIN_BASIS).reachability.paths.is_empty());
+        let lowered = run(&files, ResolutionBasis::NameOnly);
+        assert!(lowered.reachability.paths.is_empty());
     }
 
     #[test]
