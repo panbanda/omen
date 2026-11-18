@@ -4852,3 +4852,43 @@ mod ecma_generic_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod ecma_decorator_tests {
+    use super::testing::rows;
+
+    #[test]
+    fn test_decorator_call_has_the_decorated_definition_as_its_caller_typescript() {
+        let decorators = "export function RestController(path: string) {\n  return (target: unknown) => target;\n}\n\nexport function Get(path: string) {\n  return (target: unknown, key: string) => key;\n}\n";
+        let typed = "import { RestController, Get } from './decorators';\n\n@RestController('/x')\nexport class Controller {\n  @Get('/list')\n  list(): number {\n    return 1;\n  }\n}\n\n@RestController('/y')\nclass Other {}\n";
+        let plain = typed.replace("(): number", "()");
+        let untyped_decorators = decorators.replace(": string", "").replace(": unknown", "");
+        for extension in ["ts", "tsx", "js", "jsx"] {
+            let typescript = extension.starts_with('t');
+            let controller = if typescript { typed } else { plain.as_str() };
+            let decorators = if typescript {
+                decorators
+            } else {
+                untyped_decorators.as_str()
+            };
+            let decorators_file = format!("decorators.{extension}");
+            let controller_file = format!("controller.{extension}");
+            let files = [
+                (decorators_file.as_str(), decorators),
+                (controller_file.as_str(), controller),
+            ];
+            let found = rows(&files, &controller_file);
+            let rest = format!("[decorators.{extension}#RestController]");
+            let get = format!("[decorators.{extension}#Get]");
+            assert_eq!(
+                found,
+                [
+                    format!("3 Controller>RestController UniqueCandidate ImportedName {rest}"),
+                    format!("5 Controller.list>Get UniqueCandidate ImportedName {get}"),
+                    format!("11 Other>RestController UniqueCandidate ImportedName {rest}"),
+                ],
+                "{extension}"
+            );
+        }
+    }
+}

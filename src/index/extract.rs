@@ -958,6 +958,36 @@ impl<'tree> Extractor<'_, 'tree> {
         self.scope_owners.iter().rev().flatten().next().copied()
     }
 
+    /// The node ID of the definition that a decorator decorates, when the
+    /// current node is in the decorator and the decorator is outside the node
+    /// of that definition. TypeScript puts the decorator of
+    /// `@Decorator() export class Name` in the `export` statement, and the
+    /// decorator of a method in the body of the class before the method.
+    fn decorated_definition(&self) -> Option<usize> {
+        let position = self
+            .ancestors
+            .iter()
+            .rposition(|ancestor| ancestor.kind() == "decorator")?;
+        let decorator = self.ancestors[position];
+        let holder = self.ancestors.get(position.checked_sub(1)?)?;
+        match holder.kind() {
+            "export_statement" => holder
+                .child_by_field_name("declaration")
+                .filter(|declaration| declaration.kind().ends_with("class_declaration"))
+                .map(|declaration| declaration.id()),
+            "class_body" => {
+                let mut member = decorator.next_named_sibling();
+                while let Some(next) = member.filter(|next| next.kind() == "decorator") {
+                    member = next.next_named_sibling();
+                }
+                member
+                    .filter(|member| member.kind() == "method_definition")
+                    .map(|member| member.id())
+            }
+            _ => None,
+        }
+    }
+
     fn draft(&self, node: Node<'tree>, rule: &DefinitionRule) -> Option<(Draft<'tree>, Exported)> {
         let context = Context {
             file: self.file,
@@ -1093,7 +1123,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 current: Some((node.id(), self.ancestors.last().copied())),
                 memo: &self.memo,
             };
-            let owner = self.owner();
+            let owner = self.decorated_definition().or_else(|| self.owner());
             if let Some(call) = call.then(|| self.spec.call(node, &context)).flatten() {
                 let via_closure = !self.closure_depths.is_empty();
                 let receiver = self.spec.call_syntax().receiver_range(node);
