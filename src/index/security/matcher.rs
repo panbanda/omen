@@ -397,6 +397,13 @@ impl FileContext<'_> {
         here || near
     }
 
+    /// A repository definition of the name is visible in each file. Only a language with one global
+    /// namespace has this. A Rust module of another file is not in scope without an import, and the
+    /// checks of the imports and of the file before cover a definition in scope.
+    fn global_name(&self, name: &str) -> bool {
+        self.syntax.global_namespace && self.repository.all.contains(name)
+    }
+
     fn is_root(&self, head: &str) -> bool {
         self.syntax.roots.contains(&head)
             || (self.syntax.roots.contains(&"*") && !matches!(head, "crate" | "self" | "super"))
@@ -467,10 +474,7 @@ impl FileContext<'_> {
         if !external.is_empty() {
             // A glob import gives the head of a path only if its module exports a module
             // with the name of a root, such as `std`. Thus the matcher also keeps the written path.
-            if written.len() > 1
-                && self.is_root(&head)
-                && !self.repository.all.contains(head.as_str())
-            {
+            if written.len() > 1 && self.is_root(&head) && !self.global_name(&head) {
                 external.push(written.clone());
             }
             return Owner::Paths {
@@ -478,7 +482,7 @@ impl FileContext<'_> {
                 imported: true,
             };
         }
-        if self.is_root(&head) && self.repository.all.contains(head.as_str()) {
+        if self.is_root(&head) && self.global_name(&head) {
             return Owner::Repository;
         }
         Owner::Paths {
