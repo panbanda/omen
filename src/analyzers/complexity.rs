@@ -2083,6 +2083,37 @@ fn drain(v: &mut Vec<i32>) {
         }
     }
 
+    /// The default branch is the one that matches each remaining value: no
+    /// guard, and a pattern that cannot fail.
+    #[test]
+    fn test_default_branch_shapes() {
+        let cases: &[(Language, &str, &str, u32)] = &[
+            (Language::Python, "a.py", "def f(x):\n    match x:\n        case 0:\n            pass\n        case _, _:\n            pass\n", 3),
+            (Language::Python, "a.py", "def f(x):\n    match x:\n        case 0:\n            pass\n        case rest:\n            pass\n", 2),
+            (Language::Python, "a.py", "def f(x):\n    match x:\n        case 0:\n            pass\n        case Color.RED:\n            pass\n", 3),
+            (Language::Python, "a.py", "def f(x, y):\n    match x:\n        case 0:\n            pass\n        case rest if y:\n            pass\n", 3),
+            (Language::CSharp, "A.cs", "class A { int F(int x) { return x switch { 0 => 1, var rest => rest }; } }", 2),
+            (Language::CSharp, "A.cs", "class A { int F((int, int) x) { return x switch { (0, 0) => 1, var (a, b) => a }; } }", 3),
+            (Language::CSharp, "A.cs", "class A { int F(int x) { return x switch { _ when x > 0 => 1, _ => 0 }; } }", 2),
+            (Language::Bash, "a.sh", "f() {\n  case \"$x\" in\n    a) g ;;\n    b|*) g ;;\n  esac\n}\n", 2),
+        ];
+        let mut failures = Vec::new();
+        for (lang, filename, code, expected) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            let cyclomatic: Vec<u32> = result
+                .functions
+                .iter()
+                .map(|f| f.metrics.cyclomatic)
+                .collect();
+            if cyclomatic != [*expected] {
+                failures.push(format!(
+                    "{lang:?} {cyclomatic:?}, expected {expected}: {code}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     fn assert_two_case_switch(code: &str, lang: Language, filename: &str) {
         let result = parse_and_analyze(code.as_bytes(), lang, filename);
         assert_eq!(result.functions.len(), 1, "{filename}: {code}");
