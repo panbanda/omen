@@ -1,6 +1,6 @@
 //! The security analysis of a set of files: the sinks, the entry points, and the paths.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
@@ -10,7 +10,7 @@ use super::entry::{
     entry_points_of_file, find_entry_points_with, EntryPoint, EntryRule, OnDemandTrees,
 };
 use super::matcher::{file_sinks, Repository};
-use super::reach::{coverage, reachability, Coverage, Reachability};
+use super::reach::{coverage, reachability, Coverage, InlineRegions, Reachability};
 use super::spec::SinkSpec;
 use super::suppress::{self, InvalidSuppression, Suppressed};
 use super::{find_sinks_with, Sink};
@@ -18,8 +18,8 @@ use crate::core::Language;
 use crate::index::build::{list_directory, CodeIndex, ListDirectory, ReadFile};
 use crate::index::extract::FileSymbols;
 use crate::index::headers;
-use crate::index::model::ResolutionBasis;
-use crate::index::view::{CallView, DEFAULT_MIN_BASIS};
+use crate::index::model::{Reference, ResolutionBasis};
+use crate::index::view::{CallView, FunctionValue, DEFAULT_MIN_BASIS};
 use crate::parser::ParseResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,7 +119,8 @@ pub fn analyze_with_index(
         .map(|position| index.files[*position].file.clone())
         .collect();
     let (sinks, suppressed, invalid_suppressions) = suppress::split(all_sinks, &names, comments);
-    let view = CallView::from_index(index);
+    let view =
+        CallView::from_index_with_function_values(index, &inline_handlers(index, &entry_points));
     let reach = reachability(&view, &sinks, &entry_points, options.min_basis);
     let mut languages: Vec<Language> = Vec::new();
     for position in &kept {
@@ -136,6 +137,82 @@ pub fn analyze_with_index(
         reachability: reach,
         coverage: coverage(&languages, options.experimental),
     })
+}
+
+/// The inline handlers of the entry points, in the order of the file and the start. Each call
+/// and each function reference that the index gives to the symbol around a handler belongs to
+/// the innermost handler that contains it.
+fn inline_handlers<'i>(index: &'i CodeIndex, entries: &[EntryPoint]) -> Vec<FunctionValue<'i>> {
+    let mut values: Vec<FunctionValue<'i>> = Vec::new();
+    let mut value_of_entry: Vec<Option<usize>> = vec![None; entries.len()];
+    let mut by_key: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut order: Vec<usize> = (0..entries.len())
+        .filter(|position| {
+            entries[*position].inline_handler.is_some() && entries[*position].symbol.is_some()
+        })
+        .collect();
+    order.sort_by_key(|position| {
+        let entry = &entries[*position];
+        let range = entry.inline_handler.as_ref().map(|inline| inline.range);
+        (
+            entry.file.as_str(),
+            range.map(|range| range.start_byte),
+            std::cmp::Reverse(range.map(|range| range.end_byte)),
+        )
+    });
+    for position in order {
+        let entry = &entries[position];
+        let (Some(inline), Some(key)) = (&entry.inline_handler, &entry.symbol) else {
+            continue;
+        };
+        let value = *by_key.entry(key.as_str()).or_insert_with(|| {
+            values.push(FunctionValue {
+                key: key.clone(),
+                file: entry.file.clone(),
+                range: inline.range,
+                enclosing: inline.enclosing.clone(),
+                parent: None,
+                references: Vec::new(),
+                function_references: Vec::new(),
+                is_test: entry.in_test,
+            });
+            values.len() - 1
+        });
+        value_of_entry[position] = Some(value);
+    }
+    let regions = InlineRegions::new(entries, |position, _| value_of_entry[position]);
+    let parents: Vec<Option<String>> = values
+        .iter()
+        .map(|value| {
+            regions
+                .parent(&value.file, value.enclosing.as_deref(), &value.range)
+                .map(|parent| values[parent].key.clone())
+        })
+        .collect();
+    for (value, parent) in values.iter_mut().zip(parents) {
+        value.parent = parent;
+    }
+    let files: BTreeSet<String> = values.iter().map(|value| value.file.clone()).collect();
+    for file in index.files.iter().filter(|file| files.contains(&file.file)) {
+        let holder = |reference: &Reference| {
+            regions.innermost(
+                &file.file,
+                reference.enclosing.as_deref(),
+                reference.name_range.start_byte,
+            )
+        };
+        for reference in &file.references {
+            if let Some(value) = holder(reference) {
+                values[value].references.push(reference);
+            }
+        }
+        for reference in &file.function_references {
+            if let Some(value) = holder(reference) {
+                values[value].function_references.push(reference);
+            }
+        }
+    }
+    values
 }
 
 type Comments = Vec<(Vec<suppress::Allow>, Vec<InvalidSuppression>)>;
@@ -496,6 +573,31 @@ mod tests {
     }
 
     #[test]
+    fn an_inline_handler_follows_a_function_reference_in_it() {
+        let source = "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\nfunction worker() { exec('x'); }\napp.post('/run', (req, res) => { setImmediate(worker); });\n";
+        let analysis = run(&[("server.js", source)], DEFAULT_MIN_BASIS);
+        use crate::index::security::reach::EdgeKind;
+        let steps: Vec<Vec<(&str, EdgeKind)>> = analysis
+            .reachability
+            .paths
+            .iter()
+            .map(|path| {
+                path.steps
+                    .iter()
+                    .map(|step| (step.symbol.as_str(), step.edge))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            steps,
+            [[
+                ("server.js#<inline@5:17>", EdgeKind::Call),
+                ("server.js#worker", EdgeKind::FunctionReference),
+            ]]
+        );
+    }
+
+    #[test]
     fn a_path_of_calls_only_has_no_function_reference_fields() {
         let analysis = run(&[("app.py", APP)], DEFAULT_MIN_BASIS);
         let json = serde_json::to_value(&analysis.reachability.paths[0]).unwrap();
@@ -601,6 +703,18 @@ mod tests {
     }
 
     #[test]
+    fn a_sink_in_generated_code_is_not_in_the_reachability() {
+        let generated = "// Code generated by protoc-gen-go. DO NOT EDIT.\n\npackage main\n\nimport \"os/exec\"\n\nfunc run(program string) {\n\texec.Command(program)\n}\n";
+        let analysis = run(&[("api.pb.go", generated)], DEFAULT_MIN_BASIS);
+        assert_eq!(analysis.sinks.len(), 1);
+        assert!(analysis.sinks[0].flags.in_generated);
+        assert!(analysis.reachability.no_known_entry.is_empty());
+        let written = generated.replace("// Code generated by protoc-gen-go. DO NOT EDIT.\n\n", "");
+        let analysis = run(&[("api.go", written.as_str())], DEFAULT_MIN_BASIS);
+        assert_eq!(analysis.reachability.no_known_entry.len(), 1);
+    }
+
+    #[test]
     fn the_coverage_names_the_frameworks_and_the_categories_of_the_languages() {
         let analysis = run(&[("app.py", APP)], DEFAULT_MIN_BASIS);
         assert_eq!(analysis.coverage.languages, ["python"]);
@@ -669,5 +783,233 @@ mod tests {
         let analysis = run(&[("a.py", source)], DEFAULT_MIN_BASIS);
         assert_eq!(analysis.sinks.len(), 1);
         assert!(analysis.invalid_suppressions.is_empty());
+    }
+
+    /// The steps of each path, with the line of its entry point and of its sink.
+    fn path_steps(analysis: &Analysis) -> Vec<(u32, u32, Vec<String>)> {
+        let line = |key: &str| -> u32 {
+            key.split(':')
+                .nth(1)
+                .and_then(|line| line.parse().ok())
+                .unwrap_or(0)
+        };
+        let mut found: Vec<(u32, u32, Vec<String>)> = analysis
+            .reachability
+            .paths
+            .iter()
+            .map(|path| {
+                (
+                    line(&path.entry),
+                    line(&path.sink),
+                    path.steps.iter().map(|step| step.symbol.clone()).collect(),
+                )
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn an_inline_handler_starts_a_path_to_the_sinks_in_it_and_below_it() {
+        let source = "import { Controller, Get, Post, UseGuards } from '@nestjs/common';\nimport express from 'express';\nimport { exec } from 'child_process';\nconst PATH = '/metrics';\n@Controller('cats')\nexport class CatsController {\n  @Get(':id') find() { return 1; }\n  @UseGuards(AuthGuard) @Post() run(cmd: string) { exec(cmd); }\n}\nexport class Server {\n  app = express();\n  setup() {\n    const app = this.app; app.get('/health', (_req, res) => res.send('ok'));\n    this.app.post(PATH, (req, res) => { exec(req.body.cmd); res.end(); });\n    this.app.put('/deep', (req, res) => deep(req.body));\n  }\n}\nfunction deep(value: string) {\n  exec(value);\n}\n";
+        let analysis = run(&[("src/c.ts", source)], DEFAULT_MIN_BASIS);
+        assert_eq!(
+            path_steps(&analysis),
+            [
+                (8, 8, vec!["src/c.ts#CatsController.run".to_string()]),
+                (
+                    14,
+                    14,
+                    vec!["src/c.ts#Server.setup.<inline@14:24>".to_string()]
+                ),
+                (
+                    15,
+                    19,
+                    vec![
+                        "src/c.ts#Server.setup.<inline@15:26>".to_string(),
+                        "src/c.ts#deep".to_string()
+                    ]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_caller_of_the_function_around_an_inline_handler_reaches_its_sinks_through_it() {
+        let source = "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\napp.get('/boot', boot);\nfunction boot(req, res) {\n  setup();\n}\nfunction setup() {\n  app.post('/run', (req, res) => exec(req.body.cmd));\n}\n";
+        let analysis = run(&[("server.js", source)], DEFAULT_MIN_BASIS);
+        assert_eq!(
+            path_steps(&analysis),
+            [
+                (
+                    4,
+                    9,
+                    vec![
+                        "server.js#boot".to_string(),
+                        "server.js#setup".to_string(),
+                        "server.js#setup.<inline@9:19>".to_string()
+                    ]
+                ),
+                (9, 9, vec!["server.js#setup.<inline@9:19>".to_string()]),
+            ]
+        );
+    }
+
+    /// The steps of each path with the kind of the edge to each step.
+    fn path_edges(analysis: &Analysis) -> Vec<Vec<(String, EdgeKind)>> {
+        let mut found: Vec<Vec<(String, EdgeKind)>> = analysis
+            .reachability
+            .paths
+            .iter()
+            .map(|path| {
+                path.steps
+                    .iter()
+                    .map(|step| (step.symbol.clone(), step.edge))
+                    .collect()
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    use crate::index::security::reach::EdgeKind;
+
+    #[test]
+    fn a_call_in_an_inline_handler_is_an_edge_of_the_handler_and_not_of_the_function_around_it() {
+        let source = "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\napp.get('/boot', boot);\nfunction boot(req, res) {\n  setup();\n}\nfunction setup() {\n  app.post('/run', (req, res) => deep(req.body.cmd));\n}\nfunction deep(command) {\n  exec(command);\n}\n";
+        let analysis = run(&[("server.js", source)], DEFAULT_MIN_BASIS);
+        let inline = "server.js#setup.<inline@9:19>".to_string();
+        let deep = "server.js#deep".to_string();
+        assert_eq!(
+            path_edges(&analysis),
+            [
+                vec![
+                    ("server.js#boot".to_string(), EdgeKind::Call),
+                    ("server.js#setup".to_string(), EdgeKind::Call),
+                    (inline.clone(), EdgeKind::FunctionReference),
+                    (deep.clone(), EdgeKind::Call),
+                ],
+                vec![(inline, EdgeKind::Call), (deep, EdgeKind::Call)],
+            ]
+        );
+    }
+
+    #[test]
+    fn an_inline_handler_that_registers_an_inline_handler_reaches_it() {
+        let source = "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\nfunction setup() {\n  app.get('/outer', (req, res) => {\n    app.post('/inner', (q, s) => exec(q.body.c));\n  });\n}\n";
+        let analysis = run(&[("server.js", source)], DEFAULT_MIN_BASIS);
+        let outer = "server.js#setup.<inline@5:20>".to_string();
+        let inner = "server.js#setup.<inline@6:23>".to_string();
+        assert_eq!(
+            path_edges(&analysis),
+            [
+                vec![
+                    (outer, EdgeKind::Call),
+                    (inner.clone(), EdgeKind::FunctionReference)
+                ],
+                vec![(inner, EdgeKind::Call)],
+            ]
+        );
+    }
+
+    /// `depth` nested inline handlers that close at one byte, and `depth` bytes after it that
+    /// only the outermost handler contains.
+    fn innermost_after_a_deep_nest(depth: usize) -> std::time::Duration {
+        use crate::index::model::Span;
+        use crate::index::security::entry::{EntryBasis, EntryKind, InlineHandler};
+        let entries: Vec<EntryPoint> = (0..depth)
+            .map(|level| {
+                let end = if level == 0 { 3 * depth } else { depth + 1 };
+                let range = Span {
+                    start_byte: level,
+                    end_byte: end,
+                    start_line: 1,
+                    start_column: 0,
+                    end_line: 1,
+                    end_column: 0,
+                };
+                EntryPoint {
+                    key: format!("a.ts:{level}"),
+                    file: "a.ts".to_string(),
+                    kind: EntryKind::HttpHandler,
+                    range,
+                    symbol: None,
+                    framework: "express".to_string(),
+                    route: None,
+                    guards: Vec::new(),
+                    guards_complete: true,
+                    guards_unknown_reason: None,
+                    basis: EntryBasis::Registered,
+                    in_test: false,
+                    inline_handler: Some(InlineHandler {
+                        range,
+                        enclosing: None,
+                    }),
+                }
+            })
+            .collect();
+        let regions = InlineRegions::new(&entries, |position, _| Some(position));
+        let start = std::time::Instant::now();
+        for byte in depth + 1..2 * depth + 1 {
+            assert_eq!(regions.innermost("a.ts", None, byte), Some(0));
+        }
+        assert_eq!(regions.innermost("a.ts", None, depth), Some(depth - 1));
+        start.elapsed()
+    }
+
+    #[test]
+    fn a_byte_after_a_nest_belongs_to_the_handler_around_the_nest() {
+        innermost_after_a_deep_nest(10);
+    }
+
+    #[test]
+    #[ignore = "timing test: run in release with --ignored"]
+    fn timing_bytes_after_a_deep_nest_of_inline_handlers_resolve_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "bytes after a nest",
+            20_000,
+            innermost_after_a_deep_nest,
+        );
+    }
+
+    #[test]
+    #[ignore = "timing test: run in release with --ignored"]
+    fn timing_inline_handlers_resolve_in_linear_time() {
+        let source = |size: usize| {
+            let mut text = String::from(
+                "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\nfunction setup() {\n",
+            );
+            for route in 0..size {
+                text.push_str(&format!(
+                    "  app.post('/r{route}', (req, res) => {{ exec(req.body.c); res.end(); }});\n"
+                ));
+            }
+            text.push_str("}\n");
+            text
+        };
+        // The index of one large function is outside the measure. Only the steps of the inline
+        // handlers are measured.
+        crate::index::timing::assert_scales_linearly("inline handlers", 4_000, |size| {
+            let text = source(size);
+            let paths = [PathBuf::from("server.js")];
+            let read = |_: &Path| Ok(text.as_bytes().to_vec());
+            let index = CodeIndex::build(Path::new(""), &paths, &read, &|_| Vec::new());
+            let analysis = run(&[("server.js", text.as_str())], DEFAULT_MIN_BASIS);
+            assert_eq!(analysis.reachability.paths.len(), size);
+            let start = std::time::Instant::now();
+            let view = CallView::from_index_with_function_values(
+                &index,
+                &inline_handlers(&index, &analysis.entry_points),
+            );
+            let found = reachability(
+                &view,
+                &analysis.sinks,
+                &analysis.entry_points,
+                DEFAULT_MIN_BASIS,
+            );
+            let took = start.elapsed();
+            assert_eq!(found.paths.len(), size);
+            took
+        });
     }
 }

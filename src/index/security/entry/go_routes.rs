@@ -39,12 +39,22 @@ use std::sync::Arc;
 
 use tree_sitter::Node;
 
-use super::{syntax, Context, Draft, EntryBasis, EntryKind, Route, TreeSource};
+use super::{
+    syntax, Context, Draft, EntryBasis, EntryKind, GuardsUnknownReason, Route, TreeSource,
+};
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ImportKind, ImportTarget, Reference, Span, Symbol, SymbolKind};
 
 /// The methods that `Any` registers. gin v1.11.0 `anyMethods`.
+/// The guard text of a middleware argument that is not a name. An entry point with this guard
+/// has a guard list that is not complete.
+pub(super) const UNREAD_GUARD: &str = "<expression>";
+
+/// The guard text of a middleware that is a function literal. It has no name, so the guard list
+/// is not complete.
+pub(super) const UNNAMED_FUNCTION_GUARD: &str = "<function literal>";
+
 const GIN_ANY: [&str; 9] = [
     "GET", "POST", "PUT", "PATCH", "HEAD", "OPTIONS", "DELETE", "CONNECT", "TRACE",
 ];
@@ -510,6 +520,8 @@ struct Record {
     method: String,
     path: String,
     guards: Vec<String>,
+    /// A call around the handler can add a guard that omen does not read.
+    unread_wrapper: bool,
 }
 
 /// The router that a pure function returns.
@@ -556,6 +568,9 @@ enum CallStep<'tree> {
 pub(super) struct Handler {
     pub symbol: Option<String>,
     pub guards: Vec<String>,
+    /// A call around the handler is not a conversion and not a middleware that omen reads. It can
+    /// add a guard.
+    pub unread_wrapper: bool,
     function_like: bool,
 }
 
@@ -860,7 +875,7 @@ impl<'a> Context<'a> {
                         results.push(Handler {
                             function_like: symbol.is_some(),
                             symbol,
-                            guards: Vec::new(),
+                            ..Handler::default()
                         });
                     }
                     "func_literal" => results.push(Handler {
@@ -899,27 +914,33 @@ impl<'a> Context<'a> {
                     }
                 }
                 Task::Combine(function, count) => {
+                    let middleware = self.is_go_middleware(function, kind);
                     let mut inner: Vec<Handler> = results
                         .split_off(results.len() - count)
                         .into_iter()
                         .filter(|handler| handler.function_like)
                         .collect();
                     if inner.is_empty() {
-                        results.push(Handler::default());
+                        results.push(Handler {
+                            unread_wrapper: !middleware,
+                            ..Handler::default()
+                        });
                         continue;
                     }
+                    let nested_unread = inner.iter().any(|handler| handler.unread_wrapper);
                     let (symbol, nested) = match inner.pop() {
                         Some(only) if inner.is_empty() => (only.symbol, only.guards),
                         _ => (None, Vec::new()),
                     };
                     let mut guards = Vec::new();
-                    if self.is_go_middleware(function, kind) {
+                    if middleware {
                         guards.extend(self.go_guard_name(function));
                     }
                     guards.extend(nested);
                     results.push(Handler {
                         symbol,
                         guards,
+                        unread_wrapper: !middleware || nested_unread,
                         function_like: true,
                     });
                 }
@@ -1953,7 +1974,7 @@ impl CallSites {
             let Some(tree) = trees.tree(position) else {
                 continue;
             };
-            let context = Context::new(&tree, file, files, trees, &[]);
+            let context = Context::new(position, &tree, file, files, trees, &[]);
             let directory = directory_of(&file.file);
             for (name, alias) in collect_aliases(tree.root_node(), &tree.source) {
                 let entry = types
@@ -2064,7 +2085,7 @@ impl CallSites {
             if sites.is_empty() {
                 continue;
             }
-            let context = Context::new(&tree, file, files, trees, &[]);
+            let context = Context::new(position, &tree, file, files, trees, &[]);
             let own_index = FileUses::new(tree.root_node(), &tree.source, file, &context, false);
             let mut other_index: Option<FileUses<'_, '_>> = None;
             for (reference, keys) in sites {
@@ -3565,8 +3586,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             .map(|argument| {
                 self.context.go_guard_name(*argument).unwrap_or_else(|| {
                     match argument.kind() {
-                        "func_literal" => "<function literal>",
-                        _ => "<expression>",
+                        "func_literal" => UNNAMED_FUNCTION_GUARD,
+                        _ => UNREAD_GUARD,
                     }
                     .to_string()
                 })
@@ -4346,6 +4367,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             .filter(|_| !omitted)
             .map(|node| self.context.go_handler(node, kind));
         let mut guards = self.guard_names(guard_arguments);
+        let unread_wrapper = handler
+            .as_ref()
+            .is_some_and(|handler| handler.unread_wrapper);
         let symbol = handler.map(|handler| {
             guards.extend(handler.guards);
             handler.symbol
@@ -4366,6 +4390,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 method: method.to_string(),
                 path: path.to_string(),
                 guards: guards.clone(),
+                unread_wrapper,
             });
         }
     }
@@ -4388,6 +4413,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             method: "ANY".to_string(),
             path: String::new(),
             guards: Vec::new(),
+            unread_wrapper: false,
         });
     }
 
@@ -4701,11 +4727,16 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 route: Some(Route {
                     method: record.method.clone(),
                     parameters: path_parameters(framework, &path),
-                    path,
+                    path: Some(path),
+                    path_template: None,
                 }),
                 guards,
                 basis: EntryBasis::Registered,
                 variant: None,
+                inline_handler: None,
+                unknown: record
+                    .unread_wrapper
+                    .then_some(GuardsUnknownReason::UnreadMiddleware),
             };
             let last = drafts.len() - 1;
             drafts[last] = Some((draft, duplicate));
@@ -5171,7 +5202,7 @@ fn mux_order(
             if record.opaque {
                 return None;
             }
-            let path = draft.route.as_ref()?.path.as_str();
+            let path = draft.route.as_ref()?.path.as_deref()?;
             let (literal, kind) = mux_literal(path, record.prefix);
             Some((literal, kind, record.method.as_str()))
         };
@@ -5375,7 +5406,7 @@ fn echo_precedence(
                 return None;
             }
             let (draft, _) = drafts[index].as_ref()?;
-            let path = &draft.route.as_ref()?.path;
+            let path = draft.route.as_ref()?.path.as_deref()?;
             Some((root, echo_tokens(path)))
         })
         .collect();

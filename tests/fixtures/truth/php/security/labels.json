@@ -6,6 +6,7 @@
   "closed_world": false,
   "sinks_closed_world": true,
   "not_applicable": [
+    {"dimension": "sinks", "category": "unsafe_html_output", "reason": "PHP writes HTML with echo and print. The language has no function or type that marks a string as safe HTML."},
     {"dimension": "sinks", "category": "memory_unsafe", "reason": "PHP is a memory-safe language."},
     {"dimension": "sinks", "category": "code_evaluation/aliased_import", "reason": "The construct eval is a language construct. A use statement cannot alias it."},
     {"dimension": "sinks", "category": "sql_string_construction/aliased_import", "reason": "The sink is a method of a database object. No import binds the method."},

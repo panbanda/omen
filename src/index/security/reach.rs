@@ -12,6 +12,11 @@
 //! A sink without a path has the state `no_known_entry`. That state does not say that the
 //! sink is safe. The graph has only the calls and the function references that the index
 //! resolves, and an entry point that the table does not know has no paths.
+//!
+//! An inline handler, as an arrow function that a route registers, is a node of the graph. A
+//! call, a function reference, or a sink belongs to the innermost inline handler that contains
+//! it. The inline handler or the function that contains a handler has a function reference to
+//! it, because it gives the handler as a value.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -23,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use super::entry::EntryPoint;
 use super::{Sink, SinkCategory};
 use crate::core::Language;
-use crate::index::model::ResolutionBasis;
+use crate::index::model::{ResolutionBasis, Span};
 use crate::index::view::CallView;
 
 /// How one symbol on a path leads to the next symbol.
@@ -124,9 +129,16 @@ fn language_name(language: Language) -> String {
 fn frameworks_of(language: Language) -> &'static [&'static str] {
     match language {
         Language::Python => &["flask", "fastapi", "django", "celery", "python"],
-        Language::JavaScript | Language::TypeScript | Language::Tsx | Language::Jsx => {
-            &["express", "next"]
-        }
+        Language::JavaScript | Language::TypeScript | Language::Tsx | Language::Jsx => &[
+            "express",
+            "fastify",
+            "koa",
+            "nestjs",
+            "next",
+            "repository_decorators",
+            "routing-controllers",
+            "tsoa",
+        ],
         Language::Java => &["spring", "java"],
         Language::CSharp => &["aspnet", "csharp"],
         Language::Go => &["net/http", "gin", "go"],
@@ -174,7 +186,10 @@ pub fn coverage(languages: &[Language], experimental: bool) -> Coverage {
     }
     statement.push_str(
         "Omen does not follow data, and it follows only the calls and the function references \
-         that the index resolves. An empty result does not mean that the code is safe.",
+         that the index resolves. \
+         An entry point with `guards_complete: false` can have a guard that omen did not read, \
+         or can lack a guard that omen lists. \
+         An empty result does not mean that the code is safe.",
     );
     Coverage {
         languages: names.into_iter().collect(),
@@ -324,24 +339,141 @@ fn shortest_path_members(
     members
 }
 
+/// One inline handler: its range, the index of the region that contains it, and its value.
+struct Region {
+    start: usize,
+    end: usize,
+    parent: Option<usize>,
+    value: usize,
+}
+
+/// The regions of one file and one symbol around them, in the order of their start. Two regions
+/// of one syntax tree are nested or apart.
+#[derive(Default)]
+struct Place {
+    regions: Vec<Region>,
+    /// From each boundary of a region to the next one, the value of the innermost region, in the
+    /// order of the boundaries. A search of a byte is then one binary search, also below a deep
+    /// nest of regions.
+    segments: Vec<(usize, Option<usize>)>,
+}
+
+/// The inline handlers of the entry points, by the file and the symbol around them, each with a
+/// value that the caller gives.
+pub(super) struct InlineRegions<'e> {
+    by_place: BTreeMap<(&'e str, Option<&'e str>), Place>,
+}
+
+impl<'e> InlineRegions<'e> {
+    /// The regions of the entries for which `value_of` gives a value. Of two entries with one
+    /// range, the first one gives the value.
+    pub(super) fn new(
+        entries: &'e [EntryPoint],
+        value_of: impl Fn(usize, &EntryPoint) -> Option<usize>,
+    ) -> Self {
+        let mut by_place: BTreeMap<(&'e str, Option<&'e str>), Place> = BTreeMap::new();
+        for (index, entry) in entries.iter().enumerate() {
+            let (Some(inline), Some(value)) =
+                (entry.inline_handler.as_ref(), value_of(index, entry))
+            else {
+                continue;
+            };
+            by_place
+                .entry((entry.file.as_str(), inline.enclosing.as_deref()))
+                .or_default()
+                .regions
+                .push(Region {
+                    start: inline.range.start_byte,
+                    end: inline.range.end_byte,
+                    parent: None,
+                    value,
+                });
+        }
+        for place in by_place.values_mut() {
+            let Place { regions, segments } = place;
+            regions.sort_by_key(|region| (region.start, std::cmp::Reverse(region.end)));
+            regions.dedup_by_key(|region| (region.start, region.end));
+            let mut open: Vec<usize> = Vec::new();
+            for index in 0..regions.len() {
+                while let Some(last) = open
+                    .last()
+                    .copied()
+                    .filter(|last| regions[*last].end <= regions[index].start)
+                {
+                    open.pop();
+                    let around = open.last().map(|outer| regions[*outer].value);
+                    segments.push((regions[last].end, around));
+                }
+                regions[index].parent = open.last().copied();
+                open.push(index);
+                segments.push((regions[index].start, Some(regions[index].value)));
+            }
+            while let Some(last) = open.pop() {
+                let around = open.last().map(|outer| regions[*outer].value);
+                segments.push((regions[last].end, around));
+            }
+        }
+        Self { by_place }
+    }
+
+    /// The value of the innermost inline handler of the place that contains the byte.
+    pub(super) fn innermost(
+        &self,
+        file: &str,
+        enclosing: Option<&str>,
+        byte: usize,
+    ) -> Option<usize> {
+        let segments = &self.by_place.get(&(file, enclosing))?.segments;
+        let after = segments.partition_point(|(boundary, _)| *boundary <= byte);
+        segments[after.checked_sub(1)?].1
+    }
+
+    /// The value of the inline handler that directly contains the inline handler with the range.
+    pub(super) fn parent(
+        &self,
+        file: &str,
+        enclosing: Option<&str>,
+        range: &Span,
+    ) -> Option<usize> {
+        let regions = &self.by_place.get(&(file, enclosing))?.regions;
+        let key = (range.start_byte, std::cmp::Reverse(range.end_byte));
+        let index = regions
+            .binary_search_by_key(&key, |region| (region.start, std::cmp::Reverse(region.end)))
+            .ok()?;
+        regions[index].parent.map(|parent| regions[parent].value)
+    }
+
+    /// The innermost inline handler that holds the sink.
+    fn holder(&self, sink: &Sink) -> Option<usize> {
+        self.innermost(&sink.file, sink.enclosing.as_deref(), sink.range.start_byte)
+    }
+}
+
 /// Finds the paths from the entry points to the sinks.
 ///
-/// An entry point or a sink in test code is not in the result. An entry point without a
-/// symbol in the index has no paths.
+/// An entry point or a sink in test code is not in the result. A sink in generated code is
+/// not in the result either. An entry point without a symbol in the index has no paths.
 pub fn reachability(
     view: &CallView,
     sinks: &[Sink],
     entries: &[EntryPoint],
     min_basis: ResolutionBasis,
 ) -> Reachability {
+    let regions = InlineRegions::new(entries, |_, entry| {
+        entry
+            .symbol
+            .as_deref()
+            .and_then(|key| view.position_of(key))
+    });
     let sink_symbols: Vec<(&Sink, Option<usize>)> = sinks
         .iter()
-        .filter(|sink| !sink.flags.in_test)
+        .filter(|sink| !sink.flags.in_test && !sink.flags.in_generated)
         .map(|sink| {
-            let symbol = sink
-                .enclosing
-                .as_deref()
-                .and_then(|key| view.position_of(key));
+            let symbol = regions.holder(sink).or_else(|| {
+                sink.enclosing
+                    .as_deref()
+                    .and_then(|key| view.position_of(key))
+            });
             (sink, symbol)
         })
         .collect();

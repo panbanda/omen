@@ -6,7 +6,7 @@
   "closed_world": false,
   "entry_points_closed_world": true,
   "entry_points": [
-    {"label": "express_show", "file": "server.js", "line": 5, "kind": "http_handler", "framework": "express", "method": "GET", "path": "/users/:id", "parameters": ["id"], "guards": ["authenticate"]},
-    {"label": "express_inline", "file": "server.js", "line": 6, "kind": "http_handler", "framework": "express", "method": "POST", "path": "/y"}
+    {"label": "express_show", "file": "server.js", "line": 5, "kind": "http_handler", "framework": "express", "method": "GET", "path": "/users/:id", "parameters": ["id"], "guards": ["authenticate"], "guards_complete": false, "guards_unknown_reason": "layer_not_read"},
+    {"label": "express_inline", "file": "server.js", "line": 6, "kind": "http_handler", "framework": "express", "method": "POST", "path": "/y", "guards_complete": false, "guards_unknown_reason": "layer_not_read"}
   ]
 }

@@ -45,3 +45,41 @@ fn a_built_query_with_a_deep_string_operand() {
     let analysis = analyze("app.py", source);
     assert_eq!(categories(&analysis), [SinkCategory::SqlStringConstruction]);
 }
+
+/// The value of `x = <expression>` in `source`.
+fn literal_at(language: crate::core::Language, file: &str, source: &str) -> bool {
+    let parsed = crate::parser::Parser::new()
+        .parse(source.as_bytes(), language, std::path::Path::new(file))
+        .unwrap();
+    let mut value = None;
+    crate::parser::walk_preorder(parsed.root_node(), |node| {
+        if matches!(node.kind(), "assignment" | "variable_declarator") {
+            value = node
+                .child_by_field_name("right")
+                .or_else(|| node.child_by_field_name("value"));
+            return crate::parser::Walk::Stop;
+        }
+        crate::parser::Walk::Children
+    });
+    super::syntax::is_literal(value.unwrap())
+}
+
+/// `is_literal` reads each level of a list of literals.
+#[test]
+fn a_deep_list_of_literals_is_a_literal() {
+    let literal = on_small_stack(|| {
+        let source = format!("x = {}\n", nest("[", "1", "]"));
+        literal_at(crate::core::Language::Python, "a.py", &source)
+    });
+    assert!(literal);
+}
+
+/// `is_literal` and `outer_interpolations` read each level of a template in a template.
+#[test]
+fn a_deep_template_of_literals_is_a_literal() {
+    let literal = on_small_stack(|| {
+        let source = format!("const x = {};\n", nest("`${", "'a'", "}`"));
+        literal_at(crate::core::Language::JavaScript, "a.js", &source)
+    });
+    assert!(literal);
+}
