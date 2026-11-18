@@ -218,6 +218,31 @@ fn run_with_source(
         return Err(error);
     }
 
+    // Each section has `is_test` in its rows, and `--exclude-tests` removes
+    // the test rows, as the single command does. This step is after each
+    // analyzer, because an analyzer reads the full result of a different one.
+    for entry in &mut results {
+        let name = entry
+            .get("analyzer")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let Some(result) = entry.get_mut("result") else {
+            continue;
+        };
+        if name == "security" {
+            if scope.exclude_tests {
+                let report: Option<crate::analyzers::security::Report> =
+                    serde_json::from_value(result.clone()).ok();
+                if let Some(report) = report {
+                    *result = serde_json::to_value(report.without_tests())?;
+                }
+            }
+            continue;
+        }
+        super::test_rows::mark(result, &name, &ctx, scope.exclude_tests);
+    }
+
     // `--top` and `--offset` apply to each section as they apply to the
     // single command. SARIF keeps each finding.
     let top = scope.top.unwrap_or(0);

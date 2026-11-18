@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "language": "jsx",
+  "split": "development",
+  "oracle": "Author-reviewed. `bun build --no-bundle` (Bun 1.3.2) accepts each file. The test functions are globals of the test tool, which is not in the case. The harness does not run the code.",
+  "closed_world": false,
+  "sinks_closed_world": false,
+  "not_applicable": [
+    {"dimension":"tests","category":"entry_by_name","reason":"No test tool of ECMAScript finds a test by the name of a function. A call of a test function such as `it` makes a test."}
+  ],
+  "tests": [
+    {"label":"suite_callback","category":"entry_by_syntax","file":"src/service.jsx","line":19,"role":"support"},
+    {"label":"test_callback","category":"entry_by_syntax","file":"src/service.jsx","line":23,"role":"support"},
+    {"label":"each_callback","category":"entry_by_syntax","file":"src/service.jsx","line":28,"role":"support"},
+    {"label":"helper_in_suite","category":"support","file":"src/service.jsx","line":14,"name":"helper","role":"support"},
+    {"label":"helper_in_test_file","category":"support","file":"src/service.test.jsx","line":3,"name":"sharedHelper","role":"support"},
+    {"label":"production","category":"not_test","file":"src/service.jsx","line":1,"name":"production","role":"none"},
+    {"label":"test_like_name","category":"not_test","file":"src/service.jsx","line":5,"name":"testConnection","role":"none"},
+    {"label":"parameter_named_it","category":"not_test","file":"src/service.jsx","line":10,"role":"none"}
+  ]
+}

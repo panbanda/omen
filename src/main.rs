@@ -86,8 +86,31 @@ fn run(cli: Cli) -> omen::core::Result<()> {
     result
 }
 
+/// The name of a command that has `--exclude-tests` on its command line and
+/// no list of files or of symbols in its report. The flag has no meaning
+/// for such a command.
+fn command_without_test_rows(command: &Command) -> Option<&'static str> {
+    let (arguments, name) = match command {
+        Command::Changes(arguments) => (&arguments.common, "changes"),
+        Command::Flags(arguments) => (&arguments.common, "flags"),
+        Command::Outline(arguments) => (&arguments.common, "outline"),
+        Command::Impact(arguments) => (&arguments.common, "impact"),
+        Command::Symbol(arguments) => (&arguments.common, "symbol"),
+        #[cfg(feature = "mutation")]
+        Command::Mutation(command) => (&command.args.common, "mutation"),
+        _ => return None,
+    };
+    arguments.exclude_tests.then_some(name)
+}
+
 fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
     commands::repository::check_ref(cli)?;
+    if let Some(name) = command_without_test_rows(&cli.command) {
+        return Err(omen::core::Error::InvalidArgument(format!(
+            "`--exclude-tests` does not apply to `omen {name}`. \
+             Its report has no list of files or of symbols."
+        )));
+    }
 
     let config = match &cli.config {
         Some(config_path) => Config::from_file(config_path)?,
@@ -158,7 +181,13 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             commands::diff::run(path, &config, &request, format, &mut stdout())?;
         }
         Command::Changes(args) => {
-            analyzers::run_changes(path, &config, format, &scope_of(cli, args), &mut stdout())?;
+            let request = WindowedRequest {
+                scope: scope_of(cli, &args.common),
+                window: WindowRequest {
+                    since: args.since.clone(),
+                },
+            };
+            analyzers::run_changes(path, &config, format, &request, &mut stdout())?;
         }
         Command::Deadcode(args) => {
             let request = DeadcodeRequest {

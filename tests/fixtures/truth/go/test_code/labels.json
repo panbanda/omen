@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed. `gofmt -e -l` (Go 1.26.0) accepts each file and lists no file. No compiler ran. The harness does not run the code.",
+  "closed_world": false,
+  "sinks_closed_world": false,
+  "not_applicable": [
+    {"dimension":"tests","category":"entry_by_syntax","reason":"`go test` finds a test by its name in a file whose name ends in `_test.go`. No syntax marks a test."}
+  ],
+  "tests": [
+    {"label":"test_function","category":"entry_by_name","file":"service_test.go","line":13,"name":"TestProduction","role":"entry"},
+    {"label":"benchmark_function","category":"entry_by_name","file":"service_test.go","line":19,"name":"BenchmarkProduction","role":"entry"},
+    {"label":"fuzz_function","category":"entry_by_name","file":"service_test.go","line":25,"name":"FuzzProduction","role":"entry"},
+    {"label":"example_function","category":"entry_by_name","file":"service_test.go","line":31,"name":"ExampleProduction","role":"entry"},
+    {"label":"test_main","category":"entry_by_name","file":"service_test.go","line":35,"name":"TestMain","role":"entry"},
+    {"label":"helper_in_test_file","category":"support","file":"service_test.go","line":5,"name":"helper","role":"support"},
+    {"label":"lowercase_after_prefix","category":"support","file":"service_test.go","line":9,"name":"Testify","role":"support"},
+    {"label":"production","category":"not_test","file":"service.go","line":3,"name":"Production","role":"none"},
+    {"label":"test_name_in_production","category":"not_test","file":"service.go","line":7,"name":"TestConnection","role":"none"},
+    {"label":"benchmark_name_in_production","category":"not_test","file":"service.go","line":11,"name":"BenchmarkLike","role":"none"}
+  ]
+}

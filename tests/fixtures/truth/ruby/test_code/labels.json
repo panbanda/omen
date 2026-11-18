@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "language": "ruby",
+  "split": "development",
+  "oracle": "Author-reviewed. `ruby -wc` (Ruby 3.4.7) accepts each file. Minitest and RSpec did not run. The harness does not run the code.",
+  "closed_world": false,
+  "sinks_closed_world": false,
+  "not_applicable": [
+
+  ],
+  "tests": [
+    {"label":"minitest_class","category":"entry_by_syntax","file":"lib/checks.rb","line":4,"name":"ServiceTest","role":"entry"},
+    {"label":"describe_block","category":"entry_by_syntax","file":"lib/checks.rb","line":25,"role":"support"},
+    {"label":"minitest_method","category":"entry_by_name","file":"lib/checks.rb","line":9,"name":"test_production","role":"entry"},
+    {"label":"minitest_hook","category":"entry_by_name","file":"lib/checks.rb","line":5,"name":"setup","role":"entry"},
+    {"label":"helper_in_minitest_class","category":"support","file":"lib/checks.rb","line":13,"name":"value","role":"support"},
+    {"label":"helper_in_describe_block","category":"support","file":"lib/checks.rb","line":19,"name":"build","role":"support"},
+    {"label":"helper_in_spec_directory","category":"support","file":"spec/service_spec.rb","line":3,"name":"shared_service","role":"support"},
+    {"label":"production","category":"not_test","file":"lib/service.rb","line":2,"name":"production","role":"none"},
+    {"label":"test_like_name","category":"not_test","file":"lib/service.rb","line":6,"name":"test_connection","role":"none"},
+    {"label":"context_of_a_different_library","category":"not_test","file":"lib/service.rb","line":12,"name":"not_a_spec","role":"none"}
+  ]
+}

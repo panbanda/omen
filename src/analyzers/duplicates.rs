@@ -27,7 +27,8 @@ use crate::core::{
     is_test_file, percentile, AnalysisContext, Analyzer as AnalyzerTrait, Language as CoreLanguage,
     Result,
 };
-use crate::parser::{cfg_test_module_ranges, Parser as TreeSitterParser};
+use crate::index::test_code::test_ranges_of_tree;
+use crate::parser::Parser as TreeSitterParser;
 
 /// Clone type classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -757,6 +758,8 @@ impl AnalyzerTrait for Analyzer {
             }
         }
 
+        rank_clones(&mut clones);
+
         // Calculate statistics
         if !clones.is_empty() {
             let mut similarities: Vec<f64> = clones.iter().map(|c| c.similarity).collect();
@@ -807,6 +810,20 @@ struct CodeFragment {
 struct ClonePair {
     idx_a: usize,
     idx_b: usize,
+}
+
+/// Puts the pair with the highest similarity first. Of two pairs with the
+/// same similarity, the one with more lines is first. The places break a tie.
+fn rank_clones(clones: &mut [Clone]) {
+    clones.sort_by(|a, b| {
+        b.similarity
+            .total_cmp(&a.similarity)
+            .then_with(|| (b.lines_a + b.lines_b).cmp(&(a.lines_a + a.lines_b)))
+            .then_with(|| a.file_a.cmp(&b.file_a))
+            .then_with(|| a.start_line_a.cmp(&b.start_line_a))
+            .then_with(|| a.file_b.cmp(&b.file_b))
+            .then_with(|| a.start_line_b.cmp(&b.start_line_b))
+    });
 }
 
 // Output types
@@ -947,11 +964,9 @@ fn detect_language(path: &str) -> &'static str {
     }
 }
 
-/// Find Rust `#[cfg(test)]` module bodies and convert them to 0-indexed
-/// `[start, end)` line ranges, reusing the tree-sitter based detector shared
-/// with `analyzers::tdg` (`crate::parser::cfg_test_module_ranges`) so both
-/// analyzers agree on what counts as test code and avoid `not(test)` /
-/// `contest`-style false positives.
+/// The Rust test code of the file as 0-indexed `[start, end)` line ranges.
+/// `crate::index::test_code` gives the ranges, thus each analyzer has the
+/// same answer.
 fn rust_cfg_test_line_ranges(content: &str) -> Vec<Range<usize>> {
     let parser = TreeSitterParser::new();
     let Ok(parsed) = parser.parse(
@@ -962,13 +977,16 @@ fn rust_cfg_test_line_ranges(content: &str) -> Vec<Range<usize>> {
         return Vec::new();
     };
 
-    cfg_test_module_ranges(&parsed.tree.root_node(), content)
-        .into_iter()
-        .map(|byte_range| {
-            byte_offset_to_line(content, byte_range.start)
-                ..byte_offset_to_line(content, byte_range.end)
-        })
-        .collect()
+    test_ranges_of_tree(
+        parsed.tree.root_node(),
+        content.as_bytes(),
+        CoreLanguage::Rust,
+    )
+    .into_iter()
+    .map(|byte_range| {
+        byte_offset_to_line(content, byte_range.start)..byte_offset_to_line(content, byte_range.end)
+    })
+    .collect()
 }
 
 /// Count newlines before `offset` to get the 0-indexed line number, matching
@@ -1456,6 +1474,32 @@ fn hash_tokens(tokens: &[String]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_clones_are_in_the_order_of_the_similarity_and_then_of_the_size() {
+        let pair = |file: &str, similarity: f64, lines: usize| Clone {
+            clone_type: CloneType::Type1,
+            similarity,
+            file_a: file.to_string(),
+            file_b: "z.rs".to_string(),
+            start_line_a: 1,
+            end_line_a: lines as u32,
+            start_line_b: 1,
+            end_line_b: lines as u32,
+            lines_a: lines,
+            lines_b: lines,
+            group_id: 1,
+        };
+        let mut clones = vec![
+            pair("a.rs", 0.9, 10),
+            pair("c.rs", 1.0, 10),
+            pair("b.rs", 1.0, 10),
+            pair("d.rs", 1.0, 40),
+        ];
+        rank_clones(&mut clones);
+        let order: Vec<&str> = clones.iter().map(|clone| clone.file_a.as_str()).collect();
+        assert_eq!(order, ["d.rs", "b.rs", "c.rs", "a.rs"]);
+    }
     use crate::config::Config as CoreConfig;
     use crate::core::FileSet;
     use std::fs;

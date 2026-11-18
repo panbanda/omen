@@ -19,18 +19,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::analyzers::{complexity, hotspot, temporal};
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
-use crate::parser::{cfg_test_module_ranges, ParseResult, Parser};
+use crate::index::test_code::test_ranges_of_tree;
+use crate::parser::{ParseResult, Parser};
 
 /// TDG weight configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Weights {
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub structural_complexity: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub semantic_complexity: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub duplication: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub coupling: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub documentation: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub consistency: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub hotspot: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub temporal_coupling: f32,
 }
 
@@ -410,7 +419,11 @@ impl Analyzer {
         }
 
         let test_ranges = if language == Language::Rust {
-            cfg_test_module_ranges(&parsed.tree.root_node(), source)
+            test_ranges_of_tree(
+                parsed.tree.root_node(),
+                source.as_bytes(),
+                crate::core::Language::Rust,
+            )
         } else {
             Vec::new()
         };
@@ -844,6 +857,7 @@ impl Grade {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PenaltyAttribution {
     pub source_metric: String,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub amount: f32,
     pub issue: String,
 }
@@ -852,21 +866,32 @@ pub struct PenaltyAttribution {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Score {
     // Component scores
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub structural_complexity: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub semantic_complexity: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub duplication_ratio: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub coupling_score: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub doc_coverage: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub consistency_score: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub hotspot_score: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub temporal_coupling_score: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub entropy_score: f32,
 
     // Aggregated score and grade
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub total: f32,
     pub grade: Grade,
 
     // Metadata
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub confidence: f32,
     pub language: Language,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -956,11 +981,22 @@ impl Score {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Analysis {
     pub files: Vec<Score>,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub average_score: f32,
     pub average_grade: Grade,
     pub total_files: usize,
     pub language_distribution: HashMap<Language, usize>,
     pub grade_distribution: HashMap<String, usize>,
+}
+
+/// Puts the file with the lowest score first: a low score is much debt. The
+/// path breaks a tie.
+fn rank_scores(scores: &mut [Score]) {
+    scores.sort_by(|left, right| {
+        left.total
+            .total_cmp(&right.total)
+            .then_with(|| left.file.cmp(&right.file))
+    });
 }
 
 fn aggregate_project_score(scores: Vec<Score>) -> Analysis {
@@ -982,6 +1018,8 @@ fn aggregate_project_score(scores: Vec<Score>) -> Analysis {
         *grade_dist.entry(grade_key).or_insert(0) += 1;
     }
 
+    let mut scores = scores;
+    rank_scores(&mut scores);
     Analysis {
         files: scores,
         average_score,
@@ -1285,6 +1323,33 @@ import React from 'react';
     }
 
     #[test]
+    fn test_files_are_in_the_order_of_the_score_with_the_lowest_first() {
+        let score = |file: &str, total: f32| Score {
+            file: file.to_string(),
+            total,
+            ..Score::default()
+        };
+        let analysis = aggregate_project_score(vec![
+            score("a.rs", 90.0),
+            score("c.rs", 40.0),
+            score("b.rs", 40.0),
+            score("d.rs", 75.5),
+        ]);
+        let order: Vec<&str> = analysis
+            .files
+            .iter()
+            .map(|file| file.file.as_str())
+            .collect();
+        assert_eq!(order, ["b.rs", "c.rs", "d.rs", "a.rs"]);
+        let json = serde_json::to_value(&analysis.files[2]).unwrap();
+        assert_eq!(json["total"].to_string(), "75.5");
+        let weights = serde_json::to_value(Weights::default()).unwrap();
+        for (name, weight) in weights.as_object().unwrap() {
+            assert!(weight.to_string().len() <= 5, "{name}: {weight}");
+        }
+    }
+
+    #[test]
     fn test_aggregate_project_score() {
         let scores = vec![
             Score {
@@ -1510,6 +1575,8 @@ fn risky() {
                 complexity_percentile: 85.0,
                 commits: 42,
                 avg_complexity: 12.0,
+                churn_score: 42.0,
+                total_complexity: 120,
             }],
             summary: hs::AnalysisSummary {
                 total_hotspots: 1,
@@ -1521,7 +1588,8 @@ fn risky() {
 
         let temporal_analysis = tp::Analysis {
             generated_at: "2025-01-01T00:00:00Z".to_string(),
-            period_days: 30,
+            period_days: Some(30),
+            churn_window: None,
             min_cochanges: 3,
             couplings: vec![tp::FileCoupling {
                 file_a: "lib.rs".to_string(),

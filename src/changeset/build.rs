@@ -187,10 +187,8 @@ fn component_of(file: &str) -> String {
 }
 
 fn is_test_symbol(file: &str, symbol: Option<&Symbol>) -> bool {
-    is_test_file(Path::new(file))
-        || symbol.is_some_and(|symbol| {
-            symbol.name.starts_with("test_") || symbol.name.starts_with("Test")
-        })
+    // The index gives the answer for a symbol. A caller without a symbol has only its path.
+    symbol.map_or_else(|| is_test_file(Path::new(file)), Symbol::is_test)
 }
 
 /// The complexity of each function of the files of one side.

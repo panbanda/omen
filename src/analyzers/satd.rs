@@ -245,6 +245,8 @@ impl AnalyzerTrait for Analyzer {
         };
 
         let total_items: usize = by_category.values().sum();
+        let mut items = items;
+        rank_items(&mut items);
         let analysis = Analysis {
             items,
             by_category,
@@ -321,6 +323,30 @@ pub struct AnalysisSummary {
     pub density: f64,
 }
 
+impl Severity {
+    /// The place of the severity in a list: 0 is the most severe.
+    fn rank(self) -> u8 {
+        match self {
+            Self::Critical => 0,
+            Self::High => 1,
+            Self::Medium => 2,
+            Self::Low => 3,
+        }
+    }
+}
+
+/// Puts the item with the highest severity first. The file and the line
+/// break a tie.
+fn rank_items(items: &mut [SatdItem]) {
+    items.sort_by(|left, right| {
+        left.severity
+            .rank()
+            .cmp(&right.severity.rank())
+            .then_with(|| left.file.cmp(&right.file))
+            .then_with(|| left.line.cmp(&right.line))
+    });
+}
+
 /// Check if a line is a comment.
 fn is_comment_line(line: &str) -> bool {
     let trimmed = line.trim();
@@ -350,6 +376,41 @@ fn severity_from_weight(weight: f64) -> Severity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_items_are_in_the_order_of_the_severity_and_then_of_the_place() {
+        let item = |file: &str, line: u32, severity: Severity| SatdItem {
+            file: file.to_string(),
+            line,
+            category: "design".to_string(),
+            severity,
+            marker: "NOTE".to_string(),
+            text: String::new(),
+            weight: 1.0,
+        };
+        let mut items = vec![
+            item("a.rs", 9, Severity::Low),
+            item("b.rs", 2, Severity::Critical),
+            item("a.rs", 7, Severity::High),
+            item("a.rs", 3, Severity::High),
+            item("a.rs", 1, Severity::Medium),
+        ];
+        rank_items(&mut items);
+        let order: Vec<(&str, u32)> = items
+            .iter()
+            .map(|item| (item.file.as_str(), item.line))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                ("b.rs", 2),
+                ("a.rs", 3),
+                ("a.rs", 7),
+                ("a.rs", 1),
+                ("a.rs", 9)
+            ]
+        );
+    }
 
     #[test]
     fn test_analyzer_uses_content_source_for_historical_commits() {

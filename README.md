@@ -107,6 +107,8 @@ Dead code includes:
 
 **Why it matters:** Dead code isn't just clutter. It confuses new developers who think it must be important. It increases build times and binary sizes. Worst of all, it can hide bugs - if someone "fixes" dead code thinking it runs, they've wasted time. [Romano et al. (2020)](https://ieeexplore.ieee.org/document/8370748) found that dead code is a strong predictor of other code quality problems.
 
+Omen does not report a test, or a function that only the runtime calls, as dead code. `docs/TEST_CODE.md` gives the rule for a test in each language and the list of these functions. Each item has `is_test`, and the items are in the order of `confidence`.
+
 > [!TIP]
 > Delete dead code. Version control means you can always get it back if needed.
 
@@ -212,6 +214,8 @@ Risk levels use percentile-based thresholds following JIT defect prediction best
 | Low    | Bottom 80% | Below P80 - Standard review process        |
 
 This approach aligns with the 80/20 rule from defect prediction research: ~20% of code changes contain ~80% of defects. It ensures actionable results regardless of repository characteristics - well-disciplined repos will have lower thresholds, while high-churn repos will have higher ones.
+
+A window with fewer than 20 commits has the fixed thresholds 0.6 and 0.3, because a percentile of a few scores is one of those scores. `risk_thresholds.basis` is `percentile` or `absolute`. Use `omen changes --since 3m` for a wider window. See [docs/LISTS_AND_WINDOWS.md](docs/LISTS_AND_WINDOWS.md).
 
 **Why it matters:** [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763) demonstrated that JIT prediction catches risky changes at commit time, before bugs propagate. Their effort-aware approach uses ranking rather than fixed thresholds, focusing limited review resources on the riskiest ~20% of commits. [Zeng et al. (2021)](https://ieeexplore.ieee.org/document/9463091) showed that simple JIT models match deep learning accuracy (~65%) with better interpretability.
 
@@ -416,6 +420,8 @@ Each percentile is a rank in a different set of files:
 
 - **Churn percentile** - The rank of the churn score of the file among the files that changed in the window. The churn score is 1 for each commit, and 1 more for each 100 changed lines. If one of ten files changed, its churn percentile is 50, not 95.
 - **Complexity percentile** - The rank of the sum of the cyclomatic complexity of the functions of the file, among the files that have a complexity result. As in Tornhill, this measure grows with the size of the file.
+
+Each row has the two values that its percentiles rank: `churn_score` and `total_complexity`, the sum of the cyclomatic complexity of the functions of the file. `avg_complexity` is the mean for one function, and the score does not use it. See [docs/LISTS_AND_WINDOWS.md](docs/LISTS_AND_WINDOWS.md).
 
 | Hotspot Score | Severity | Action                 |
 | ------------- | -------- | ---------------------- |
@@ -970,6 +976,13 @@ omen --help
 
 # Minify JSON onto one line
 omen -f json score --compact
+
+# Each list is in rank order: --top gives the rows with the most risk.
+omen defect --top 10
+omen complexity --top 20
+
+# Do not list the rows that are test code
+omen defect --top 10 --exclude-tests
 
 # The flags -p, -f, -c, -v, -j, and --compact are global.
 # Put them before or after the subcommand.
