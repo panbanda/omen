@@ -214,6 +214,9 @@ pub(super) struct Scope {
     bindings: Bindings,
     /// The request constraints of the blocks around the route.
     constraints: Constraints,
+    /// The request constraints of the mount of the engine of the route set. Rails checks them on
+    /// the route of the mount, so a constraint of a route of the engine does not replace them.
+    mount_constraints: Rc<Vec<String>>,
     /// A loop around the route has more work than `LOOP_WORK_LIMIT` allows. Omen reads its block
     /// one time, and each loop parameter has an unknown value.
     unexpanded: bool,
@@ -1653,6 +1656,19 @@ impl<'a> Context<'a> {
         )
     }
 
+    /// The guards that the constraints give to a route or to a `mount`: the constraints of the
+    /// mount of the engine, and then the constraints of the blocks. A constraint object of the
+    /// route replaces the constraints of the blocks, as `Mapping#initialize` of Rails 7.2.2 uses
+    /// only that object. A hash keeps them.
+    fn route_constraints(&self, scope: &Scope, value: Option<Node<'_>>) -> Vec<String> {
+        let mut guards = scope.mount_constraints.to_vec();
+        match value.and_then(|value| self.constraint_text(value)) {
+            Some(own) => guards.push(own),
+            None => guards.extend(scope.constraints.names()),
+        }
+        guards
+    }
+
     fn add_constraint(&self, value: Node<'_>, scope: &mut Scope) {
         if let Some(text) = self.constraint_text(value) {
             scope.constraints.add(text);
@@ -1734,9 +1750,7 @@ impl<'a> Context<'a> {
             };
             scope.prefix = Prefix::root().push(&mount.path);
             scope.prefix.as_ref()?;
-            for guard in &mount.guards {
-                scope.constraints.add(guard.clone());
-            }
+            scope.mount_constraints = Rc::new(mount.guards.clone());
             scope.modules = scope.modules.extend(self.rails_engine_module(identity)?);
         }
         Some(scope)
@@ -1982,22 +1996,17 @@ impl<'a> Context<'a> {
             {
                 return None;
             }
-            let mut guards = scope.constraints.clone();
             for option in &options.0 {
                 match option.key.as_str() {
-                    "at" | "as" | "defaults" if !option.string_key => {}
-                    "constraints" if !option.string_key => {
-                        if let Some(text) = self.constraint_text(option.value) {
-                            guards.add(text);
-                        }
-                    }
+                    "at" | "as" | "defaults" | "constraints" if !option.string_key => {}
                     _ => return None,
                 }
             }
+            let guards = self.route_constraints(scope, options.get("constraints"));
             let path = self.rails_literal(path.or(options.get("at"))?, &scope.bindings)?;
             Some(Mount {
                 path: join(&scope.prefix, &path)?.text(),
-                guards: guards.names(),
+                guards,
             })
         };
         let state = match (mounts.get(&identity), read()) {
@@ -2203,7 +2212,9 @@ impl<'a> Context<'a> {
         if let Some(constraint) = &definition.constraint {
             constraints.add(constraint.clone());
         }
-        let constraints = constraints.names();
+        let mut guards = scope.mount_constraints.to_vec();
+        guards.extend(constraints.names());
+        let constraints = guards;
         let api_only = match scope.api_only {
             ApiOnly::On => true,
             ApiOnly::Off => false,
@@ -2296,12 +2307,7 @@ impl<'a> Context<'a> {
                 None => return,
             }
         }
-        let mut constraints = scope.constraints.clone();
-        if let Some(value) = options.get("constraints") {
-            if let Some(text) = self.constraint_text(value) {
-                constraints.add(text);
-            }
-        }
+        let constraints = self.route_constraints(scope, options.get("constraints"));
 
         let mut target_text = None;
         let mut path_node = None;
@@ -2478,7 +2484,7 @@ impl<'a> Context<'a> {
                 _ => unresolved_handler(),
             },
         };
-        let mut guards = constraints.names();
+        let mut guards = constraints;
         guards.extend(handler_guards);
         super::keep_first(&mut guards);
         for method in methods {

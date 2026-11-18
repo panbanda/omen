@@ -186,7 +186,7 @@ each form against the source of Rails 7.2.2.
 | `scope`, `namespace`, `resources`, or a route with a key that Rails does not know, as `id: /\d+/` or `id: Format.username` | Read. Rails makes the key a requirement or a default of each route. It changes no path and no controller. |
 | `controller :x do` | Read. |
 | `constraints do`, `defaults do` | Read. They change no path. |
-| `constraints:` or `constraints(...)` with an object, as `constraints: StaffConstraint.new` | Read on `scope`, `namespace`, `constraints`, `resources`, `resource`, `mount`, and a route. Rails asks the object if the request matches, so the object is a guard of each route in its reach. The guard is the source text of the object, with one space for each run of white space. A lambda is `lambda:` and its line. The guards of the blocks come first, from the outer block to the inner block. Then the guard of the route comes, and then the callbacks of the controller. A guard with the text of an earlier guard is not repeated. A hash, as `constraints: { id: /\d+/ }`, constrains segments and request attributes. It is not a guard. |
+| `constraints:` or `constraints(...)` with an object, as `constraints: StaffConstraint.new` | Read on `scope`, `namespace`, `constraints`, `resources`, `resource`, `mount`, and a route. Rails asks the object if the request matches, so the object is a guard of each route in its reach. The guard is the source text of the object, with one space for each run of white space. A lambda is `lambda:` and its line. The guards of the blocks come first, from the outer block to the inner block. Then the callbacks of the controller come. A constraint object of a route or of a `mount` replaces the guards of the blocks, because Rails uses only that object for the route. A constraint object of `resources` or `resource` adds to them, because Rails makes it a scope. The constraint objects of the mount of an engine come first for each route of the engine, and a route of the engine does not replace them. A guard with the text of an earlier guard is not repeated. A hash, as `constraints: { id: /\d+/ }`, constrains segments and request attributes. It is not a guard. |
 | `format: true` on `scope`, `namespace`, `resources`, `resource`, or a route | Read. The path ends with `.:format`, as `Mapping.normalize_path` gives it. `format: false`, `nil`, a string, a symbol, and a regular expression add nothing to the path. Any other value skips the route or the block. The option of a route replaces the option of its blocks. |
 | `each` and `each_with_index` on a literal array, and `each` and `each_pair` on a literal hash | Read. See "Loops over literal lists". |
 | Devise blocks, `concern`, any other loop, and any block that omen does not know | The block is skipped. |
@@ -298,8 +298,9 @@ A route in `Blog::Engine.routes.draw` has a path that starts at the place where 
 mounts the engine. Omen reads the `mount` calls in the block of `draw`, `append`, or `prepend` on
 the routes of the application, in each Ruby file, and in the blocks in it that omen can enter.
 The forms are `mount Blog::Engine, at: "/blog"` and `mount Blog::Engine => "/blog"`, with the
-options `as:`, `defaults:`, and `constraints:`. A `constraints:` object of the mount, and of the
-blocks around it, is a guard of each route of the engine.
+options `as:`, `defaults:`, and `constraints:`. A `constraints:` object of the mount is a guard of
+each route of the engine. Without it, the constraint objects of the blocks around the mount are
+the guards.
 
 Omen gives the routes of an engine only when it reads exactly one mount of the engine. These
 conditions give no route for the engine:

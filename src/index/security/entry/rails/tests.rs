@@ -166,7 +166,7 @@ fn a_constraint_object_of_a_scope_a_block_a_route_or_a_resource_is_a_guard() {
     assert_eq!(
         rows(&routes, &[WEBHOOKS]),
         sorted(&[
-            "GET /a WebhooksController.show [A.new, B.new(x: 1), C, check]",
+            "GET /a WebhooksController.show [C, check]",
             "GET /webhooks WebhooksController.index [A.new, B.new(x: 1), D.new, check]",
             "GET /b WebhooksController.show [lambda:8, check]",
             "GET /c WebhooksController.show [lambda:11, check]",
@@ -655,8 +655,35 @@ fn the_constraints_around_a_mount_guard_the_routes_of_the_engine() {
     assert_eq!(
         engine_rows(&[("plugins/blog/plugin.rb", mount)]),
         sorted(&[
-            "GET /blog/posts Blog.PostsController.index [A.new, AdminConstraint.new, ensure_blog]",
-            "GET /blog/posts/:id Blog.PostsController.show [A.new, AdminConstraint.new, ensure_blog]",
+            "GET /blog/posts Blog.PostsController.index [AdminConstraint.new, ensure_blog]",
+            "GET /blog/posts/:id Blog.PostsController.show [AdminConstraint.new, ensure_blog]",
+        ])
+    );
+    let scoped = "Rails.application.routes.draw do\n  scope constraints: A.new do\n    mount Blog::Engine, at: \"/blog\", constraints: { subdomain: \"x\" }\n  end\nend\n";
+    assert_eq!(
+        engine_rows(&[("plugins/blog/plugin.rb", scoped)]),
+        sorted(&[
+            "GET /blog/posts Blog.PostsController.index [A.new, ensure_blog]",
+            "GET /blog/posts/:id Blog.PostsController.show [A.new, ensure_blog]",
+        ])
+    );
+}
+
+#[test]
+fn a_route_constraint_object_in_an_engine_replaces_the_blocks_but_not_the_mount() {
+    let mount = (
+        "plugins/blog/plugin.rb",
+        "Rails.application.routes.draw do\n  mount Blog::Engine, at: \"/blog\", constraints: M.new\nend\n",
+    );
+    let routes = (
+        "plugins/blog/config/routes.rb",
+        "Blog::Engine.routes.draw do\n  scope constraints: S.new do\n    get \"/posts\" => \"posts#index\", constraints: R.new\n    resources :posts, only: :show\n  end\nend\n",
+    );
+    assert_eq!(
+        rows_of(&rails(&[BLOG_ENGINE, BLOG_POSTS, routes, mount])),
+        sorted(&[
+            "GET /blog/posts Blog.PostsController.index [M.new, R.new, ensure_blog]",
+            "GET /blog/posts/:id Blog.PostsController.show [M.new, S.new, ensure_blog]",
         ])
     );
 }
