@@ -323,7 +323,6 @@ fn unwrap(node: Node<'_>) -> Node<'_> {
     node
 }
 
-/// The node with the range. Of two nodes with the same range, the outer one.
 /// Tells if a member of a class body belongs to the class and not to its instances.
 fn is_static(member: Node<'_>) -> bool {
     member.kind() == "class_static_block"
@@ -370,6 +369,7 @@ fn is_plus(node: Node<'_>) -> bool {
             .is_some_and(|operator| operator.kind() == "+")
 }
 
+/// The node with the range. Of two nodes with the same range, the outer one.
 fn node_at<'t>(root: Node<'t>, range: &Range<usize>) -> Option<Node<'t>> {
     let mut node = root.descendant_for_byte_range(range.start, range.end)?;
     while let Some(parent) = node.parent() {
@@ -504,22 +504,16 @@ fn route_of(method: &str, prefix: Option<&[Part]>, path: &[Part]) -> Route {
 
 /// Adds the identifiers that a pattern binds.
 fn pattern_names<'t>(pattern: Node<'t>, out: &mut Vec<Node<'t>>) {
-    match pattern.kind() {
-        "identifier" | "shorthand_property_identifier_pattern" => out.push(pattern),
-        "pair_pattern" => {
-            if let Some(value) = pattern.child_by_field_name("value") {
-                pattern_names(value, out);
+    // A loop with a stack, because a generated pattern can be deeper than the call stack.
+    let mut stack = vec![pattern];
+    while let Some(pattern) = stack.pop() {
+        match pattern.kind() {
+            "identifier" | "shorthand_property_identifier_pattern" => out.push(pattern),
+            "pair_pattern" => stack.extend(pattern.child_by_field_name("value")),
+            "assignment_pattern" | "object_assignment_pattern" => {
+                stack.extend(pattern.child_by_field_name("left"))
             }
-        }
-        "assignment_pattern" | "object_assignment_pattern" => {
-            if let Some(left) = pattern.child_by_field_name("left") {
-                pattern_names(left, out);
-            }
-        }
-        _ => {
-            for child in named_children(pattern) {
-                pattern_names(child, out);
-            }
+            _ => stack.extend(named_children(pattern).into_iter().rev()),
         }
     }
 }
@@ -1218,6 +1212,11 @@ impl<'a> Context<'a> {
     fn path_of(&self, unit: Unit<'_>, node: Node<'_>, hops: usize) -> Vec<Part> {
         let node = unwrap(node);
         let unknown = || vec![Part::Unknown(text(node, unit.source).to_string())];
+        // Each nested operand and each name uses a hop, so the hops bound the depth of the
+        // recursion.
+        if hops > MAX_HOPS {
+            return unknown();
+        }
         let mut parts = match node.kind() {
             "string" => match string_value(node, unit.source) {
                 Some(value) => vec![Part::Text(value)],
@@ -1265,9 +1264,6 @@ impl<'a> Context<'a> {
                     };
                     rights.push(right);
                     left = unwrap(next);
-                }
-                if hops > MAX_HOPS {
-                    return unknown();
                 }
                 let mut parts = self.path_of(unit, left, hops + 1);
                 for right in rights.into_iter().rev() {
@@ -3065,6 +3061,35 @@ mod tests {
             .join()
             .expect("no stack overflow");
         assert_eq!(found, 1);
+    }
+
+    fn routes_on_a_small_stack(source: String) -> usize {
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || http(&[("src/a.ts", &source)]).len())
+            .expect("a thread")
+            .join()
+            .expect("no stack overflow")
+    }
+
+    #[test]
+    fn a_deep_nest_of_templates_does_not_exhaust_the_stack() {
+        let depth = 20_000;
+        let path = format!("{}x{}", "`/${".repeat(depth), "}`".repeat(depth));
+        let source = format!(
+            "import express from 'express';\nconst app = express();\napp.get({path}, handler);\nfunction handler() {{}}\n"
+        );
+        assert_eq!(routes_on_a_small_stack(source), 1);
+    }
+
+    #[test]
+    fn a_deep_destructuring_assignment_does_not_exhaust_the_stack() {
+        let depth = 20_000;
+        let pattern = format!("{}app{}", "[".repeat(depth), "]".repeat(depth));
+        let source = format!(
+            "import express from 'express';\nlet app = express();\n{pattern} = [];\napp.get('/x', handler);\nfunction handler() {{}}\n"
+        );
+        assert_eq!(routes_on_a_small_stack(source), 0);
     }
 
     #[test]
