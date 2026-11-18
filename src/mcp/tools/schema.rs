@@ -142,6 +142,7 @@ mod tests {
                 "min_basis",
                 "offset",
                 "path",
+                "start_line",
                 "symbol"
             ]
         );

@@ -34,33 +34,18 @@ pub fn build(snapshot: &Snapshot, root: &Path, name: &str, options: &Options) ->
         ));
     }
     let index = &snapshot.index;
-    let matches: Vec<_> = index
-        .resolve(name)
-        .into_iter()
-        .filter(|&i| {
-            options
-                .start_line
-                .is_none_or(|line| index.symbols[i].line == line)
-        })
+    let selection = crate::symbol::select(index, name, options.start_line)?;
+    let seed = selection.definition;
+    // A call can resolve to a declaration of the function, such as a C prototype.
+    let roots: Vec<usize> = std::iter::once(seed)
+        .chain(selection.declarations.iter().copied())
         .collect();
-    if matches.len() != 1 {
-        let choices: Vec<_> = matches
-            .iter()
-            .map(|&i| SymbolLocation::from(&index.symbols[i]))
-            .collect();
-        let mut report = json!({"found": !matches.is_empty(), "ambiguous": matches.len() > 1,
-            "choices": choices, "omitted": {"choices": 0},
-            "hint": "Select qualified_name and start_line. No definition selected."});
-        fit(&mut report, options.max_bytes, &["choices"])?;
-        return Ok(report);
-    }
-    let seed = matches[0];
     let mut related = BTreeMap::new();
     related.insert(seed, ("seed", 0));
     for (relation, levels) in [
         (
             "caller",
-            index.callers(&[seed], options.depth, DEFAULT_MIN_BASIS),
+            index.callers(&roots, options.depth, DEFAULT_MIN_BASIS),
         ),
         (
             "callee",
