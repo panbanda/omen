@@ -1498,13 +1498,91 @@ impl<'a> Resolver<'a> {
             .unwrap_or_else(|| Outcome::none(Status::Unresolved))
     }
 
+    /// Tells if `name` is a method of the standard `Arc` or `Rc` that a call
+    /// on the wrapper finds before the methods of its content. Rust searches
+    /// the methods of the wrapper first: its inherent methods, then the
+    /// methods of the traits in scope. These methods do not call the method
+    /// of the content with the same name.
+    fn is_wrapper_method(&self, file: usize, name: &str) -> bool {
+        // The traits of the Rust 2021 prelude: `AsRef`, `Clone`, `Into`,
+        // `ToOwned`, and `TryInto`.
+        const PRELUDE: [&str; 6] = [
+            "as_ref",
+            "clone",
+            "clone_from",
+            "into",
+            "to_owned",
+            "try_into",
+        ];
+        // A method of a different trait applies only when the file imports
+        // the trait or its module with a wildcard.
+        const IMPORTED: [(&str, &str, &[&str]); 3] = [
+            (
+                "borrow",
+                "Borrow",
+                &["std::borrow", "core::borrow", "alloc::borrow"],
+            ),
+            ("deref", "Deref", &["std::ops", "core::ops"]),
+            ("type_id", "Any", &["std::any", "core::any"]),
+        ];
+        if PRELUDE.contains(&name) {
+            return true;
+        }
+        let Some((_, trait_name, modules)) = IMPORTED.iter().find(|(method, ..)| *method == name)
+        else {
+            return false;
+        };
+        self.files[file].imports.iter().any(|binding| {
+            let wildcard = matches!(
+                binding.kind,
+                ImportKind::Wildcard | ImportKind::ReExportWildcard
+            );
+            modules.iter().any(|module| {
+                if wildcard {
+                    binding.module_path == *module
+                } else {
+                    binding.module_path == format!("{module}::{trait_name}")
+                }
+            })
+        })
+    }
+
+    /// The wrapper type of the `self` parameter of the nearest method in
+    /// `chain`, as `Arc` for `self: &Arc<Self>`. `owner` is the type of the
+    /// method. A type of the repository with the name of the wrapper is a
+    /// different type, thus it gives `None`.
+    fn self_parameter_wrapper(&self, file: usize, chain: &[Id], owner: Id) -> Option<&'static str> {
+        let method = chain
+            .iter()
+            .take_while(|id| !is_container(self.symbol(**id)))
+            .find(|id| self.symbol(**id).kind == SymbolKind::Method)?;
+        let declared = self.facts(*method).parameter_types.as_ref()?.first()?;
+        let declared = match declared.strip_prefix('&') {
+            Some(reference) => reference.strip_prefix("mut").unwrap_or(reference),
+            None => declared,
+        };
+        let (path, argument) = declared.split_once('<')?;
+        let owner_name = self.symbol(owner).name.as_str();
+        if argument != "Self>" && argument != format!("{owner_name}>") {
+            return None;
+        }
+        let wrapper = path.rsplit("::").next()?;
+        let wrapper = crate::index::lang::rust::SELF_WRAPPERS
+            .into_iter()
+            .find(|known| *known == wrapper)?;
+        self.types(wrapper, None, file)
+            .is_empty()
+            .then_some(wrapper)
+    }
+
     /// The member of the enclosing type that a call on a local name gets
     /// when the first value of the name is the object in a wrapper, as Rust
     /// `let this = Arc::new(self);` gives. `Arc` and `Rc` give the methods of
     /// their content, but not the methods that they define themselves. A type
     /// of the repository with the name of the wrapper is a different type,
-    /// thus it gives `None`. `self.clone()` gives the object only when the
-    /// `clone` of the type returns `Self`.
+    /// thus it gives `None`. `self.clone()` gives the wrapper when the `self`
+    /// parameter is in a wrapper, and else the object only when the `clone`
+    /// of the type returns `Self`.
     fn on_wrapped_self(
         &self,
         local: &Local,
@@ -1513,27 +1591,18 @@ impl<'a> Resolver<'a> {
         name: &str,
         arity: usize,
     ) -> Option<Outcome> {
-        // The methods of `Arc` and `Rc` that do not call the method of the
-        // content with the same name.
-        const WRAPPER_METHODS: [&str; 9] = [
-            "as_ref",
-            "borrow",
-            "clone",
-            "clone_from",
-            "deref",
-            "into",
-            "to_owned",
-            "try_into",
-            "type_id",
-        ];
         let wrapper = local.self_wrapper.as_deref()?;
-        if !wrapper.is_empty() && !self.types(wrapper, None, file).is_empty() {
-            return None;
-        }
-        if !wrapper.is_empty() && WRAPPER_METHODS.contains(&name) {
+        let owner = self.enclosing_type(chain)?;
+        let wrapper = match wrapper {
+            "" => self
+                .self_parameter_wrapper(file, chain, owner)
+                .unwrap_or_default(),
+            _ if !self.types(wrapper, None, file).is_empty() => return None,
+            _ => wrapper,
+        };
+        if !wrapper.is_empty() && self.is_wrapper_method(file, name) {
             return Some(Outcome::none(Status::External));
         }
-        let owner = self.enclosing_type(chain)?;
         if wrapper.is_empty() {
             let owner_name = self.symbol(owner).name.as_str();
             let clones = self.members(owner, "clone", 0, &mut BTreeSet::new());
@@ -2268,6 +2337,13 @@ impl<'a> Resolver<'a> {
                 if self.family(file) == Family::Ruby && name == "new" {
                     return Outcome::of(Basis::EnclosingType, self.constructors(owner, arity))
                         .unwrap_or_else(|| Outcome::none(Status::Unresolved));
+                }
+                // `self.clone()` with `self: &Arc<Self>` calls `Arc::clone`.
+                if self.family(file) == Family::Rust
+                    && self.self_parameter_wrapper(file, &chain, owner).is_some()
+                    && self.is_wrapper_method(file, name)
+                {
+                    return Outcome::none(Status::External);
                 }
                 let members = self.members(owner, name, arity, &mut BTreeSet::new());
                 Outcome::of(Basis::EnclosingType, members).unwrap_or_else(|| {
@@ -3532,6 +3608,61 @@ mod false_edge_tests {
                 "24 Node.run>this.start UniqueCandidate EnclosingType [a.rs#Node.start]",
             ]
         );
+    }
+
+    /// A method of a trait of `Arc` is the method of the wrapper only when the
+    /// trait is in scope. `Borrow`, `Deref`, and `Any` are not in the prelude,
+    /// thus without an import the call reaches the content.
+    #[test]
+    fn test_rust_trait_method_of_the_wrapper_needs_the_trait_in_scope() {
+        let body = "struct Node;\n\nimpl Node {\n    fn borrow(&self) {}\n\n    fn deref(&self) {}\n\n    fn type_id(&self) {}\n\n    fn run(self) {\n        let this = Arc::new(self);\n        this.borrow();\n        this.deref();\n        this.type_id();\n    }\n}\n";
+        let without = format!("use std::sync::Arc;\n\n{body}");
+        assert_eq!(
+            rows_of(&[("a.rs", without.as_str())], "a.rs", "borrow"),
+            ["14 Node.run>this.borrow UniqueCandidate EnclosingType [a.rs#Node.borrow]"]
+        );
+        assert_eq!(
+            rows_of(&[("a.rs", without.as_str())], "a.rs", "deref"),
+            ["15 Node.run>this.deref UniqueCandidate EnclosingType [a.rs#Node.deref]"]
+        );
+        assert_eq!(
+            rows_of(&[("a.rs", without.as_str())], "a.rs", "type_id"),
+            ["16 Node.run>this.type_id UniqueCandidate EnclosingType [a.rs#Node.type_id]"]
+        );
+        let imported = format!(
+            "use std::any::Any;\nuse std::borrow::Borrow;\nuse std::sync::Arc;\nuse core::ops::*;\n\n{body}"
+        );
+        for name in ["borrow", "deref", "type_id"] {
+            let rows = rows_of(&[("a.rs", imported.as_str())], "a.rs", name);
+            assert_eq!(rows.len(), 1, "{name}");
+            assert!(rows[0].ends_with(" External - []"), "{rows:?}");
+        }
+    }
+
+    /// With `self: &Arc<Self>` or `self: Rc<Self>`, `self.clone()` is the
+    /// `clone` of the wrapper, also when the type has an inherent `clone`.
+    #[test]
+    fn test_rust_clone_of_a_wrapped_self_parameter_is_the_wrapper() {
+        for receiver in [
+            "self: &Arc<Self>",
+            "self: Arc<Self>",
+            "self: &std::rc::Rc<Self>",
+        ] {
+            let source = format!("use std::sync::Arc;\n\nstruct Node;\n\nstruct Other;\n\nimpl Other {{\n    fn start(&self) {{}}\n}}\n\nimpl Node {{\n    fn start(&self) {{}}\n\n    fn clone(&self) -> Other {{\n        Other\n    }}\n\n    fn share({receiver}) {{\n        let copy = self.clone();\n        copy.start();\n        copy.clone();\n    }}\n}}\n");
+            assert_eq!(
+                rows_of(&[("a.rs", source.as_str())], "a.rs", "start"),
+                ["20 Node.share>copy.start UniqueCandidate EnclosingType [a.rs#Node.start]"],
+                "{receiver}"
+            );
+            assert_eq!(
+                rows_of(&[("a.rs", source.as_str())], "a.rs", "clone"),
+                [
+                    "19 Node.share>self.clone External - []",
+                    "21 Node.share>copy.clone External - []",
+                ],
+                "{receiver}"
+            );
+        }
     }
 
     /// A type of the repository with the name `Arc` is not the standard type.

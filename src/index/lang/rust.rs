@@ -76,7 +76,7 @@ const TEXT_ID_MEMO: u8 = 1;
 const IMPLEMENTATION_MEMO: u8 = 2;
 
 /// The types that hold the object of a method and give its methods.
-const SELF_WRAPPERS: [&str; 2] = ["Arc", "Rc"];
+pub const SELF_WRAPPERS: [&str; 2] = ["Arc", "Rc"];
 
 /// The longest text of a first value that `self_wrapper` reads.
 const SELF_WRAPPER_LIMIT: usize = 48;
