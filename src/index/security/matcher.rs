@@ -99,6 +99,33 @@ fn split_path(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The package of an import path: `@scope/name/sub` gives `@scope/name`, and `name/sub`
+/// gives `name`.
+fn package_name(module_path: &str) -> String {
+    let mut parts = module_path.split('/');
+    let first = parts.next().unwrap_or_default();
+    match parts.next() {
+        Some(second) if first.starts_with('@') => format!("{first}/{second}"),
+        _ => first.to_string(),
+    }
+}
+
+/// An import of an external package that is not in `packages` gives the owner.
+fn is_other_package(packages: &str, owner: &Owner) -> bool {
+    let Owner::Paths {
+        package: Some(package),
+        ..
+    } = owner
+    else {
+        return false;
+    };
+    let unscoped = package.rsplit('/').next().unwrap_or(package);
+    !packages.is_empty()
+        && !packages
+            .split('|')
+            .any(|listed| listed == package || listed == unscoped)
+}
+
 /// The path of a declared type: `&mut sql.DB` gives `sql`, `DB`.
 fn type_segments(text: &str) -> Option<Vec<String>> {
     let mut rest = text.trim();
@@ -230,9 +257,11 @@ enum Owner {
     /// The head is a variable that has no known type.
     Unknown,
     /// The paths that the written path can mean. `imported` tells that an import gave them.
+    /// `package` is the external package of that import, when the import names one.
     Paths {
         paths: Vec<Vec<String>>,
         imported: bool,
+        package: Option<String>,
     },
 }
 
@@ -457,6 +486,8 @@ impl FileContext<'_> {
             return Owner::Paths {
                 paths: vec![path],
                 imported: true,
+                package: (binding.target_file == ImportTarget::External)
+                    .then(|| package_name(&binding.module_path)),
             };
         }
         let wildcards: Vec<&ImportBinding> = imports
@@ -488,6 +519,7 @@ impl FileContext<'_> {
             return Owner::Paths {
                 paths: external,
                 imported: true,
+                package: None,
             };
         }
         if self.is_root(&head) && self.repository.all.contains(head.as_str()) {
@@ -496,6 +528,7 @@ impl FileContext<'_> {
         Owner::Paths {
             paths: vec![written],
             imported: false,
+            package: None,
         }
     }
 
@@ -640,7 +673,7 @@ impl FileContext<'_> {
                 .iter()
                 .copied()
                 .filter(|spec| match spec.target {
-                    Target::Path { callee, .. } | Target::Method { callee } => {
+                    Target::Path { callee, .. } | Target::Method { callee, .. } => {
                         aliased
                             || callee == "*"
                             || callee.split('|').any(|name| name == callee_name)
@@ -696,11 +729,19 @@ impl FileContext<'_> {
                     &call_arguments
                 };
                 let matched: Option<(SinkBasis, String)> = match (&spec.target, &owner) {
-                    (_, Owner::Repository) => None,
-                    (Target::Method { .. }, _) => (reference.receiver.is_some()
+                    // A repository class can inherit the method from a library class. Thus
+                    // only a repository definition of the method itself excludes the call.
+                    (Target::Method { packages, .. }, _) => (reference.receiver.is_some()
+                        && !is_other_package(packages, &owner)
                         && !self.resolver_selected_repository(reference))
                     .then(|| (SinkBasis::NameOnly, format!("*.{}", reference.name))),
-                    (Target::Path { module, callee }, Owner::Paths { paths, imported }) => paths
+                    (_, Owner::Repository) => None,
+                    (
+                        Target::Path { module, callee },
+                        Owner::Paths {
+                            paths, imported, ..
+                        },
+                    ) => paths
                         .iter()
                         .find_map(|path| {
                             self.path_match(module, callee, path, *imported)
@@ -797,7 +838,9 @@ impl FileContext<'_> {
             .collect();
         let function = chain_segments(&function_text)?;
         let is_promisify = match self.resolve(&function, chain, start) {
-            Owner::Paths { paths, imported } => paths.iter().any(|path| {
+            Owner::Paths {
+                paths, imported, ..
+            } => paths.iter().any(|path| {
                 self.path_match("util|node:util", "promisify", path, imported)
                     .is_some()
             }),
@@ -1031,7 +1074,9 @@ impl FileContext<'_> {
                 }
                 let chain = self.owner_chain(self.enclosing_position(node.start_byte()));
                 return match self.resolve(&written, &chain, node.start_byte()) {
-                    Owner::Paths { paths, imported } => paths
+                    Owner::Paths {
+                        paths, imported, ..
+                    } => paths
                         .iter()
                         .any(|path| self.path_match(module, owner, path, imported).is_some()),
                     Owner::Repository | Owner::Unknown => false,
@@ -1244,7 +1289,9 @@ impl FileContext<'_> {
             return;
         }
         let chain = self.owner_chain(self.enclosing_position(node.start_byte()));
-        let Owner::Paths { paths, imported } = self.resolve(&written, &chain, node.start_byte())
+        let Owner::Paths {
+            paths, imported, ..
+        } = self.resolve(&written, &chain, node.start_byte())
         else {
             return;
         };
@@ -1292,7 +1339,10 @@ impl FileContext<'_> {
         }
         let chain = self.owner_chain(self.enclosing_position(node.start_byte()));
         let owner = self.resolve(&written, &chain, node.start_byte());
-        let Owner::Paths { paths, imported } = owner else {
+        let Owner::Paths {
+            paths, imported, ..
+        } = owner
+        else {
             return false;
         };
         for spec in &self.specs {

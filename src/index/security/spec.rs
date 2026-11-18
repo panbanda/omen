@@ -97,6 +97,11 @@ pub enum Target {
     /// A method call on a receiver of unknown type. Only the name gives the evidence.
     Method {
         callee: &'static str,
+        /// The packages whose objects have the method. Empty means any. When an import of an
+        /// external package that is not in the list gives the receiver, the call is not a sink.
+        /// A package matches by its full name or by its name without the scope, thus
+        /// `typeorm` matches `@n8n/typeorm`.
+        packages: &'static str,
     },
     /// A member access that is not a call.
     Mention {
@@ -217,7 +222,10 @@ const fn method(
     SinkSpec {
         category,
         languages,
-        target: Target::Method { callee },
+        target: Target::Method {
+            callee,
+            packages: "",
+        },
         predicate,
     }
 }
@@ -434,12 +442,19 @@ pub const SPECS: &[SinkSpec] = &[
         Predicate::HasArgument { index: 0 },
     ),
     path(UnsafeDeserialization, ECMA, "node-serialize", "unserialize", Always),
-    method(
-        SqlStringConstruction,
-        ECMA,
-        "query|execute|raw|queryRawUnsafe|$queryRawUnsafe",
-        built(0),
-    ),
+    SinkSpec {
+        category: SqlStringConstruction,
+        languages: ECMA,
+        target: Target::Method {
+            callee: "query|execute|raw|queryRawUnsafe|$queryRawUnsafe",
+            packages: "pg|pg-pool|pg-promise|postgres|mysql|mysql2|mariadb|mssql|tedious|oracledb|\
+                       sqlite|sqlite3|better-sqlite3|knex|typeorm|sequelize|@prisma/client|\
+                       kysely|drizzle-orm|@mikro-orm/core|objection|slonik|alasql|duckdb|\
+                       @google-cloud/bigquery|snowflake-sdk|@databricks/sql|@neondatabase/serverless|\
+                       @vercel/postgres|@planetscale/database|@libsql/client",
+        },
+        predicate: built(0),
+    },
     path(
         WeakHash,
         ECMA,

@@ -1155,6 +1155,53 @@ mod tests {
     }
 
     #[test]
+    fn an_array_argument_is_not_a_built_sql_string_ecma() {
+        let source = "export async function run(git, db, branch: string) {\n  await git.raw([\"init\", `--initial-branch=${branch}`]);\n  await db.raw(`SELECT * FROM t WHERE name = '${branch}'`);\n  await db.query([`SELECT ${branch}`]);\n  await db.query`SELECT * FROM t WHERE name = ${branch}`;\n  return String.raw`${branch}\\.json`;\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [(3, "sql_string_construction", false)]
+        );
+    }
+
+    #[test]
+    fn a_receiver_of_a_library_that_is_not_sql_is_not_a_sql_sink_ecma() {
+        let source = "import type { SimpleGit } from \"simple-git\";\nimport type { Knex } from \"knex\";\nimport type { QueryRunner } from \"@n8n/typeorm\";\n\nexport async function run(git: SimpleGit, knex: Knex, runner: QueryRunner, other, name: string) {\n  await git.raw(`log ${name}`);\n  await knex.raw(`SELECT * FROM t WHERE name = '${name}'`);\n  await runner.query(`SELECT * FROM t WHERE name = '${name}'`);\n  await other.query(`SELECT * FROM t WHERE name = '${name}'`);\n}\n";
+        assert_eq!(
+            found(Language::TypeScript, &[("a.ts", source)]),
+            [
+                one("a.ts", 7, "sql_string_construction", "name_only"),
+                one("a.ts", 8, "sql_string_construction", "name_only"),
+                one("a.ts", 9, "sql_string_construction", "name_only"),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_inherited_sql_method_of_a_repository_class_is_a_sink_ecma() {
+        let repository = "import { Repository } from \"typeorm\";\n\nexport class Statistics extends Repository<object> {\n  count() {\n    return 1;\n  }\n}\n\nexport class Own {\n  query(text: string) {\n    return text;\n  }\n}\n";
+        let main = "import { Statistics, Own } from \"./repository\";\n\nexport async function run(statistics: Statistics, own: Own, id: string) {\n  await statistics.query(`SELECT * FROM t WHERE id = ${id}`);\n  await own.query(`SELECT * FROM t WHERE id = ${id}`);\n}\n";
+        assert_eq!(
+            found(
+                Language::TypeScript,
+                &[("main.ts", main), ("repository.ts", repository)]
+            ),
+            [one("main.ts", 4, "sql_string_construction", "name_only")]
+        );
+    }
+
+    #[test]
+    fn a_template_with_only_literal_substitutions_is_constant_ecma() {
+        let source = "export async function run(db, prefix: string) {\n  await db.query(`SELECT * FROM ${\"users\"} WHERE id = ${1}`);\n  await db.query(`SELECT * FROM ${prefix}users`);\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [
+                (2, "sql_string_construction", true),
+                (3, "sql_string_construction", false),
+            ]
+        );
+    }
+
+    #[test]
     fn a_trusted_html_string_is_unsafe_html_output_csharp_and_rust() {
         let csharp = "using Microsoft.AspNetCore.Html;\n\npublic class A {\n    public object Run(string text) {\n        new HtmlString(text);\n        return new HtmlString(\"<br>\");\n    }\n}\n";
         assert_eq!(

@@ -79,6 +79,10 @@ pub fn arguments<'tree>(call: Node<'tree>, language: Language) -> Vec<Node<'tree
         let mut cursor = call.walk();
         nodes.extend(call.children_by_field_name("argument", &mut cursor));
     } else if let Some(list) = call.child_by_field_name("arguments") {
+        // The template of a tagged template is the one argument.
+        if list.kind() == "template_string" {
+            return vec![list];
+        }
         let mut cursor = list.walk();
         nodes.extend(list.named_children(&mut cursor));
     }
@@ -297,7 +301,31 @@ pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -
         | "member_call_expression" => {
             FORMAT_CALLEES.contains(&callee_name(node, source)) && !is_composed_format(node, source)
         }
+        // A tag function gets the parts and the values of a template apart, as
+        // `String.raw` and `sql` do. Thus a tagged template does not build a string.
+        "template_string"
+            if node.parent().is_some_and(|parent| {
+                parent.kind() == "call_expression"
+                    && parent.child_by_field_name("arguments") == Some(node)
+            }) =>
+        {
+            false
+        }
+        // An array of strings is not one string, as `git.raw(["log", `${name}`])` shows.
+        "array" | "list" | "tuple" | "array_expression" | "array_creation_expression" => false,
         _ => has_interpolation(node),
+    }
+}
+
+/// The interpolations of a string that are not in another interpolation.
+fn outer_interpolations<'tree>(node: Node<'tree>, found: &mut Vec<Node<'tree>>) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if is_interpolation(child.kind()) {
+            found.push(child);
+        } else {
+            outer_interpolations(child, found);
+        }
     }
 }
 
@@ -320,7 +348,22 @@ pub fn is_literal(node: Node<'_>) -> bool {
         return !operands.is_empty() && operands.into_iter().all(is_literal);
     }
     if kind.contains("string") {
-        return !has_interpolation(node);
+        if node.kind() == "encapsed_string"
+            && has_descendant(node, &|child| child.kind() == "variable_name")
+        {
+            return false;
+        }
+        // An interpolation of literals only, as `${"users"}`, gives a constant.
+        let mut interpolations = Vec::new();
+        outer_interpolations(node, &mut interpolations);
+        return interpolations.into_iter().all(|interpolation| {
+            let mut cursor = interpolation.walk();
+            let values: Vec<Node<'_>> = interpolation
+                .named_children(&mut cursor)
+                .filter(|value| !value.kind().contains("comment"))
+                .collect();
+            !values.is_empty() && values.into_iter().all(is_literal)
+        });
     }
     [
         "integer", "float", "number", "true", "false", "null", "nil", "none", "char", "boolean",

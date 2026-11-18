@@ -88,6 +88,10 @@
     {"label": "tls_verification_disabled.real_call.setting_property", "category": "tls_verification_disabled", "scenario": "real_call", "file": "tls_property.ts", "line": 5, "basis": "name_only", "constant_argument": false},
     {"label": "tls_verification_disabled.safe_variant.true_property", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_property.ts", "line": 6, "flagged": false},
     {"label": "tls_verification_disabled.safe_variant.destructured", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_property.ts", "line": 7, "flagged": false},
-    {"label": "tls_verification_disabled.real_call.environment", "category": "tls_verification_disabled", "scenario": "real_call", "file": "tls_property.ts", "line": 8, "basis": "name_only", "constant_argument": true}
+    {"label": "tls_verification_disabled.real_call.environment", "category": "tls_verification_disabled", "scenario": "real_call", "file": "tls_property.ts", "line": 8, "basis": "name_only", "constant_argument": true},
+    {"label": "sql_string_construction.same_name_symbol.simple_git_raw", "category": "sql_string_construction", "scenario": "same_name_symbol", "file": "sql_receiver.ts", "line": 5, "flagged": false},
+    {"label": "sql_string_construction.real_call.knex_raw", "category": "sql_string_construction", "scenario": "real_call", "file": "sql_receiver.ts", "line": 6, "basis": "name_only", "constant_argument": false},
+    {"label": "sql_string_construction.real_call.literal_substitution", "category": "sql_string_construction", "scenario": "real_call", "file": "sql_receiver.ts", "line": 7, "basis": "name_only", "constant_argument": true},
+    {"label": "sql_string_construction.safe_variant.array_argument", "category": "sql_string_construction", "scenario": "safe_variant", "file": "sql_receiver.ts", "line": 8, "flagged": false}
   ]
 }

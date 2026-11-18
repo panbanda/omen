@@ -133,6 +133,26 @@ and the forms with `Context`, with the SQL text second. A built string as the SQ
 the sink. Omen does not use the names `Get` and `Select`: other libraries use them for a
 key or a value.
 
+The Node SQL sinks are the methods `query`, `execute`, `raw`, `queryRawUnsafe`, and
+`$queryRawUnsafe`, with a built string as the first argument. These rules limit them:
+
+- When an import of an external package gives the receiver, as `git: SimpleGit` from
+  `simple-git` does, the package must be a SQL library, such as `pg`, `mysql2`, `knex`,
+  `typeorm`, `sequelize`, or `@prisma/client`. The list is in `src/index/security/spec.rs`.
+  A package matches by its full name or by its name without the scope, thus `typeorm`
+  matches `@n8n/typeorm`. A receiver without a known package stays a sink with the basis
+  `name_only`.
+- A repository class can inherit the method from a library class, as a TypeORM
+  `Repository` does. Thus only a repository definition of the method excludes the call.
+- An array is not a built string, as `git.raw(["log", `${name}`])` shows.
+- A tagged template, as ``String.raw`...` `` or ``sql`...` ``, is not a built string: the
+  tag function gets the parts and the values apart.
+
+A template whose substitutions are all literals, as `` `SELECT ${"a"}` ``, has
+`constant_argument: true`. Omen does not mark other templates as constant. A substitution
+of a variable, of a field, or of a parameter, such as `${tablePrefix}` in a TypeORM
+migration, can have a value from the configuration, and omen does not follow values.
+
 The precision of each category on real repositories is in
 `docs/benchmarks/security-precision.md`. A category with a precision below 50
 percent is experimental: omen does not look for it unless you use `--experimental`.
