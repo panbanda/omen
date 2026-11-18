@@ -52,6 +52,7 @@ struct Repository<'a> {
     rust_parents: RwLock<HashMap<String, Option<String>>>,
     /// The options of each TypeScript project file after `extends`.
     project_options: RwLock<HashMap<String, std::sync::Arc<typescript::ProjectOptions>>>,
+    inherited_options: typescript::InheritedMemo,
 }
 
 /// The module tree of the Rust files of an index: which file is the root of a crate, the
@@ -151,6 +152,7 @@ impl<'a> Repository<'a> {
             rust_module_declarations,
             rust_parents: RwLock::new(HashMap::new()),
             project_options: RwLock::new(HashMap::new()),
+            inherited_options: RwLock::new(HashMap::new()),
         };
         repository.read_rust_packages();
         repository
@@ -250,7 +252,8 @@ pub struct Manifests {
     pub rust_packages: BTreeMap<String, cargo::Package>,
     /// The directories of the Rust packages, by the name of their library.
     pub rust_library_directories: BTreeMap<String, BTreeSet<String>>,
-    /// The packages that the `package.json` files of the repository name.
+    /// The packages that the `package.json` files of the repository name,
+    /// sorted by the name.
     pub node_packages: Vec<NodePackage>,
     /// The project files of TypeScript and JavaScript.
     pub projects: typescript::ProjectConfigs,
@@ -367,12 +370,12 @@ impl Manifests {
         let here = directory(path);
         if typescript::is_project_file(file_name(path)) {
             if let Some(config) = typescript::project_config(text) {
-                self.projects.configs.insert(path.to_string(), config);
+                self.projects.insert(path.to_string(), config);
             }
         } else if file_name(path) == "package.json" {
             self.node_packages.extend(node_package(here, text));
             self.node_packages.sort_by(|left, right| {
-                (&left.directory, &left.name).cmp(&(&right.directory, &right.name))
+                (&left.name, &left.directory).cmp(&(&right.name, &right.directory))
             });
         } else if file_name(path) == "go.mod" {
             self.go_modules
@@ -731,12 +734,8 @@ impl Repository<'_> {
         // repository are the candidates.
         let mut own_package = false;
         let mut found = BTreeSet::new();
-        for package in &self.manifests.node_packages {
-            let subpath = match path.strip_prefix(package.name.as_str()) {
-                Some("") => ".".to_string(),
-                Some(rest) if rest.starts_with('/') => format!(".{rest}"),
-                _ => continue,
-            };
+        for (package, rest) in typescript::packages_of(&self.manifests.node_packages, path) {
+            let subpath = format!(".{rest}");
             own_package = true;
             found.extend(self.package_files(package, &subpath));
         }
@@ -789,11 +788,11 @@ impl Repository<'_> {
         if let Some(found) = self.project_options.read().get(config) {
             return std::sync::Arc::clone(found);
         }
-        let options = std::sync::Arc::new(
-            self.manifests
-                .projects
-                .options(config, &self.manifests.node_packages),
-        );
+        let options = std::sync::Arc::new(self.manifests.projects.options(
+            config,
+            &self.manifests.node_packages,
+            &self.inherited_options,
+        ));
         self.project_options
             .write()
             .insert(config.to_string(), std::sync::Arc::clone(&options));
@@ -1709,6 +1708,16 @@ mod typescript_tests {
                 "import { trim } from '@shared/text';\nimport { run } from '~/run';\n",
             ),
             ("packages/api/src/run.ts", "export function run() {}\n"),
+            // A second config that extends the same base gets its own `${configDir}`.
+            (
+                "packages/admin/tsconfig.json",
+                "{\"extends\": \"@acme/config/tsconfig.local.json\"}",
+            ),
+            (
+                "packages/admin/src/main.ts",
+                "import { run } from '~/run';\n",
+            ),
+            ("packages/admin/src/run.ts", "export function run() {}\n"),
         ];
         assert_eq!(
             target(&files, "packages/web/src/main.ts", "@shared/text"),
@@ -1722,6 +1731,10 @@ mod typescript_tests {
         assert_eq!(
             target(&files, "packages/api/src/main.ts", "@shared/text"),
             "external"
+        );
+        assert_eq!(
+            target(&files, "packages/admin/src/main.ts", "~/run"),
+            "packages/admin/src/run.ts"
         );
     }
 
@@ -1821,5 +1834,119 @@ mod typescript_tests {
             target(&files, main, "@acme/utils/pair"),
             "ambiguous(packages/utils/src/pair.ts,packages/utils/src/pair.tsx)"
         );
+    }
+}
+
+#[cfg(test)]
+mod typescript_timing_tests {
+    use super::testing::rows;
+    use crate::index::resolve::function_references::assert_scales_linearly;
+
+    /// A config with `size` patterns, `size` packages whose configs extend
+    /// it, and one file with `size` imports through the patterns.
+    fn path_patterns_at(size: usize) -> std::time::Duration {
+        let patterns: Vec<String> = (0..size)
+            .map(|position| format!("\"@lib{position}/*\": [\"libs/lib{position}/src/*\"]"))
+            .collect();
+        let mut owned = vec![(
+            "tsconfig.base.json".to_string(),
+            format!(
+                "{{ \"compilerOptions\": {{ \"paths\": {{ {} }} }} }}",
+                patterns.join(", ")
+            ),
+        )];
+        let mut main = String::new();
+        for position in 0..size {
+            owned.push((
+                format!("libs/lib{position}/tsconfig.json"),
+                "{ \"extends\": \"../../tsconfig.base.json\" }".to_string(),
+            ));
+            owned.push((
+                format!("libs/lib{position}/src/index.ts"),
+                "export const value = 1;\n".to_string(),
+            ));
+            main.push_str(&format!(
+                "import {{ value as v{position} }} from '@lib{position}/index';\n"
+            ));
+        }
+        owned.push((
+            "app/tsconfig.json".to_string(),
+            "{ \"extends\": \"../tsconfig.base.json\" }".to_string(),
+        ));
+        owned.push(("app/main.ts".to_string(), main));
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let found = rows(&files, "app/main.ts");
+        let elapsed = started.elapsed();
+        assert_eq!(found.len(), size);
+        let last = format!("libs/lib{}/src/index.ts", size - 1);
+        assert!(
+            found.iter().any(|row| row.contains(&last)),
+            "{:?}",
+            found.last()
+        );
+        elapsed
+    }
+
+    /// A chain of `size` configs in sibling directories, each of which
+    /// extends the config before it, and one file beside each config that
+    /// imports through the pattern of the first config.
+    fn chain_of_extends_at(size: usize) -> std::time::Duration {
+        let mut owned = vec![
+            (
+                "c0/tsconfig.json".to_string(),
+                "{ \"compilerOptions\": { \"paths\": { \"@shared/*\": [\"./shared/*\"] } } }"
+                    .to_string(),
+            ),
+            (
+                "c0/shared/value.ts".to_string(),
+                "export const value = 1;\n".to_string(),
+            ),
+        ];
+        for position in 1..size {
+            owned.push((
+                format!("c{position}/tsconfig.json"),
+                format!("{{ \"extends\": \"../c{}/tsconfig.json\" }}", position - 1),
+            ));
+            owned.push((
+                format!("c{position}/main.ts"),
+                "import { value } from '@shared/value';\n".to_string(),
+            ));
+        }
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let last = format!("c{}/main.ts", size - 1);
+        let started = std::time::Instant::now();
+        let found = rows(&files, &last);
+        let elapsed = started.elapsed();
+        assert!(found[0].contains("c0/shared/value.ts"), "{found:?}");
+        elapsed
+    }
+
+    #[test]
+    fn test_chain_of_extends_resolves() {
+        chain_of_extends_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_chain_of_extends_resolves_in_linear_time() {
+        assert_scales_linearly("chain of extends", 500, chain_of_extends_at);
+    }
+
+    #[test]
+    fn test_many_path_patterns_resolve() {
+        path_patterns_at(50);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_path_patterns_resolve_in_linear_time() {
+        assert_scales_linearly("path patterns", 2_000, path_patterns_at);
     }
 }

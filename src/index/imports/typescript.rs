@@ -12,7 +12,10 @@
 //! A path in an option is relative to the config that has the option.
 //! `${configDir}` is the directory of the config that the tool reads first.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
 
 use super::{directory, file_name, join, NodePackage};
 
@@ -69,21 +72,30 @@ impl ProjectOptions {
             return (Vec::new(), false);
         };
         let exact = patterns
-            .iter()
-            .find(|(pattern, _)| pattern == module)
-            .map(|(_, substitutions)| (substitutions, ""));
+            .binary_search_by(|(pattern, _)| pattern.as_str().cmp(module))
+            .ok()
+            .map(|position| (&patterns[position].1, ""));
+        // The patterns are sorted, thus the patterns with one prefix before
+        // `*` are together. The search tries the longest prefix first, and
+        // the cost does not grow with the number of patterns.
         let wildcard = || {
-            patterns
-                .iter()
-                .filter_map(|(pattern, substitutions)| {
-                    let (prefix, suffix) = pattern.split_once('*')?;
-                    let matched = module.strip_prefix(prefix)?.strip_suffix(suffix)?;
-                    Some((prefix.len(), substitutions, matched, pattern == "*"))
-                })
-                // The first pattern wins a tie.
+            (0..=module.len())
                 .rev()
-                .max_by_key(|(prefix, _, _, _)| *prefix)
-                .map(|(_, substitutions, matched, catch_all)| (substitutions, matched, catch_all))
+                .filter(|length| module.is_char_boundary(*length))
+                .map(|length| &module[..length])
+                .filter(|prefix| !prefix.contains('*'))
+                .find_map(|prefix| {
+                    let start = format!("{prefix}*");
+                    let first = patterns.partition_point(|(pattern, _)| *pattern < start);
+                    patterns[first..]
+                        .iter()
+                        .take_while(|(pattern, _)| pattern.starts_with(&start))
+                        .find_map(|(pattern, substitutions)| {
+                            let matched =
+                                module[prefix.len()..].strip_suffix(&pattern[start.len()..])?;
+                            Some((substitutions, matched, pattern == "*"))
+                        })
+                })
         };
         let exact = exact.map(|(substitutions, matched)| (substitutions, matched, false));
         let Some((substitutions, matched, catch_all)) = exact.or_else(wildcard) else {
@@ -228,7 +240,11 @@ pub fn project_config(text: &str) -> Option<ProjectConfig> {
                         .collect();
                     (pattern.clone(), substitutions)
                 })
-                .collect()
+                .collect::<PathPatterns>()
+        })
+        .map(|mut paths| {
+            paths.sort_by(|left, right| left.0.cmp(&right.0));
+            paths
         });
     Some(ProjectConfig {
         extends,
@@ -242,25 +258,79 @@ pub fn project_config(text: &str) -> Option<ProjectConfig> {
 /// The project files of the repository, by their path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProjectConfigs {
-    pub configs: BTreeMap<String, ProjectConfig>,
+    configs: BTreeMap<String, ProjectConfig>,
+    /// The paths of the configs, by their directory.
+    directories: BTreeMap<String, Vec<String>>,
+}
+
+/// The options of a config after `extends`, before `${configDir}` has a
+/// value. Each path keeps the directory of the config that has it.
+#[derive(Debug, Clone, Default)]
+pub struct Inherited {
+    base_url: Option<Located>,
+    paths: Option<(PathPatterns, String)>,
+    out_dir: Option<Located>,
+    root_dir: Option<Located>,
+}
+
+/// The text of a path option and the directory of the config that has it.
+#[derive(Debug, Clone)]
+struct Located {
+    directory: String,
+    text: String,
+}
+
+/// The options of each config after `extends`, by the path of the config.
+pub type InheritedMemo = RwLock<HashMap<String, Arc<Inherited>>>;
+
+/// The packages whose name is `module` or a prefix of `module` before a
+/// `/`, and the rest of `module` after the name. `packages` is sorted by
+/// the name.
+pub fn packages_of<'a, 'm>(
+    packages: &'a [NodePackage],
+    module: &'m str,
+) -> impl Iterator<Item = (&'a NodePackage, &'m str)> + 'a
+where
+    'm: 'a,
+{
+    module
+        .match_indices('/')
+        .map(|(position, _)| position)
+        .chain([module.len()])
+        .flat_map(move |end| {
+            let name = &module[..end];
+            let first = packages.partition_point(|package| package.name.as_str() < name);
+            packages[first..]
+                .iter()
+                .take_while(move |package| package.name == name)
+                .map(move |package| (package, &module[end..]))
+        })
 }
 
 impl ProjectConfigs {
+    pub fn insert(&mut self, path: String, config: ProjectConfig) {
+        let paths = self
+            .directories
+            .entry(directory(&path).to_string())
+            .or_default();
+        if let Err(position) = paths.binary_search(&path) {
+            paths.insert(position, path.clone());
+        }
+        self.configs.insert(path, config);
+    }
+
     /// The path of the config that `extends` names in the config at `from`.
     /// A name that is not a relative path names a file of a package. The
     /// result is `None` when the repository does not have the file.
+    /// `packages` is sorted by the name.
     pub fn extended(&self, from: &str, name: &str, packages: &[NodePackage]) -> Option<String> {
         let candidates: Vec<String> = if name.starts_with('.') {
             join(directory(from), name).into_iter().collect()
         } else {
-            packages
-                .iter()
-                .filter_map(|package| {
-                    let rest = name.strip_prefix(package.name.as_str())?;
-                    match rest {
-                        "" => join(&package.directory, "tsconfig.json"),
-                        rest => join(&package.directory, rest.strip_prefix('/')?),
-                    }
+            packages_of(packages, name)
+                .filter_map(|(package, rest)| match rest {
+                    "" => join(&package.directory, "tsconfig.json"),
+                    rest => join(&package.directory, rest.strip_prefix('/')?),
                 })
                 .collect()
         };
@@ -280,7 +350,8 @@ impl ProjectConfigs {
     }
 
     /// The paths that `extends` of the config at `path` names and that the
-    /// repository can have, but that the index did not read.
+    /// repository can have, but that the index did not read. `packages` is
+    /// sorted by the name.
     pub fn unread(&self, packages: &[NodePackage]) -> Vec<String> {
         let mut unread = Vec::new();
         for (path, config) in &self.configs {
@@ -295,10 +366,7 @@ impl ProjectConfigs {
                     }
                     continue;
                 }
-                for package in packages {
-                    let Some(rest) = name.strip_prefix(package.name.as_str()) else {
-                        continue;
-                    };
+                for (package, rest) in packages_of(packages, name) {
                     let target = match rest {
                         "" => join(&package.directory, "tsconfig.json"),
                         rest => rest
@@ -317,7 +385,8 @@ impl ProjectConfigs {
         unread
     }
 
-    /// The names of the packages that `extends` names and that the index does not know.
+    /// The names of the packages that `extends` names and that the index
+    /// does not know. `packages` is sorted by the name.
     pub fn unknown_packages(&self, packages: &[NodePackage]) -> Vec<String> {
         let mut names: Vec<String> = self
             .configs
@@ -332,7 +401,9 @@ impl ProjectConfigs {
                 } else {
                     first.to_string()
                 };
-                let known = packages.iter().any(|known| known.name == package);
+                let known = packages
+                    .binary_search_by(|known| known.name.as_str().cmp(&package))
+                    .is_ok();
                 (!known).then_some(package)
             })
             .collect();
@@ -341,52 +412,28 @@ impl ProjectConfigs {
         names
     }
 
-    /// The options of the config at `path`, after `extends`.
-    pub fn options(&self, path: &str, packages: &[NodePackage]) -> ProjectOptions {
-        let leaf = directory(path).to_string();
-        self.options_of(path, &leaf, packages, &mut Vec::new())
-    }
-
-    fn options_of(
+    /// The options of the config at `path`, after `extends`. `memo` keeps
+    /// the options of each config of a chain of `extends`, thus each config
+    /// is read one time. `packages` is sorted by the name.
+    pub fn options(
         &self,
         path: &str,
-        leaf: &str,
         packages: &[NodePackage],
-        seen: &mut Vec<String>,
+        memo: &InheritedMemo,
     ) -> ProjectOptions {
-        let Some(config) = self.configs.get(path) else {
-            return ProjectOptions::default();
-        };
-        if seen.iter().any(|earlier| earlier == path) {
-            return ProjectOptions::default();
-        }
-        seen.push(path.to_string());
-        let mut options = ProjectOptions::default();
-        for name in &config.extends {
-            let Some(parent) = self.extended(path, name, packages) else {
-                continue;
-            };
-            let inherited = self.options_of(&parent, leaf, packages, seen);
-            options.base_url = inherited.base_url.or(options.base_url);
-            options.paths = inherited.paths.or(options.paths);
-            options.out_dir = inherited.out_dir.or(options.out_dir);
-            options.root_dir = inherited.root_dir.or(options.root_dir);
-        }
-        seen.pop();
-        let here = directory(path);
-        let to_leaf = relative_to(here, leaf);
-        let located = |text: &Option<String>| -> Option<String> {
-            let text = text.as_deref()?.replace("${configDir}", &to_leaf);
+        let (inherited, _) = self.inherited(path, packages, memo, &mut HashSet::new());
+        let leaf = directory(path);
+        let located = |option: &Option<Located>| -> Option<String> {
+            let Located { directory, text } = option.as_ref()?;
+            let text = text.replace("${configDir}", &relative_to(directory, leaf));
             if text.starts_with('/') {
                 return None;
             }
-            join(here, &text)
+            join(directory, &text)
         };
-        if config.base_url.is_some() {
-            options.base_url = located(&config.base_url);
-        }
-        if let Some(paths) = &config.paths {
-            let paths = paths
+        let paths = inherited.paths.as_ref().map(|(patterns, directory)| {
+            let to_leaf = relative_to(directory, leaf);
+            let patterns = patterns
                 .iter()
                 .map(|(pattern, substitutions)| {
                     let substitutions = substitutions
@@ -396,7 +443,63 @@ impl ProjectConfigs {
                     (pattern.clone(), substitutions)
                 })
                 .collect();
-            options.paths = Some((paths, here.to_string()));
+            (patterns, directory.clone())
+        });
+        ProjectOptions {
+            base_url: located(&inherited.base_url),
+            paths,
+            out_dir: located(&inherited.out_dir),
+            root_dir: located(&inherited.root_dir),
+        }
+    }
+
+    /// The options of the config at `path` after `extends`, and tells if
+    /// the chain had no cycle. Only the options of a chain without a cycle
+    /// go into `memo`, because the options in a cycle depend on the config
+    /// where the search starts.
+    fn inherited(
+        &self,
+        path: &str,
+        packages: &[NodePackage],
+        memo: &InheritedMemo,
+        seen: &mut HashSet<String>,
+    ) -> (Arc<Inherited>, bool) {
+        if let Some(found) = memo.read().get(path) {
+            return (Arc::clone(found), true);
+        }
+        let Some(config) = self.configs.get(path) else {
+            return (Arc::default(), true);
+        };
+        if !seen.insert(path.to_string()) {
+            return (Arc::default(), false);
+        }
+        let mut options = Inherited::default();
+        let mut complete = true;
+        for name in &config.extends {
+            let Some(parent) = self.extended(path, name, packages) else {
+                continue;
+            };
+            let (inherited, whole) = self.inherited(&parent, packages, memo, seen);
+            complete &= whole;
+            let inherited = Arc::unwrap_or_clone(inherited);
+            options.base_url = inherited.base_url.or(options.base_url);
+            options.paths = inherited.paths.or(options.paths);
+            options.out_dir = inherited.out_dir.or(options.out_dir);
+            options.root_dir = inherited.root_dir.or(options.root_dir);
+        }
+        seen.remove(path);
+        let here = directory(path);
+        let located = |text: &Option<String>| {
+            text.as_ref().map(|text| Located {
+                directory: here.to_string(),
+                text: text.clone(),
+            })
+        };
+        if config.base_url.is_some() {
+            options.base_url = located(&config.base_url);
+        }
+        if let Some(paths) = &config.paths {
+            options.paths = Some((paths.clone(), here.to_string()));
         }
         if config.out_dir.is_some() {
             options.out_dir = located(&config.out_dir);
@@ -404,14 +507,19 @@ impl ProjectConfigs {
         if config.root_dir.is_some() {
             options.root_dir = located(&config.root_dir);
         }
-        options
+        let options = Arc::new(options);
+        if complete {
+            memo.write().insert(path.to_string(), Arc::clone(&options));
+        }
+        (options, complete)
     }
 
     /// The configs in the directory `directory`.
-    pub fn in_directory<'a>(&'a self, directory: &'a str) -> impl Iterator<Item = &'a str> + 'a {
-        self.configs
-            .keys()
-            .filter(move |path| super::directory(path) == directory)
+    pub fn in_directory<'a>(&'a self, directory: &str) -> impl Iterator<Item = &'a str> + 'a {
+        self.directories
+            .get(directory)
+            .into_iter()
+            .flatten()
             .map(String::as_str)
     }
 

@@ -8,9 +8,9 @@
 
 pub mod external;
 #[cfg(test)]
-mod function_references;
+pub(crate) mod function_references;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::RwLock;
@@ -922,6 +922,30 @@ impl<'a> Resolver<'a> {
             }
         };
         keep(&mut found, &|id| !self.facts(*id).trait_implementation);
+        // A TypeScript overload signature has no body. The implementation with
+        // the same name in the same container runs for each signature.
+        let implemented: HashSet<_> = found
+            .iter()
+            .filter(|id| self.symbol(**id).body_range.is_some())
+            .map(|id| {
+                let facts = self.facts(*id);
+                (
+                    id.0,
+                    self.symbol(*id).name.as_str(),
+                    facts.container_path.as_slice(),
+                )
+            })
+            .collect();
+        found.retain(|id| {
+            let symbol = self.symbol(*id);
+            symbol.body_range.is_some()
+                || self.family(id.0) != Family::Ecma
+                || !implemented.contains(&(
+                    id.0,
+                    symbol.name.as_str(),
+                    self.facts(*id).container_path.as_slice(),
+                ))
+        });
         // A definition replaces the declaration that it defines. A
         // declaration of a different overload stays.
         let defined = found.clone();
@@ -929,21 +953,6 @@ impl<'a> Resolver<'a> {
             self.symbol(*id).body_range.is_some()
                 || !defined.iter().any(|other| {
                     self.symbol(*other).body_range.is_some() && self.same_parameters(*id, *other)
-                })
-        });
-        // A TypeScript overload signature has no body. The implementation with
-        // the same name in the same container runs for each signature.
-        let implemented = found.clone();
-        found.retain(|id| {
-            let symbol = self.symbol(*id);
-            symbol.body_range.is_some()
-                || self.family(id.0) != Family::Ecma
-                || !implemented.iter().any(|other| {
-                    let implementation = self.symbol(*other);
-                    other.0 == id.0
-                        && implementation.body_range.is_some()
-                        && implementation.name == symbol.name
-                        && self.facts(*other).container_path == self.facts(*id).container_path
                 })
         });
         // Only a language with overloads selects by the number of arguments.
@@ -4890,5 +4899,121 @@ mod ecma_decorator_tests {
                 "{extension}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod ecma_timing_tests {
+    use super::function_references::assert_scales_linearly;
+    use super::testing::rows;
+
+    const DI: &str = "export type Constructable<T = unknown> = new (...args: any[]) => T;\nexport type ServiceIdentifier<T = unknown> = Constructable<T>;\n\nclass ContainerClass {\n  get<T>(type: ServiceIdentifier<T>): T {\n    return undefined as T;\n  }\n}\n\nexport const Container = new ContainerClass();\n";
+
+    /// One class with `size` overload signatures of `find`, and ten calls of
+    /// `find`. Each call has each signature as a candidate.
+    fn overloads_at(size: usize) -> std::time::Duration {
+        let mut source = String::from("export class Repo {\n");
+        for position in 0..size {
+            source.push_str(&format!(
+                "  find(id: number, n{position}: string): string;\n"
+            ));
+        }
+        source.push_str("  find(id: unknown, ...rest: unknown[]): string {\n    return '';\n  }\n\n  run(): void {\n");
+        for _ in 0..10 {
+            source.push_str("    this.find(1, 'a');\n");
+        }
+        source.push_str("  }\n}\n");
+        let started = std::time::Instant::now();
+        let found = rows(&[("repo.ts", &source)], "repo.ts");
+        let elapsed = started.elapsed();
+        assert_eq!(found.len(), 10);
+        assert!(
+            found[9].ends_with(&format!(
+                " UniqueCandidate EnclosingType [repo.ts#Repo.find~{}]",
+                size + 1
+            )),
+            "{}",
+            found[9]
+        );
+        elapsed
+    }
+
+    /// `size` methods, each with a decorator, and one method with `size`
+    /// decorators.
+    fn decorators_at(size: usize) -> std::time::Duration {
+        let mut source = String::from("function mark(name: string) {\n  return (target: unknown) => target;\n}\n\nexport class Service {\n");
+        for position in 0..size {
+            source.push_str(&format!("  @mark('a')\n  method{position}(): void {{}}\n"));
+        }
+        for _ in 0..size {
+            source.push_str("  @mark('b')\n");
+        }
+        source.push_str("  last(): void {}\n}\n");
+        let started = std::time::Instant::now();
+        let found = rows(&[("service.ts", &source)], "service.ts");
+        let elapsed = started.elapsed();
+        assert_eq!(found.len(), 2 * size);
+        assert!(found[0].contains(" Service.method0>mark "), "{}", found[0]);
+        assert!(
+            found[2 * size - 1].contains(" Service.last>mark "),
+            "{}",
+            found[2 * size - 1]
+        );
+        elapsed
+    }
+
+    /// `size` classes, and one `Container.get` call of each class.
+    fn container_calls_at(size: usize) -> std::time::Duration {
+        let mut services = String::new();
+        let mut main = String::from("import { Container } from './di';\nimport * as services from './services';\n\nexport function run(): void {\n");
+        for position in 0..size {
+            services.push_str(&format!(
+                "export class S{position} {{\n  plain{position}(): void {{}}\n}}\n"
+            ));
+            main.push_str(&format!(
+                "  Container.get(services.S{position}).plain{position}();\n"
+            ));
+        }
+        main.push_str("}\n");
+        let files = [
+            ("di.ts", DI),
+            ("services.ts", services.as_str()),
+            ("main.ts", main.as_str()),
+        ];
+        let started = std::time::Instant::now();
+        let found = rows(&files, "main.ts");
+        let elapsed = started.elapsed();
+        let last = format!("[services.ts#S{}.plain{}]", size - 1, size - 1);
+        assert!(
+            found.iter().any(|row| row.ends_with(&last)),
+            "{:?}",
+            found.last()
+        );
+        elapsed
+    }
+
+    #[test]
+    fn test_ecma_timing_cases_resolve() {
+        overloads_at(50);
+        decorators_at(50);
+        container_calls_at(50);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_typescript_overloads_resolve_in_linear_time() {
+        assert_scales_linearly("overloads", 2_000, overloads_at);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_typescript_decorators_resolve_in_linear_time() {
+        assert_scales_linearly("decorators", 10_000, decorators_at);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_typescript_container_calls_resolve_in_linear_time() {
+        assert_scales_linearly("container calls", 5_000, container_calls_at);
     }
 }

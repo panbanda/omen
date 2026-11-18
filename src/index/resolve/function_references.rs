@@ -310,7 +310,11 @@ fn timing_chain_of_import_names_scales_linearly() {
 /// time grows in proportion to the size. A quadratic search takes four times
 /// as long for twice the input. The check uses the best of two runs for each
 /// size, and a floor for a time that is too short to compare.
-fn assert_scales_linearly(label: &str, size: usize, run: impl Fn(usize) -> std::time::Duration) {
+pub(crate) fn assert_scales_linearly(
+    label: &str,
+    size: usize,
+    run: impl Fn(usize) -> std::time::Duration,
+) {
     let best = |size: usize| (0..2).map(|_| run(size)).min().expect("two runs");
     let small = best(size);
     let large = best(size * 2);

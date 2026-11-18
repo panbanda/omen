@@ -870,6 +870,17 @@ impl ValueSites {
     }
 }
 
+/// A run of decorators in the body of a class, and the lengths of the
+/// collected facts when the run began.
+struct PendingDecorators {
+    /// The node ID of the body of the class.
+    body: usize,
+    body_depth: usize,
+    calls: usize,
+    values: usize,
+    locals: usize,
+}
+
 struct Extractor<'a, 'tree> {
     spec: &'a dyn LanguageSpec,
     rules: HashMap<&'static str, DefinitionRule>,
@@ -886,6 +897,12 @@ struct Extractor<'a, 'tree> {
     scope_owners: Vec<Option<usize>>,
     /// The depths of the function values that have no name and contain the current node.
     closure_depths: Vec<usize>,
+    /// For each decorator of an `export` statement that contains the current
+    /// node, its depth and the node ID of the class that it decorates.
+    decorators: Vec<(usize, Option<usize>)>,
+    /// The runs of decorators in the body of a class whose method the walk
+    /// has not entered.
+    pending_decorators: Vec<PendingDecorators>,
     call_kinds: Vec<&'static str>,
     local_kinds: Vec<&'static str>,
     /// One entry for each kind ID that the walk found.
@@ -958,33 +975,59 @@ impl<'tree> Extractor<'_, 'tree> {
         self.scope_owners.iter().rev().flatten().next().copied()
     }
 
-    /// The node ID of the definition that a decorator decorates, when the
-    /// current node is in the decorator and the decorator is outside the node
-    /// of that definition. TypeScript puts the decorator of
+    /// Gives the calls in a decorator the definition that it decorates as
+    /// their caller, when the decorator is outside the node of that
+    /// definition. TypeScript puts the decorator of
     /// `@Decorator() export class Name` in the `export` statement, and the
     /// decorator of a method in the body of the class before the method.
-    fn decorated_definition(&self) -> Option<usize> {
-        let position = self
-            .ancestors
-            .iter()
-            .rposition(|ancestor| ancestor.kind() == "decorator")?;
-        let decorator = self.ancestors[position];
-        let holder = self.ancestors.get(position.checked_sub(1)?)?;
-        match holder.kind() {
-            "export_statement" => holder
-                .child_by_field_name("declaration")
-                .filter(|declaration| declaration.kind().ends_with("class_declaration"))
-                .map(|declaration| declaration.id()),
-            "class_body" => {
-                let mut member = decorator.next_named_sibling();
-                while let Some(next) = member.filter(|next| next.kind() == "decorator") {
-                    member = next.next_named_sibling();
+    ///
+    /// The method is not known until the walk enters it. Thus the calls of
+    /// a run of decorators in the body of a class first have the class as
+    /// their caller, and the walk changes the caller when it enters the
+    /// method that follows the run.
+    fn track_decorators(&mut self, node: Node<'tree>, depth: usize) {
+        let parent = self.ancestors.last().copied();
+        let in_parent =
+            |run: &PendingDecorators| parent.is_some_and(|parent| parent.id() == run.body);
+        if node.kind() != "decorator" && self.pending_decorators.last().is_some_and(in_parent) {
+            let run = self.pending_decorators.pop().expect("a pending run");
+            if node.kind() == "method_definition" {
+                let method = Some(node.id());
+                for call in &mut self.calls[run.calls..] {
+                    call.2 = method;
                 }
-                member
-                    .filter(|member| member.kind() == "method_definition")
-                    .map(|member| member.id())
+                for value in &mut self.values[run.values..] {
+                    value.1 = method;
+                }
+                for local in &mut self.locals[run.locals..] {
+                    local.1 = method;
+                }
             }
-            _ => None,
+        }
+        if node.kind() != "decorator" {
+            return;
+        }
+        let Some(parent) = parent else {
+            return;
+        };
+        match parent.kind() {
+            "export_statement" => {
+                let class = parent
+                    .child_by_field_name("declaration")
+                    .filter(|declaration| declaration.kind().ends_with("class_declaration"))
+                    .map(|declaration| declaration.id());
+                self.decorators.push((depth, class));
+            }
+            "class_body" if !self.pending_decorators.last().is_some_and(in_parent) => {
+                self.pending_decorators.push(PendingDecorators {
+                    body: parent.id(),
+                    body_depth: depth - 1,
+                    calls: self.calls.len(),
+                    values: self.values.len(),
+                    locals: self.locals.len(),
+                });
+            }
+            _ => {}
         }
     }
 
@@ -1071,6 +1114,7 @@ impl<'tree> Extractor<'_, 'tree> {
         if !node.is_named() {
             return;
         }
+        self.track_decorators(node, depth);
         let KindFacts {
             imports,
             module,
@@ -1123,7 +1167,11 @@ impl<'tree> Extractor<'_, 'tree> {
                 current: Some((node.id(), self.ancestors.last().copied())),
                 memo: &self.memo,
             };
-            let owner = self.decorated_definition().or_else(|| self.owner());
+            let owner = self
+                .decorators
+                .last()
+                .and_then(|(_, decorated)| *decorated)
+                .or_else(|| self.owner());
             if let Some(call) = call.then(|| self.spec.call(node, &context)).flatten() {
                 let via_closure = !self.closure_depths.is_empty();
                 let receiver = self.spec.call_syntax().receiver_range(node);
@@ -1234,6 +1282,16 @@ impl<'tree> Extractor<'_, 'tree> {
         }
         if self.closure_depths.last() == Some(&depth) {
             self.closure_depths.pop();
+        }
+        if self.decorators.last().is_some_and(|(at, _)| *at == depth) {
+            self.decorators.pop();
+        }
+        if self
+            .pending_decorators
+            .last()
+            .is_some_and(|run| run.body_depth == depth)
+        {
+            self.pending_decorators.pop();
         }
     }
 
@@ -1728,6 +1786,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         modules: Vec::new(),
         scope_owners: Vec::new(),
         closure_depths: Vec::new(),
+        decorators: Vec::new(),
+        pending_decorators: Vec::new(),
         call_kinds: spec.call_kinds(),
         local_kinds: spec.local_kinds(),
         facts_of_kinds: Vec::new(),
