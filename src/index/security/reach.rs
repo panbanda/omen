@@ -7,6 +7,10 @@
 //! A sink without a path has the state `no_known_entry`. That state does not say that the
 //! sink is safe. The call graph has only the calls that the index resolves, and an entry
 //! point that the table does not know has no paths.
+//!
+//! An inline handler, as an arrow function that a route registers, is a node of the graph. A
+//! sink in the inline handler belongs to that node. The function around the inline handler has
+//! an edge to it, because that function makes it.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -86,9 +90,16 @@ fn language_name(language: Language) -> String {
 fn frameworks_of(language: Language) -> &'static [&'static str] {
     match language {
         Language::Python => &["flask", "fastapi", "django", "celery", "python"],
-        Language::JavaScript | Language::TypeScript | Language::Tsx | Language::Jsx => {
-            &["express", "next"]
-        }
+        Language::JavaScript | Language::TypeScript | Language::Tsx | Language::Jsx => &[
+            "express",
+            "fastify",
+            "koa",
+            "nestjs",
+            "next",
+            "repository_decorators",
+            "routing-controllers",
+            "tsoa",
+        ],
         Language::Java => &["spring", "java"],
         Language::CSharp => &["aspnet", "csharp"],
         Language::Go => &["net/http", "gin", "go"],
@@ -233,6 +244,82 @@ fn shortest_path_members(
     members
 }
 
+/// One inline handler in the view: its range, the position of the region that contains it,
+/// and its position in the view.
+struct Region {
+    start: usize,
+    end: usize,
+    parent: Option<usize>,
+    symbol: usize,
+}
+
+/// The inline handlers of the entry points that are in the view, by the file and the symbol
+/// around them. The regions of one key are in the order of their start. Two regions of one
+/// syntax tree are nested or apart.
+struct InlineRegions<'e> {
+    by_place: BTreeMap<(&'e str, Option<&'e str>), Vec<Region>>,
+}
+
+impl<'e> InlineRegions<'e> {
+    fn new(view: &CallView, entries: &'e [EntryPoint]) -> Self {
+        let mut by_place: BTreeMap<(&'e str, Option<&'e str>), Vec<Region>> = BTreeMap::new();
+        for entry in entries {
+            let (Some(inline), Some(symbol)) = (
+                entry.inline_handler.as_ref(),
+                entry
+                    .symbol
+                    .as_deref()
+                    .and_then(|key| view.position_of(key)),
+            ) else {
+                continue;
+            };
+            by_place
+                .entry((entry.file.as_str(), inline.enclosing.as_deref()))
+                .or_default()
+                .push(Region {
+                    start: inline.range.start_byte,
+                    end: inline.range.end_byte,
+                    parent: None,
+                    symbol,
+                });
+        }
+        for regions in by_place.values_mut() {
+            regions.sort_by_key(|region| (region.start, std::cmp::Reverse(region.end)));
+            regions.dedup_by_key(|region| (region.start, region.end));
+            let mut open: Vec<usize> = Vec::new();
+            for index in 0..regions.len() {
+                while open
+                    .last()
+                    .is_some_and(|last| regions[*last].end <= regions[index].start)
+                {
+                    open.pop();
+                }
+                regions[index].parent = open.last().copied();
+                open.push(index);
+            }
+        }
+        Self { by_place }
+    }
+
+    /// The innermost inline handler that holds the sink.
+    fn holder(&self, sink: &Sink) -> Option<usize> {
+        let regions = self
+            .by_place
+            .get(&(sink.file.as_str(), sink.enclosing.as_deref()))?;
+        let position = sink.range.start_byte;
+        let after = regions.partition_point(|region| region.start <= position);
+        let mut current = after.checked_sub(1);
+        while let Some(index) = current {
+            let region = &regions[index];
+            if position < region.end {
+                return Some(region.symbol);
+            }
+            current = region.parent;
+        }
+        None
+    }
+}
+
 /// Finds the paths from the entry points to the sinks.
 ///
 /// An entry point or a sink in test code is not in the result. An entry point without a
@@ -243,14 +330,16 @@ pub fn reachability(
     entries: &[EntryPoint],
     min_basis: ResolutionBasis,
 ) -> Reachability {
+    let regions = InlineRegions::new(view, entries);
     let sink_symbols: Vec<(&Sink, Option<usize>)> = sinks
         .iter()
         .filter(|sink| !sink.flags.in_test)
         .map(|sink| {
-            let symbol = sink
-                .enclosing
-                .as_deref()
-                .and_then(|key| view.position_of(key));
+            let symbol = regions.holder(sink).or_else(|| {
+                sink.enclosing
+                    .as_deref()
+                    .and_then(|key| view.position_of(key))
+            });
             (sink, symbol)
         })
         .collect();

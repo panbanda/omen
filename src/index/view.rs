@@ -14,7 +14,9 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use super::build::CodeIndex;
-use super::model::{Receiver, ResolutionBasis, ResolutionStatus, SharedStr, SymbolKind};
+use super::model::{
+    Receiver, Reference, ResolutionBasis, ResolutionStatus, SharedStr, Span, SymbolKind,
+};
 use crate::core::{Error, Language, Result};
 
 /// The weakest basis that gives an edge when the caller does not select
@@ -103,6 +105,65 @@ impl ResolutionSummary {
     }
 }
 
+/// The evidence of one reference of `caller`, and the basis of its edges. A reference without
+/// an edge has no basis.
+fn stored_call(
+    reference: &Reference,
+    caller: usize,
+    by_key: &HashMap<SharedStr, usize>,
+) -> (StoredCall, Option<ResolutionBasis>) {
+    let resolution = &reference.resolution;
+    let candidates: Vec<usize> = resolution
+        .candidates
+        .iter()
+        .filter_map(|key| by_key.get(key).copied())
+        .collect();
+    let is_edge = matches!(
+        resolution.status,
+        ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
+    );
+    // One candidate that has only the name is an edge when the
+    // caller of the view asks for the basis `NameOnly`.
+    let by_name_only = resolution.status == ResolutionStatus::Ambiguous
+        && resolution.basis == Some(ResolutionBasis::NameOnly)
+        && candidates.len() == 1;
+    let basis = match (is_edge, by_name_only) {
+        (true, _) => resolution.basis,
+        (false, true) => Some(ResolutionBasis::NameOnly),
+        (false, false) => None,
+    };
+    let call = match (&reference.receiver, &reference.qualifier) {
+        (Some(Receiver::SelfValue), _) => format!("self.{}", reference.name),
+        (Some(Receiver::Super), _) => format!("super.{}", reference.name),
+        (Some(Receiver::Name(name)), _) => format!("{name}.{}", reference.name),
+        (Some(Receiver::Expression), _) => format!("(..).{}", reference.name),
+        (None, Some(qualifier)) => format!("{qualifier}::{}", reference.name),
+        (None, None) => reference.name.clone(),
+    };
+    let stored = StoredCall {
+        caller: caller as u32,
+        call: call.into_boxed_str(),
+        line: reference.name_range.start_line,
+        status: resolution.status,
+        basis: resolution.basis,
+        candidates: candidates.iter().map(|position| *position as u32).collect(),
+    };
+    (stored, basis)
+}
+
+/// A function value without a name that the security analysis adds to the view as a
+/// definition, as the arrow function that a route registers.
+pub struct FunctionValue<'r> {
+    /// The key of the new definition. It is not a key of the index.
+    pub key: String,
+    pub file: String,
+    pub range: Span,
+    /// The key of the definition that contains the function value.
+    pub enclosing: Option<String>,
+    /// The references in the function value. The index gives them to `enclosing`.
+    pub references: Vec<&'r Reference>,
+}
+
 pub struct CallView {
     /// The definitions, in the order of the file and the position. A field
     /// is not in the view.
@@ -184,48 +245,14 @@ impl CallView {
             let Some(caller) = caller else {
                 continue;
             };
-            let resolution = &reference.resolution;
-            let candidates: Vec<usize> = resolution
-                .candidates
-                .iter()
-                .filter_map(|key| by_key.get(key).copied())
-                .collect();
-            let is_edge = matches!(
-                resolution.status,
-                ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
-            );
-            // One candidate that has only the name is an edge when the
-            // caller of the view asks for the basis `NameOnly`.
-            let by_name_only = resolution.status == ResolutionStatus::Ambiguous
-                && resolution.basis == Some(ResolutionBasis::NameOnly)
-                && candidates.len() == 1;
-            let basis = match (is_edge, by_name_only) {
-                (true, _) => resolution.basis,
-                (false, true) => Some(ResolutionBasis::NameOnly),
-                (false, false) => None,
-            };
+            let (call, basis) = stored_call(reference, caller, &by_key);
             if let Some(basis) = basis {
-                for candidate in &candidates {
-                    callees[caller].insert((*candidate, basis));
-                    callers[*candidate].insert((caller, basis));
+                for candidate in call.candidates.iter() {
+                    callees[caller].insert((*candidate as usize, basis));
+                    callers[*candidate as usize].insert((caller, basis));
                 }
             }
-            let call = match (&reference.receiver, &reference.qualifier) {
-                (Some(Receiver::SelfValue), _) => format!("self.{}", reference.name),
-                (Some(Receiver::Super), _) => format!("super.{}", reference.name),
-                (Some(Receiver::Name(name)), _) => format!("{name}.{}", reference.name),
-                (Some(Receiver::Expression), _) => format!("(..).{}", reference.name),
-                (None, Some(qualifier)) => format!("{qualifier}::{}", reference.name),
-                (None, None) => reference.name.clone(),
-            };
-            evidence[caller].push(StoredCall {
-                caller: caller as u32,
-                call: call.into_boxed_str(),
-                line: reference.name_range.start_line,
-                status: resolution.status,
-                basis: resolution.basis,
-                candidates: candidates.iter().map(|position| *position as u32).collect(),
-            });
+            evidence[caller].push(call);
         }
         let mut stored_calls = Vec::new();
         let mut call_resolution_ranges = Vec::with_capacity(symbols.len());
@@ -251,6 +278,74 @@ impl CallView {
             summary,
             sources: index.files.len(),
             fingerprint: None,
+        }
+    }
+
+    /// Adds each function value as a definition, once for each key. The edges of a function
+    /// value are the edges of its references. The definition that contains the function value
+    /// makes it, so that definition has an edge to it with the basis `LexicalScope`.
+    pub fn add_function_values(&mut self, values: &[FunctionValue<'_>]) {
+        let mut touched: BTreeSet<usize> = BTreeSet::new();
+        let mut makers: BTreeSet<usize> = BTreeSet::new();
+        for value in values {
+            if self.by_key.contains_key(value.key.as_str()) {
+                continue;
+            }
+            let position = self.symbols.len();
+            self.by_key
+                .insert(SharedStr::from(value.key.as_str()), position);
+            self.symbols.push(ViewSymbol {
+                name: value
+                    .key
+                    .rsplit(['.', '#'])
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+                body_start: value.range.start_byte,
+                qualified_name: value.key.clone(),
+                kind: SymbolKind::Function,
+                file: value.file.clone(),
+                line: value.range.start_line,
+                end_line: value.range.end_line,
+                signature: String::new(),
+            });
+            let mut callees: BTreeSet<(usize, ResolutionBasis)> = BTreeSet::new();
+            let start = self.stored_calls.len();
+            for reference in &value.references {
+                let (call, basis) = stored_call(reference, position, &self.by_key);
+                if let Some(basis) = basis {
+                    callees.extend(
+                        call.candidates
+                            .iter()
+                            .map(|target| (*target as usize, basis)),
+                    );
+                }
+                self.stored_calls.push(call);
+            }
+            self.call_resolution_ranges
+                .push(start..self.stored_calls.len());
+            for (target, basis) in &callees {
+                self.callers[*target].push((position, *basis));
+                touched.insert(*target);
+            }
+            self.callees.push(callees.into_iter().collect());
+            self.callers.push(Vec::new());
+            if let Some(enclosing) = value
+                .enclosing
+                .as_deref()
+                .and_then(|key| self.by_key.get(key).copied())
+            {
+                self.callees[enclosing].push((position, ResolutionBasis::LexicalScope));
+                makers.insert(enclosing);
+                self.callers[position].push((enclosing, ResolutionBasis::LexicalScope));
+            }
+        }
+        for target in touched {
+            self.callers[target].sort_unstable();
+            self.callers[target].dedup();
+        }
+        for maker in makers {
+            self.callees[maker].sort_unstable();
         }
     }
 

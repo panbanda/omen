@@ -7,7 +7,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::entry::{
-    entry_points_of_file, find_entry_points_with, EntryPoint, EntryRule, OnDemandTrees,
+    entry_points_of_file, find_entry_points_with, EntryPoint, EntryRule, InlineHandler,
+    OnDemandTrees,
 };
 use super::matcher::{file_sinks, Repository};
 use super::reach::{coverage, reachability, Coverage, Reachability};
@@ -18,8 +19,8 @@ use crate::core::Language;
 use crate::index::build::{list_directory, CodeIndex, ListDirectory, ReadFile};
 use crate::index::extract::FileSymbols;
 use crate::index::headers;
-use crate::index::model::ResolutionBasis;
-use crate::index::view::{CallView, DEFAULT_MIN_BASIS};
+use crate::index::model::{Reference, ResolutionBasis};
+use crate::index::view::{CallView, FunctionValue, DEFAULT_MIN_BASIS};
 use crate::parser::ParseResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,7 +120,8 @@ pub fn analyze_with_index(
         .map(|position| index.files[*position].file.clone())
         .collect();
     let (sinks, suppressed, invalid_suppressions) = suppress::split(all_sinks, &names, comments);
-    let view = CallView::from_index(index);
+    let mut view = CallView::from_index(index);
+    view.add_function_values(&inline_handlers(index, &entry_points));
     let reach = reachability(&view, &sinks, &entry_points, options.min_basis);
     let mut languages: Vec<Language> = Vec::new();
     for position in &kept {
@@ -136,6 +138,48 @@ pub fn analyze_with_index(
         reachability: reach,
         coverage: coverage(&languages, options.experimental),
     })
+}
+
+/// The inline handlers of the entry points, each with the references in it that the index gives
+/// to the symbol around it.
+fn inline_handlers<'i>(index: &'i CodeIndex, entries: &[EntryPoint]) -> Vec<FunctionValue<'i>> {
+    let mut by_file: BTreeMap<&str, Vec<(&str, &InlineHandler)>> = BTreeMap::new();
+    for entry in entries {
+        if let (Some(inline), Some(key)) = (&entry.inline_handler, &entry.symbol) {
+            by_file
+                .entry(entry.file.as_str())
+                .or_default()
+                .push((key.as_str(), inline));
+        }
+    }
+    let mut values = Vec::new();
+    for file in index
+        .files
+        .iter()
+        .filter(|file| by_file.contains_key(file.file.as_str()))
+    {
+        let mut references: Vec<&Reference> = file.references.iter().collect();
+        references.sort_by_key(|reference| reference.name_range.start_byte);
+        for (key, inline) in &by_file[file.file.as_str()] {
+            let first = references.partition_point(|reference| {
+                reference.name_range.start_byte < inline.range.start_byte
+            });
+            let inside: Vec<&Reference> = references[first..]
+                .iter()
+                .take_while(|reference| reference.name_range.start_byte < inline.range.end_byte)
+                .filter(|reference| reference.enclosing.as_deref() == inline.enclosing.as_deref())
+                .copied()
+                .collect();
+            values.push(FunctionValue {
+                key: key.to_string(),
+                file: file.file.clone(),
+                range: inline.range,
+                enclosing: inline.enclosing.clone(),
+                references: inside,
+            });
+        }
+    }
+    values
 }
 
 type Comments = Vec<(Vec<suppress::Allow>, Vec<InvalidSuppression>)>;
@@ -597,5 +641,114 @@ mod tests {
         let analysis = run(&[("a.py", source)], DEFAULT_MIN_BASIS);
         assert_eq!(analysis.sinks.len(), 1);
         assert!(analysis.invalid_suppressions.is_empty());
+    }
+
+    /// The steps of each path, with the line of its entry point and of its sink.
+    fn path_steps(analysis: &Analysis) -> Vec<(u32, u32, Vec<String>)> {
+        let line = |key: &str| -> u32 {
+            key.split(':')
+                .nth(1)
+                .and_then(|line| line.parse().ok())
+                .unwrap_or(0)
+        };
+        let mut found: Vec<(u32, u32, Vec<String>)> = analysis
+            .reachability
+            .paths
+            .iter()
+            .map(|path| {
+                (
+                    line(&path.entry),
+                    line(&path.sink),
+                    path.steps.iter().map(|step| step.symbol.clone()).collect(),
+                )
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn an_inline_handler_starts_a_path_to_the_sinks_in_it_and_below_it() {
+        let source = "import { Controller, Get, Post, UseGuards } from '@nestjs/common';\nimport express from 'express';\nimport { exec } from 'child_process';\nconst PATH = '/metrics';\n@Controller('cats')\nexport class CatsController {\n  @Get(':id') find() { return 1; }\n  @UseGuards(AuthGuard) @Post() run(cmd: string) { exec(cmd); }\n}\nexport class Server {\n  app = express();\n  setup() {\n    const app = this.app; app.get('/health', (_req, res) => res.send('ok'));\n    this.app.post(PATH, (req, res) => { exec(req.body.cmd); res.end(); });\n    this.app.put('/deep', (req, res) => deep(req.body));\n  }\n}\nfunction deep(value: string) {\n  exec(value);\n}\n";
+        let analysis = run(&[("src/c.ts", source)], DEFAULT_MIN_BASIS);
+        assert_eq!(
+            path_steps(&analysis),
+            [
+                (8, 8, vec!["src/c.ts#CatsController.run".to_string()]),
+                (
+                    14,
+                    14,
+                    vec!["src/c.ts#Server.setup.<inline@14:24>".to_string()]
+                ),
+                (
+                    15,
+                    19,
+                    vec![
+                        "src/c.ts#Server.setup.<inline@15:26>".to_string(),
+                        "src/c.ts#deep".to_string()
+                    ]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_caller_of_the_function_around_an_inline_handler_reaches_its_sinks_through_it() {
+        let source = "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\napp.get('/boot', boot);\nfunction boot(req, res) {\n  setup();\n}\nfunction setup() {\n  app.post('/run', (req, res) => exec(req.body.cmd));\n}\n";
+        let analysis = run(&[("server.js", source)], DEFAULT_MIN_BASIS);
+        assert_eq!(
+            path_steps(&analysis),
+            [
+                (
+                    4,
+                    9,
+                    vec![
+                        "server.js#boot".to_string(),
+                        "server.js#setup".to_string(),
+                        "server.js#setup.<inline@9:19>".to_string()
+                    ]
+                ),
+                (9, 9, vec!["server.js#setup.<inline@9:19>".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore = "timing test: run in release with --ignored"]
+    fn timing_inline_handlers_resolve_in_linear_time() {
+        let source = |size: usize| {
+            let mut text = String::from(
+                "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\nfunction setup() {\n",
+            );
+            for route in 0..size {
+                text.push_str(&format!(
+                    "  app.post('/r{route}', (req, res) => {{ exec(req.body.c); res.end(); }});\n"
+                ));
+            }
+            text.push_str("}\n");
+            text
+        };
+        // The index of one large function is outside the measure. Only the steps of the inline
+        // handlers are measured.
+        super::super::entry::tests::assert_scales_linearly("inline handlers", 4_000, |size| {
+            let text = source(size);
+            let paths = [PathBuf::from("server.js")];
+            let read = |_: &Path| Ok(text.as_bytes().to_vec());
+            let index = CodeIndex::build(Path::new(""), &paths, &read, &|_| Vec::new());
+            let analysis = run(&[("server.js", text.as_str())], DEFAULT_MIN_BASIS);
+            assert_eq!(analysis.reachability.paths.len(), size);
+            let start = std::time::Instant::now();
+            let mut view = CallView::from_index(&index);
+            view.add_function_values(&inline_handlers(&index, &analysis.entry_points));
+            let found = reachability(
+                &view,
+                &analysis.sinks,
+                &analysis.entry_points,
+                DEFAULT_MIN_BASIS,
+            );
+            let took = start.elapsed();
+            assert_eq!(found.paths.len(), size);
+            took
+        });
     }
 }
