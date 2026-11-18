@@ -118,7 +118,7 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 | `included_module` | Rails | A class of the chain has `include`, `extend`, or `prepend`, in its body or from outside. A module can add callbacks with `included do`. |
 | `callback_outside_class` | Rails | A callback call or `class_eval` in another place has the constant of a class of the chain as its receiver. |
 | `unresolved_macro` | Rails | A class of the chain calls a class method that omen cannot resolve to a definition that it can read. |
-| `unreadable_callback` | Rails | A callback call has a form or a place that omen cannot read: a name that is not a literal, a block or a lambda with no name, a list that is not a literal, a receiver, or `skip_callback`. |
+| `unreadable_callback` | Rails | A callback call has a form or a place that omen cannot read: a name that is not a literal, a block or a lambda with no name, a list that is not a literal, a receiver other than `self`, or `skip_callback`. |
 | `conditional_callback` | Rails | A callback for the action has `if:` or `unless:`, or it is in a branch that omen cannot evaluate. |
 | `around_callback` | Rails | A class of the chain has an `around_action` callback. Omen reads only the `before_action` callbacks. |
 | `imported_router` | FastAPI | An import binds the router of the route, or the router that includes it. |
@@ -210,7 +210,7 @@ each form against the source of Rails 7.2.2.
 | A repeated option, as `to: "a#b", to: "c#d"`, or a repeated hash-rocket key | The last value wins, as in Ruby. |
 | A hash-rocket target together with `to:`, `controller:`, or `action:` | The route has no symbol and no guard. Rails lets the hash-rocket value win over `to:`, and it reads a rocket value without `#` as a controller. Omen does not model this. |
 | A target that is not a literal, as `to: TARGET`, `controller: NAME`, or `action: ACTION`, and a `to:` string with more than one `#` | The route has no symbol and no guard. The path stays. |
-| A `before_action` call with a name that is not a literal or with a block and no name, a `skip_before_action` call with a name that is not a literal, a callback call with a receiver, `skip_callback`, `set_callback`, and `reset_callbacks` | The guards of the class, and of each class that inherits from it, are not complete, with the reason `unreadable_callback`. The guards that omen read stay in the list. |
+| A `before_action` call with a name that is not a literal or with a block and no name, a `skip_before_action` call with a name that is not a literal, a callback call with a receiver other than `self`, `skip_callback`, `set_callback`, and `reset_callbacks` | The guards of the class, and of each class that inherits from it, are not complete, with the reason `unreadable_callback`. The guards that omen read stay in the list. |
 | `around_action`, `prepend_around_action`, and `skip_around_action` | Not read. The guards of the class, and of each class that inherits from it, are not complete, with the reason `around_callback`. |
 | `append_before_action` | Read as `before_action`. |
 | `protect_from_forgery` and `skip_forgery_protection` | Read as `before_action :verify_authenticity_token` and as the skip of it, with the options `only:`, `except:`, `if:`, `unless:`, and `prepend:`. Rails 7.2.2 defines them in this way. A call of `protect_from_forgery`, `skip_forgery_protection`, or `http_basic_authenticate_with` with the constant of a class as the receiver, in any file, gives `callback_outside_class`. |
@@ -380,8 +380,8 @@ complete.
 ### Class methods that register callbacks
 
 An application can define a class method that calls `before_action`, and a controller can call
-that method in its body. Omen reads a call without a receiver that is a statement of the class
-body, or of a branch of a condition in it. A call in a block is not such a call.
+that method in its body. Omen reads a call without a receiver or with the receiver `self` that is
+a statement of the class body, or of a branch of a condition in it. A call in a block is not such a call.
 
 Omen searches the name in the class and then in each superclass in the repository. A definition
 is `def self.name` in a class body, or `def name` in `class << self`. The definition of the

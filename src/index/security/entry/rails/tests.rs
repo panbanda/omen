@@ -1204,6 +1204,38 @@ fn a_class_method_of_the_chain_gives_the_callbacks_that_it_registers() {
 }
 
 #[test]
+fn a_call_with_the_receiver_self_is_a_call_of_the_class() {
+    for (body, index, show) in [
+        (
+            "self.requires_admin",
+            "[base, ensure_admin] complete",
+            "[base, ensure_admin, ensure_fresh] complete",
+        ),
+        (
+            "self.requires_staff()",
+            "[base, ensure_staff] complete",
+            "[base, ensure_staff] complete",
+        ),
+        (
+            "self.before_action :own, only: :show",
+            "[base] complete",
+            "[base, own] complete",
+        ),
+        (
+            "self.unknown_macro",
+            "[base] unresolved_macro",
+            "[base] unresolved_macro",
+        ),
+    ] {
+        assert_eq!(
+            macro_rows(MACRO_BASE, body),
+            [format!("/index {index}"), format!("/show {show}")],
+            "{body}"
+        );
+    }
+}
+
+#[test]
 fn a_class_method_that_omen_cannot_resolve_makes_the_guards_not_complete() {
     for body in [
         "unknown_macro",

@@ -8428,7 +8428,7 @@ func routes() {
                 .find(|entry| entry.route.as_ref().unwrap().path == path)
                 .unwrap()
         };
-        for path in ["/a", "/b", "/c", "/d"] {
+        for path in ["/a", "/c", "/d"] {
             assert_eq!(by_path(path).guards, ["auth"], "{path}");
             assert_eq!(
                 by_path(path).guards_unknown_reason,
@@ -8438,6 +8438,9 @@ func routes() {
         }
         assert_eq!(by_path("/e").guards, ["auth"]);
         assert!(by_path("/e").guards_complete);
+        // `self.skip_before_action` is the call of the class itself.
+        assert!(by_path("/b").guards.is_empty());
+        assert!(by_path("/b").guards_complete);
     }
 
     #[test]

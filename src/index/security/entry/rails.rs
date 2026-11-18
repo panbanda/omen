@@ -3553,7 +3553,7 @@ impl<'a> Context<'a> {
                 }
             }
             "call" => match self.rails_callback(node, out.macro_name.as_deref()) {
-                Some(mut callback) if node.child_by_field_name("receiver").is_none() => {
+                Some(mut callback) if Self::is_own_call(node) => {
                     callback.conditional |= conditional;
                     out.list.push(Statement::Callback(callback));
                 }
@@ -3568,7 +3568,7 @@ impl<'a> Context<'a> {
                     } else if method.contains("around_action") || method.contains("around_filter") {
                         out.note(GuardsUnknownReason::AroundCallback);
                     } else if out.blocks == 0
-                        && node.child_by_field_name("receiver").is_none()
+                        && Self::is_own_call(node)
                         && !CLASS_METHODS_WITHOUT_CALLBACKS.contains(&method)
                     {
                         // A call of a class method in the class body can register callbacks.
@@ -3599,6 +3599,13 @@ impl<'a> Context<'a> {
                 }
             }
         }
+    }
+
+    /// Tells if a call in a class body calls a method of the class: it has no receiver, or the
+    /// receiver `self`.
+    fn is_own_call(call: Node<'_>) -> bool {
+        call.child_by_field_name("receiver")
+            .is_none_or(|receiver| receiver.kind() == "self")
     }
 
     /// The names, the `only:` and `except:` lists, and the conditions of a callback call.
