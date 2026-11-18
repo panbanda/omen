@@ -499,6 +499,76 @@ mod tests {
         );
     }
 
+    const ASYNC_COMMAND_MODULES: &[&str] = &[
+        "tokio::process",
+        "smol::process",
+        "async_process",
+        "async_std::process",
+    ];
+
+    #[test]
+    fn an_async_rust_command_is_a_sink_by_path_by_import_and_by_alias() {
+        for module in ASYNC_COMMAND_MODULES {
+            let source = format!(
+                "use {module}::Command;\nuse {module}::Command as Spawn;\n\npub async fn run(program: &str) {{\n    {module}::Command::new(program);\n    Command::new(\"sh\").arg(\"-c\").arg(program);\n    Spawn::new(program);\n}}\n"
+            );
+            assert_eq!(
+                found(Language::Rust, &[("a.rs", &source)]),
+                [
+                    one("a.rs", 5, "command_execution", "imported_symbol"),
+                    one("a.rs", 6, "command_execution", "imported_symbol"),
+                    one("a.rs", 7, "command_execution", "imported_symbol"),
+                ],
+                "{module}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_async_rust_command_in_a_string_a_comment_or_another_crate_is_not_a_sink() {
+        for module in ASYNC_COMMAND_MODULES {
+            let source = format!(
+                "use clap::Command;\n\npub fn run() {{\n    let text = \"{module}::Command::new(program)\";\n    // {module}::Command::new(program);\n    Command::new(\"cli\");\n    {module}::id();\n}}\n"
+            );
+            assert_eq!(found(Language::Rust, &[("a.rs", &source)]), [], "{module}");
+        }
+    }
+
+    #[test]
+    fn a_repository_command_type_is_not_an_async_rust_command_sink() {
+        let helpers = "pub struct Command;\n\nimpl Command {\n    pub fn new(program: &str) -> Self {\n        Command\n    }\n}\n";
+        let main = "mod process;\nuse crate::process::Command;\n\npub fn run(program: &str) {\n    Command::new(program);\n    tokio::process::Command::new(program);\n}\n";
+        assert_eq!(
+            found(
+                Language::Rust,
+                &[("src/process.rs", helpers), ("src/lib.rs", main)]
+            ),
+            [one("src/lib.rs", 6, "command_execution", "imported_symbol")]
+        );
+    }
+
+    #[test]
+    fn an_async_rust_command_in_test_code_has_the_flag_in_test() {
+        let source = "#[cfg(test)]\nmod tests {\n    #[tokio::test]\n    async fn runs() {\n        tokio::process::Command::new(\"ls\");\n    }\n}\n";
+        let result = sinks(Language::Rust, &[("a.rs", source)]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].category.name(), "command_execution");
+        assert!(result[0].flags.in_test);
+    }
+
+    #[test]
+    fn a_glob_import_of_a_process_module_binds_the_command_type() {
+        for module in ["std::process"].iter().chain(ASYNC_COMMAND_MODULES) {
+            let source =
+                format!("use {module}::*;\n\npub fn run(program: &str) {{\n    Command::new(program);\n}}\n");
+            assert_eq!(
+                found(Language::Rust, &[("a.rs", &source)]),
+                [one("a.rs", 4, "command_execution", "imported_symbol")],
+                "{module}"
+            );
+        }
+    }
+
     #[test]
     fn a_java_receiver_chain_resolves_unless_the_class_is_a_repository_class() {
         let real = "public class A {\n    void run(String command) throws Exception {\n        Runtime.getRuntime().exec(command);\n    }\n}\n";

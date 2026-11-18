@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "language": "rust",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid for the grammar. The case holds the process commands of the async runtimes and a repository type with the same name. The harness does not build or run the code.",
+  "closed_world": false,
+  "sinks_closed_world": true,
+  "not_applicable": [
+
+  ],
+  "sinks": [
+    {"label": "command_execution.real_call.tokio_path", "category": "command_execution", "scenario": "real_call", "file": "commands.rs", "line": 8, "basis": "imported_symbol", "constant_argument": false},
+    {"label": "command_execution.real_call.tokio_import", "category": "command_execution", "scenario": "real_call", "file": "commands.rs", "line": 9, "basis": "imported_symbol", "constant_argument": true},
+    {"label": "command_execution.safe_variant.tokio_function", "category": "command_execution", "scenario": "safe_variant", "file": "commands.rs", "line": 10, "flagged": false},
+    {"label": "command_execution.name_in_string.tokio", "category": "command_execution", "scenario": "name_in_string", "file": "commands.rs", "line": 11, "flagged": false},
+    {"label": "command_execution.name_in_comment.tokio", "category": "command_execution", "scenario": "name_in_comment", "file": "commands.rs", "line": 12, "flagged": false},
+    {"label": "command_execution.real_call.smol_path", "category": "command_execution", "scenario": "real_call", "file": "commands.rs", "line": 16, "basis": "imported_symbol"},
+    {"label": "command_execution.aliased_import.smol", "category": "command_execution", "scenario": "aliased_import", "file": "commands.rs", "line": 17, "basis": "imported_symbol"},
+    {"label": "command_execution.safe_variant.clap_command", "category": "command_execution", "scenario": "safe_variant", "file": "commands.rs", "line": 18, "flagged": false},
+    {"label": "command_execution.name_in_string.smol", "category": "command_execution", "scenario": "name_in_string", "file": "commands.rs", "line": 19, "flagged": false},
+    {"label": "command_execution.name_in_comment.smol", "category": "command_execution", "scenario": "name_in_comment", "file": "commands.rs", "line": 20, "flagged": false},
+    {"label": "command_execution.real_call.async_process_path", "category": "command_execution", "scenario": "real_call", "file": "commands.rs", "line": 24, "basis": "imported_symbol"},
+    {"label": "command_execution.aliased_import.async_process", "category": "command_execution", "scenario": "aliased_import", "file": "commands.rs", "line": 25, "basis": "imported_symbol"},
+    {"label": "command_execution.name_in_string.async_process", "category": "command_execution", "scenario": "name_in_string", "file": "commands.rs", "line": 26, "flagged": false},
+    {"label": "command_execution.name_in_comment.async_process", "category": "command_execution", "scenario": "name_in_comment", "file": "commands.rs", "line": 27, "flagged": false},
+    {"label": "command_execution.real_call.async_std_path", "category": "command_execution", "scenario": "real_call", "file": "commands.rs", "line": 31, "basis": "imported_symbol"},
+    {"label": "command_execution.aliased_import.async_std", "category": "command_execution", "scenario": "aliased_import", "file": "commands.rs", "line": 32, "basis": "imported_symbol"},
+    {"label": "command_execution.name_in_string.async_std", "category": "command_execution", "scenario": "name_in_string", "file": "commands.rs", "line": 33, "flagged": false},
+    {"label": "command_execution.name_in_comment.async_std", "category": "command_execution", "scenario": "name_in_comment", "file": "commands.rs", "line": 34, "flagged": false},
+    {"label": "command_execution.in_test.tokio", "category": "command_execution", "scenario": "in_test", "file": "commands.rs", "line": 42, "basis": "imported_symbol", "in_test": true},
+    {"label": "command_execution.in_test.smol", "category": "command_execution", "scenario": "in_test", "file": "commands.rs", "line": 43, "basis": "imported_symbol", "in_test": true},
+    {"label": "command_execution.in_test.async_process", "category": "command_execution", "scenario": "in_test", "file": "commands.rs", "line": 44, "basis": "imported_symbol", "in_test": true},
+    {"label": "command_execution.in_test.async_std", "category": "command_execution", "scenario": "in_test", "file": "commands.rs", "line": 45, "basis": "imported_symbol", "in_test": true},
+    {"label": "command_execution.same_name_symbol.process_type", "category": "command_execution", "scenario": "same_name_symbol", "file": "decoys.rs", "line": 4, "flagged": false}
+  ]
+}
