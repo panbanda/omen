@@ -1472,6 +1472,39 @@ mod tests {
         assert_eq!(analysis.groups[0].clone_type, CloneType::Type3);
     }
 
+    /// A group can join pairs of different types. Each pair gets its own
+    /// type and similarity, not the values of the group.
+    #[test]
+    fn test_clone_pair_type_comes_from_the_pair() {
+        let renamed = "package main\n\nfunc weight(values []int) int {\n\tacc := 0\n\tfor _, value := range values {\n\t\tif value > 99 {\n\t\t\tacc += value * 3\n\t\t} else {\n\t\t\tacc += value\n\t\t}\n\t}\n\treturn acc\n}\n";
+        let analysis = analyze_sources(&[
+            ("a.go", BASE_FUNCTION),
+            ("b.go", BASE_FUNCTION),
+            ("c.go", renamed),
+        ]);
+        assert_eq!(analysis.groups.len(), 1);
+        assert_eq!(analysis.groups[0].clone_type, CloneType::Type2);
+        let types: Vec<_> = analysis
+            .clones
+            .iter()
+            .map(|clone| {
+                (
+                    clone.file_a.as_str(),
+                    clone.file_b.as_str(),
+                    clone.clone_type,
+                )
+            })
+            .collect();
+        assert_eq!(
+            types,
+            [
+                ("a.go", "b.go", CloneType::Type1),
+                ("a.go", "c.go", CloneType::Type2),
+                ("b.go", "c.go", CloneType::Type2),
+            ]
+        );
+    }
+
     /// The similarity counts each repeated shingle. A function with three
     /// times the blocks of another function is not its clone.
     #[test]
