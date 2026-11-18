@@ -57,7 +57,7 @@ When developers write `TODO: fix this later` or `HACK: this is terrible but work
 | Requirement | TODO, FEAT              | Missing features or incomplete implementations |
 | Test        | FAILING, SKIP, DISABLED | Tests that are broken or turned off            |
 | Performance | SLOW, OPTIMIZE, PERF    | Code that works but needs to be faster         |
-| Security    | SECURITY, VULN, UNSAFE  | Known security issues                          |
+| Security    | `XXX:`, `VULN:`, `UNSAFE:` | Known security issues. Only a tag at the start of a comment counts |
 
 **Why it matters:** [Potdar and Shihab's 2014 study](https://ieeexplore.ieee.org/document/6976075) found that SATD comments often stay in codebases for years. The longer they stay, the harder they are to fix because people forget the context. [Maldonado and Shihab (2015)](https://ieeexplore.ieee.org/document/7332619) showed that design debt is the most common and most dangerous type.
 
@@ -617,7 +617,7 @@ Each component metric is normalized to a 0-100 scale where higher is always bett
 4. **Severity-aware** - Weight items by impact, not just count
 
 For example, SATD (Self-Admitted Technical Debt) uses severity-weighted scoring:
-- Critical (SECURITY, VULN): 4x weight
+- Critical (a tag such as `XXX:` or `VULN:` at the start of a comment): 4x weight
 - High (FIXME, BUG): 2x weight
 - Medium (HACK, REFACTOR): 1x weight
 - Low (TODO, NOTE): 0.25x weight

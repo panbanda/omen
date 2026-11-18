@@ -127,6 +127,10 @@ fn has_ignore_directive(line: &str) -> bool {
 ///
 /// Clear markers like TODO, FIXME, HACK, BUG are accepted anywhere. omen:ignore
 fn is_valid_satd_marker(line: &str, match_start: usize, marker: &str) -> bool {
+    if satd::SECURITY.contains(&marker) {
+        return is_tag_at_comment_start(line, match_start, marker);
+    }
+
     // Clear markers (TODO, FIXME, HACK, BUG, etc.) are always valid omen:ignore
     if !AMBIGUOUS_MARKERS.contains(&marker) {
         return true;
@@ -145,6 +149,36 @@ fn is_valid_satd_marker(line: &str, match_start: usize, marker: &str) -> bool {
 
     // Ambiguous markers without punctuation are likely false positives
     false
+}
+
+/// The prefixes that start a comment line, longest first.
+const COMMENT_PREFIXES: &[&str] = &[
+    "///", "//!", "//", "/**", "/*", "'''", "\"\"\"", "--", "#", "*", ";",
+];
+
+/// Whether the marker is a tag at the start of the comment text: `XXX:`,
+/// `UNSAFE(name)`, or an uppercase `XXX` alone. omen:ignore
+fn is_tag_at_comment_start(line: &str, match_start: usize, marker: &str) -> bool {
+    let trimmed = line.trim_start();
+    let Some(prefix) = COMMENT_PREFIXES
+        .iter()
+        .find(|prefix| trimmed.starts_with(*prefix))
+    else {
+        return false;
+    };
+    let text = trimmed[prefix.len()..].trim_start();
+    let text_start = line.len() - text.len();
+    if match_start != text_start {
+        return false;
+    }
+    let word = &text[..marker.len()];
+    let next = text[marker.len()..].chars().next();
+    match next {
+        Some(':' | '(') => true,
+        // `Xxx` and `xxx` are placeholder names, not a tag.
+        None | Some(' ' | '\t') => marker == "XXX" && word == "XXX",
+        _ => false,
+    }
 }
 
 impl AnalyzerTrait for Analyzer {
@@ -354,13 +388,64 @@ mod tests {
     #[test]
     fn test_satd_categories() {
         let analyzer = Analyzer::new();
-        let content = b"// HACK: workaround\n// SECURITY: vulnerable\n".to_vec();
+        let content = b"// HACK: workaround\n// VULN: unchecked input\n".to_vec();
         let file = SourceFile::from_content("test.rs", Language::Rust, content);
 
         let items = analyzer.analyze_file(&file);
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].category, "design");
         assert_eq!(items[1].category, "security");
+    }
+
+    fn security_items(lines: &[&str]) -> Vec<String> {
+        let content = lines
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>();
+        let file = SourceFile::from_content("test.rs", Language::Rust, content.into_bytes());
+        Analyzer::new()
+            .analyze_file(&file)
+            .into_iter()
+            .filter(|item| item.category == "security")
+            .map(|item| item.text)
+            .collect()
+    }
+
+    /// A security marker is debt only as a tag at the start of the comment.
+    #[test]
+    fn test_security_marker_as_tag_is_debt_in_each_comment_syntax() {
+        let lines = [
+            "// XXX: race on the cache",
+            "# XXX fix the lock order",
+            "/* VULN: the input is not escaped */",
+            " * INSECURE: the token goes over plain HTTP",
+            "-- UNSAFE: no escape of the name",
+            "; XXX(jo): the buffer can overflow",
+            "/// XXX: check the bounds",
+            "//! UNSAFE(review): raw pointer",
+            "    // XXX",
+        ];
+        assert_eq!(security_items(&lines).len(), lines.len());
+    }
+
+    /// Gitea and omen comments that use a security word to explain the code.
+    #[test]
+    fn test_security_word_in_explanation_is_not_debt() {
+        let lines = [
+            "// findLdapSecurityProtocolByName finds security protocol by its name ignoring case.",
+            "# ignore update to refs/pull/xxx/head, so we don't need to output any information",
+            "/* keep the old \"octicon-xxx\" class name */",
+            " * Security settings",
+            "-- SECURITY: Ensure that the PR is safe",
+            "; It's caller's duty to make every element not bypass its own directly level, to avoid security issues.",
+            "// 'unsafe-inline' is needed by inline script",
+            "// Xxx returns the value",
+            "/// The security facts of the first resolved symbol.",
+            "//! It does not say that a change makes the code vulnerable.",
+            "// TODO Make insecure passwords optional for local accounts",
+            "// unsafe { *pointer }",
+        ];
+        assert_eq!(security_items(&lines), Vec::<String>::new());
     }
 
     #[test]

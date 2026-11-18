@@ -610,8 +610,9 @@ pub mod satd {
     /// Performance debt markers.
     pub const PERFORMANCE: &[&str] = &["SLOW", "OPTIMIZE", "PERF", "BOTTLENECK", "INEFFICIENT"];
 
-    /// Security debt markers. omen:ignore
-    pub const SECURITY: &[&str] = &["SECURITY", "VULN", "UNSAFE", "XXX", "INSECURE"];
+    /// Security debt markers. Each one is debt only as a tag at the start of
+    /// the comment, because the same words also explain code. omen:ignore
+    pub const SECURITY: &[&str] = &["VULN", "UNSAFE", "XXX", "INSECURE"];
 
     /// Documentation debt markers.
     pub const DOCUMENTATION: &[&str] = &["DOC", "UNDOCUMENTED", "DOCUMENT", "NODOC", "UNDOC"];
