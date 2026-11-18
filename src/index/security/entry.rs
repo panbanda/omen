@@ -2,8 +2,8 @@
 //!
 //! The table in this module names each framework by the syntax that declares a
 //! handler: a decorator, an annotation, a registration call, a file convention,
-//! or the name `main`. A guard is a decorator, an annotation, or a middleware
-//! name that the syntax attaches to the handler. A guard is a declared fact. It
+//! or the name `main`. A guard is a decorator, an annotation, a middleware name, or a
+//! declared dependency that the syntax attaches to the handler. A guard is a declared fact. It
 //! never means that the handler is authenticated.
 //!
 //! The public API is [`find_entry_points`]. A different analyzer can call it
@@ -19,9 +19,10 @@ use super::spec::syntax_of;
 use super::syntax;
 use crate::core::{is_test_file, Language};
 use crate::index::extract::FileSymbols;
-use crate::index::model::{Span, Symbol, SymbolKind};
+use crate::index::model::{ResolutionBasis, ResolutionStatus, Span, Symbol, SymbolKind};
 use crate::parser::{cfg_test_module_ranges, ParseResult};
 
+mod fastapi;
 mod go_routes;
 mod persistent;
 mod rails;
@@ -88,7 +89,8 @@ pub struct Route {
     pub method: String,
     /// The path as the source writes it, with a leading `/`.
     pub path: String,
-    /// The names of the parameters in the path, in order.
+    /// The names of the parameters in the path, in order. For FastAPI, the names of the request
+    /// parameters of the handler follow them.
     pub parameters: Vec<String>,
 }
 
@@ -104,7 +106,8 @@ pub struct EntryPoint {
     pub symbol: Option<String>,
     pub framework: String,
     pub route: Option<Route>,
-    /// The decorators, annotations, and middleware names that the syntax attaches to the handler.
+    /// The decorators, annotations, middleware names, and declared dependencies that the syntax
+    /// attaches to the handler.
     pub guards: Vec<String>,
     pub basis: EntryBasis,
     pub in_test: bool,
@@ -392,12 +395,64 @@ fn join_path(prefix: &str, path: &str) -> String {
     joined
 }
 
+/// The name node of a value that names a function: the name itself, or the last name of a
+/// path or a member. Rust `list::<T>` gives the name `list`.
+fn value_name(value: Node<'_>) -> Option<Node<'_>> {
+    match value.kind() {
+        "identifier" => Some(value),
+        "generic_function" => value_name(value.child_by_field_name("function")?),
+        "scoped_identifier" | "member_access_expression" => value.child_by_field_name("name"),
+        "attribute" => value.child_by_field_name("attribute"),
+        "member_expression" => value.child_by_field_name("property"),
+        "selector_expression" | "field_expression" => value.child_by_field_name("field"),
+        _ => None,
+    }
+}
+
 fn route(method: &str, path: String) -> Route {
     Route {
         method: method.to_uppercase(),
         parameters: route_parameters(&path),
         path,
     }
+}
+
+/// Removes each value that is equal to an earlier value.
+fn keep_first(values: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    values.retain(|value| seen.insert(value.clone()));
+}
+
+/// The name of a Python decorator that is a known guard, as `login_required`.
+fn python_guard(decorator: Node<'_>, source: &[u8]) -> Option<String> {
+    let expression = decorator.named_child(0)?;
+    let callee = if expression.kind() == "call" {
+        expression.child_by_field_name("function")?
+    } else {
+        expression
+    };
+    let name = syntax::text(callee, source).rsplit('.').next()?;
+    PYTHON_GUARDS.contains(&name).then(|| name.to_string())
+}
+
+/// The known guards in the decorators of the Python function with the range.
+fn python_function_guards(root: Node<'_>, source: &[u8], range: &Span) -> Vec<String> {
+    let decorated = root
+        .descendant_for_byte_range(range.start_byte, range.end_byte)
+        .and_then(|function| function.parent())
+        .filter(|parent| parent.kind() == "decorated_definition");
+    let Some(decorated) = decorated else {
+        return Vec::new();
+    };
+    let mut cursor = decorated.walk();
+    let decorators: Vec<Node<'_>> = decorated
+        .children(&mut cursor)
+        .filter(|child| child.kind() == "decorator")
+        .collect();
+    decorators
+        .into_iter()
+        .filter_map(|decorator| python_guard(decorator, source))
+        .collect()
 }
 
 /// Tells if a declaration or a typed parameter binds `name` to a text with a marker.
@@ -503,6 +558,10 @@ struct Context<'a> {
     go_dead: std::sync::OnceLock<(Vec<usize>, Vec<usize>)>,
     /// The names that the package of a Go file declares at the top level.
     go_declared: std::sync::OnceLock<std::sync::Arc<std::collections::HashSet<String>>>,
+    /// The bindings of a Python file, by scope. Only a file with a FastAPI route builds them.
+    python_scopes: std::cell::OnceCell<fastapi::Scopes<'a>>,
+    /// Tells for the text of the receiver of a Python route decorator if it is a framework value.
+    python_receivers: std::cell::RefCell<std::collections::HashMap<&'a str, bool>>,
 }
 
 struct Draft {
@@ -550,6 +609,8 @@ impl<'a> Context<'a> {
             go_covered: std::sync::OnceLock::new(),
             go_dead: std::sync::OnceLock::new(),
             go_declared: std::sync::OnceLock::new(),
+            python_scopes: std::cell::OnceCell::new(),
+            python_receivers: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -696,21 +757,33 @@ impl<'a> Context<'a> {
 
     /// The one function or method with the name. A definition in the file wins over a definition in another file.
     fn symbol_named(&self, name: &str, container: Option<&str>) -> Option<String> {
+        let (file, position) = self.callable_named(name, container)?;
+        let file = file.map_or(self.file, |file| &self.all[file]);
+        Some(file.symbols[position].key.to_string())
+    }
+
+    /// The file and the position of the one function or method with the name. The file `None`
+    /// is this file. A definition in this file wins over a definition in another file.
+    fn callable_named(
+        &self,
+        name: &str,
+        container: Option<&str>,
+    ) -> Option<(Option<usize>, usize)> {
         let fits = |symbol: &Symbol| {
             container.is_none_or(|wanted| symbol.container.as_deref() == Some(wanted))
         };
-        let here: Vec<&Symbol> = self
+        let here: Vec<usize> = self
             .callables_here()
             .get(name)
             .into_iter()
             .flatten()
-            .map(|position| &self.file.symbols[*position])
-            .filter(|symbol| fits(symbol))
+            .copied()
+            .filter(|position| fits(&self.file.symbols[*position]))
             .collect();
         if here.len() == 1 {
-            return Some(here[0].key.to_string());
+            return Some((None, here[0]));
         }
-        let everywhere: Vec<&Symbol> = self
+        let everywhere: Vec<(usize, usize)> = self
             .all_parsed
             .shared()
             .callables
@@ -718,24 +791,51 @@ impl<'a> Context<'a> {
             .get(name)
             .into_iter()
             .flatten()
-            .map(|(file, position)| &self.all[*file].symbols[*position])
-            .filter(|symbol| fits(symbol))
+            .copied()
+            .filter(|(file, position)| fits(&self.all[*file].symbols[*position]))
             .collect();
-        (everywhere.len() == 1).then(|| everywhere[0].key.to_string())
+        (everywhere.len() == 1).then(|| (Some(everywhere[0].0), everywhere[0].1))
     }
 
     fn handler_symbol(&self, handler: Node<'_>) -> Option<String> {
         if self.file.language == Language::Go {
             return self.go_handler_symbol(handler);
         }
+        if let Some(symbol) = self.referenced_function(handler) {
+            return Some(symbol);
+        }
         let name = match handler.kind() {
             "identifier" => self.text(handler),
             "attribute" | "member_expression" | "selector_expression" | "field_expression" => {
                 self.text(handler).rsplit(['.', ':']).next().unwrap_or("")
             }
+            // A path names a module or a type. Its last name alone is no evidence.
             _ => return None,
         };
         self.symbol_named(name, None)
+    }
+
+    /// The one function that the index resolves for the use of the handler as a value. A
+    /// resolution by the name alone does not count.
+    fn referenced_function(&self, handler: Node<'_>) -> Option<String> {
+        let name = value_name(handler)?;
+        let references = &self.file.function_references;
+        let first = references
+            .partition_point(|reference| reference.name_range.start_byte < name.start_byte());
+        let mut found = references[first..]
+            .iter()
+            .take_while(|reference| reference.name_range.start_byte == name.start_byte())
+            .filter(|reference| {
+                matches!(
+                    reference.resolution.status,
+                    ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
+                ) && reference.resolution.basis != Some(ResolutionBasis::NameOnly)
+            })
+            .flat_map(|reference| reference.resolution.candidates.iter());
+        let symbol = found.next()?;
+        found
+            .all(|other| other == symbol)
+            .then(|| symbol.to_string())
     }
 
     fn arguments_of(call: Node<'_>) -> Vec<Node<'_>> {
@@ -1064,20 +1164,11 @@ impl<'a> Context<'a> {
             .child_by_field_name("definition")
             .and_then(|definition| definition.child_by_field_name("name"))
             .and_then(|name| self.symbol_at(name));
-        let guards: Vec<String> = decorators
+        let decorator_guards: Vec<Option<String>> = decorators
             .iter()
-            .filter_map(|decorator| decorator.named_child(0))
-            .filter_map(|expression| {
-                let callee = if expression.kind() == "call" {
-                    expression.child_by_field_name("function")?
-                } else {
-                    expression
-                };
-                let name = self.text(callee).rsplit('.').next()?.to_string();
-                PYTHON_GUARDS.contains(&name.as_str()).then_some(name)
-            })
+            .map(|decorator| python_guard(*decorator, self.source))
             .collect();
-        for decorator in &decorators {
+        for (position, decorator) in decorators.iter().enumerate() {
             let Some(expression) = decorator.named_child(0) else {
                 continue;
             };
@@ -1126,7 +1217,22 @@ impl<'a> Context<'a> {
             let Some(receiver) = callee.child_by_field_name("object") else {
                 continue;
             };
-            if !self.is_framework_value(receiver, markers, &[(framework_module, exports)]) {
+            // The answer for a receiver needs a search of the file. A file has one framework,
+            // so the text of the receiver gives the answer for each later route.
+            let known = self
+                .python_receivers
+                .borrow()
+                .get(self.text(receiver))
+                .copied();
+            let is_framework_value = known.unwrap_or_else(|| {
+                let answer =
+                    self.is_framework_value(receiver, markers, &[(framework_module, exports)]);
+                self.python_receivers
+                    .borrow_mut()
+                    .insert(self.text(receiver), answer);
+                answer
+            });
+            if !is_framework_value {
                 continue;
             }
             let Some(path) = arguments
@@ -1162,17 +1268,103 @@ impl<'a> Context<'a> {
             } else {
                 vec![name.to_uppercase()]
             };
+            // A decorator above the route decorator wraps the function after the framework
+            // registers it. The framework does not call the wrapper, so it is not a guard.
+            let mut guards: Vec<String> = decorator_guards[position + 1..]
+                .iter()
+                .flatten()
+                .cloned()
+                .collect();
+            let mut route = route(&methods.join(","), path);
+            if framework == "fastapi" {
+                let (dependencies, parameters) =
+                    self.fastapi_declared(node, *decorator, expression, receiver);
+                guards.extend(dependencies);
+                route.parameters.extend(parameters);
+                keep_first(&mut route.parameters);
+            }
+            keep_first(&mut guards);
             out.push(Draft {
                 range: Span::of(decorator),
                 kind: EntryKind::HttpHandler,
                 symbol: symbol.clone(),
                 framework,
-                route: Some(route(&methods.join(","), path)),
-                guards: guards.clone(),
+                route: Some(route),
+                guards,
                 basis: EntryBasis::Declared,
                 variant: None,
             });
         }
+    }
+
+    /// The known guards in the decorators of the view function of a Django route. The function
+    /// can be in a different file. Each decorator wraps the function before the route gets it.
+    fn python_view_guards(&self, view: (Option<usize>, usize)) -> Vec<String> {
+        match view {
+            (None, position) => python_function_guards(
+                self.parsed.root_node(),
+                self.source,
+                &self.file.symbols[position].range,
+            ),
+            (Some(file), position) => self.all_parsed.tree(file).map_or_else(Vec::new, |parsed| {
+                python_function_guards(
+                    parsed.root_node(),
+                    &parsed.source,
+                    &self.all[file].symbols[position].range,
+                )
+            }),
+        }
+    }
+
+    /// The file and the position of the view function of a Django route. The file `None` is
+    /// this file. A name is the function of this file, or the one function with the name. A
+    /// qualified name, as `views.detail`, is never a function of this file: it is the one
+    /// function with the name in the module that the import of the qualifier gives. If the
+    /// index did not resolve the import, it is the one function with the name in the
+    /// repository.
+    fn python_view(&self, view: Node<'_>) -> Option<(Option<usize>, usize)> {
+        use crate::index::model::ImportTarget;
+        if view.kind() == "identifier" {
+            return self.callable_named(self.text(view), None);
+        }
+        if view.kind() != "attribute" {
+            return None;
+        }
+        let qualifier = view.child_by_field_name("object")?;
+        let name = self.text(view.child_by_field_name("attribute")?);
+        let targets: Vec<&str> = self
+            .file
+            .imports
+            .iter()
+            .filter(|binding| {
+                qualifier.kind() == "identifier"
+                    && binding.local_name.as_deref() == Some(self.text(qualifier))
+            })
+            .flat_map(|binding| match &binding.target_file {
+                ImportTarget::Resolved(file) => std::slice::from_ref(file),
+                ImportTarget::Package(files) => files.as_slice(),
+                _ => &[],
+            })
+            .map(String::as_str)
+            .collect();
+        let candidates: Vec<(usize, usize)> = self
+            .all_parsed
+            .shared()
+            .callables
+            .get_or_init(|| callables_by_name(self.all))
+            .get(name)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|(file, position)| {
+                self.all[*file].symbols[*position].container.is_none()
+                    && (targets.is_empty() || targets.contains(&self.all[*file].file.as_str()))
+            })
+            .collect();
+        let [(file, position)] = candidates.as_slice() else {
+            return None;
+        };
+        Some((Some(*file), *position))
     }
 
     fn python_django(&self, node: Node<'_>, out: &mut Vec<Draft>) {
@@ -1192,16 +1384,18 @@ impl<'a> Context<'a> {
         if !self.is_string(*first) {
             return;
         }
-        let Some(symbol) = self.handler_symbol(*view) else {
+        let Some(target) = self.python_view(*view) else {
             return;
         };
+        let (file, position) = target;
+        let symbol = &file.map_or(self.file, |file| &self.all[file]).symbols[position];
         out.push(Draft {
             range: Span::of(&node),
             kind: EntryKind::HttpHandler,
-            symbol: Some(symbol),
+            symbol: Some(symbol.key.to_string()),
             framework: "django",
             route: Some(route("ANY", join_path("", &self.string_of(*first)))),
-            guards: Vec::new(),
+            guards: self.python_view_guards(target),
             basis: EntryBasis::Registered,
             variant: None,
         });
@@ -1900,13 +2094,13 @@ mod tests {
         assert_eq!(parses.load(Ordering::SeqCst), 1);
     }
 
-    fn entries(language: Language, files: &[(&str, &str)]) -> Vec<EntryPoint> {
+    pub(super) fn entries(language: Language, files: &[(&str, &str)]) -> Vec<EntryPoint> {
         entries_timed(language, files, true).0
     }
 
     /// Like `entries`, without the resolution of the references. The search for Rails entry points
     /// does not use them, and the resolution of a large input takes much more time than the search.
-    fn entries_lean(
+    pub(super) fn entries_lean(
         language: Language,
         files: &[(&str, &str)],
     ) -> (Vec<EntryPoint>, std::time::Duration) {
@@ -1918,7 +2112,7 @@ mod tests {
     /// check uses the best of two runs for each size, and a floor for a time that is too short to
     /// compare, so the speed of the machine does not change the result. The absolute bound is far
     /// above any speed that a CI machine has.
-    fn assert_scales_linearly(
+    pub(super) fn assert_scales_linearly(
         label: &str,
         size: usize,
         run: impl Fn(usize) -> std::time::Duration,
@@ -4778,11 +4972,14 @@ func routes() {
         timed_search(&[("main.go".to_string(), source)])
     }
 
-    fn assert_linear_growth(small: usize, run: fn(usize) -> Search, expected: fn(usize) -> usize) {
-        let (first_found, first) = run(small);
-        let (second_found, second) = run(small * 2);
-        assert_eq!(first_found, expected(small));
-        assert_eq!(second_found, expected(small * 2));
+    fn assert_found_counts(small: usize, run: fn(usize) -> Search, expected: fn(usize) -> usize) {
+        assert_eq!(run(small).0, expected(small));
+        assert_eq!(run(small * 2).0, expected(small * 2));
+    }
+
+    fn assert_linear_growth(small: usize, run: fn(usize) -> Search) {
+        let (_, first) = run(small);
+        let (_, second) = run(small * 2);
         let floor = std::time::Duration::from_millis(300);
         assert!(
             second < 3 * first.max(floor),
@@ -4790,16 +4987,19 @@ func routes() {
         );
     }
 
+    // The ratio check runs only in the release timing step: a debug or coverage
+    // build on a shared runner is too slow and too noisy for a ratio of times.
     macro_rules! go_timing {
         ($scenario:ident, $small_test:ident, $large_test:ident, $small:expr, $large:expr, $expected:expr) => {
             #[test]
             fn $small_test() {
-                assert_linear_growth($small, $scenario, $expected);
+                assert_found_counts($small, $scenario, $expected);
             }
 
             #[test]
             #[ignore = "timing: run in release"]
             fn $large_test() {
+                assert_linear_growth($small, $scenario);
                 let (_, took) = $scenario($large);
                 assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
             }
@@ -5996,6 +6196,167 @@ func routes() {
         );
         assert_eq!(found[0].route, route("GET", "/items/{id}", &["id"]));
         assert_eq!(found[1].route, route("GET", "/ping", &[]));
+    }
+
+    /// The handler symbol of each route, sorted by the path of the route.
+    fn handlers_by_route(found: &[EntryPoint]) -> Vec<(String, Option<String>)> {
+        let mut handlers: Vec<(String, Option<String>)> = found
+            .iter()
+            .filter_map(|entry| {
+                let route = entry.route.as_ref()?;
+                Some((route.path.clone(), entry.symbol.clone()))
+            })
+            .collect();
+        handlers.sort();
+        handlers
+    }
+
+    const SCOPED_HANDLER_FILES: &[(&str, &str)] = &[
+        ("src/lib.rs", "mod routes;\nmod server;\n"),
+        ("src/routes/mod.rs", "pub mod health;\npub mod items;\n"),
+        ("src/routes/health.rs", "pub async fn health() {}\n"),
+        (
+            "src/routes/items.rs",
+            "pub async fn list() {}\n\npub async fn health() {}\n\npub struct Api;\n\nimpl Api {\n    pub async fn show() {}\n}\n",
+        ),
+        (
+            "src/server.rs",
+            "use axum::{routing::get, Router};\nuse crate::routes::{health, items};\n\nmod inline {\n    pub async fn ping() {}\n}\n\npub struct Server;\n\nimpl Server {\n    pub fn router() -> Router {\n        Router::new()\n            .route(\"/health\", get(health::health))\n            .route(\"/items\", get(items::list))\n            .route(\"/full\", get(crate::routes::items::list))\n            .route(\"/super\", get(super::routes::health::health))\n            .route(\"/show\", get(items::Api::show))\n            .route(\"/generic\", get(items::list::<u32>))\n            .route(\"/inline\", get(inline::ping))\n            .route(\"/self\", get(Self::handle))\n            .route(\"/missing\", get(items::missing))\n            .route(\"/external\", get(other_crate::handlers::list))\n    }\n\n    async fn handle() {}\n}\n\npub struct Other;\n\nimpl Other {\n    async fn handle() {}\n}\n",
+        ),
+    ];
+
+    #[test]
+    fn an_axum_handler_with_a_path_resolves_through_the_modules_of_the_index() {
+        let found = entries(Language::Rust, SCOPED_HANDLER_FILES);
+        let symbol = |key: &str| Some(key.to_string());
+        assert_eq!(
+            handlers_by_route(&found),
+            [
+                ("/external".to_string(), None),
+                ("/full".to_string(), symbol("src/routes/items.rs#list")),
+                ("/generic".to_string(), symbol("src/routes/items.rs#list")),
+                ("/health".to_string(), symbol("src/routes/health.rs#health")),
+                ("/inline".to_string(), symbol("src/server.rs#inline.ping")),
+                ("/items".to_string(), symbol("src/routes/items.rs#list")),
+                ("/missing".to_string(), None),
+                ("/self".to_string(), symbol("src/server.rs#Server.handle")),
+                ("/show".to_string(), symbol("src/routes/items.rs#Api.show")),
+                ("/super".to_string(), symbol("src/routes/health.rs#health")),
+            ]
+        );
+    }
+
+    /// `count` modules with a handler of one name, and `count` files that each register
+    /// one handler with a module path.
+    fn scoped_axum_handlers(count: usize) -> (usize, std::time::Duration) {
+        let mut files: Vec<(String, String)> = Vec::new();
+        let mut declarations = String::new();
+        for index in 0..count {
+            declarations.push_str(&format!("mod m{index};\nmod s{index};\n"));
+            files.push((
+                format!("src/m{index}.rs"),
+                "pub async fn handler() {}\n".to_string(),
+            ));
+            let (import, path) = if index % 2 == 0 {
+                (String::new(), format!("crate::m{index}::handler"))
+            } else {
+                (
+                    format!("use crate::m{index};\n"),
+                    format!("m{index}::handler"),
+                )
+            };
+            files.push((
+                format!("src/s{index}.rs"),
+                format!("use axum::{{routing::get, Router}};\n{import}\npub fn app() -> Router {{\n    Router::new().route(\"/{index}\", get({path}))\n}}\n"),
+            ));
+        }
+        files.push(("src/lib.rs".to_string(), declarations));
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(name, text)| (name.as_str(), text.as_str()))
+            .collect();
+        let (found, took) = entries_timed(Language::Rust, &borrowed, true);
+        assert_eq!(found.len(), count);
+        assert!(found.iter().all(|entry| entry.symbol.is_some()));
+        (found.len(), took)
+    }
+
+    #[test]
+    fn scoped_axum_handlers_of_one_name_all_resolve() {
+        scoped_axum_handlers(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_axum_handlers_of_one_name_with_module_paths_resolve_in_linear_time() {
+        assert_scales_linearly("scoped axum handlers", 10_000, |count| {
+            scoped_axum_handlers(count).1
+        });
+    }
+
+    #[test]
+    fn an_axum_handler_path_is_not_resolved_by_its_last_name_alone() {
+        let files = [
+            ("src/lib.rs", "mod server;\nmod items;\n"),
+            ("src/items.rs", "pub async fn other() {}\n"),
+            (
+                "src/server.rs",
+                "use axum::{routing::get, Router};\n\npub fn app() -> Router {\n    Router::new().route(\"/a\", get(items::list)).route(\"/b\", get(crate::unknown::list))\n}\n",
+            ),
+            ("src/elsewhere.rs", "pub async fn list() {}\n"),
+        ];
+        let found = entries(Language::Rust, &files);
+        assert_eq!(
+            handlers_by_route(&found),
+            [("/a".to_string(), None), ("/b".to_string(), None)]
+        );
+    }
+
+    #[test]
+    fn a_csharp_minimal_api_handler_with_a_type_resolves_to_the_method_of_the_type() {
+        let program = "var app = WebApplication.Create(args);\napp.MapGet(\"/items\", Handlers.List);\napp.MapGet(\"/others\", Others.List);\n";
+        let handlers = "public static class Handlers {\n    public static string List() => \"\";\n}\n\npublic static class Others {\n    public static string List() => \"\";\n}\n";
+        let found = entries(
+            Language::CSharp,
+            &[("Program.cs", program), ("Handlers.cs", handlers)],
+        );
+        assert_eq!(
+            handlers_by_route(&found),
+            [
+                (
+                    "/items".to_string(),
+                    Some("Handlers.cs#Handlers.List".to_string())
+                ),
+                (
+                    "/others".to_string(),
+                    Some("Handlers.cs#Others.List".to_string())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_django_view_of_an_imported_module_resolves_when_another_file_has_the_name() {
+        let urls = "from django.urls import path\nimport views\n\nurlpatterns = [\n    path(\"items/\", views.detail),\n]\n";
+        let views = "def detail(request):\n    return request\n";
+        let admin = "def detail(request):\n    return request\n";
+        let found = entries(
+            Language::Python,
+            &[("urls.py", urls), ("views.py", views), ("admin.py", admin)],
+        );
+        assert_eq!(found[0].symbol.as_deref(), Some("views.py#detail"));
+    }
+
+    #[test]
+    fn an_express_handler_of_an_imported_module_resolves_when_another_file_has_the_name() {
+        let app = "import express from \"express\";\nimport * as users from \"./users\";\n\nconst app = express();\napp.get(\"/users\", users.list);\n";
+        let users = "export function list(request, response) {}\n";
+        let posts = "export function list(request, response) {}\n";
+        let found = entries(
+            Language::JavaScript,
+            &[("app.js", app), ("users.js", users), ("posts.js", posts)],
+        );
+        assert_eq!(found[0].symbol.as_deref(), Some("users.js#list"));
     }
 
     #[test]

@@ -72,9 +72,29 @@ pub struct SymbolChange {
     pub transitive_callers: usize,
     /// The name of the weakest resolution basis of an edge to the symbol.
     pub weakest_basis: Option<String>,
+    /// True when the symbol is test code. The rule is the rule of `CallerRef::is_test`.
+    #[serde(default)]
+    pub is_test: bool,
 }
 
 impl SymbolChange {
+    /// The order of the symbols for a review. Symbols that are not test code
+    /// come first. Then a changed or removed symbol comes before an added
+    /// symbol. Then the symbol with more transitive callers comes first. The
+    /// key makes the order total.
+    pub fn review_order(&self, other: &Self) -> std::cmp::Ordering {
+        let rank = |symbol: &Self| {
+            (
+                symbol.is_test,
+                symbol.state == ChangeState::Added,
+                std::cmp::Reverse(symbol.transitive_callers),
+            )
+        };
+        rank(self)
+            .cmp(&rank(other))
+            .then_with(|| self.key.cmp(&other.key))
+    }
+
     pub fn test_callers(&self) -> usize {
         self.direct_callers
             .iter()
@@ -178,4 +198,60 @@ pub struct ChangeSet {
     /// The function `compute` leaves it empty. `changeset::security::compute` gives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<super::security::SecurityChanges>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn symbol(
+        key: &str,
+        state: ChangeState,
+        transitive_callers: usize,
+        is_test: bool,
+    ) -> SymbolChange {
+        SymbolChange {
+            key: key.to_string(),
+            name: key.to_string(),
+            kind: SymbolKind::Function,
+            file: "a.rs".to_string(),
+            line: 1,
+            state,
+            signature_before: None,
+            signature_after: None,
+            complexity_before: None,
+            complexity_after: None,
+            direct_callers: Vec::new(),
+            transitive_callers,
+            weakest_basis: None,
+            is_test,
+        }
+    }
+
+    #[test]
+    fn test_review_order_puts_the_symbols_with_the_most_effect_first() {
+        let mut symbols = [
+            symbol("a_test_changed", ChangeState::Changed, 9, true),
+            symbol("b_added_many", ChangeState::Added, 7, false),
+            symbol("c_added_few", ChangeState::Added, 1, false),
+            symbol("d_changed_few", ChangeState::Changed, 0, false),
+            symbol("f_removed_many", ChangeState::Removed, 5, false),
+            symbol("e_changed_many", ChangeState::Changed, 5, false),
+            symbol("g_test_added", ChangeState::Added, 0, true),
+        ];
+        symbols.sort_by(SymbolChange::review_order);
+        let keys: Vec<&str> = symbols.iter().map(|symbol| symbol.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "e_changed_many",
+                "f_removed_many",
+                "d_changed_few",
+                "b_added_many",
+                "c_added_few",
+                "a_test_changed",
+                "g_test_added"
+            ]
+        );
+    }
 }

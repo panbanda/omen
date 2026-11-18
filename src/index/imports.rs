@@ -804,10 +804,16 @@ impl Repository<'_> {
     }
 
     fn rust(&self, binding: &ImportBinding) -> ImportTarget {
+        // `mod name;` declares a child of the module of the file. A crate with the same
+        // name is a different module.
+        if binding.kind == ImportKind::ModuleDeclaration {
+            return self
+                .rust_child(&self.rust_children(&binding.file), &binding.module_path)
+                .map_or(ImportTarget::Unresolved, ImportTarget::Resolved);
+        }
         match self.rust_walk(&binding.file, &binding.module_path) {
             None => ImportTarget::Unresolved,
             Some((module, true, _)) => ImportTarget::Resolved(module),
-            Some(_) if binding.kind == ImportKind::ModuleDeclaration => ImportTarget::Unresolved,
             Some(_) => ImportTarget::External,
         }
     }
@@ -1205,6 +1211,11 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
                     .iter()
                     .filter(|_| file.language == Language::Rust)
                     .filter_map(|reference| reference.qualifier.as_deref())
+                    .chain(
+                        file.value_sites
+                            .qualifiers()
+                            .filter(|_| file.language == Language::Rust),
+                    )
                     .flat_map(|qualifier| {
                         // The path before a type names the module of the type.
                         let module = qualifier.rsplit_once("::").map(|(module, _)| module);

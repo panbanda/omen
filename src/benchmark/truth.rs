@@ -157,6 +157,24 @@ pub struct Labels {
     pub entry_points: Vec<EntryPointLabel>,
     #[serde(default)]
     pub paths: Vec<PathLabel>,
+    #[serde(default)]
+    pub references: Vec<ReferenceLabel>,
+}
+
+/// One use of a function as a value, as the argument `worker` in
+/// `spawn(worker)` is. The use is not a call.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceLabel {
+    pub label: String,
+    /// The key of the symbol whose body has the use.
+    pub user: String,
+    pub line: u32,
+    /// The name of the function as the source has it, without a receiver or a path.
+    pub name: String,
+    /// The keys of the functions to which the use has an edge. An empty list
+    /// means that omen must not report an edge.
+    pub expected: Vec<String>,
 }
 
 /// One shortest path from an entry point to a sink. An entry point and a sink are
@@ -187,6 +205,9 @@ pub struct PathLabel {
     /// The keys of symbols that each path to a sink goes through.
     #[serde(default)]
     pub choke_points: Vec<String>,
+    /// The number of edges of the path that are function references.
+    #[serde(default)]
+    pub function_references: Option<usize>,
 }
 
 /// One entry point: a handler that the code declares or registers.
@@ -207,7 +228,7 @@ pub struct EntryPointLabel {
     pub path: Option<String>,
     #[serde(default)]
     pub parameters: Vec<String>,
-    /// The declared guards, in source order.
+    /// The declared guards, in the order in which omen reports them.
     #[serde(default)]
     pub guards: Vec<String>,
 }
@@ -339,6 +360,7 @@ pub struct Observed {
     pub sinks: Vec<ObservedSink>,
     pub entry_points: Vec<ObservedEntryPoint>,
     pub paths: Vec<ObservedPath>,
+    pub references: Vec<ObservedReference>,
 }
 
 #[derive(Debug, Clone)]
@@ -353,6 +375,19 @@ pub struct ObservedPath {
     pub guards: Vec<String>,
     /// The keys of the symbols on this path that are choke points for the sink of this path.
     pub choke_points: Vec<String>,
+    /// The number of edges of the path that are function references.
+    pub function_references: usize,
+}
+
+/// One use of a function as a value that omen reported.
+#[derive(Debug, Clone)]
+pub struct ObservedReference {
+    /// The key of the symbol whose body has the use.
+    pub user: String,
+    pub line: u32,
+    pub name: String,
+    /// The keys of the functions to which the use has an edge.
+    pub edges: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -948,6 +983,14 @@ fn compare_paths(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec
                 found.and_then(|path| mismatch(count.to_string(), path.path_count.to_string())),
             ));
         }
+        if let Some(count) = label.function_references {
+            out.push(check(
+                "function_references",
+                found.and_then(|path| {
+                    mismatch(count.to_string(), path.function_references.to_string())
+                }),
+            ));
+        }
         if let Some(guards) = &label.guards {
             out.push(check(
                 "guards",
@@ -970,6 +1013,48 @@ fn compare_paths(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec
             ));
         }
     }
+}
+
+/// A label names one use: a symbol, a line, and a name. The edges of the use must be the
+/// expected functions. A use that omen does not report has no edge.
+fn compare_references(
+    case: &str,
+    labels: &Labels,
+    observed: &Observed,
+    out: &mut Vec<Assertion>,
+) -> Result<()> {
+    let names = labels.references.iter().map(|label| label.label.as_str());
+    let mut seen = BTreeSet::new();
+    for name in names {
+        if name.is_empty() || name.contains('/') || !seen.insert(name) {
+            return Err(invalid(format!(
+                "{case}: references label '{name}' must be unique and non-empty without '/'"
+            )));
+        }
+    }
+    for label in &labels.references {
+        let expected: BTreeSet<&String> = label.expected.iter().collect();
+        let edges: BTreeSet<&String> = observed
+            .references
+            .iter()
+            .filter(|found| {
+                found.user == label.user && found.line == label.line && found.name == label.name
+            })
+            .flat_map(|found| &found.edges)
+            .collect();
+        let false_edges: Vec<_> = edges.difference(&expected).collect();
+        let missed_edges: Vec<_> = expected.difference(&edges).collect();
+        let prefix = format!("{case}/references/{}", label.label);
+        out.push(assertion(
+            format!("{prefix}/no_false_edge"),
+            (!false_edges.is_empty()).then(|| format!("false edge to {}", join(false_edges))),
+        ));
+        out.push(assertion(
+            format!("{prefix}/no_missed_edge"),
+            (!missed_edges.is_empty()).then(|| format!("no edge to {}", join(missed_edges))),
+        ));
+    }
+    Ok(())
 }
 
 /// A label takes one reported sink. A second label on the same line and category needs a
@@ -1076,6 +1161,7 @@ pub fn compare(case: &str, labels: &Labels, observed: &Observed) -> Result<Vec<A
     compare_sinks(case, labels, observed, &mut assertions);
     compare_entry_points(case, labels, observed, &mut assertions);
     compare_paths(case, labels, observed, &mut assertions);
+    compare_references(case, labels, observed, &mut assertions)?;
     Ok(assertions)
 }
 
@@ -1401,6 +1487,7 @@ mod tests {
             sinks: vec![],
             entry_points: vec![],
             paths: vec![],
+            references: vec![],
             imports: vec![ObservedImport {
                 file: "main.rs".to_string(),
                 line: 1,
@@ -2140,6 +2227,7 @@ mod tests {
             path_count: 1,
             guards: vec!["login_required".to_string()],
             choke_points: vec!["app.py#helper".to_string()],
+            function_references: 0,
         }
     }
 
@@ -2327,6 +2415,95 @@ mod tests {
             gaps.contains(&"sinks/weak_hash/real_call".to_string()),
             "blank reason is no exemption"
         );
+    }
+
+    fn reference_labels() -> Labels {
+        serde_json::from_value(serde_json::json!({
+            "version": 1, "language": "python", "split": "development", "oracle": "x",
+            "closed_world": false,
+            "references": [
+                {"label": "callback", "user": "app.py#run", "line": 6, "name": "worker",
+                 "expected": ["app.py#worker"]},
+                {"label": "shadowed", "user": "app.py#other", "line": 9, "name": "worker",
+                 "expected": []}
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn reference_failures(references: Vec<ObservedReference>) -> Vec<String> {
+        let observed = Observed {
+            references,
+            ..Observed::default()
+        };
+        compare("python/references", &reference_labels(), &observed)
+            .unwrap()
+            .into_iter()
+            .filter(|assertion| !assertion.passed)
+            .map(|assertion| assertion.id)
+            .collect()
+    }
+
+    fn observed_reference(user: &str, line: u32, edges: &[&str]) -> ObservedReference {
+        ObservedReference {
+            user: user.to_string(),
+            line,
+            name: "worker".to_string(),
+            edges: edges.iter().map(|edge| edge.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_function_reference_label_checks_the_edges_of_one_use() {
+        let correct = vec![observed_reference("app.py#run", 6, &["app.py#worker"])];
+        assert_eq!(reference_failures(correct), Vec::<String>::new());
+        assert_eq!(
+            reference_failures(Vec::new()),
+            ["python/references/references/callback/no_missed_edge"]
+        );
+        let wrong = vec![
+            observed_reference("app.py#run", 6, &["app.py#other"]),
+            observed_reference("app.py#other", 9, &["app.py#worker"]),
+        ];
+        assert_eq!(
+            reference_failures(wrong),
+            [
+                "python/references/references/callback/no_false_edge",
+                "python/references/references/callback/no_missed_edge",
+                "python/references/references/shadowed/no_false_edge",
+            ]
+        );
+        // A use on a different line is a different use.
+        let elsewhere = vec![observed_reference("app.py#run", 7, &["app.py#worker"])];
+        assert_eq!(
+            reference_failures(elsewhere),
+            ["python/references/references/callback/no_missed_edge"]
+        );
+    }
+
+    #[test]
+    fn a_path_label_checks_the_number_of_function_references() {
+        let mut labels = path_labels();
+        labels.paths[0].function_references = Some(1);
+        let failing = |observed: ObservedPath| -> Vec<String> {
+            let observed = Observed {
+                paths: vec![observed],
+                ..Observed::default()
+            };
+            compare("python/paths", &labels, &observed)
+                .unwrap()
+                .into_iter()
+                .filter(|assertion| !assertion.passed)
+                .map(|assertion| assertion.id)
+                .collect()
+        };
+        assert_eq!(
+            failing(observed_path()),
+            ["python/paths/paths/update_to_system/function_references"]
+        );
+        let mut through_reference = observed_path();
+        through_reference.function_references = 1;
+        assert_eq!(failing(through_reference), Vec::<String>::new());
     }
 
     #[test]

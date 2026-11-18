@@ -1,5 +1,7 @@
 //! Python symbols.
 
+use std::rc::Rc;
+
 use tree_sitter::Node;
 
 use crate::index::extract::{
@@ -15,7 +17,7 @@ const IMPORT_FROM_STATEMENT: &str = "import_from_statement";
 const ALIASED_IMPORT: &str = "aliased_import";
 const WILDCARD_IMPORT: &str = "wildcard_import";
 
-use crate::index::calls::{Call, CallSyntax, LocalName};
+use crate::index::calls::{Call, CallSyntax, LocalName, ValueSyntax};
 
 const PARAMETERS: &str = "parameters";
 const LAMBDA_PARAMETERS: &str = "lambda_parameters";
@@ -176,6 +178,20 @@ enum PublicNames {
     NotLiteral,
 }
 
+/// The public names of a module. The walk asks for each definition at the top
+/// level, and the function reads the statements of the module only one time.
+fn public_names_of_module(module: Node<'_>, context: &Context<'_, '_>) -> Rc<PublicNames> {
+    let key = (module.id(), 0);
+    if let Some(found) = context.memo.borrow().get(&key) {
+        if let Ok(found) = Rc::clone(found).downcast::<PublicNames>() {
+            return found;
+        }
+    }
+    let names = Rc::new(public_names(module, context));
+    context.memo.borrow_mut().insert(key, names.clone());
+    names
+}
+
 fn public_names(module: Node<'_>, context: &Context<'_, '_>) -> PublicNames {
     let mut result = PublicNames::NotDeclared;
     let mut cursor = module.walk();
@@ -219,6 +235,10 @@ fn public_names(module: Node<'_>, context: &Context<'_, '_>) -> PublicNames {
 impl LanguageSpec for Python {
     fn call_syntax(&self) -> CallSyntax {
         CALL_SYNTAX
+    }
+
+    fn value_syntax(&self) -> ValueSyntax {
+        super::values::PYTHON
     }
 
     /// `super()` gives the parent object. It does not call a definition.
@@ -467,12 +487,11 @@ impl LanguageSpec for Python {
                 scope.exported.clone()
             };
         }
-        let mut module = draft.node;
-        while let Some(parent) = module.parent() {
-            module = parent;
-        }
+        // The first ancestor of the walk is the module. `Node::parent` searches
+        // the children of the module, which is slow for a large module.
+        let module = context.ancestors.first().copied().unwrap_or(draft.node);
         // A name in a literal `__all__` is public, also when it starts with `_`.
-        match public_names(module, context) {
+        match &*public_names_of_module(module, context) {
             PublicNames::Listed(names) => {
                 if names.contains(&draft.name) {
                     Exported::Exported

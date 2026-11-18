@@ -11,12 +11,12 @@ use std::rc::Rc;
 
 use tree_sitter::Node;
 
-use super::calls::{split_type, Argument, Call, CallSyntax, LocalName};
+use super::calls::{split_type, Argument, Call, CallSyntax, LocalName, ValueSyntax, ValueUse};
 use super::lang;
 use super::members::{self, MemberFacts, PendingBlock, Recorder, SymbolRow};
 use super::model::{
-    symbol_key, Exported, ImportBinding, ImportKind, ImportTarget, Reference, ReferenceKind,
-    Resolution, ResolutionStatus, SharedStr, Span, Symbol, SymbolKind,
+    symbol_key, Exported, ImportBinding, ImportKind, ImportTarget, Receiver, Reference,
+    ReferenceKind, Resolution, ResolutionStatus, SharedStr, Span, Symbol, SymbolKind, NO_ARITY,
 };
 use crate::core::Language;
 use crate::parser::ParseResult;
@@ -203,6 +203,9 @@ pub struct ReferenceFacts {
     /// A construction whose declared type is optional. The resolver gives it
     /// a candidate only when each type of the repository with the name is a class.
     pub nullable_target: bool,
+    /// A function reference whose name is a variable. Only a function value
+    /// that the variable holds is its candidate.
+    pub variable: bool,
 }
 
 /// The names of the value that an index expression reads: `c.items[i]`
@@ -578,6 +581,34 @@ pub trait LanguageSpec: Sync {
     fn call_hook_kinds(&self) -> Vec<&'static str> {
         Vec::new()
     }
+
+    /// The table that tells where the language uses a function as a value.
+    fn value_syntax(&self) -> ValueSyntax {
+        ValueSyntax::default()
+    }
+
+    /// Each node kind for which the walk calls `function_values`.
+    fn value_kinds(&self) -> Vec<&'static str> {
+        self.value_syntax().position_kinds()
+    }
+
+    /// Adds each use of a name as a value at a node. The default reads the
+    /// table. The resolver tells if the name is a function.
+    fn function_values<'tree>(
+        &self,
+        node: Node<'tree>,
+        context: &Context<'_, 'tree>,
+        out: &mut Vec<ValueUse<'tree>>,
+    ) {
+        self.value_syntax()
+            .values(&self.call_syntax(), node, context, out);
+    }
+
+    /// Each node kind that `function_values` compares with, and that is not
+    /// in the table. The grammar lint examines these kinds.
+    fn value_hook_kinds(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
 }
 
 /// Gives the specification of a language.
@@ -674,6 +705,166 @@ type RawCall<'tree> = (
     Option<(usize, usize)>,
 );
 
+/// What one declaration of a local name tells about the name.
+#[derive(Clone, Copy)]
+struct BoundName<'a> {
+    /// The first byte of the value of the name. It is 0 for a name that has
+    /// no value, as a parameter is.
+    first_value: usize,
+    /// The bytes of the block in which the name is visible. See `Local::block`.
+    block: Option<&'a std::ops::Range<usize>>,
+    /// The declaration has a type or a value.
+    has_type_or_value: bool,
+}
+
+/// A range of bytes in `ValueSites::text`.
+type TextRange = (u32, u32);
+
+/// The expression before the name of a value.
+#[derive(Debug, Clone, Copy)]
+enum SiteReceiver {
+    None,
+    SelfValue,
+    Super,
+    Name(TextRange),
+    Expression,
+}
+
+/// One use of a name as a value, before the resolution.
+#[derive(Debug, Clone, Copy)]
+struct ValueSite {
+    name: TextRange,
+    name_range: Span,
+    start_byte: u32,
+    end_byte: u32,
+    /// The position in `FileSymbols::symbols` of the enclosing definition.
+    owner: Option<u32>,
+    receiver: SiteReceiver,
+    qualifier: Option<TextRange>,
+    /// The byte range of the receiver expression in the source.
+    receiver_range: Option<(u32, u32)>,
+    /// The source text of the receiver expression.
+    receiver_text: Option<TextRange>,
+    arrow: bool,
+    via_closure: bool,
+    variable: bool,
+}
+
+/// The uses of a name as a value in one file, before the resolution.
+///
+/// A repository has many uses, and the resolver keeps few of them. The uses
+/// of a file are thus in two blocks of memory, one for the records and one
+/// for the texts. A record of its own for each use, with a string for each
+/// text, left the memory in small parts that the process did not use again.
+#[derive(Debug, Clone, Default)]
+pub struct ValueSites {
+    text: String,
+    sites: Vec<ValueSite>,
+}
+
+impl ValueSites {
+    pub fn len(&self) -> usize {
+        self.sites.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sites.is_empty()
+    }
+
+    fn add_text(&mut self, text: &str) -> TextRange {
+        let start = self.text.len() as u32;
+        self.text.push_str(text);
+        (start, self.text.len() as u32)
+    }
+
+    fn text_of(&self, range: TextRange) -> &str {
+        &self.text[range.0 as usize..range.1 as usize]
+    }
+
+    /// The path before the name of each use that has one, as `jobs` in `jobs::worker`.
+    pub fn qualifiers(&self) -> impl Iterator<Item = &str> {
+        self.sites
+            .iter()
+            .filter_map(|site| site.qualifier.map(|qualifier| self.text_of(qualifier)))
+    }
+
+    /// The name of the use at `position`.
+    pub fn name(&self, position: usize) -> &str {
+        self.text_of(self.sites[position].name)
+    }
+
+    /// Tells if the use at `position` is one name, without a receiver and without a path.
+    pub fn is_bare(&self, position: usize) -> bool {
+        let site = &self.sites[position];
+        matches!(site.receiver, SiteReceiver::None) && site.qualifier.is_none()
+    }
+
+    /// Keeps the uses for which `keep` is true. `keep` gets the position of the use.
+    pub fn retain(&mut self, mut keep: impl FnMut(usize) -> bool) {
+        let mut position = 0;
+        self.sites.retain(|_| {
+            position += 1;
+            keep(position - 1)
+        });
+        self.sites.shrink_to_fit();
+    }
+
+    /// The reference and the resolver facts of the use at `position`. `file`
+    /// is the path of the file, and `symbols` has the symbols of the file.
+    pub fn reference(
+        &self,
+        position: usize,
+        file: &SharedStr,
+        symbols: &[Symbol],
+    ) -> (Reference, ReferenceFacts) {
+        let site = &self.sites[position];
+        let receiver = match site.receiver {
+            SiteReceiver::None => None,
+            SiteReceiver::SelfValue => Some(Receiver::SelfValue),
+            SiteReceiver::Super => Some(Receiver::Super),
+            SiteReceiver::Name(name) => Some(Receiver::Name(self.text_of(name).to_string())),
+            SiteReceiver::Expression => Some(Receiver::Expression),
+        };
+        let receiver_text = site.receiver_text.map(|text| self.text_of(text));
+        let reference = Reference {
+            file: file.clone(),
+            name_range: site.name_range,
+            name: self.text_of(site.name).to_string(),
+            kind: ReferenceKind::FunctionReference,
+            enclosing: site.owner.map(|owner| symbols[owner as usize].key.clone()),
+            via_closure: site.via_closure,
+            receiver,
+            qualifier: site
+                .qualifier
+                .map(|qualifier| self.text_of(qualifier).to_string()),
+            arity: NO_ARITY,
+            resolution: Resolution {
+                status: ResolutionStatus::Unresolved,
+                basis: None,
+                candidates: Vec::new(),
+                superseded: Vec::new(),
+            },
+        };
+        let facts = ReferenceFacts {
+            start_byte: site.start_byte as usize,
+            end_byte: site.end_byte as usize,
+            owner: site.owner.map(|owner| owner as usize),
+            arguments: Vec::new(),
+            receiver: site
+                .receiver_range
+                .map(|(start, end)| (start as usize, end as usize)),
+            receiver_path: receiver_text
+                .and_then(|text| name_path(text).or_else(|| indexed_path(text))),
+            receiver_indexed: receiver_text.is_some_and(|text| indexed_path(text).is_some()),
+            tried: false,
+            arrow: site.arrow,
+            nullable_target: false,
+            variable: site.variable,
+        };
+        (reference, facts)
+    }
+}
+
 struct Extractor<'a, 'tree> {
     spec: &'a dyn LanguageSpec,
     rules: HashMap<&'static str, DefinitionRule>,
@@ -702,6 +893,9 @@ struct Extractor<'a, 'tree> {
     return_type_field: &'static str,
     /// Each call with its start byte, its owner, and its closure flag.
     calls: Vec<RawCall<'tree>>,
+    value_kinds: Vec<&'static str>,
+    /// Each use of a name as a value, with its owner and its closure flag.
+    values: Vec<(ValueUse<'tree>, Option<usize>, bool)>,
     locals: Vec<(LocalName, Option<usize>, Option<std::ops::Range<usize>>)>,
     block_kinds: Vec<&'static str>,
     /// The local name and the exported name of each export of a name of this
@@ -719,6 +913,7 @@ struct KindFacts {
     module: bool,
     call: bool,
     local: bool,
+    value: bool,
     scope: bool,
     rule: Option<DefinitionRule>,
     /// The roles of the kind in the facts of the members, as `members::kind_bits` gives.
@@ -742,6 +937,7 @@ impl<'tree> Extractor<'_, 'tree> {
             module: self.module_kinds.contains(&kind),
             call: self.call_kinds.contains(&kind),
             local: self.local_kinds.contains(&kind),
+            value: self.value_kinds.contains(&kind),
             scope: self.spec.scope_kinds().contains(&kind),
             rule: self.rules.get(kind).copied(),
             member_bits: self.members.as_ref().map_or(0, |recorder| {
@@ -844,6 +1040,7 @@ impl<'tree> Extractor<'_, 'tree> {
             module,
             call,
             local,
+            value,
             scope: opens_scope,
             rule,
             member_bits,
@@ -879,7 +1076,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 self.modules.extend(self.spec.module_name(node, &context));
             }
         }
-        if call || local {
+        if call || local || value {
             let context = Context {
                 file: self.file,
                 source: self.source,
@@ -896,6 +1093,13 @@ impl<'tree> Extractor<'_, 'tree> {
                 let receiver = self.spec.call_syntax().receiver_range(node);
                 self.calls
                     .push((call, node.byte_range(), owner, via_closure, receiver));
+            }
+            if value {
+                let mut uses = Vec::new();
+                self.spec.function_values(node, &context, &mut uses);
+                let via_closure = !self.closure_depths.is_empty();
+                self.values
+                    .extend(uses.into_iter().map(|used| (used, owner, via_closure)));
             }
             if local {
                 let mut names = Vec::new();
@@ -1052,6 +1256,13 @@ pub struct FileSymbols {
     pub references: Vec<Reference>,
     /// One entry for each reference, in the order of `references`.
     pub reference_facts: Vec<ReferenceFacts>,
+    /// The uses of a function as a value, in source order. They are not
+    /// calls, and they are not in `references`. `resolve_references` gives
+    /// the list: a use is in it only when it has a candidate.
+    pub function_references: Vec<Reference>,
+    /// Each use of a name as a value that can name a function.
+    /// `resolve_references` reads the uses and empties the list.
+    pub value_sites: ValueSites,
     /// The parameters and the local variables of each function.
     pub locals: Vec<Local>,
     /// The module file that each qualifier of a call names, by the text of
@@ -1489,6 +1700,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         return_owners: Vec::new(),
         return_type_field: spec.call_syntax().return_type_field,
         calls: Vec::new(),
+        value_kinds: spec.value_kinds(),
+        values: Vec::new(),
         locals: Vec::new(),
         block_kinds: spec.block_kinds(),
         export_aliases: Vec::new(),
@@ -1635,7 +1848,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 .target
                 .as_ref()
                 .map_or_else(|| split_type(&text).1, |target| target.name.clone()),
-            ReferenceKind::Call => text.to_string(),
+            ReferenceKind::Call | ReferenceKind::FunctionReference => text.to_string(),
         };
         references.push(Reference {
             file: shared_file.clone(),
@@ -1675,8 +1888,136 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                     .is_some_and(|rest| rest.trim_ascii_start().starts_with(b"->"))
             }),
             nullable_target,
+            variable: false,
         });
     }
+    // Most values are local names and fields, and a repository has many of
+    // them. A use that the facts of this file show to name no function gets
+    // no record. The rules agree with the rules of the resolver, which gives
+    // a function reference no candidate that has only the name as evidence.
+    let mut bound: HashMap<(usize, &str), Vec<BoundName<'_>>> = HashMap::new();
+    for local in &locals {
+        if let Some(owner) = local.owner {
+            let names = bound.entry((owner, local.name.name.as_str())).or_default();
+            names.push(BoundName {
+                first_value: local.name.value_start.unwrap_or(0),
+                block: local.block.as_ref(),
+                has_type_or_value: local.name.type_name.is_some()
+                    || local.name.value_start.is_some(),
+            });
+        }
+    }
+    let defined: std::collections::HashSet<&str> = symbols
+        .iter()
+        .filter(|symbol| matches!(symbol.kind, SymbolKind::Function | SymbolKind::Method))
+        .map(|symbol| symbol.name.as_str())
+        .collect();
+    let imported: std::collections::HashSet<&str> = imports
+        .iter()
+        .filter_map(|binding| binding.local_name.as_deref())
+        .collect();
+    let sees_other_files = imports.iter().any(|binding| {
+        matches!(
+            binding.kind,
+            ImportKind::Load | ImportKind::Wildcard | ImportKind::ReExportWildcard
+        )
+    });
+    // In these languages a bare name is a definition of the file or an
+    // import, unless the file loads a file or has a wildcard import.
+    let names_are_in_file = !sees_other_files
+        && matches!(
+            parsed.language,
+            Language::Python
+                | Language::JavaScript
+                | Language::Jsx
+                | Language::TypeScript
+                | Language::Tsx
+                | Language::Rust
+                | Language::Bash
+        );
+    // The owner and each definition that contains it, the nearest first.
+    let chain_of = |owner: Option<usize>| {
+        std::iter::successors(owner, |position| link_facts[*position].parent)
+    };
+    let mut values = extractor.values;
+    values.sort_by_key(|(used, _, _)| used.node.start_byte());
+    let mut value_sites = ValueSites::default();
+    for (used, owner, via_closure) in values {
+        let bare = used.callee.receiver.is_none() && used.callee.qualifier.is_none();
+        let name = match &used.name {
+            Some(name) => name.as_str(),
+            None => std::str::from_utf8(&parsed.source[used.callee.name_node.byte_range()])
+                .unwrap_or(""),
+        };
+        let start = used.node.start_byte();
+        let owner_position = position_of(owner);
+        // A PHP variable has `$` before the name of the function value that it holds.
+        let is_defined = defined.contains(name.trim_start_matches('$'));
+        let names_no_function = match &used.callee.receiver {
+            // A local name hides a function of a different file. The name
+            // is not in scope before its first value, and a name of a block
+            // is not in scope after the block.
+            None if bare && !is_defined => {
+                let hidden = chain_of(owner_position)
+                    .filter_map(|position| bound.get(&(position, name)))
+                    .flatten()
+                    .any(|local| {
+                        (local.first_value < start || local.first_value == 0)
+                            && local.block.is_none_or(|block| block.contains(&start))
+                    });
+                hidden || (names_are_in_file && !imported.contains(name))
+            }
+            // A parameter without a type gives no type to its member.
+            Some(Receiver::Name(receiver)) if !is_defined => {
+                let mut locals = chain_of(owner_position)
+                    .filter_map(|position| bound.get(&(position, receiver.as_str())))
+                    .flatten()
+                    .peekable();
+                locals.peek().is_some()
+                    && locals.all(|local| !local.has_type_or_value)
+                    && !defined.contains(receiver.as_str())
+                    && !imported.contains(receiver.as_str())
+            }
+            _ => false,
+        };
+        if names_no_function || name.is_empty() {
+            continue;
+        }
+        let name = value_sites.add_text(name);
+        let receiver = match &used.callee.receiver {
+            None => SiteReceiver::None,
+            Some(Receiver::SelfValue) => SiteReceiver::SelfValue,
+            Some(Receiver::Super) => SiteReceiver::Super,
+            Some(Receiver::Name(text)) => SiteReceiver::Name(value_sites.add_text(text)),
+            Some(Receiver::Expression) => SiteReceiver::Expression,
+        };
+        let qualifier = used.callee.qualifier.as_deref();
+        let qualifier = qualifier.map(|text| value_sites.add_text(text));
+        let receiver_text = used
+            .receiver
+            .and_then(|(start, end)| parsed.source.get(start..end))
+            .and_then(|text| std::str::from_utf8(text).ok())
+            .map(|text| value_sites.add_text(text));
+        value_sites.sites.push(ValueSite {
+            name,
+            name_range: Span::of(&used.callee.name_node),
+            start_byte: start as u32,
+            end_byte: used.node.end_byte() as u32,
+            owner: owner_position.map(|owner| owner as u32),
+            receiver,
+            qualifier,
+            receiver_range: used.receiver.map(|(start, end)| (start as u32, end as u32)),
+            receiver_text,
+            arrow: used.receiver.is_some_and(|(_, end)| {
+                let rest = parsed.source.get(end..);
+                rest.is_some_and(|rest| rest.trim_ascii_start().starts_with(b"->"))
+            }),
+            via_closure,
+            variable: used.variable,
+        });
+    }
+    value_sites.sites.shrink_to_fit();
+    value_sites.text.shrink_to_fit();
     FileSymbols {
         file: file.to_string(),
         language: parsed.language,
@@ -1686,6 +2027,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         modules,
         references,
         reference_facts,
+        function_references: Vec::new(),
+        value_sites,
         locals,
         path_targets: BTreeMap::new(),
         rebound: rebound_names(parsed),
