@@ -1,5 +1,7 @@
 //! Python symbols.
 
+use std::rc::Rc;
+
 use tree_sitter::Node;
 
 use crate::index::extract::{
@@ -174,6 +176,20 @@ enum PublicNames {
     Listed(Vec<String>),
     /// The module calculates `__all__`.
     NotLiteral,
+}
+
+/// The public names of `module`, read one time for each module. Without the
+/// memo, each definition of a large module reads all its statements.
+fn module_public_names(module: Node<'_>, context: &Context<'_, '_>) -> Rc<PublicNames> {
+    let key = (module.id(), 0);
+    if let Some(found) = context.memo.borrow().get(&key) {
+        if let Ok(found) = Rc::clone(found).downcast::<PublicNames>() {
+            return found;
+        }
+    }
+    let names = Rc::new(public_names(module, context));
+    context.memo.borrow_mut().insert(key, names.clone());
+    names
 }
 
 fn public_names(module: Node<'_>, context: &Context<'_, '_>) -> PublicNames {
@@ -467,12 +483,17 @@ impl LanguageSpec for Python {
                 scope.exported.clone()
             };
         }
-        let mut module = draft.node;
+        // `Node::parent` searches from the root, thus a walk up from each
+        // definition costs the number of statements of the module.
+        let mut module = match context.ancestors.first() {
+            Some(root) if root.parent().is_none() => *root,
+            _ => draft.node,
+        };
         while let Some(parent) = module.parent() {
             module = parent;
         }
         // A name in a literal `__all__` is public, also when it starts with `_`.
-        match public_names(module, context) {
+        match &*module_public_names(module, context) {
             PublicNames::Listed(names) => {
                 if names.contains(&draft.name) {
                     Exported::Exported
