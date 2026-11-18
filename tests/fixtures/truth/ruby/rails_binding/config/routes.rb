@@ -18,5 +18,11 @@ Rails.application.routes.draw do
     end
     get "session/current"
     patch "session/current" => "session#update"
+    get "reports" => "reports#index"
+    get "exports" => "exports#index"
+    get "exports/:id" => "exports#show"
+    get "missing" => "missing#index"
+    get "rack" => RackApp
+    get "staff" => "admin/staff#index"
   end
 end

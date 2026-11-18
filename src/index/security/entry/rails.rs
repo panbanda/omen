@@ -33,7 +33,7 @@ use parking_lot::Mutex;
 use tree_sitter::Node;
 
 use super::persistent::PersistentMap;
-use super::{route, Context, Draft, EntryBasis, EntryKind};
+use super::{first_reason, route, Context, Draft, EntryBasis, EntryKind, GuardsUnknownReason};
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
 use crate::index::model::{Span, Symbol};
@@ -374,6 +374,14 @@ enum Inside {
     Same,
     New(Rc<Scope>),
     Each(Vec<Rc<Scope>>),
+}
+
+/// A route target that is not a controller action.
+enum Endpoint {
+    Redirect,
+    Rack,
+    /// A string or a name that omen cannot read as a controller action.
+    Unknown,
 }
 
 /// The route set of a `draw` call.
@@ -2177,13 +2185,13 @@ impl<'a> Context<'a> {
                     format,
                 );
                 let variant_path = path.clone();
-                let (symbol, handler_guards) = match &controller {
+                let (symbol, handler_guards, unknown) = match &controller {
                     Some(controller) => self.rails_handler_cached(
                         &definition.modules,
                         &ControllerRef::Text(controller.clone()),
                         action,
                     ),
-                    None => (None, Vec::new()),
+                    None => unresolved_handler(),
                 };
                 let mut guards = constraints.clone();
                 guards.extend(handler_guards);
@@ -2197,6 +2205,7 @@ impl<'a> Context<'a> {
                     guards,
                     basis: EntryBasis::Registered,
                     variant: Some(format!("{action}@{name}@{variant_path}")),
+                    unknown,
                 });
             }
         }
@@ -2401,11 +2410,20 @@ impl<'a> Context<'a> {
             "root" => vec![String::from("GET")],
             verb => vec![verb.to_uppercase()],
         };
-        let (symbol, handler_guards) = match (&target.controller, &target.action) {
+        let (symbol, handler_guards, unknown) = match (&target.controller, &target.action) {
             (Some(controller), Some(action)) => {
                 self.rails_handler_cached(&scope.modules, controller, action)
             }
-            _ => (None, Vec::new()),
+            _ => match target_text
+                .filter(|_| !rocket_with_target)
+                .map(|node| self.endpoint_kind(node))
+            {
+                // A redirect runs no code of the application, so the constraints are all its
+                // guards.
+                Some(Endpoint::Redirect) => (None, Vec::new(), None),
+                Some(Endpoint::Rack) => (None, Vec::new(), Some(GuardsUnknownReason::RackEndpoint)),
+                _ => unresolved_handler(),
+            },
         };
         let mut guards = constraints.names();
         guards.extend(handler_guards);
@@ -2420,7 +2438,23 @@ impl<'a> Context<'a> {
                 guards: guards.clone(),
                 basis: EntryBasis::Registered,
                 variant: None,
+                unknown,
             });
+        }
+    }
+
+    /// The kind of a route target that is not a string: a `redirect` call of the mapper, or
+    /// another object, which Rails calls as a Rack application.
+    fn endpoint_kind(&self, target: Node<'_>) -> Endpoint {
+        let is_redirect = target.kind() == "call"
+            && target.child_by_field_name("receiver").is_none()
+            && target
+                .child_by_field_name("method")
+                .is_some_and(|method| self.text(method) == "redirect");
+        match target.kind() {
+            _ if is_redirect => Endpoint::Redirect,
+            "string" | "simple_symbol" | "identifier" => Endpoint::Unknown,
+            _ => Endpoint::Rack,
         }
     }
 
@@ -2760,7 +2794,7 @@ impl<'a> Context<'a> {
             known
         });
         if !known {
-            return (None, Vec::new());
+            return unresolved_handler();
         }
         let key = (modules.id(), controller.key(), action.to_string());
         if let Some(found) = self.rails_handled.borrow().get(&key) {
@@ -2779,7 +2813,7 @@ impl<'a> Context<'a> {
     /// have an acronym that omen cannot read, the controller is not known.
     fn rails_handler(&self, modules: &[String], controller: &str, action: &str) -> Handler {
         let Some(identity) = self.rails_identity(modules, controller) else {
-            return (None, Vec::new());
+            return unresolved_handler();
         };
         let shared = self.rails_shared();
         let key = (identity.clone(), action.to_string());
@@ -2832,14 +2866,20 @@ impl<'a> Context<'a> {
 
     fn rails_resolve(&self, shared: &RailsShared, identity: &str, action: &str) -> Handler {
         if !shared.classes.contains_key(identity) {
-            return (None, Vec::new());
+            return unresolved_handler();
         }
         let symbol = match self.rails_action(shared, identity, action) {
-            Action::Hidden => return (None, Vec::new()),
+            Action::Hidden => {
+                return (
+                    None,
+                    Vec::new(),
+                    Some(GuardsUnknownReason::UnreadableAction),
+                )
+            }
             Action::Public(symbol) => symbol,
         };
-        let guards = self.rails_program(shared, identity).guards_for(action);
-        (symbol, guards)
+        let (guards, unknown) = self.rails_program(shared, identity).guards_for(action);
+        (symbol, guards, unknown)
     }
 
     /// Finds the nearest class in the chain of superclasses that decides if the action runs. A class
@@ -2953,18 +2993,21 @@ impl<'a> Context<'a> {
             current = parent.clone();
         }
         let mut program =
-            program.unwrap_or_else(|| Arc::new(Program::layer(None, Vec::new(), false)));
+            program.unwrap_or_else(|| Arc::new(Program::layer(None, Vec::new(), None)));
         for class in chain.iter().rev() {
             let mut own: Vec<Callback> = Vec::new();
-            let mut opaque = false;
+            let mut gap = shared
+                .unresolved_parents
+                .contains(class)
+                .then_some(GuardsUnknownReason::UnresolvedSuperclass);
             for (position, index) in shared.classes.get(class).into_iter().flatten() {
                 let class_callbacks = self.rails_callbacks(shared, *position, *index);
                 own.extend(class_callbacks.list.iter().cloned());
-                opaque |= class_callbacks.opaque;
+                gap = first_reason(gap, class_callbacks.gap);
             }
-            opaque |= self.is_named_outside_the_class(class);
-            if !own.is_empty() || opaque {
-                program = Arc::new(Program::layer(Some(program), own, opaque));
+            gap = first_reason(gap, self.named_outside_the_class(class));
+            if !own.is_empty() || gap.is_some() {
+                program = Arc::new(Program::layer(Some(program), own, gap));
             }
             shared
                 .programs
@@ -2978,9 +3021,9 @@ impl<'a> Context<'a> {
     /// callback call, `include`, `extend`, `prepend`, or `class_eval` with the constant of the class
     /// as its receiver. The constant may have fewer modules than the identity of the class, so omen
     /// compares each end of the identity.
-    fn is_named_outside_the_class(&self, identity: &str) -> bool {
+    fn named_outside_the_class(&self, identity: &str) -> Option<GuardsUnknownReason> {
         let named = self.rails_shared().external.get_or_init(|| {
-            let mut named = HashSet::new();
+            let mut named: HashMap<String, GuardsUnknownReason> = HashMap::new();
             for (position, file) in self.all.iter().enumerate() {
                 if file.language != Language::Ruby {
                     continue;
@@ -3001,9 +3044,14 @@ impl<'a> Context<'a> {
                             if is_callback_family(method) || CLASS_CHANGING_CALLS.contains(&method)
                             {
                                 let text = super::syntax::text(receiver, &parsed.source);
-                                named.insert(
-                                    text.trim().trim_start_matches("::").replace("::", "."),
-                                );
+                                let name = text.trim().trim_start_matches("::").replace("::", ".");
+                                let reason = if MODULE_CALLS.contains(&method) {
+                                    GuardsUnknownReason::IncludedModule
+                                } else {
+                                    GuardsUnknownReason::CallbackOutsideClass
+                                };
+                                let known = named.get(&name).copied();
+                                named.insert(name, known.map_or(reason, |known| known.min(reason)));
                             }
                         }
                     }
@@ -3014,16 +3062,15 @@ impl<'a> Context<'a> {
             named
         });
         if named.is_empty() {
-            return false;
+            return None;
         }
         let mut rest = identity;
+        let mut found = None;
         loop {
-            if named.contains(rest) {
-                return true;
-            }
+            found = first_reason(found, named.get(rest).copied());
             match rest.split_once('.') {
                 Some((_, tail)) => rest = tail,
-                None => return false,
+                None => return found,
             }
         }
     }
@@ -3226,7 +3273,7 @@ impl<'a> Context<'a> {
     /// Reads the callbacks in the children of the node. `conditional` tells that a branch that
     /// omen cannot evaluate holds the node. A callback in such a branch is conditional. A literal
     /// condition makes a branch dead or live, as it does for a route. A callback under any other
-    /// kind of node makes the callbacks of the class opaque: omen reports no guard for it.
+    /// kind of node makes the guards of the class not complete.
     fn collect_callbacks(
         &self,
         node: Node<'_>,
@@ -3249,7 +3296,7 @@ impl<'a> Context<'a> {
         out: &mut ClassCallbacks,
     ) {
         if depth > MAX_READ_DEPTH {
-            out.opaque = true;
+            out.note(GuardsUnknownReason::UnreadableCallback);
             return;
         }
         match node.kind() {
@@ -3263,7 +3310,7 @@ impl<'a> Context<'a> {
                 for part in parts {
                     if Some(part) == condition {
                         if subtree_has_callback(part, self.source, 0) {
-                            out.opaque = true;
+                            out.note(GuardsUnknownReason::UnreadableCallback);
                         }
                         continue;
                     }
@@ -3287,11 +3334,15 @@ impl<'a> Context<'a> {
                     out.list.push(callback);
                 }
                 _ => {
-                    if node.child_by_field_name("method").is_some_and(|method| {
-                        is_callback_family(self.text(method))
-                            || CLASS_CHANGING_CALLS.contains(&self.text(method))
-                    }) {
-                        out.opaque = true;
+                    let method = node
+                        .child_by_field_name("method")
+                        .map_or("", |method| self.text(method));
+                    if MODULE_CALLS.contains(&method) {
+                        out.note(GuardsUnknownReason::IncludedModule);
+                    } else if is_callback_family(method) || CLASS_CHANGING_CALLS.contains(&method) {
+                        out.note(GuardsUnknownReason::UnreadableCallback);
+                    } else if method.contains("around_action") || method.contains("around_filter") {
+                        out.note(GuardsUnknownReason::AroundCallback);
                     }
                     let mut cursor = node.walk();
                     let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
@@ -3299,7 +3350,7 @@ impl<'a> Context<'a> {
                         if matches!(child.kind(), "do_block" | "block") {
                             self.collect_callback_node(child, conditional, depth + 1, out);
                         } else if subtree_has_callback(child, self.source, 0) {
-                            out.opaque = true;
+                            out.note(GuardsUnknownReason::UnreadableCallback);
                         }
                     }
                 }
@@ -3309,7 +3360,7 @@ impl<'a> Context<'a> {
             }
             _ => {
                 if subtree_has_callback(node, self.source, 0) {
-                    out.opaque = true;
+                    out.note(GuardsUnknownReason::UnreadableCallback);
                 }
             }
         }
@@ -3319,7 +3370,9 @@ impl<'a> Context<'a> {
     /// A list that is not a literal makes the callback unreadable. See `Callback::applies_to`.
     fn rails_callback(&self, call: Node<'_>) -> Option<Callback> {
         let (skip, mut prepend) = match self.text(call.child_by_field_name("method")?) {
-            "before_action" | "before_filter" => (false, false),
+            "before_action" | "before_filter" | "append_before_action" | "append_before_filter" => {
+                (false, false)
+            }
             "prepend_before_action" | "prepend_before_filter" => (false, true),
             "skip_before_action" | "skip_before_filter" => (true, false),
             _ => return None,
@@ -3331,6 +3384,10 @@ impl<'a> Context<'a> {
             .into_iter()
             .map(|argument| self.rails_literal(argument, bindings))
             .collect::<Option<Vec<String>>>()?;
+        // A callback with a block and no name is a guard that omen cannot name.
+        if !skip && names.is_empty() {
+            return None;
+        }
         let list = |key: &str| {
             options
                 .as_ref()
@@ -3391,6 +3448,18 @@ struct Callback {
 }
 
 impl Callback {
+    /// Why omen does not know if the callback runs: a list that omen cannot read, or a
+    /// condition.
+    fn uncertain(&self) -> Option<GuardsUnknownReason> {
+        if self.unreadable {
+            Some(GuardsUnknownReason::UnreadableCallback)
+        } else if self.conditional {
+            Some(GuardsUnknownReason::ConditionalCallback)
+        } else {
+            None
+        }
+    }
+
     /// A callback never claims a guard that may not apply. A `before_action` call with a list
     /// that omen cannot read, or with `if:` or `unless:`, adds no guard. A `skip_before_action`
     /// call with a list that omen cannot read removes the guard for each action. A
@@ -3445,12 +3514,19 @@ fn ordered_names(slots: &PersistentMap<String, Slot>) -> Vec<String> {
         .collect()
 }
 
-/// The callbacks of one class: the calls that omen reads, and a flag that tells that a callback
-/// call is in a place that omen cannot read. Then the class has no guard that omen can claim.
+/// The callbacks of one class: the calls that omen reads, and the reason when a statement of
+/// the class can change the callbacks in a way that omen cannot read. Then the guards of the
+/// class are not complete.
 #[derive(Default)]
 struct ClassCallbacks {
     list: Vec<Callback>,
-    opaque: bool,
+    gap: Option<GuardsUnknownReason>,
+}
+
+impl ClassCallbacks {
+    fn note(&mut self, reason: GuardsUnknownReason) {
+        self.gap = first_reason(self.gap, Some(reason));
+    }
 }
 
 /// A program works out the guards of an action from its default guards when the callbacks that list
@@ -3580,9 +3656,13 @@ struct Program {
     /// The skips with an `only:` list that apply to the action, newest first, in this layer and in
     /// the superclasses.
     only_skips: PersistentMap<String, Arc<Link>>,
-    /// A callback of this layer or of a superclass is in a place that omen cannot read. Then the
-    /// layer builds no index.
-    opaque: bool,
+    /// Why the guards of each action are not complete: a statement of this layer or of a
+    /// superclass can change the callbacks in a way that omen cannot read, or a callback for each
+    /// action has a condition.
+    gap: Option<GuardsUnknownReason>,
+    /// Why the guards of one action are not complete, by action: a callback with an `only:` list
+    /// has a condition.
+    action_gaps: PersistentMap<String, GuardsUnknownReason>,
     default: std::sync::OnceLock<Arc<DefaultGuards>>,
     /// The guards of an action that a list names, as this layer has them, by action.
     resolved: Mutex<HashMap<String, PersistentMap<String, Slot>>>,
@@ -3601,24 +3681,53 @@ impl Drop for Program {
 }
 
 impl Program {
-    fn layer(parent: Option<Arc<Program>>, callbacks: Vec<Callback>, opaque: bool) -> Self {
+    fn layer(
+        parent: Option<Arc<Program>>,
+        callbacks: Vec<Callback>,
+        gap: Option<GuardsUnknownReason>,
+    ) -> Self {
         let offset = parent
             .as_ref()
             .map_or(0, |parent| parent.offset + parent.callbacks.len());
         let callbacks: Vec<Arc<Callback>> = callbacks.into_iter().map(Arc::new).collect();
-        let opaque = opaque || parent.as_ref().is_some_and(|parent| parent.opaque);
+        let mut gap = first_reason(gap, parent.as_ref().and_then(|parent| parent.gap));
+        let mut action_gaps = PersistentMap::default();
         let mut names = PersistentMap::default();
         let mut listed = PersistentMap::default();
         let mut only_skips = PersistentMap::default();
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
-        if !opaque {
+        {
             if let Some(parent) = &parent {
                 names = parent.names.clone();
                 listed = parent.listed.clone();
                 only_skips = parent.only_skips.clone();
+                action_gaps = parent.action_gaps.clone();
             }
             for (index, callback) in callbacks.iter().enumerate() {
                 let global = offset + index;
+                if let Some(reason) = callback.uncertain() {
+                    match &callback.only {
+                        Some(only) if !callback.unreadable => {
+                            for action in only {
+                                if callback
+                                    .except
+                                    .as_ref()
+                                    .is_some_and(|except| except.contains(action))
+                                {
+                                    continue;
+                                }
+                                let known = action_gaps.get(action).copied();
+                                action_gaps.insert(
+                                    action.clone(),
+                                    known.map_or(reason, |known: GuardsUnknownReason| {
+                                        known.min(reason)
+                                    }),
+                                );
+                            }
+                        }
+                        _ => gap = first_reason(gap, Some(reason)),
+                    }
+                }
                 let decides_always = !callback.skip
                     || callback.unreadable
                     || (callback.only.is_none() && callback.except.is_none());
@@ -3675,7 +3784,8 @@ impl Program {
             names,
             listed,
             only_skips,
-            opaque,
+            gap,
+            action_gaps,
             default: std::sync::OnceLock::new(),
             resolved: Mutex::new(HashMap::new()),
         }
@@ -3762,14 +3872,13 @@ impl Program {
     /// costs one change for each class. A layer whose chain has few callbacks for the action works
     /// the guards out from the default guards instead, so a long chain with one listed callback
     /// costs only that callback.
-    fn guards_for(&self, action: &str) -> Vec<String> {
-        if self.opaque {
-            return Vec::new();
+    fn guards_for(&self, action: &str) -> (Vec<String>, Option<GuardsUnknownReason>) {
+        let key = action.to_string();
+        let gap = first_reason(self.gap, self.action_gaps.get(&key).copied());
+        if self.listed.get(&key).is_none() {
+            return (self.default_guards().names(), gap);
         }
-        if self.listed.get(&action.to_string()).is_none() {
-            return self.default_guards().names();
-        }
-        ordered_names(&self.resolved(action))
+        (ordered_names(&self.resolved(action)), gap)
     }
 
     fn resolved(&self, action: &str) -> PersistentMap<String, Slot> {
@@ -3876,8 +3985,17 @@ fn order_slots(slots: &mut [(&str, Slot)]) {
 /// A class identity and an action name.
 type ActionKey = (String, String);
 
-/// The symbol and the guards of an action.
-pub(super) type Handler = (Option<String>, Vec<String>);
+/// The symbol and the guards of an action, and the reason when the guards are not complete.
+pub(super) type Handler = (Option<String>, Vec<String>, Option<GuardsUnknownReason>);
+
+/// The handler of a route with a controller or an action that omen cannot find.
+fn unresolved_handler() -> Handler {
+    (
+        None,
+        Vec::new(),
+        Some(GuardsUnknownReason::UnresolvedController),
+    )
+}
 
 /// A symbol of the index: the position of the file, and the position in the symbols of the file.
 type Placed = (usize, usize);
@@ -4202,6 +4320,9 @@ fn block_parameter_names(call: Node<'_>, source: &[u8]) -> Vec<String> {
 
 /// The calls that change the callbacks of a class without a callback name: they add the callbacks
 /// of a module, or run code in the class.
+/// The calls that add the methods and the callbacks of a module to a class.
+const MODULE_CALLS: [&str; 3] = ["include", "extend", "prepend"];
+
 const CLASS_CHANGING_CALLS: [&str; 7] = [
     "include",
     "extend",
@@ -4877,9 +4998,12 @@ pub(super) struct RailsShared {
     methods: HashMap<String, HashMap<String, Vec<Placed>>>,
     /// The superclass of each class identity. A class in a loop of superclasses has none.
     parents: HashMap<String, Option<String>>,
+    /// The classes with a superclass that omen cannot find, and that is not a base class of
+    /// Rails. Such a superclass can add callbacks.
+    unresolved_parents: HashSet<String>,
     inflections: std::sync::OnceLock<Inflections>,
     api_only: std::sync::OnceLock<ApiOnlySets>,
-    external: std::sync::OnceLock<HashSet<String>>,
+    external: std::sync::OnceLock<HashMap<String, GuardsUnknownReason>>,
     mounts: std::sync::OnceLock<HashMap<String, MountState>>,
     engine_modules: Mutex<HashMap<String, Option<Vec<String>>>>,
     callbacks: Mutex<HashMap<Placed, Arc<ClassCallbacks>>>,
@@ -4892,7 +5016,7 @@ pub(super) struct RailsShared {
 impl RailsShared {
     pub(super) fn build(all: &[FileSymbols]) -> Self {
         let mut classes: HashMap<String, Vec<Placed>> = HashMap::new();
-        let mut superclasses: HashMap<&str, UniqueClass> = HashMap::new();
+        let mut suffixes: HashMap<String, UniqueClass> = HashMap::new();
         let mut methods: HashMap<String, HashMap<String, Vec<Placed>>> = HashMap::new();
         for (position, file) in all.iter().enumerate() {
             if file.language != Language::Ruby {
@@ -4901,14 +5025,14 @@ impl RailsShared {
             for (index, symbol) in file.symbols.iter().enumerate() {
                 if symbol.kind.is_type() {
                     let identity = qualified_name(file, symbol);
-                    let unique = match superclasses.get(symbol.name.as_str()) {
-                        None => UniqueClass::One(identity.clone()),
-                        Some(UniqueClass::One(existing)) if *existing == identity => {
-                            UniqueClass::One(identity.clone())
-                        }
-                        Some(_) => UniqueClass::Many,
-                    };
-                    superclasses.insert(symbol.name.as_str(), unique);
+                    for suffix in identity_suffixes(&identity) {
+                        let unique = match suffixes.get(suffix) {
+                            None => UniqueClass::One(identity.clone()),
+                            Some(UniqueClass::One(existing)) if *existing == identity => continue,
+                            Some(_) => UniqueClass::Many,
+                        };
+                        suffixes.insert(suffix.to_string(), unique);
+                    }
                     classes.entry(identity).or_default().push((position, index));
                 } else if symbol.is_callable() {
                     let qualified = qualified_name(file, symbol);
@@ -4928,11 +5052,12 @@ impl RailsShared {
                 (*position, all[*position].symbols[*index].range.start_byte)
             });
         }
-        let parents = resolve_parents(all, &classes, &superclasses);
+        let (parents, unresolved_parents) = resolve_parents(all, &classes, &suffixes);
         Self {
             classes,
             methods,
             parents,
+            unresolved_parents,
             inflections: std::sync::OnceLock::new(),
             api_only: std::sync::OnceLock::new(),
             external: std::sync::OnceLock::new(),
@@ -4947,26 +5072,114 @@ impl RailsShared {
     }
 }
 
-/// The superclass identity of each class. A
-/// qualified superclass name, a name of two classes, and a class in a loop of superclasses give
-/// no superclass. A class that leads into a loop keeps its superclass. Omen visits each class one
+/// The superclass that the `class` statement of the symbol names. The supertypes of a class also
+/// have the modules that it includes, so the name must follow the `<` of the signature.
+fn superclass_text(symbol: &Symbol) -> Option<&String> {
+    let first = symbol.supertypes.first()?;
+    let (_, after) = symbol.signature.split_once('<')?;
+    after
+        .trim_start()
+        .starts_with(first.as_str())
+        .then_some(first)
+}
+
+/// The number of names that the `class` statement of the symbol writes for the class: one for
+/// `class Users`, and two for `class Admin::Users`.
+fn declared_parts(symbol: &Symbol) -> usize {
+    let name = symbol
+        .signature
+        .split_once('<')
+        .map_or(symbol.signature.as_str(), |(before, _)| before)
+        .trim()
+        .rsplit(char::is_whitespace)
+        .next()
+        .unwrap_or("");
+    name.trim_start_matches("::").split("::").count()
+}
+
+/// The longest tail of an identity that a superclass name can match without a leading `::`.
+const SUFFIX_PARTS: usize = 4;
+
+/// The tails of an identity with one to `SUFFIX_PARTS` parts: for `A.B.C`, the tails `C`, `B.C`,
+/// and `A.B.C`.
+fn identity_suffixes(identity: &str) -> Vec<&str> {
+    let mut suffixes = vec![identity];
+    let mut starts: Vec<usize> = identity
+        .match_indices('.')
+        .map(|(dot, _)| dot + 1)
+        .collect();
+    starts.reverse();
+    suffixes.extend(starts.into_iter().map(|start| &identity[start..]));
+    suffixes.sort_by_key(|suffix| suffix.len());
+    suffixes.dedup();
+    suffixes.truncate(SUFFIX_PARTS);
+    suffixes
+}
+
+/// The base classes of Rails for a controller. They are not in the repository, and omen lists no
+/// guard of Rails itself.
+const RAILS_BASES: [&str; 4] = [
+    "ActionController::Base",
+    "ActionController::API",
+    "ActionController::Metal",
+    "AbstractController::Base",
+];
+
+/// The superclass identity of each class, and the classes with a superclass that omen cannot
+/// find. A superclass name with a leading `::` must be the identity of a class. Omen searches
+/// any other name as Ruby does: in each module around the `class` statement from the inner one
+/// to the outer one, and then at the top level. A name that this search does not find, of at
+/// most `SUFFIX_PARTS` parts, as `Base` or `Admin::Base`, can be the tail of the identity of
+/// exactly one class: the autoloader of the application can find such a class. A name of two
+/// such classes, and a class in a loop of superclasses give no superclass. A class that leads into a loop keeps its superclass. Omen visits each class one
 /// time.
 fn resolve_parents(
     all: &[FileSymbols],
     classes: &HashMap<String, Vec<Placed>>,
-    superclasses: &HashMap<&str, UniqueClass>,
-) -> HashMap<String, Option<String>> {
+    suffixes: &HashMap<String, UniqueClass>,
+) -> (HashMap<String, Option<String>>, HashSet<String>) {
+    let mut unresolved: HashSet<String> = HashSet::new();
     let raw: HashMap<&str, Option<&str>> = classes
         .iter()
         .map(|(identity, group)| {
-            let parent = group
-                .iter()
-                .find_map(|(position, index)| all[*position].symbols[*index].supertypes.first())
-                .filter(|parent| !parent.contains("::"))
-                .and_then(|parent| match superclasses.get(parent.as_str()) {
+            let named = group.iter().find_map(|(position, index)| {
+                let symbol = &all[*position].symbols[*index];
+                superclass_text(symbol).map(|parent| (parent, declared_parts(symbol)))
+            });
+            let known = |identity: &str| {
+                classes
+                    .get_key_value(identity)
+                    .map(|(found, _)| found.as_str())
+            };
+            let parent = named.and_then(|(parent, declared)| {
+                let path = parent.trim().trim_start_matches("::");
+                let dotted = path.replace("::", ".");
+                if parent.trim().starts_with("::") {
+                    return known(&dotted);
+                }
+                // The modules around the `class` statement: the identity without the parts
+                // that the statement itself writes, as `Admin::Users` writes two.
+                let mut around = identity.as_str();
+                for _ in 0..declared {
+                    around = around.rsplit_once('.').map_or("", |(outer, _)| outer);
+                }
+                while !around.is_empty() {
+                    if let Some(found) = known(&format!("{around}.{dotted}")) {
+                        return Some(found);
+                    }
+                    around = around.rsplit_once('.').map_or("", |(outer, _)| outer);
+                }
+                known(&dotted).or_else(|| match suffixes.get(&dotted) {
                     Some(UniqueClass::One(found)) => Some(found.as_str()),
                     _ => None,
-                });
+                })
+            });
+            let named = named.map(|(parent, _)| parent);
+            if let (Some(named), None) = (named, parent) {
+                if !RAILS_BASES.contains(&named.trim().trim_start_matches("::")) {
+                    unresolved.insert(identity.clone());
+                }
+            }
             (identity.as_str(), parent)
         })
         .collect();
@@ -4998,10 +5211,13 @@ fn resolve_parents(
             } else {
                 raw.get(identity).copied().flatten().map(str::to_string)
             };
+            if in_cycle {
+                unresolved.insert((*identity).to_string());
+            }
             parents.insert((*identity).to_string(), parent);
         }
     }
-    parents
+    (parents, unresolved)
 }
 
 /// The chain of containers and the name of a class, joined with `.`. The key of the symbol has

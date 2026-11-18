@@ -727,3 +727,189 @@ fn a_resource_in_a_member_or_collection_block_has_the_path_of_the_block() {
         ])
     );
 }
+
+/// One row for each entry: the path, the guards, and `complete` or the reason.
+fn guard_rows(routes: &str, others: &[(&str, &str)]) -> Vec<String> {
+    let mut files = vec![("config/routes.rb", routes)];
+    files.extend_from_slice(others);
+    let mut rows: Vec<String> = rails(&files)
+        .iter()
+        .map(|entry| {
+            assert_eq!(
+                entry.guards_complete,
+                entry.guards_unknown_reason.is_none(),
+                "{entry:?}"
+            );
+            format!(
+                "{} [{}] {}",
+                entry.route.as_ref().expect("a route").path,
+                entry.guards.join(", "),
+                entry
+                    .guards_unknown_reason
+                    .map_or("complete", |reason| reason.name())
+            )
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn a_route_without_a_controller_action_tells_why_its_guards_are_not_known() {
+    let routes = draw(
+        "  get \"old\" => redirect(\"/new\"), constraints: A.new\n  get \"app\" => RackApp\n  get \"lambda\", to: ->(env) { [200, {}, []] }\n  get \"missing\" => \"missing#show\"\n  get \"dynamic\", to: TARGET\n  get \"hidden\" => \"webhooks#secret\"\n  get \"shown\" => \"webhooks#show\"",
+    );
+    let controller = (
+        "app/controllers/webhooks_controller.rb",
+        "class WebhooksController\n  before_action :check\n  def show; end\n  private\n  def secret; end\nend\n",
+    );
+    assert_eq!(
+        guard_rows(&routes, &[controller]),
+        sorted(&[
+            "/old [A.new] complete",
+            "/app [] rack_endpoint",
+            "/lambda [] rack_endpoint",
+            "/missing [] unresolved_controller",
+            "/dynamic [] rack_endpoint",
+            "/hidden [] unreadable_action",
+            "/shown [check] complete",
+        ])
+    );
+}
+
+fn class_rows(classes: &str) -> Vec<String> {
+    let routes = draw("  get \"index\" => \"a#index\"\n  get \"show\" => \"a#show\"");
+    guard_rows(&routes, &[("app/controllers/a.rb", classes)])
+}
+
+#[test]
+fn a_callback_with_a_condition_makes_the_guards_of_its_actions_not_complete() {
+    assert_eq!(
+        class_rows("class AController\n  before_action :a\n  before_action :b, if: :ok?\n  def index; end\n  def show; end\nend\n"),
+        ["/index [a] conditional_callback", "/show [a] conditional_callback"]
+    );
+    assert_eq!(
+        class_rows("class AController\n  before_action :a\n  before_action :b, only: [:index], unless: :ok?\n  def index; end\n  def show; end\nend\n"),
+        ["/index [a] conditional_callback", "/show [a] complete"]
+    );
+    assert_eq!(
+        class_rows("class AController\n  before_action :a\n  skip_before_action :a, only: :show, if: :ok?\n  def index; end\n  def show; end\nend\n"),
+        ["/index [a] complete", "/show [] conditional_callback"]
+    );
+    assert_eq!(
+        class_rows("class AController\n  before_action :a\n  if ENV[\"X\"]\n    before_action :b\n  end\n  def index; end\n  def show; end\nend\n"),
+        ["/index [a] conditional_callback", "/show [a] conditional_callback"]
+    );
+}
+
+#[test]
+fn a_callback_that_omen_cannot_read_keeps_the_guards_that_omen_knows() {
+    for (statement, reason) in [
+        ("before_action :b, only: ACTIONS", "unreadable_callback"),
+        ("before_action NAME", "unreadable_callback"),
+        ("before_action do\n    halt\n  end", "unreadable_callback"),
+        ("before_action -> { halt }", "unreadable_callback"),
+        (
+            "before_action { |controller| controller.halt }",
+            "unreadable_callback",
+        ),
+        (
+            "skip_callback :process_action, :before, :a",
+            "unreadable_callback",
+        ),
+        ("around_action :wrap", "around_callback"),
+        ("prepend_around_action :wrap", "around_callback"),
+        ("include Extra", "included_module"),
+        ("extend Extra", "included_module"),
+        ("prepend Extra", "included_module"),
+        ("class_eval(SOURCE)", "unreadable_callback"),
+    ] {
+        let classes = format!(
+            "class AController\n  before_action :a\n  {statement}\n  def index; end\n  def show; end\nend\n"
+        );
+        assert_eq!(
+            class_rows(&classes),
+            [
+                format!("/index [a] {reason}"),
+                format!("/show [a] {reason}")
+            ],
+            "{statement}"
+        );
+    }
+    assert_eq!(
+        class_rows("class AController\n  before_action :a\n  append_before_action :b\n  after_action :log\n  def index; end\n  def show; end\nend\n"),
+        ["/index [a, b] complete", "/show [a, b] complete"]
+    );
+}
+
+#[test]
+fn a_superclass_that_omen_cannot_find_makes_the_guards_not_complete() {
+    for (parent, expected) in [
+        ("ActionController::Base", "[a] complete"),
+        ("::ActionController::API", "[a] complete"),
+        ("Missing", "[a] unresolved_superclass"),
+        ("Gem::BaseController", "[a] unresolved_superclass"),
+        ("BaseController", "[base, a] complete"),
+        ("::BaseController", "[base, a] complete"),
+        ("Admin::BaseController", "[admin, a] complete"),
+        ("::Admin::BaseController", "[admin, a] complete"),
+        ("Twice", "[a] unresolved_superclass"),
+    ] {
+        let classes = format!(
+            "class BaseController < ActionController::Base\n  before_action :base\nend\nclass Admin::BaseController < ActionController::Base\n  before_action :admin\nend\nmodule One\n  class Twice\n  end\nend\nmodule Two\n  class Twice\n  end\nend\nclass AController < {parent}\n  before_action :a\n  def index; end\n  def show; end\nend\n"
+        );
+        assert_eq!(
+            class_rows(&classes),
+            [format!("/index {expected}"), format!("/show {expected}")],
+            "{parent}"
+        );
+    }
+}
+
+#[test]
+fn a_class_with_only_an_include_has_no_superclass() {
+    assert_eq!(
+        class_rows("module Extra\nend\nclass AController\n  include Extra\n  before_action :a\n  def index; end\n  def show; end\nend\n"),
+        ["/index [a] included_module", "/show [a] included_module"]
+    );
+}
+
+fn a_chain_of_conditional_callbacks_at(depth: usize) -> std::time::Duration {
+    let mut routes = String::new();
+    let mut classes = String::new();
+    for number in 0..depth {
+        routes.push_str(&format!("  get \"r{number}\" => \"c{number}#show\"\n"));
+        let parent = if number == 0 {
+            String::new()
+        } else {
+            format!(" < C{}Controller", number - 1)
+        };
+        classes.push_str(&format!(
+            "class C{number}Controller{parent}\n  before_action :g{number}, only: [:a{number}], if: :ok?\n  def show; end\nend\n"
+        ));
+    }
+    let routes = draw(&routes);
+    let files = [
+        ("config/routes.rb", routes.as_str()),
+        ("app/controllers/chain.rb", classes.as_str()),
+    ];
+    let (found, elapsed) = entries_lean(Language::Ruby, &files);
+    assert_eq!(found.len(), depth);
+    assert!(found.iter().all(|entry| entry.guards_complete));
+    elapsed
+}
+
+#[test]
+fn a_chain_of_conditional_callbacks_for_other_actions_is_complete() {
+    a_chain_of_conditional_callbacks_at(20);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_a_chain_of_conditional_callbacks_resolves_in_linear_time() {
+    assert_scales_linearly(
+        "conditional callbacks",
+        2_000,
+        a_chain_of_conditional_callbacks_at,
+    );
+}

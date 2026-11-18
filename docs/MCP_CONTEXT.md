@@ -243,6 +243,16 @@ byte savings that can increase tokens. This runtime check is not a promise
 of fewer tokens for every tokenizer or response. Exact token counts are evaluated
 separately by the benchmark. Small responses may remain unchanged.
 
+## Security facts in tool results
+
+The tool `security` gives each entry point with `guards`, `guards_complete`, and
+`guards_unknown_reason`. The tools `get_symbol` and `impact` give the same three fields in
+`security.entry_point`, when the symbol is the handler of an entry point. If `guards_complete`
+is `false`, code that omen did not read can add a guard or remove one. Then an empty `guards`
+list does not tell that the entry point has no guard. The summary of `security` has
+`entry_points_with_incomplete_guards` and `incomplete_guards_by_reason`. See "Guards that omen
+did not read" in `docs/SECURITY.md` for each reason.
+
 ## What is guaranteed
 
 The lossless encoding is guaranteed in this repository, not by a benchmark.
