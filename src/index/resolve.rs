@@ -1305,16 +1305,32 @@ impl<'a> Resolver<'a> {
     /// `cfg` attributes, as `#[cfg(unix)] mod a` and `#[cfg(windows)] mod a`,
     /// are one item.
     ///
-    /// The members of one type can include the members of each type with its
-    /// name and container. Thus the search for each type costs the number of
-    /// the types, and each call of one path must not search again.
+    /// The members of one type include the members of each type of the file
+    /// with its kind, name, and path. Thus a search for each type costs the
+    /// square of the number of the types. `members` reads only the kind, the
+    /// name, the path, the parent types, and the prepended modules of a type,
+    /// and a search in a different file finds types with one name and one
+    /// path together. Thus the function searches once for each group of types
+    /// with the same values, and each later call of one path reads the result.
     fn twin_members(&self, types: &[Id], name: &str, arity: usize) -> Arc<Vec<Id>> {
         let query = (types.to_vec(), name.to_string(), arity);
         if let Some(found) = self.twin_members_cache.read().get(&query) {
             return found.clone();
         }
-        let mut members: Vec<Id> = types
-            .iter()
+        let mut groups: BTreeMap<_, Id> = BTreeMap::new();
+        for owner in types {
+            let symbol = self.symbol(*owner);
+            let facts = self.facts(*owner);
+            let key = (
+                symbol.kind,
+                self.member_path(*owner),
+                &symbol.supertypes,
+                &facts.prepends,
+            );
+            groups.entry(key).or_insert(*owner);
+        }
+        let mut members: Vec<Id> = groups
+            .values()
             .flat_map(|owner| self.members(*owner, name, arity, &mut BTreeSet::new()))
             .collect();
         members.sort();
@@ -3489,6 +3505,59 @@ mod false_edge_tests {
         });
         assert_doubles_at_most("members", 10_000, |size| {
             calls_into_twin_modules_resolve_at(20, size, 2_000)
+        });
+    }
+
+    /// `modules` modules `a` under different `cfg` attributes, each with the
+    /// functions `f0` to `f{names - 1}`, and one call of `a::fN` for each name.
+    fn calls_of_many_names_into_twin_modules_resolve_at(
+        modules: usize,
+        names: usize,
+    ) -> std::time::Duration {
+        let functions: String = (0..names)
+            .map(|name| format!("    pub fn f{name}() {{}}\n"))
+            .collect();
+        let mut source = String::new();
+        for module in 0..modules {
+            source.push_str(&format!(
+                "#[cfg(feature = \"f{module}\")]\nmod a {{\n{functions}}}\n"
+            ));
+        }
+        source.push_str("fn run() {\n");
+        for name in 0..names {
+            source.push_str(&format!("    a::f{name}();\n"));
+        }
+        source.push_str("}\n");
+        let files = [("a.rs", source.as_str())];
+        let started = std::time::Instant::now();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let twins = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| {
+                reference.resolution.status == super::Status::UniqueCandidate
+                    && reference.resolution.candidates.len() == modules
+            })
+            .count();
+        assert_eq!(twins, names);
+        elapsed
+    }
+
+    #[test]
+    fn test_calls_of_many_names_into_twin_modules_resolve_to_each_twin() {
+        calls_of_many_names_into_twin_modules_resolve_at(20, 20);
+    }
+
+    /// The input has `modules * names` functions, and the edges are
+    /// `modules * names`. The first search for each name must not cost the
+    /// square of the number of the modules.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_calls_of_many_names_into_twin_modules_resolve_in_linear_time() {
+        assert_doubles_at_most("modules", 400, |size| {
+            calls_of_many_names_into_twin_modules_resolve_at(size, 400)
         });
     }
 
