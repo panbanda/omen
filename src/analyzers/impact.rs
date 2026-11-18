@@ -19,6 +19,9 @@ pub struct ImpactSymbol {
     pub qualified_name: String,
     pub file: String,
     pub line: u32,
+    /// The symbol is test code. See `crate::index::test_code`.
+    #[serde(default)]
+    pub is_test: bool,
 }
 
 /// One BFS level in the impact report.
@@ -148,6 +151,7 @@ pub fn analyze_view(
                         qualified_name: index.symbols[i].qualified_name.clone(),
                         file: index.symbols[i].file.clone(),
                         line: index.symbols[i].line,
+                        is_test: index.symbols[i].is_test,
                     })
                     .collect();
                 ImpactLevel {
@@ -241,6 +245,30 @@ mod tests {
             .contains("main.rs#a"));
         // callees should be empty for Callers direction
         assert!(report.callees.is_empty());
+    }
+
+    #[test]
+    fn test_a_caller_in_test_code_has_is_test() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("lib.rs");
+        fs::write(
+            &file,
+            "fn target() {}\nfn production() { target(); }\n#[cfg(test)]\n#[allow(dead_code)]\nmod checks {\n    use super::*;\n    #[test]\n    fn runs() { target(); }\n}\n",
+        )
+        .unwrap();
+        let report = analyze(dir.path(), &[file], "target", 1, Direction::Callers).unwrap();
+        let rows: Vec<(&str, bool)> = report.callers[0]
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.qualified_name.as_str(), symbol.is_test))
+            .collect();
+        assert_eq!(
+            rows,
+            [("lib.rs#production", false), ("lib.rs#checks.runs", true)]
+        );
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["callers"][0]["symbols"][0]["is_test"], false);
+        assert_eq!(json["callers"][0]["symbols"][1]["is_test"], true);
     }
 
     #[test]

@@ -14,4 +14,5 @@ pub mod members;
 pub mod model;
 pub mod resolve;
 pub mod security;
+pub mod test_code;
 pub mod view;

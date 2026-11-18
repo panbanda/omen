@@ -346,6 +346,35 @@ fn test_changed_symbol_has_callers_and_tests() {
 }
 
 #[test]
+fn test_caller_is_a_test_by_its_syntax_and_not_by_its_name() {
+    let tests = "\n#[cfg(test)]\n#[allow(clippy::unwrap_used)]\nmod checks {\n    use super::*;\n\n    #[test]\n    /// The documentation is between the attribute and the function.\n    fn doubles() {\n        assert_eq!(double(2), 4);\n    }\n}\n\npub fn test_like_name() -> u32 {\n    double(1)\n}\n";
+    let base = format!("pub fn double(value: u32) -> u32 {{\n    value * 2\n}}\n{tests}");
+    let head = format!("pub fn double(value: u32) -> u32 {{\n    value + value\n}}\n{tests}");
+    let directory = two_commits(&[("src/lib.rs", &base)], |path| {
+        write(path, "src/lib.rs", &head);
+    });
+    let changes = changes(directory.path());
+    let double = changes
+        .symbols
+        .iter()
+        .find(|symbol| symbol.key == "src/lib.rs#double")
+        .expect("double");
+    let callers: Vec<(&str, bool)> = double
+        .direct_callers
+        .iter()
+        .map(|caller| (caller.key.as_str(), caller.is_test))
+        .collect();
+    assert_eq!(
+        callers,
+        [
+            ("src/lib.rs#checks.doubles", true),
+            ("src/lib.rs#test_like_name", false)
+        ]
+    );
+    assert_eq!(double.test_callers(), 1);
+}
+
+#[test]
 fn test_graph_marks_an_added_call_and_a_removed_call() {
     let directory = repository();
     let changes = changes(directory.path());

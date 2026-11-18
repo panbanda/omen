@@ -9,18 +9,16 @@
 //! The public API is [`find_entry_points`]. A different analyzer can call it
 //! with the parsed files and the index of the same files.
 
-use std::ops::Range;
-
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
 
 use super::spec::syntax_of;
 use super::syntax;
-use crate::core::{is_test_file, Language};
+use crate::core::Language;
 use crate::index::extract::FileSymbols;
 use crate::index::model::{Span, Symbol, SymbolKind};
-use crate::parser::{cfg_test_module_ranges, ParseResult};
+use crate::parser::ParseResult;
 
 mod go_routes;
 mod persistent;
@@ -477,7 +475,6 @@ struct Context<'a> {
     all_parsed: &'a dyn TreeSource,
     rules: &'a [EntryRule],
     source: &'a [u8],
-    test_ranges: Vec<Range<usize>>,
     /// The start of the first statement of a list that jumps out of the block (`next`, `break`), by
     /// the id of the list node.
     rails_jumps: std::cell::RefCell<std::collections::HashMap<usize, Option<usize>>>,
@@ -525,12 +522,6 @@ impl<'a> Context<'a> {
         all_parsed: &'a dyn TreeSource,
         rules: &'a [EntryRule],
     ) -> Self {
-        let test_ranges = if file.language == Language::Rust {
-            let text = std::str::from_utf8(&parsed.source).unwrap_or("");
-            cfg_test_module_ranges(&parsed.root_node(), text)
-        } else {
-            Vec::new()
-        };
         Self {
             parsed,
             file,
@@ -538,7 +529,6 @@ impl<'a> Context<'a> {
             all_parsed,
             rules,
             source: &parsed.source,
-            test_ranges,
             rails_jumps: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_handled: std::cell::RefCell::new(std::collections::HashMap::new()),
@@ -790,11 +780,7 @@ impl<'a> Context<'a> {
                     route: draft.route,
                     guards: draft.guards,
                     basis: draft.basis,
-                    in_test: is_test_file(&self.file.file)
-                        || self
-                            .test_ranges
-                            .iter()
-                            .any(|range| range.contains(&draft.range.start_byte)),
+                    in_test: self.file.is_test_at(draft.range.start_byte),
                 }
             })
             .collect();

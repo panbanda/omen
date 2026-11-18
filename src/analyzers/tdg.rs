@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::analyzers::{hotspot, temporal};
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
-use crate::parser::{cfg_test_module_ranges, Parser};
+use crate::index::test_code::test_ranges_of_tree;
+use crate::parser::Parser;
 
 /// TDG weight configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -428,7 +429,11 @@ impl Analyzer {
         };
 
         let test_ranges = if language == Language::Rust {
-            cfg_test_module_ranges(&parsed.tree.root_node(), source)
+            test_ranges_of_tree(
+                parsed.tree.root_node(),
+                source.as_bytes(),
+                crate::core::Language::Rust,
+            )
         } else {
             Vec::new()
         };

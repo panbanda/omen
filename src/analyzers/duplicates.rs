@@ -26,7 +26,8 @@ use crate::core::{
     is_test_file, percentile, AnalysisContext, Analyzer as AnalyzerTrait, Language as CoreLanguage,
     Result,
 };
-use crate::parser::{cfg_test_module_ranges, Parser as TreeSitterParser};
+use crate::index::test_code::test_ranges_of_tree;
+use crate::parser::Parser as TreeSitterParser;
 
 /// Clone type classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -950,11 +951,9 @@ fn detect_language(path: &str) -> &'static str {
     }
 }
 
-/// Find Rust `#[cfg(test)]` module bodies and convert them to 0-indexed
-/// `[start, end)` line ranges, reusing the tree-sitter based detector shared
-/// with `analyzers::tdg` (`crate::parser::cfg_test_module_ranges`) so both
-/// analyzers agree on what counts as test code and avoid `not(test)` /
-/// `contest`-style false positives.
+/// The Rust test code of the file as 0-indexed `[start, end)` line ranges.
+/// `crate::index::test_code` gives the ranges, thus each analyzer has the
+/// same answer.
 fn rust_cfg_test_line_ranges(content: &str) -> Vec<Range<usize>> {
     let parser = TreeSitterParser::new();
     let Ok(parsed) = parser.parse(
@@ -965,13 +964,16 @@ fn rust_cfg_test_line_ranges(content: &str) -> Vec<Range<usize>> {
         return Vec::new();
     };
 
-    cfg_test_module_ranges(&parsed.tree.root_node(), content)
-        .into_iter()
-        .map(|byte_range| {
-            byte_offset_to_line(content, byte_range.start)
-                ..byte_offset_to_line(content, byte_range.end)
-        })
-        .collect()
+    test_ranges_of_tree(
+        parsed.tree.root_node(),
+        content.as_bytes(),
+        CoreLanguage::Rust,
+    )
+    .into_iter()
+    .map(|byte_range| {
+        byte_offset_to_line(content, byte_range.start)..byte_offset_to_line(content, byte_range.end)
+    })
+    .collect()
 }
 
 /// Count newlines before `offset` to get the 0-indexed line number, matching

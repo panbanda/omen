@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "language": "rust",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Rust: tree-sitter gives no error node for a file. The attribute macros `perf`, `testlog`, and `tokio::test` are not in the case, thus rustc did not compile the case. The harness does not build or run the code.",
+  "closed_world": false,
+  "sinks_closed_world": false,
+  "not_applicable": [
+    {"dimension":"tests","category":"entry_by_name","reason":"No Rust test tool finds a test by its name. The attribute `#[test]`, or an attribute macro that makes one, marks a test."}
+  ],
+  "tests": [
+    {"label":"attribute","category":"entry_by_syntax","file":"src/lib.rs","line":23,"name":"plain","role":"entry"},
+    {"label":"doc_comment_between","category":"entry_by_syntax","file":"src/lib.rs","line":29,"name":"documented","role":"entry"},
+    {"label":"path_attribute","category":"entry_by_syntax","file":"src/lib.rs","line":32,"name":"of_tokio","role":"entry"},
+    {"label":"wrapped_attribute","category":"entry_by_syntax","file":"src/lib.rs","line":35,"name":"wrapped","role":"entry"},
+    {"label":"unknown_attribute_in_test_code","category":"entry_by_syntax","file":"src/lib.rs","line":38,"name":"registered_by_an_unknown_attribute","role":"entry"},
+    {"label":"test_directory_attribute","category":"entry_by_syntax","file":"tests/api.rs","line":6,"name":"runs","role":"entry"},
+    {"label":"helper_in_cfg_test_module","category":"support","file":"src/lib.rs","line":18,"name":"helper","role":"support"},
+    {"label":"cfg_test_module","category":"support","file":"src/lib.rs","line":15,"name":"checks","role":"support"},
+    {"label":"declared_module_file","category":"support","file":"src/declared.rs","line":1,"name":"in_a_declared_module","role":"support"},
+    {"label":"helper_in_test_directory","category":"support","file":"tests/api.rs","line":1,"name":"shared","role":"support"},
+    {"label":"production","category":"not_test","file":"src/lib.rs","line":1,"name":"production","role":"none"},
+    {"label":"test_like_name","category":"not_test","file":"src/lib.rs","line":5,"name":"test_connection","role":"none"},
+    {"label":"unknown_attribute_in_production","category":"not_test","file":"src/lib.rs","line":10,"name":"measured_in_production","role":"none"},
+    {"label":"cfg_not_test","category":"not_test","file":"src/lib.rs","line":46,"name":"only_in_production","role":"none"},
+    {"label":"cfg_any_test","category":"not_test","file":"src/lib.rs","line":50,"name":"for_tests_of_other_crates","role":"none"}
+  ]
+}

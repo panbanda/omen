@@ -66,12 +66,13 @@ fn cache_isolates_repository_roots_and_cannot_escape_root() {
 #[test]
 fn bounded_context_retains_seed_and_discovers_transitive_test_candidates() {
     for (file, source) in [
-        ("main.rs", "fn helper(){}\nfn service(){helper();}\nfn wrapper(){service();}\nfn test_service(){wrapper();}"),
-        ("main.ts", "function helper(){}\nfunction service(){helper();}\nfunction wrapper(){service();}\nfunction test_service(){wrapper();}"),
-        ("main.rb", "def helper; end\ndef service; helper(); end\ndef wrapper; service(); end\ndef test_service; wrapper(); end"),
-        ("main.go", "package main\nfunc helper(){}\nfunc service(){helper()}\nfunc wrapper(){service()}\nfunc TestService(){wrapper()}"),
+        ("main.rs", "fn helper(){}\nfn service(){helper();}\nfn wrapper(){service();}\n#[test]\nfn checks_service(){wrapper();}"),
+        ("main.test.ts", "function helper(){}\nfunction service(){helper();}\nfunction wrapper(){service();}\nfunction checksService(){wrapper();}"),
+        ("test/main_test.rb", "def helper; end\ndef service; helper(); end\ndef wrapper; service(); end\ndef test_service; wrapper(); end"),
+        ("main_test.go", "package main\nfunc helper(){}\nfunc service(){helper()}\nfunc wrapper(){service()}\nfunc TestService(){wrapper()}"),
     ] {
         let dir = TempDir::new().unwrap(); let path = dir.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, source).unwrap();
         let snapshot = IndexCache::default().load(dir.path(), &[path]).unwrap();
         let report = build(&snapshot, dir.path(), "service", &Options::default()).unwrap();
@@ -84,6 +85,33 @@ fn bounded_context_retains_seed_and_discovers_transitive_test_candidates() {
         assert_eq!(report["symbols"][0]["relation"], "seed");
         assert_eq!(report["symbols"][0]["location"], report["seed"]);
     }
+}
+
+#[test]
+fn test_candidate_hint_follows_the_syntax_and_not_the_name() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("main.rs");
+    std::fs::write(
+        &path,
+        "fn service(){}\nfn test_connection(){service();}\n#[cfg(test)]\nmod checks {\n    use super::*;\n    #[test]\n    fn runs(){service();}\n}\n",
+    )
+    .unwrap();
+    let snapshot = IndexCache::default().load(dir.path(), &[path]).unwrap();
+    let report = build(&snapshot, dir.path(), "service", &Options::default()).unwrap();
+    let hinted: Vec<&str> = report["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|symbol| {
+            symbol["role_hints"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|role| role["role"] == "test_candidate")
+        })
+        .map(|symbol| symbol["location"]["qualified_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(hinted, ["main.rs#checks.runs"]);
 }
 
 #[test]

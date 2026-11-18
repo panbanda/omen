@@ -2,7 +2,6 @@
 //! and the syntax tree for the sinks that are not calls.
 
 use std::collections::{HashMap, HashSet};
-use std::ops::Range;
 
 use rayon::prelude::*;
 use tree_sitter::Node;
@@ -10,13 +9,12 @@ use tree_sitter::Node;
 use super::spec::{specs_for, syntax_of, LanguageSyntax, Predicate, SinkSpec, Target};
 use super::syntax;
 use super::{Sink, SinkBasis, SinkCategory, SinkFlags};
-use crate::core::{is_test_file, Language};
 use crate::index::extract::{language_spec, FileSymbols, Local};
 use crate::index::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ResolutionBasis,
     ResolutionStatus, Span, SymbolKind,
 };
-use crate::parser::{cfg_test_module_ranges, ParseResult};
+use crate::parser::ParseResult;
 
 /// The sinks of the files, in file order and then in source order.
 ///
@@ -232,7 +230,6 @@ struct FileContext<'a> {
     syntax: LanguageSyntax,
     specs: Vec<&'static SinkSpec>,
     source: &'a [u8],
-    test_ranges: Vec<Range<usize>>,
     call_kinds: Vec<&'static str>,
 }
 
@@ -244,12 +241,6 @@ pub(super) fn file_sinks(
 ) -> Vec<Sink> {
     let language = file.language;
     let source = parsed.source.as_slice();
-    let test_ranges = if language == Language::Rust {
-        let text = std::str::from_utf8(source).unwrap_or("");
-        cfg_test_module_ranges(&parsed.root_node(), text)
-    } else {
-        Vec::new()
-    };
     let context = FileContext {
         parsed,
         file,
@@ -263,7 +254,6 @@ pub(super) fn file_sinks(
             )
             .collect(),
         source,
-        test_ranges,
         call_kinds: language_spec(language).call_syntax().call_kinds(),
     };
     let mut sinks = Vec::new();
@@ -276,11 +266,7 @@ pub(super) fn file_sinks(
 
 impl FileContext<'_> {
     fn in_test(&self, start_byte: usize) -> bool {
-        is_test_file(&self.file.file)
-            || self
-                .test_ranges
-                .iter()
-                .any(|range| range.contains(&start_byte))
+        self.file.is_test_at(start_byte)
     }
 
     /// The symbol positions that contain a function, from the inner one to the outer one.

@@ -1,0 +1,1708 @@
+//! The one rule that tells if a definition is test code.
+//!
+//! The extraction walk calls [`marks`] for each node of the kinds that
+//! [`mark_kinds`] gives. A mark is a byte range that is test code. The path
+//! of the file is the second source: [`is_test_path`]. Each consumer reads
+//! the result from `Symbol::test_role` or from `FileSymbols::is_test_at`.
+//!
+//! The rule for each language:
+//!
+//! - Rust: an item with `#[cfg(test)]`, a function with a test attribute, and
+//!   a module file that a `#[cfg(test)] mod name;` declares.
+//! - Python: a pytest fixture, a `TestCase` subclass, and the `test_*` names
+//!   of a test file.
+//! - ECMAScript: the callbacks of `describe`, `it`, `test`, and the hooks.
+//! - Go: the `Test`, `Benchmark`, `Fuzz`, and `Example` functions of a test file.
+//! - Java and C#: a method with a test annotation, and its class.
+//! - Ruby: a Minitest class, and the blocks of `describe`, `it`, and `specify`.
+//! - PHP: a PHPUnit class, and a method with `@test` or `#[Test]`.
+//! - C and C++: the function that a test macro such as `TEST` defines.
+//! - Bash: the path of the file only. A Bats file is not a Bash file.
+
+use std::collections::HashMap;
+use std::ops::Range;
+
+use tree_sitter::Node;
+
+use super::extract::FileSymbols;
+use super::model::{ImportKind, ImportTarget, TestRole};
+use crate::core::{is_test_file, Language};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkKind {
+    /// The range is test code.
+    Code,
+    /// The range is a definition that a test runner calls.
+    Entry,
+    /// The range is a definition that a test runner calls when the definition
+    /// is in test code. Outside test code, the mark tells nothing.
+    EntryInTestCode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestMark {
+    pub range: Range<usize>,
+    pub kind: MarkKind,
+}
+
+/// The path follows a test convention of the language.
+pub fn is_test_path(file: &str, language: Language) -> bool {
+    if is_test_file(file) {
+        return true;
+    }
+    let normalized = file.replace('\\', "/");
+    match language {
+        Language::Rust => normalized.split('/').any(|part| part == "benches"),
+        Language::Python => normalized.rsplit('/').next() == Some("conftest.py"),
+        _ => false,
+    }
+}
+
+/// The node kinds for which the walk calls [`marks`].
+pub fn mark_kinds(language: Language) -> &'static [&'static str] {
+    match language {
+        Language::Rust => &["attribute_item", "inner_attribute_item"],
+        Language::Python => &[
+            "decorated_definition",
+            "class_definition",
+            "function_definition",
+        ],
+        Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx => {
+            &["call_expression"]
+        }
+        Language::Go => &["function_declaration"],
+        Language::Java => &["method_declaration"],
+        Language::CSharp => &["method_declaration", "class_declaration"],
+        Language::Ruby => &["class", "method", "call"],
+        Language::Php => &["class_declaration", "method_declaration"],
+        Language::C => &["function_definition", "compound_statement"],
+        Language::Cpp => &["function_definition"],
+        Language::Bash => &[],
+    }
+}
+
+/// What the walk knows at one node.
+pub struct MarkContext<'a, 'tree> {
+    pub language: Language,
+    pub source: &'a [u8],
+    /// The nodes that contain the node, from the root.
+    pub ancestors: &'a [Node<'tree>],
+    pub in_test_file: bool,
+}
+
+impl MarkContext<'_, '_> {
+    fn text(&self, node: Node<'_>) -> &str {
+        node.utf8_text(self.source).unwrap_or("")
+    }
+
+    fn nearest(&self, kinds: &[&str]) -> Option<Node<'_>> {
+        self.ancestors
+            .iter()
+            .rev()
+            .find(|ancestor| kinds.contains(&ancestor.kind()))
+            .copied()
+    }
+}
+
+fn mark(node: Node<'_>, kind: MarkKind) -> TestMark {
+    TestMark {
+        range: node.byte_range(),
+        kind,
+    }
+}
+
+/// Adds the marks that `node` gives.
+pub fn marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
+    match context.language {
+        Language::Rust => rust_marks(node, context, out),
+        Language::Python => python_marks(node, context, out),
+        Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx => {
+            ecma_marks(node, context, out)
+        }
+        Language::Go => go_marks(node, context, out),
+        Language::Java => java_marks(node, context, out),
+        Language::CSharp => csharp_marks(node, context, out),
+        Language::Ruby => ruby_marks(node, context, out),
+        Language::Php => php_marks(node, context, out),
+        Language::C | Language::Cpp => c_marks(node, context, out),
+        Language::Bash => {}
+    }
+}
+
+/// The last segment of a path such as `tokio::test`, `pytest.fixture`, or `NUnit.Framework.Test`.
+fn last_segment(path: &str) -> &str {
+    path.rsplit([':', '.', '\\']).next().unwrap_or(path).trim()
+}
+
+// ----- Rust -----
+
+/// The last segment of the path of an attribute that makes a function a test.
+const RUST_TEST_ATTRIBUTES: [&str; 9] = [
+    "test",
+    "bench",
+    "rstest",
+    "test_case",
+    "test_matrix",
+    "quickcheck",
+    "proptest",
+    "wasm_bindgen_test",
+    "parameterized",
+];
+
+/// The attributes that do not register a function with a test runner.
+const RUST_INERT_ATTRIBUTES: [&str; 31] = [
+    "allow",
+    "automatically_derived",
+    "cfg",
+    "cfg_attr",
+    "cold",
+    "deny",
+    "deprecated",
+    "derive",
+    "doc",
+    "expect",
+    "export_name",
+    "forbid",
+    "ignore",
+    "inline",
+    "instrument",
+    "link_name",
+    "link_section",
+    "macro_export",
+    "macro_use",
+    "must_use",
+    "no_mangle",
+    "non_exhaustive",
+    "optimize",
+    "path",
+    "repr",
+    "should_panic",
+    "target_feature",
+    "track_caller",
+    "unsafe",
+    "used",
+    "warn",
+];
+
+/// A `cfg` predicate is true only in a test build.
+///
+/// `test` and `all(test, x)` are such predicates. `any(test, x)` and
+/// `not(test)` are not.
+pub fn cfg_requires_test(predicate: &str) -> bool {
+    let predicate = predicate.trim();
+    if predicate == "test" {
+        return true;
+    }
+    let Some(open) = predicate.find('(') else {
+        return false;
+    };
+    if !predicate.ends_with(')') {
+        return false;
+    }
+    let name = predicate[..open].trim();
+    let members = split_arguments(&predicate[open + 1..predicate.len() - 1]);
+    match name {
+        "all" => members.iter().any(|member| cfg_requires_test(member)),
+        "any" => !members.is_empty() && members.iter().all(|member| cfg_requires_test(member)),
+        _ => false,
+    }
+}
+
+/// The arguments of a list, without the commas in parentheses and in strings.
+fn split_arguments(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut start = 0;
+    for (position, character) in text.char_indices() {
+        if in_string {
+            match character {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match character {
+            '"' => in_string = true,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(text[start..position].trim());
+                start = position + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = text[start..].trim();
+    if !last.is_empty() {
+        parts.push(last);
+    }
+    parts
+}
+
+/// The text names a path that ends in `::test`, outside a string.
+fn names_test_path(arguments: &str) -> bool {
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut code = String::with_capacity(arguments.len());
+    for character in arguments.chars() {
+        if in_string {
+            match character {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        if character == '"' {
+            in_string = true;
+            code.push(' ');
+        } else if !character.is_whitespace() {
+            code.push(character);
+        }
+    }
+    code.match_indices("::test").any(|(position, found)| {
+        code[position + found.len()..]
+            .chars()
+            .next()
+            .is_none_or(|next| !next.is_alphanumeric() && next != '_')
+    })
+}
+
+/// The path and the arguments of an attribute item, as text: `#[cfg(test)]`
+/// gives `cfg` and `(test)`.
+pub fn rust_attribute_text<'a>(item: Node<'_>, source: &'a [u8]) -> Option<(&'a str, &'a str)> {
+    let text = item.utf8_text(source).ok()?;
+    let text = text
+        .trim_start_matches('#')
+        .trim_start_matches('!')
+        .trim()
+        .strip_prefix('[')?
+        .strip_suffix(']')?
+        .trim();
+    let end = text
+        .find(|character: char| character == '(' || character == '=' || character.is_whitespace())
+        .unwrap_or(text.len());
+    Some((&text[..end], text[end..].trim()))
+}
+
+/// The item to which an outer attribute applies.
+fn rust_attribute_target<'tree>(item: Node<'tree>) -> Option<Node<'tree>> {
+    let mut next = item.next_sibling();
+    while let Some(node) = next {
+        if !matches!(
+            node.kind(),
+            "attribute_item" | "line_comment" | "block_comment"
+        ) {
+            return Some(node);
+        }
+        next = node.next_sibling();
+    }
+    None
+}
+
+fn rust_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
+    let Some((path, arguments)) = rust_attribute_text(node, context.source) else {
+        return;
+    };
+    let requires_test = path == "cfg"
+        && arguments
+            .strip_prefix('(')
+            .and_then(|rest| rest.strip_suffix(')'))
+            .is_some_and(cfg_requires_test);
+    if node.kind() == "inner_attribute_item" {
+        // `#![cfg(test)]` applies to the module or the file that contains it.
+        if requires_test {
+            let owner = context
+                .nearest(&["mod_item"])
+                .or_else(|| context.ancestors.first().copied());
+            out.extend(owner.map(|owner| mark(owner, MarkKind::Code)));
+        }
+        return;
+    }
+    let Some(target) = rust_attribute_target(node) else {
+        return;
+    };
+    if requires_test {
+        out.push(mark(target, MarkKind::Code));
+        return;
+    }
+    if target.kind() != "function_item" {
+        return;
+    }
+    let name = last_segment(path);
+    if RUST_TEST_ATTRIBUTES.contains(&name) || names_test_path(arguments) {
+        out.push(mark(target, MarkKind::Entry));
+    } else if !RUST_INERT_ATTRIBUTES.contains(&name) {
+        // An attribute macro that omen does not know can register the
+        // function with the test runner, as `#[perf]` of Zed does.
+        out.push(mark(target, MarkKind::EntryInTestCode));
+    }
+}
+
+// ----- Python -----
+
+const PYTHON_HOOK_NAMES: [&str; 17] = [
+    "setUp",
+    "tearDown",
+    "setUpClass",
+    "tearDownClass",
+    "setUpModule",
+    "tearDownModule",
+    "asyncSetUp",
+    "asyncTearDown",
+    "setup_method",
+    "teardown_method",
+    "setup_class",
+    "teardown_class",
+    "setup_module",
+    "teardown_module",
+    "setup_function",
+    "teardown_function",
+    "runTest",
+];
+
+/// The class has a superclass whose name ends in `TestCase`.
+fn python_is_test_case(class: Node<'_>, context: &MarkContext<'_, '_>) -> bool {
+    let Some(superclasses) = class.child_by_field_name("superclasses") else {
+        return false;
+    };
+    let mut cursor = superclasses.walk();
+    let found = superclasses
+        .named_children(&mut cursor)
+        .any(|base| last_segment(context.text(base)).ends_with("TestCase"));
+    found
+}
+
+fn python_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
+    match node.kind() {
+        "decorated_definition" => {
+            let Some(definition) = node.child_by_field_name("definition") else {
+                return;
+            };
+            let mut cursor = node.walk();
+            let is_test = node
+                .children(&mut cursor)
+                .filter(|child| child.kind() == "decorator")
+                .any(|decorator| {
+                    let text = context.text(decorator).trim_start_matches('@').trim();
+                    let path = text.split('(').next().unwrap_or(text).trim();
+                    matches!(
+                        path,
+                        "pytest.fixture" | "pytest_asyncio.fixture" | "fixture"
+                    ) || path.starts_with("pytest.mark.")
+                });
+            if is_test {
+                out.push(mark(definition, MarkKind::Entry));
+            }
+        }
+        "class_definition" => {
+            let name = node
+                .child_by_field_name("name")
+                .map_or("", |name| context.text(name));
+            if python_is_test_case(node, context)
+                || (context.in_test_file && name.starts_with("Test"))
+            {
+                out.push(mark(node, MarkKind::Entry));
+            }
+        }
+        _ => {
+            let name = node
+                .child_by_field_name("name")
+                .map_or("", |name| context.text(name));
+            let in_test_case = context
+                .nearest(&["class_definition", "function_definition"])
+                .is_some_and(|owner| {
+                    owner.kind() == "class_definition" && python_is_test_case(owner, context)
+                });
+            let named_as_test = name.starts_with("test") || PYTHON_HOOK_NAMES.contains(&name);
+            let is_pytest_hook = context.in_test_file && name.starts_with("pytest_");
+            if (named_as_test && (in_test_case || context.in_test_file)) || is_pytest_hook {
+                out.push(mark(node, MarkKind::Entry));
+            }
+        }
+    }
+}
+
+// ----- ECMAScript -----
+
+const ECMA_SUITES: [&str; 8] = [
+    "describe",
+    "it",
+    "test",
+    "fdescribe",
+    "fit",
+    "xdescribe",
+    "xit",
+    "xtest",
+];
+const ECMA_HOOKS: [&str; 4] = ["beforeEach", "afterEach", "beforeAll", "afterAll"];
+
+/// The first name of the callee: `describe` in `describe.each(table)(name, run)`.
+fn ecma_callee_root<'tree>(call: Node<'tree>) -> Option<(Node<'tree>, bool)> {
+    let mut current = call.child_by_field_name("function")?;
+    let mut qualified = false;
+    loop {
+        current = match current.kind() {
+            "identifier" => return Some((current, qualified)),
+            "member_expression" => current.child_by_field_name("object")?,
+            "call_expression" => current.child_by_field_name("function")?,
+            _ => return None,
+        };
+        qualified = true;
+    }
+}
+
+fn ecma_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
+    let Some((root, qualified)) = ecma_callee_root(node) else {
+        return;
+    };
+    let name = context.text(root);
+    let is_suite = ECMA_SUITES.contains(&name);
+    if !is_suite && !ECMA_HOOKS.contains(&name) {
+        return;
+    }
+    let Some(arguments) = node.child_by_field_name("arguments") else {
+        return;
+    };
+    let mut cursor = arguments.walk();
+    let values: Vec<Node<'_>> = arguments.named_children(&mut cursor).collect();
+    let callbacks: Vec<Node<'_>> = values
+        .iter()
+        .copied()
+        .filter(|value| {
+            matches!(
+                value.kind(),
+                "arrow_function" | "function_expression" | "function" | "generator_function"
+            )
+        })
+        .collect();
+    if callbacks.is_empty() {
+        return;
+    }
+    // A suite or a test has a title. A hook has only its callback. A hook of
+    // an object, as `hooks.beforeEach(run)` is, has a different first name.
+    let has_title = values
+        .first()
+        .is_some_and(|first| matches!(first.kind(), "string" | "template_string"));
+    if (is_suite && !has_title) || (!is_suite && qualified) {
+        return;
+    }
+    out.push(mark(node, MarkKind::Code));
+    out.extend(
+        callbacks
+            .into_iter()
+            .map(|callback| mark(callback, MarkKind::Entry)),
+    );
+}
+
+// ----- Go -----
+
+/// `go test` runs a function whose name is the prefix, or the prefix and
+/// then a character that is not a lowercase letter.
+fn go_is_test_name(name: &str) -> bool {
+    ["Test", "Benchmark", "Fuzz", "Example"]
+        .iter()
+        .any(|prefix| {
+            name.strip_prefix(prefix)
+                .is_some_and(|rest| !rest.starts_with(|first: char| first.is_lowercase()))
+        })
+}
+
+fn go_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
+    if !context.in_test_file {
+        return;
+    }
+    let name = node
+        .child_by_field_name("name")
+        .map_or("", |name| context.text(name));
+    if go_is_test_name(name) {
+        out.push(mark(node, MarkKind::Entry));
+    }
+}
+
+// ----- Java and C# -----
+
+/// The annotations of JUnit 4, JUnit 5, and TestNG that make a method a test or a hook.
+const JAVA_TEST_ANNOTATIONS: [&str; 22] = [
+    "Test",
+    "ParameterizedTest",
+    "RepeatedTest",
+    "TestFactory",
+    "TestTemplate",
+    "BeforeEach",
+    "AfterEach",
+    "BeforeAll",
+    "AfterAll",
+    "Before",
+    "After",
+    "BeforeClass",
+    "AfterClass",
+    "BeforeMethod",
+    "AfterMethod",
+    "BeforeSuite",
+    "AfterSuite",
+    "BeforeTest",
+    "AfterTest",
+    "BeforeGroups",
+    "AfterGroups",
+    "DataProvider",
+];
+
+fn java_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
+    let mut cursor = node.walk();
+    let Some(modifiers) = node
+        .children(&mut cursor)
+        .find(|child| child.kind() == "modifiers")
+    else {
+        return;
+    };
+    let mut cursor = modifiers.walk();
+    let is_test = modifiers
+        .children(&mut cursor)
+        .filter(|child| matches!(child.kind(), "marker_annotation" | "annotation"))
+        .filter_map(|annotation| annotation.child_by_field_name("name"))
+        .any(|name| JAVA_TEST_ANNOTATIONS.contains(&last_segment(context.text(name))));
+    if !is_test {
+        return;
+    }
+    out.push(mark(node, MarkKind::Entry));
+    out.extend(
+        context
+            .nearest(&["class_declaration"])
+            .map(|class| mark(class, MarkKind::Code)),
+    );
+}
+
+/// The attributes of NUnit, xUnit, and MSTest that make a method a test or a hook.
+const CSHARP_TEST_ATTRIBUTES: [&str; 17] = [
+    "Test",
+    "TestCase",
+    "TestCaseSource",
+    "Fact",
+    "Theory",
+    "TestMethod",
+    "DataTestMethod",
+    "SetUp",
+    "TearDown",
+    "OneTimeSetUp",
+    "OneTimeTearDown",
+    "TestInitialize",
+    "TestCleanup",
+    "ClassInitialize",
+    "ClassCleanup",
+    "AssemblyInitialize",
+    "AssemblyCleanup",
+];
+const CSHARP_CLASS_ATTRIBUTES: [&str; 2] = ["TestFixture", "TestClass"];
+
+fn csharp_has_attribute(node: Node<'_>, context: &MarkContext<'_, '_>, names: &[&str]) -> bool {
+    let mut cursor = node.walk();
+    let lists: Vec<Node<'_>> = node
+        .children(&mut cursor)
+        .filter(|child| child.kind() == "attribute_list")
+        .collect();
+    lists.into_iter().any(|list| {
+        let mut cursor = list.walk();
+        let found = list
+            .named_children(&mut cursor)
+            .filter(|child| child.kind() == "attribute")
+            .filter_map(|attribute| attribute.child_by_field_name("name"))
+            .any(|name| {
+                let name = last_segment(context.text(name));
+                names.contains(&name.strip_suffix("Attribute").unwrap_or(name))
+            });
+        found
+    })
+}
+
+fn csharp_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
+    if node.kind() == "class_declaration" {
+        if csharp_has_attribute(node, context, &CSHARP_CLASS_ATTRIBUTES) {
+            out.push(mark(node, MarkKind::Entry));
+        }
+        return;
+    }
+    if !csharp_has_attribute(node, context, &CSHARP_TEST_ATTRIBUTES) {
+        return;
+    }
+    out.push(mark(node, MarkKind::Entry));
+    out.extend(
+        context
+            .nearest(&["class_declaration"])
+            .map(|class| mark(class, MarkKind::Code)),
+    );
+}
+
+// ----- Ruby -----
+
+/// The superclass is a class of Minitest, Test::Unit, or the Rails test cases.
+fn ruby_is_test_class(class: Node<'_>, context: &MarkContext<'_, '_>) -> bool {
+    let Some(superclass) = class.child_by_field_name("superclass") else {
+        return false;
+    };
+    let text = context.text(superclass);
+    let path = text.trim_start_matches('<').trim();
+    let name = last_segment(path);
+    path == "Minitest::Test"
+        || path == "Minitest::Spec"
+        || name.ends_with("TestCase")
+        || name.ends_with("IntegrationTest")
+}
+
+const RUBY_SPEC_BLOCKS: [&str; 7] = [
+    "describe",
+    "it",
+    "specify",
+    "shared_examples",
+    "shared_examples_for",
+    "shared_context",
+    "context",
+];
+
+fn ruby_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
+    match node.kind() {
+        "class" => {
+            if ruby_is_test_class(node, context) {
+                out.push(mark(node, MarkKind::Entry));
+            }
+        }
+        "method" => {
+            let name = node
+                .child_by_field_name("name")
+                .map_or("", |name| context.text(name));
+            let in_test_class = context
+                .nearest(&["class", "module", "method"])
+                .is_some_and(|owner| owner.kind() == "class" && ruby_is_test_class(owner, context));
+            let named_as_test = name.starts_with("test_") || name == "setup" || name == "teardown";
+            if named_as_test && (in_test_class || context.in_test_file) {
+                out.push(mark(node, MarkKind::Entry));
+            }
+        }
+        _ => {
+            if node.child_by_field_name("block").is_none() {
+                return;
+            }
+            let method = node
+                .child_by_field_name("method")
+                .map_or("", |method| context.text(method));
+            if !RUBY_SPEC_BLOCKS.contains(&method) {
+                return;
+            }
+            let receiver = node
+                .child_by_field_name("receiver")
+                .map(|receiver| context.text(receiver));
+            // `context` is a name that other libraries use. It is a group of
+            // examples only in a `describe` block, which has its own mark.
+            let is_spec = match receiver {
+                None => method != "context",
+                Some(receiver) => receiver == "RSpec",
+            };
+            if is_spec {
+                out.push(mark(node, MarkKind::Code));
+            }
+        }
+    }
+}
+
+// ----- PHP -----
+
+const PHP_HOOK_NAMES: [&str; 4] = [
+    "setUp",
+    "tearDown",
+    "setUpBeforeClass",
+    "tearDownAfterClass",
+];
+const PHP_TEST_ATTRIBUTES: [&str; 8] = [
+    "Test",
+    "DataProvider",
+    "Before",
+    "After",
+    "BeforeClass",
+    "AfterClass",
+    "TestWith",
+    "TestDox",
+];
+
+/// The class extends a class whose name ends in `TestCase`.
+fn php_is_test_case(class: Node<'_>, context: &MarkContext<'_, '_>) -> bool {
+    let mut cursor = class.walk();
+    let found = class
+        .children(&mut cursor)
+        .filter(|child| child.kind() == "base_clause")
+        .any(|base| {
+            let text = context.text(base);
+            last_segment(text.trim_start_matches("extends").trim()).ends_with("TestCase")
+        });
+    found
+}
+
+/// The method has a PHPUnit attribute, or its documentation comment has the tag `@test`.
+fn php_is_marked_test(method: Node<'_>, context: &MarkContext<'_, '_>) -> bool {
+    let mut cursor = method.walk();
+    let has_attribute = method
+        .children(&mut cursor)
+        .filter(|child| child.kind() == "attribute_list")
+        .any(|list| {
+            let text = context.text(list);
+            text.trim_matches(|character| character == '#' || character == '[' || character == ']')
+                .split(',')
+                .any(|attribute| {
+                    let path = attribute.split('(').next().unwrap_or(attribute).trim();
+                    PHP_TEST_ATTRIBUTES.contains(&last_segment(path))
+                })
+        });
+    if has_attribute {
+        return true;
+    }
+    method
+        .prev_sibling()
+        .filter(|previous| previous.kind() == "comment")
+        .is_some_and(|comment| {
+            context
+                .text(comment)
+                .split(|character: char| !character.is_alphanumeric() && character != '@')
+                .any(|word| matches!(word, "@test" | "@before" | "@after" | "@dataProvider"))
+        })
+}
+
+fn php_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
+    if node.kind() == "class_declaration" {
+        if php_is_test_case(node, context) {
+            out.push(mark(node, MarkKind::Entry));
+        }
+        return;
+    }
+    let name = node
+        .child_by_field_name("name")
+        .map_or("", |name| context.text(name));
+    let class = context.nearest(&["class_declaration"]);
+    let in_test_case = class.is_some_and(|class| php_is_test_case(class, context));
+    let marked = php_is_marked_test(node, context);
+    let named_as_test = name.starts_with("test") || PHP_HOOK_NAMES.contains(&name);
+    if marked || (named_as_test && in_test_case) {
+        out.push(mark(node, MarkKind::Entry));
+        out.extend(class.map(|class| mark(class, MarkKind::Code)));
+    }
+}
+
+// ----- C and C++ -----
+
+/// The macros of GoogleTest, Catch2, Boost.Test, and Criterion that define a test function.
+const C_TEST_MACROS: [&str; 12] = [
+    "TEST",
+    "TEST_F",
+    "TEST_P",
+    "TYPED_TEST",
+    "TYPED_TEST_P",
+    "TEST_CASE",
+    "TEST_CASE_METHOD",
+    "SCENARIO",
+    "BOOST_AUTO_TEST_CASE",
+    "BOOST_FIXTURE_TEST_CASE",
+    "Test",
+    "ParameterizedTest",
+];
+
+fn c_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
+    if node.kind() == "compound_statement" {
+        // The C grammar has no function without a result type. It gives the
+        // use of the macro as a call statement, and then the body as a block
+        // of the file.
+        let at_top = context
+            .ancestors
+            .last()
+            .is_some_and(|parent| parent.kind() == "translation_unit");
+        let macro_name = node
+            .prev_sibling()
+            .filter(|_| at_top)
+            .filter(|previous| previous.kind() == "expression_statement")
+            .and_then(|statement| statement.named_child(0))
+            .filter(|call| call.kind() == "call_expression")
+            .and_then(|call| call.child_by_field_name("function"))
+            .map_or("", |name| context.text(name));
+        if C_TEST_MACROS.contains(&macro_name) {
+            out.push(mark(node, MarkKind::Code));
+        }
+        return;
+    }
+    // A use of a test macro has no result type: `TEST(Suite, Name) { ... }`.
+    // A constructor in the body of its class has none too.
+    let in_class = context
+        .ancestors
+        .last()
+        .is_some_and(|parent| parent.kind() == "field_declaration_list");
+    if in_class || node.child_by_field_name("type").is_some() {
+        return;
+    }
+    let name = node
+        .child_by_field_name("declarator")
+        .filter(|declarator| declarator.kind() == "function_declarator")
+        .and_then(|declarator| declarator.child_by_field_name("declarator"))
+        .map_or("", |name| context.text(name));
+    if C_TEST_MACROS.contains(&name) {
+        out.push(mark(node, MarkKind::Entry));
+    }
+}
+
+// ----- The result for a file -----
+
+/// The marks of one file in a form that answers each question in logarithmic time.
+#[derive(Debug, Default)]
+pub struct MarkTable {
+    /// The ranges of test code, in order, without a range in a different range.
+    pub ranges: Vec<Range<usize>>,
+    entries: HashMap<(usize, usize), MarkKind>,
+}
+
+impl MarkTable {
+    pub fn new(mut marks: Vec<TestMark>) -> Self {
+        let mut entries = HashMap::new();
+        for mark in &marks {
+            if mark.kind == MarkKind::Code {
+                continue;
+            }
+            let entry = entries
+                .entry((mark.range.start, mark.range.end))
+                .or_insert(mark.kind);
+            if mark.kind == MarkKind::Entry {
+                *entry = MarkKind::Entry;
+            }
+        }
+        marks.retain(|mark| mark.kind != MarkKind::EntryInTestCode);
+        marks.sort_by_key(|mark| (mark.range.start, std::cmp::Reverse(mark.range.end)));
+        let mut ranges: Vec<Range<usize>> = Vec::new();
+        for mark in marks {
+            if ranges
+                .last()
+                .is_none_or(|last| mark.range.start >= last.end)
+            {
+                ranges.push(mark.range);
+            }
+        }
+        Self { ranges, entries }
+    }
+
+    /// The role of the definition with this byte range, and the answer to the
+    /// question: does the definition become an entry when its file is test code?
+    pub fn role(&self, range: Range<usize>, in_test_file: bool) -> (TestRole, bool) {
+        let in_test_code = in_test_file || is_in_ranges(&self.ranges, range.start);
+        match self.entries.get(&(range.start, range.end)) {
+            Some(MarkKind::Entry) => (TestRole::Entry, false),
+            Some(_) if in_test_code => (TestRole::Entry, false),
+            Some(_) => (TestRole::None, true),
+            None if in_test_code => (TestRole::Support, false),
+            None => (TestRole::None, false),
+        }
+    }
+}
+
+/// A function of a test file with this name is a test by convention, in a
+/// language that has a test tool which finds a test by its name only: Unity
+/// for C, shUnit2 for Bash, and JUnit 3 for Java. Go, Python, Ruby, and PHP
+/// have a name rule of their own in [`marks`]. The tools of the other
+/// languages find a test by its syntax.
+pub fn is_test_by_name(language: Language, name: &str) -> bool {
+    matches!(language, Language::C | Language::Bash | Language::Java) && name.starts_with("test")
+}
+
+/// `ranges` is in order and has no range in a different range.
+pub fn is_in_ranges(ranges: &[Range<usize>], byte: usize) -> bool {
+    let position = ranges.partition_point(|range| range.start <= byte);
+    position > 0 && byte < ranges[position - 1].end
+}
+
+/// The ranges of test code in a tree, for a consumer that has a tree and no
+/// index. The path of the file is not a part of this answer.
+pub fn test_ranges_of_tree(root: Node<'_>, source: &[u8], language: Language) -> Vec<Range<usize>> {
+    let kinds = mark_kinds(language);
+    let mut found = Vec::new();
+    let mut ancestors: Vec<Node<'_>> = Vec::new();
+    let mut cursor = root.walk();
+    loop {
+        let node = cursor.node();
+        if node.is_named() && kinds.contains(&node.kind()) {
+            let context = MarkContext {
+                language,
+                source,
+                ancestors: &ancestors,
+                in_test_file: false,
+            };
+            marks(node, &context, &mut found);
+        }
+        if cursor.goto_first_child() {
+            ancestors.push(node);
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return MarkTable::new(found).ranges;
+            }
+            ancestors.pop();
+        }
+    }
+}
+
+/// Completes the facts that need a different file.
+///
+/// A Rust module file has no mark of its own when `#[cfg(test)] mod name;`
+/// declares it in a different file. This step makes such a file, and each
+/// module file that it declares, test code. Call it after the resolution of
+/// the imports. The result does not depend on the order of `files`.
+pub fn link_files(files: &mut [FileSymbols]) {
+    let positions: HashMap<String, usize> = files
+        .iter()
+        .enumerate()
+        .filter(|(_, file)| file.language == Language::Rust)
+        .map(|(position, file)| (file.file.clone(), position))
+        .collect();
+    let declared_modules = |file: &FileSymbols, only_in_test_code: bool| -> Vec<usize> {
+        file.imports
+            .iter()
+            .filter(|binding| binding.kind == ImportKind::ModuleDeclaration)
+            .filter(|binding| !only_in_test_code || file.is_test_at(binding.range.start_byte))
+            .filter_map(|binding| match &binding.target_file {
+                ImportTarget::Resolved(target) => positions.get(target).copied(),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut queue: Vec<usize> = positions
+        .values()
+        .flat_map(|position| declared_modules(&files[*position], true))
+        .collect();
+    queue.sort_unstable();
+    let mut found = Vec::new();
+    while let Some(position) = queue.pop() {
+        if files[position].test_file {
+            continue;
+        }
+        files[position].test_file = true;
+        found.push(position);
+        queue.extend(declared_modules(&files[position], false));
+    }
+    for position in found {
+        let file = &mut files[position];
+        for (symbol, facts) in file.symbols.iter_mut().zip(&file.link_facts) {
+            if facts.test_entry_in_test_code {
+                symbol.test_role = TestRole::Entry;
+            } else if symbol.test_role == TestRole::None {
+                symbol.test_role = TestRole::Support;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    use super::*;
+    use crate::index::extract::extract_file;
+    use crate::index::model::SymbolKind;
+    use crate::parser::Parser;
+
+    fn facts(language: Language, file: &str, source: &str) -> FileSymbols {
+        let parsed = Parser::new()
+            .parse(source.as_bytes(), language, Path::new(file))
+            .unwrap();
+        extract_file(&parsed, file)
+    }
+
+    /// The role of each symbol that is not a field, by name.
+    fn roles(language: Language, file: &str, source: &str) -> BTreeMap<String, TestRole> {
+        facts(language, file, source)
+            .symbols
+            .into_iter()
+            .filter(|symbol| symbol.kind != SymbolKind::Field)
+            .map(|symbol| (symbol.name, symbol.test_role))
+            .collect()
+    }
+
+    fn assert_roles(found: &BTreeMap<String, TestRole>, expected: &[(&str, TestRole)]) {
+        for (name, role) in expected {
+            assert_eq!(
+                found.get(*name),
+                Some(role),
+                "the role of `{name}` in {found:?}"
+            );
+        }
+    }
+
+    use TestRole::{Entry, None as NotTest, Support};
+
+    #[test]
+    fn test_cfg_predicate_requires_test_only_when_each_build_with_it_is_a_test_build() {
+        assert!(cfg_requires_test("test"));
+        assert!(cfg_requires_test("all(test, feature = \"a,b\")"));
+        assert!(cfg_requires_test("all(unix, all(test))"));
+        assert!(cfg_requires_test("any(test)"));
+        assert!(!cfg_requires_test("any(test, feature = \"test-support\")"));
+        assert!(!cfg_requires_test("not(test)"));
+        assert!(!cfg_requires_test("feature = \"test\""));
+        assert!(!cfg_requires_test("all(not(test), unix)"));
+    }
+
+    #[test]
+    fn test_rust_test_attributes_make_an_entry() {
+        let found = roles(
+            Language::Rust,
+            "src/lib.rs",
+            r#"
+#[test]
+fn plain() {}
+
+#[tokio::test]
+async fn tokio_test() {}
+
+#[gpui::test]
+async fn gpui_test() {}
+
+#[rstest]
+fn with_rstest() {}
+
+#[test_case(1; "one")]
+fn with_test_case(value: u32) {}
+
+#[testlog(tokio::test)]
+async fn with_wrapped_path() {}
+
+#[bench]
+fn a_benchmark(b: &mut Bencher) {}
+
+#[test]
+/// The documentation is between the attribute and the function.
+// A comment is there too.
+#[ignore]
+fn with_doc_comment_between() {}
+
+#[doc = "names crate::test in a string"]
+#[inline]
+fn production() {}
+
+#[perf]
+fn unknown_attribute_outside_test_code() {}
+
+fn test_only_by_name() {}
+"#,
+        );
+        assert_roles(
+            &found,
+            &[
+                ("plain", Entry),
+                ("tokio_test", Entry),
+                ("gpui_test", Entry),
+                ("with_rstest", Entry),
+                ("with_test_case", Entry),
+                ("with_wrapped_path", Entry),
+                ("a_benchmark", Entry),
+                ("with_doc_comment_between", Entry),
+                ("production", NotTest),
+                ("unknown_attribute_outside_test_code", NotTest),
+                ("test_only_by_name", NotTest),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_rust_cfg_test_module_is_test_code_with_other_attributes_and_comments_between() {
+        let found = roles(
+            Language::Rust,
+            "src/lib.rs",
+            r#"
+fn production() {}
+
+#[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests run a process"
+)]
+// A comment.
+mod tests {
+    fn helper() {}
+
+    #[perf]
+    fn registered_by_an_unknown_attribute() {}
+
+    #[inline]
+    fn inert_attribute() {}
+
+    mod nested {
+        fn nested_helper() {}
+    }
+}
+
+#[allow(dead_code)]
+#[cfg(test)]
+fn test_only_function() {}
+
+#[cfg(not(test))]
+mod not_tests {
+    fn real() {}
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn test_support_feature() {}
+
+#[cfg(test)]
+impl Thing {
+    fn method_for_tests(&self) {}
+}
+"#,
+        );
+        assert_roles(
+            &found,
+            &[
+                ("production", NotTest),
+                ("tests", Support),
+                ("helper", Support),
+                ("registered_by_an_unknown_attribute", Entry),
+                ("inert_attribute", Support),
+                ("nested_helper", Support),
+                ("test_only_function", Support),
+                ("real", NotTest),
+                ("test_support_feature", NotTest),
+                ("method_for_tests", Support),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_rust_inner_cfg_test_and_test_directories() {
+        let inner = roles(
+            Language::Rust,
+            "src/checks.rs",
+            "#![cfg(test)]\n\nfn helper() {}\n",
+        );
+        assert_roles(&inner, &[("helper", Support)]);
+        for file in ["tests/api.rs", "benches/speed.rs"] {
+            let found = roles(
+                Language::Rust,
+                file,
+                "fn helper() {}\n#[test]\nfn check() {}\n",
+            );
+            assert_roles(&found, &[("helper", Support), ("check", Entry)]);
+        }
+    }
+
+    #[test]
+    fn test_rust_module_file_of_a_cfg_test_declaration_is_test_code() {
+        let mut files = vec![
+            facts(
+                Language::Rust,
+                "src/lib.rs",
+                "#[cfg(test)]\nmod checks;\nmod real;\nfn production() {}\n",
+            ),
+            facts(
+                Language::Rust,
+                "src/checks.rs",
+                "mod deep;\nfn helper() {}\n#[perf]\nfn measured() {}\n",
+            ),
+            facts(
+                Language::Rust,
+                "src/checks/deep.rs",
+                "fn deep_helper() {}\n",
+            ),
+            facts(Language::Rust, "src/real.rs", "fn real() {}\n"),
+        ];
+        files.sort_by(|left, right| left.file.cmp(&right.file));
+        crate::index::extract::link_files(&mut files);
+        let manifests = crate::index::imports::Manifests::default();
+        crate::index::imports::resolve_imports(&mut files, &manifests);
+        link_files(&mut files);
+        let role = |file: &str, name: &str| {
+            files
+                .iter()
+                .find(|facts| facts.file == file)
+                .and_then(|facts| facts.symbols.iter().find(|symbol| symbol.name == name))
+                .map(|symbol| symbol.test_role)
+        };
+        assert_eq!(role("src/checks.rs", "helper"), Some(Support));
+        assert_eq!(role("src/checks.rs", "measured"), Some(Entry));
+        assert_eq!(role("src/checks/deep.rs", "deep_helper"), Some(Support));
+        assert_eq!(role("src/real.rs", "real"), Some(NotTest));
+        assert_eq!(role("src/lib.rs", "production"), Some(NotTest));
+        let checks = files.iter().find(|facts| facts.file == "src/checks.rs");
+        assert!(checks.is_some_and(|facts| facts.is_test_at(0)));
+    }
+
+    #[test]
+    fn test_python_fixtures_test_cases_and_test_files() {
+        let production = roles(
+            Language::Python,
+            "app/service.py",
+            r#"
+import unittest
+import pytest
+
+@pytest.fixture
+def database():
+    return 1
+
+@pytest.fixture(scope="session")
+def session_database():
+    return 1
+
+class ServiceCheck(unittest.TestCase):
+    def setUp(self):
+        pass
+
+    def test_runs(self):
+        self.helper()
+
+    def helper(self):
+        pass
+
+class Service:
+    def test_connection(self):
+        pass
+
+def test_like_name():
+    pass
+"#,
+        );
+        assert_roles(
+            &production,
+            &[
+                ("database", Entry),
+                ("session_database", Entry),
+                ("ServiceCheck", Entry),
+                ("setUp", Entry),
+                ("test_runs", Entry),
+                ("helper", Support),
+                ("Service", NotTest),
+                ("test_connection", NotTest),
+                ("test_like_name", NotTest),
+            ],
+        );
+        let test_file = roles(
+            Language::Python,
+            "tests/test_service.py",
+            "def test_runs():\n    pass\n\ndef helper():\n    pass\n\nclass TestThing:\n    def test_method(self):\n        pass\n",
+        );
+        assert_roles(
+            &test_file,
+            &[
+                ("test_runs", Entry),
+                ("helper", Support),
+                ("TestThing", Entry),
+                ("test_method", Entry),
+            ],
+        );
+        let conftest = roles(
+            Language::Python,
+            "conftest.py",
+            "def pytest_configure(config):\n    pass\n",
+        );
+        assert_roles(&conftest, &[("pytest_configure", Entry)]);
+    }
+
+    #[test]
+    fn test_ecma_callbacks_of_the_test_functions_are_test_code() {
+        let source = r#"
+function production() {}
+
+describe("a suite", () => {
+  function helper() {}
+  const build = () => 1;
+  beforeEach(function prepare() {});
+  it("works", function named() { helper(); });
+  test.each([1, 2])("case %s", (value) => {});
+});
+
+it.only("focused", async () => {
+  const local = () => 2;
+});
+
+const it2 = [1].map((value) => value);
+function iterate(it) { return it.next(); }
+hooks.beforeEach(function ofAnObject() {});
+test(function withoutTitle() {});
+"#;
+        for (language, file) in [
+            (Language::JavaScript, "src/a.js"),
+            (Language::Jsx, "src/a.jsx"),
+            (Language::TypeScript, "src/a.ts"),
+            (Language::Tsx, "src/a.tsx"),
+        ] {
+            let found = roles(language, file, source);
+            assert_roles(
+                &found,
+                &[
+                    ("production", NotTest),
+                    ("helper", Support),
+                    ("build", Support),
+                    ("local", Support),
+                    ("iterate", NotTest),
+                ],
+            );
+            for name in ["ofAnObject", "withoutTitle"] {
+                assert_ne!(found.get(name), Some(&Entry), "{name} in {language:?}");
+                assert_ne!(found.get(name), Some(&Support), "{name} in {language:?}");
+            }
+            for name in ["prepare", "named"] {
+                assert!(
+                    found.get(name).is_none_or(|role| *role == Entry),
+                    "{name} in {language:?}: {found:?}"
+                );
+            }
+            let facts = facts(language, file, source);
+            let focused = source.find("const local").unwrap();
+            assert!(facts.is_test_at(focused));
+            assert!(!facts.is_test_at(source.find("function production").unwrap()));
+        }
+        let by_path = roles(
+            Language::TypeScript,
+            "src/a.test.ts",
+            "function helper() {}\n",
+        );
+        assert_roles(&by_path, &[("helper", Support)]);
+    }
+
+    #[test]
+    fn test_ranges_of_a_tree_agree_with_the_index() {
+        let source = "fn production() {}\n\n#[cfg(test)]\n#[allow(dead_code)]\nmod tests {\n    fn helper() {}\n}\n\n#[cfg(not(test))]\nmod real {}\n\n#[test]\nfn check() {}\n";
+        let parsed = Parser::new()
+            .parse(source.as_bytes(), Language::Rust, Path::new("src/lib.rs"))
+            .unwrap();
+        let ranges = test_ranges_of_tree(parsed.root_node(), source.as_bytes(), Language::Rust);
+        assert_eq!(
+            ranges,
+            facts(Language::Rust, "src/lib.rs", source).test_ranges
+        );
+        let starts: Vec<&str> = ranges
+            .iter()
+            .map(|range| source[range.clone()].lines().next().unwrap())
+            .collect();
+        assert_eq!(starts, ["mod tests {", "fn check() {}"]);
+    }
+
+    #[test]
+    fn test_go_test_functions_of_a_test_file() {
+        let source = "package a\n\nfunc TestRun(t *testing.T) {}\nfunc BenchmarkRun(b *testing.B) {}\nfunc FuzzRun(f *testing.F) {}\nfunc ExampleRun() {}\nfunc Testify() {}\nfunc helper() {}\nfunc TestMain(m *testing.M) {}\n";
+        let test_file = roles(Language::Go, "a_test.go", source);
+        assert_roles(
+            &test_file,
+            &[
+                ("TestRun", Entry),
+                ("BenchmarkRun", Entry),
+                ("FuzzRun", Entry),
+                ("ExampleRun", Entry),
+                ("TestMain", Entry),
+                ("Testify", Support),
+                ("helper", Support),
+            ],
+        );
+        let production = roles(Language::Go, "a.go", source);
+        assert_roles(&production, &[("TestRun", NotTest), ("helper", NotTest)]);
+    }
+
+    #[test]
+    fn test_java_annotated_methods_and_their_class() {
+        let found = roles(
+            Language::Java,
+            "src/main/java/Checks.java",
+            r#"
+class Checks {
+    @Test
+    void runs() {}
+
+    @org.junit.jupiter.api.ParameterizedTest
+    @ValueSource(ints = {1})
+    void withValues(int value) {}
+
+    @BeforeEach
+    void prepare() {}
+
+    void helper() {}
+}
+
+class Service {
+    @Override
+    public String toString() { return ""; }
+
+    void testConnection() {}
+}
+"#,
+        );
+        assert_roles(
+            &found,
+            &[
+                ("Checks", Support),
+                ("runs", Entry),
+                ("withValues", Entry),
+                ("prepare", Entry),
+                ("helper", Support),
+                ("Service", NotTest),
+                ("toString", NotTest),
+                ("testConnection", NotTest),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_csharp_attributed_methods_and_their_class() {
+        let found = roles(
+            Language::CSharp,
+            "src/Checks.cs",
+            r#"
+[TestFixture]
+public class Checks {
+    [Test]
+    public void Runs() {}
+
+    [Xunit.Fact]
+    public void IsFact() {}
+
+    [Theory, InlineData(1)]
+    public void IsTheory(int value) {}
+
+    [TestMethodAttribute]
+    public void IsTestMethod() {}
+
+    public void Helper() {}
+}
+
+public class Unmarked {
+    [Fact]
+    public void Runs2() {}
+
+    void Helper2() {}
+}
+
+public class Service {
+    [Obsolete]
+    public void TestConnection() {}
+}
+"#,
+        );
+        assert_roles(
+            &found,
+            &[
+                ("Checks", Entry),
+                ("Runs", Entry),
+                ("IsFact", Entry),
+                ("IsTheory", Entry),
+                ("IsTestMethod", Entry),
+                ("Helper", Support),
+                ("Unmarked", Support),
+                ("Runs2", Entry),
+                ("Helper2", Support),
+                ("Service", NotTest),
+                ("TestConnection", NotTest),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_ruby_minitest_classes_and_rspec_blocks() {
+        let found = roles(
+            Language::Ruby,
+            "lib/checks.rb",
+            r#"
+class ServiceTest < Minitest::Test
+  def setup
+  end
+
+  def test_runs
+    helper
+  end
+
+  def helper
+  end
+end
+
+class UsersControllerTest < ActionDispatch::IntegrationTest
+  def test_index
+  end
+end
+
+class Service
+  def test_connection
+  end
+end
+
+RSpec.describe Service do
+  def spec_helper
+  end
+
+  context "when ready" do
+    it "runs" do
+    end
+  end
+end
+
+describe "plain" do
+  def plain_helper
+  end
+end
+
+context "of a different library" do
+  def not_a_spec
+  end
+end
+"#,
+        );
+        assert_roles(
+            &found,
+            &[
+                ("ServiceTest", Entry),
+                ("setup", Entry),
+                ("test_runs", Entry),
+                ("helper", Support),
+                ("UsersControllerTest", Entry),
+                ("test_index", Entry),
+                ("Service", NotTest),
+                ("test_connection", NotTest),
+                ("spec_helper", Support),
+                ("plain_helper", Support),
+                ("not_a_spec", NotTest),
+            ],
+        );
+        let by_path = roles(
+            Language::Ruby,
+            "spec/models/user_spec.rb",
+            "def helper\nend\n",
+        );
+        assert_roles(&by_path, &[("helper", Support)]);
+    }
+
+    #[test]
+    fn test_php_phpunit_classes_and_marked_methods() {
+        let found = roles(
+            Language::Php,
+            "src/Checks.php",
+            r#"<?php
+use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\Test;
+
+class ServiceTest extends TestCase {
+    protected function setUp(): void {}
+
+    public function testRuns(): void { $this->helper(); }
+
+    private function helper(): void {}
+
+    /**
+     * @test
+     */
+    public function it_runs(): void {}
+
+    #[Test]
+    public function with_attribute(): void {}
+}
+
+class Marked {
+    #[\PHPUnit\Framework\Attributes\Test]
+    public function marked_method(): void {}
+
+    public function other(): void {}
+}
+
+class Service {
+    /** Runs the test of the connection. */
+    public function testConnection(): void {}
+}
+"#,
+        );
+        assert_roles(
+            &found,
+            &[
+                ("ServiceTest", Entry),
+                ("setUp", Entry),
+                ("testRuns", Entry),
+                ("helper", Support),
+                ("it_runs", Entry),
+                ("with_attribute", Entry),
+                ("Marked", Support),
+                ("marked_method", Entry),
+                ("other", Support),
+                ("Service", NotTest),
+                ("testConnection", NotTest),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cpp_test_macros_define_test_functions() {
+        let source = r#"
+#include <gtest/gtest.h>
+
+int helper() { return 1; }
+
+TEST(Suite, Runs) {
+    auto local = []() { return 2; };
+    EXPECT_EQ(helper(), 1);
+}
+
+TEST_F(Fixture, WithFixture) {
+    EXPECT_TRUE(true);
+}
+
+TEST_P(Parameters, WithParameter) {
+    EXPECT_TRUE(GetParam());
+}
+
+int TEST_like(int value) { return value; }
+
+class Test {
+public:
+    Test() { build(); }
+};
+"#;
+        let facts = facts(Language::Cpp, "src/checks.cc", source);
+        assert!(facts.is_test_at(source.find("auto local").unwrap()));
+        assert!(facts.is_test_at(source.find("EXPECT_TRUE(true)").unwrap()));
+        assert!(facts.is_test_at(source.find("EXPECT_TRUE(GetParam").unwrap()));
+        assert!(!facts.is_test_at(source.find("return 1").unwrap()));
+        assert!(!facts.is_test_at(source.find("return value").unwrap()));
+        assert!(!facts.is_test_at(source.find("build();").unwrap()));
+        let found = roles(Language::Cpp, "src/checks.cc", source);
+        assert_roles(&found, &[("helper", NotTest), ("TEST_like", NotTest)]);
+        for name in ["TEST", "TEST_F", "TEST_P"] {
+            assert!(
+                found.get(name).is_none_or(|role| *role == Entry),
+                "{name}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_c_and_bash_use_the_path_and_the_test_macros() {
+        let c_source = "int helper(void) { return 1; }\n\nTest(suite, runs) {\n    helper();\n}\n";
+        let c_facts = facts(Language::C, "src/checks.c", c_source);
+        assert!(c_facts.is_test_at(c_source.find("helper();").unwrap()));
+        assert!(!c_facts.is_test_at(c_source.find("return 1").unwrap()));
+        let c_by_path = roles(
+            Language::C,
+            "tests/checks.c",
+            "int helper(void) { return 1; }\n",
+        );
+        assert_roles(&c_by_path, &[("helper", Support)]);
+        let bash = roles(Language::Bash, "test/run.sh", "helper() {\n  true\n}\n");
+        assert_roles(&bash, &[("helper", Support)]);
+        let bash_production = roles(Language::Bash, "bin/run.sh", "test_run() {\n  true\n}\n");
+        assert_roles(&bash_production, &[("test_run", NotTest)]);
+    }
+
+    #[test]
+    fn test_test_role_is_absent_from_json_for_production_code() {
+        let found = facts(
+            Language::Rust,
+            "src/lib.rs",
+            "fn production() {}\n#[test]\nfn check() {}\n",
+        );
+        let production = serde_json::to_value(&found.symbols[0]).unwrap();
+        assert!(production.get("test_role").is_none());
+        let check = serde_json::to_value(&found.symbols[1]).unwrap();
+        assert_eq!(check["test_role"], "entry");
+    }
+}

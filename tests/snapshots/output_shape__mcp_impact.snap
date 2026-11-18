@@ -32,6 +32,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                 "symbols": [
                   {
                     "file": "string",
+                    "is_test": "bool",
                     "line": "number",
                     "qualified_name": "string"
                   }
@@ -44,6 +45,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                 "symbols": [
                   {
                     "file": "string",
+                    "is_test": "bool",
                     "line": "number",
                     "qualified_name": "string"
                   }
