@@ -22,7 +22,7 @@ use omen::benchmark::truth::{
     bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth,
     render_sink_table, render_table, summarize, summarize_sinks, Assertion, ImportedName, Kind,
     Labels, LedgerEntry, Location, Observed, ObservedCall, ObservedEntryPoint, ObservedImport,
-    ObservedPath, ObservedSink, ObservedSymbol,
+    ObservedPath, ObservedReference, ObservedSink, ObservedSymbol,
 };
 use omen::core::Language;
 use omen::index::extract::{extract_file, link_files, FileSymbols};
@@ -342,6 +342,32 @@ fn index_case(dir: &Path) -> (Vec<omen::parser::ParseResult>, Vec<FileSymbols>) 
     (trees, index_files)
 }
 
+/// The uses of a function as a value. An edge exists only for one candidate
+/// that the rules selected.
+fn observed_references(files: &[FileSymbols]) -> Vec<ObservedReference> {
+    let mut references = Vec::new();
+    for reference in files.iter().flat_map(|file| &file.function_references) {
+        let Some(user) = reference.enclosing.as_deref() else {
+            continue;
+        };
+        let edge = matches!(
+            reference.resolution.status,
+            ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
+        );
+        let candidates = reference.resolution.candidates.iter();
+        references.push(ObservedReference {
+            user: user.to_string(),
+            line: reference.name_range.start_line,
+            name: reference.name.clone(),
+            edges: candidates
+                .filter(|_| edge)
+                .map(|key| key.to_string())
+                .collect(),
+        });
+    }
+    references
+}
+
 /// The key of an entry point or of a sink is `file:line:column:name`, and an HTTP handler
 /// has a method after the name. The file comes first, then two numbers.
 fn place_of(key: &str) -> (String, u32) {
@@ -392,6 +418,7 @@ fn observed_paths(dir: &Path) -> Vec<ObservedPath> {
                     .filter(|point| path.steps.iter().any(|step| step.symbol == point.symbol))
                     .map(|point| point.symbol.clone())
                     .collect(),
+                function_references: path.function_references,
             }
         })
         .collect();
@@ -407,6 +434,7 @@ fn observe(dir: &Path, with_paths: bool) -> Observed {
     };
     let mut imports = Vec::new();
     let calls = observed_calls(&index_files);
+    let references = observed_references(&index_files);
     let sinks = observed_sinks(&trees, &index_files);
     let entry_points = observed_entry_points(&trees, &index_files);
     let mut symbols = Vec::new();
@@ -428,6 +456,7 @@ fn observe(dir: &Path, with_paths: bool) -> Observed {
         sinks,
         entry_points,
         paths,
+        references,
     }
 }
 

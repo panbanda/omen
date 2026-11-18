@@ -24,7 +24,7 @@ const PAIR_PATTERN: &str = "pair_pattern";
 const STRING: &str = "string";
 const IMPORT_REQUIRE_CLAUSE: &str = "import_require_clause";
 
-use crate::index::calls::{CallSyntax, LocalName};
+use crate::index::calls::{CallSyntax, LocalName, ValueSyntax, ValueUse};
 
 const FORMAL_PARAMETERS: &str = "formal_parameters";
 
@@ -493,6 +493,34 @@ fn pattern_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalN
 }
 
 impl LanguageSpec for Ecma {
+    fn value_syntax(&self) -> ValueSyntax {
+        if self.typescript {
+            super::values::TYPESCRIPT
+        } else {
+            super::values::JAVASCRIPT
+        }
+    }
+
+    fn value_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.value_syntax().position_kinds();
+        kinds.extend(super::values::ECMA_KINDS);
+        kinds
+    }
+
+    fn value_hook_kinds(&self) -> Vec<&'static str> {
+        super::values::ECMA_HOOK_KINDS.to_vec()
+    }
+
+    fn function_values<'tree>(
+        &self,
+        node: Node<'tree>,
+        context: &Context<'_, 'tree>,
+        out: &mut Vec<ValueUse<'tree>>,
+    ) {
+        let table = self.value_syntax();
+        super::values::ecma(&table, &self.call_syntax(), node, context, out);
+    }
+
     fn block_kinds(&self) -> Vec<&'static str> {
         vec!["statement_block"]
     }

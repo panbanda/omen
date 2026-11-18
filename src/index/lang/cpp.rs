@@ -488,6 +488,10 @@ fn pointer_member(call: Node<'_>, context: &Context<'_, '_>) -> PointerMember {
 }
 
 impl LanguageSpec for Cpp {
+    fn value_syntax(&self) -> crate::index::calls::ValueSyntax {
+        super::values::CPP
+    }
+
     fn block_kinds(&self) -> Vec<&'static str> {
         vec!["compound_statement"]
     }

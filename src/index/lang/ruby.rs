@@ -217,6 +217,29 @@ impl LanguageSpec for Ruby {
         CALL_SYNTAX
     }
 
+    fn value_syntax(&self) -> crate::index::calls::ValueSyntax {
+        super::values::RUBY
+    }
+
+    fn value_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.value_syntax().position_kinds();
+        kinds.push(super::values::RUBY_CALL);
+        kinds
+    }
+
+    fn value_hook_kinds(&self) -> Vec<&'static str> {
+        vec![super::values::RUBY_CALL, super::values::SIMPLE_SYMBOL]
+    }
+
+    fn function_values<'tree>(
+        &self,
+        node: Node<'tree>,
+        context: &Context<'_, 'tree>,
+        out: &mut Vec<crate::index::calls::ValueUse<'tree>>,
+    ) {
+        super::values::ruby(&self.call_syntax(), node, context, out);
+    }
+
     fn call_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().call_kinds();
         kinds.extend([IDENTIFIER, SUPER]);
