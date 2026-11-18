@@ -349,7 +349,7 @@ the result of the old method without a change:
 
 - The block has one parameter `*arguments`, and no `return`, `next`, or `break`.
 - Its last statement is `public_send(old, *arguments)`, or `send` or `__send__` in place of
-  `public_send`.
+  `public_send`. The form `cache[arguments] ||= public_send(old, *arguments)` also counts.
 - Or its last statement is a variable or `variable.dup`. Each assignment of the variable must be
   such a call or a `cache.fetch(...)` call, and the block must use the variable in no other place.
   The memoization of Rails has this form.

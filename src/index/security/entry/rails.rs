@@ -4982,6 +4982,7 @@ fn is_derived_name(name: &str, before: Node<'_>, source: &[u8]) -> bool {
 /// one of these forms:
 ///
 /// - `public_send(old, *arguments)`, or `send` or `__send__` in place of `public_send`;
+/// - `cache[arguments] ||= public_send(old, *arguments)`, as a cache does;
 /// - a variable, or `variable.dup`, when each assignment of the variable is such a call or a
 ///   `cache.fetch(...)` call of a variable `cache`, as the memoization of Rails does, and the block
 ///   uses the variable in no other place.
@@ -5031,7 +5032,17 @@ fn returns_old_result(block: Node<'_>, old: &str, source: &[u8]) -> bool {
     else {
         return false;
     };
-    if is_old_call(last) {
+    let is_cache_write = |node: Node<'_>| {
+        node.kind() == "operator_assignment"
+            && node
+                .child_by_field_name("operator")
+                .is_some_and(|operator| text(operator) == "||=")
+            && node
+                .child_by_field_name("left")
+                .is_some_and(|left| left.kind() == "element_reference")
+            && node.child_by_field_name("right").is_some_and(is_old_call)
+    };
+    if is_old_call(last) || is_cache_write(last) {
         return !subtree_has_jump(block);
     }
     let (variable, final_use) = match last.kind() {

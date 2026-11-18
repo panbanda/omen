@@ -1500,6 +1500,7 @@ fn a_wrapper_that_returns_the_result_of_the_old_method_keeps_the_names() {
         "public_send(old, *arguments)",
         "log(1)\n          public_send(old, *arguments)",
         "value = public_send(old, *arguments)\n          value",
+        "cache[arguments] ||= public_send(old, *arguments)",
     ] {
         assert_eq!(
             with_inflector(&wrapped_singularize(body)),
@@ -1519,6 +1520,8 @@ fn a_wrapper_that_can_change_the_result_of_the_old_method_makes_the_names_unread
         "public_send(old, arguments.first.upcase)",
         "return \"x\" if arguments.empty?\n          public_send(old, *arguments)",
         "value = public_send(old, *arguments)\n          value << \"s\"\n          value",
+        "cache[arguments] ||= public_send(old, *arguments).upcase",
+        "cache[arguments] += public_send(old, *arguments)",
     ] {
         assert_eq!(
             with_inflector(&wrapped_singularize(body)),
