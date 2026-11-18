@@ -638,9 +638,10 @@ impl Ecma {
                 }
                 // `extends mixin(Base)` names the result of a call. The
                 // index does not know the class of that result.
-                "extends_clause" | "implements_clause" | "generic_type" => {
-                    self.collect_supertypes(child, context, out)
-                }
+                "extends_clause"
+                | "implements_clause"
+                | "generic_type"
+                | "parenthesized_expression" => self.collect_supertypes(child, context, out),
                 _ => {}
             }
         }
@@ -1119,7 +1120,7 @@ mod tests {
 
     #[test]
     fn test_supertypes_of_an_expression_in_extends_are_unknown() {
-        let source = "class Node extends createNode({ run() { throw new Failure('x'); } }) {}\nclass Mixed extends mixin(Base) {}\nclass Member extends lib.Base {}\n";
+        let source = "class Node extends createNode({ run() { throw new Failure('x'); } }) {}\nclass Mixed extends mixin(Base) {}\nclass Member extends lib.Base {}\nclass Paren extends (Base) {}\n";
         for language in [Language::JavaScript, Language::TypeScript] {
             let found = symbols(language, source);
             let supertypes = |name: &str| {
@@ -1132,6 +1133,7 @@ mod tests {
             assert!(supertypes("Node").is_empty(), "{language}");
             assert!(supertypes("Mixed").is_empty(), "{language}");
             assert_eq!(supertypes("Member"), ["lib.Base"], "{language}");
+            assert_eq!(supertypes("Paren"), ["Base"], "{language}");
         }
         let typed = "class Node extends Base<string> implements Shape<number>, Other {}\ninterface Shape<T> extends Named<T>, lib.Tagged {}\n";
         let found = symbols(Language::TypeScript, typed);
