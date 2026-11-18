@@ -1481,3 +1481,49 @@ fn a_proc_target_is_a_rack_endpoint() {
     let routes = draw("  get \"/favicon.ico\", to: proc { [200, {}, [\"\"]] } if Rails.env.test?");
     assert_eq!(guard_rows(&routes, &[]), ["/favicon.ico [] rack_endpoint"]);
 }
+
+/// An opening of the inflector that wraps `singularize` with the block `body`.
+fn wrapped_singularize(body: &str) -> String {
+    format!(
+        "module ActiveSupport\n  module Inflector\n    def self.wrap(*names)\n      names.each do |method_name|\n        old = \"#{{method_name}}_without_wrap\"\n        alias_method old, method_name\n        define_method(method_name) do |*arguments|\n          {body}\n        end\n      end\n    end\n\n    wrap :singularize\n  end\nend\n"
+    )
+}
+
+#[test]
+fn a_wrapper_that_returns_the_result_of_the_old_method_keeps_the_names() {
+    let readable = sorted(&[
+        "POST /webhooks/aws WebhooksController.aws [check]",
+        "GET /webhooks WebhooksController.index [check]",
+        "GET /webhooks/:webhook_id/x WebhooksController.show [check]",
+    ]);
+    for body in [
+        "public_send(old, *arguments)",
+        "log(1)\n          public_send(old, *arguments)",
+        "value = public_send(old, *arguments)\n          value",
+    ] {
+        assert_eq!(
+            with_inflector(&wrapped_singularize(body)),
+            readable,
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_wrapper_that_can_change_the_result_of_the_old_method_makes_the_names_unreadable() {
+    let unreadable = sorted(&["POST /webhooks/aws - []", "GET /webhooks - []"]);
+    for body in [
+        "public_send(old, *arguments).upcase",
+        "value = public_send(old, *arguments)\n          value.upcase",
+        "public_send(old, *arguments)\n          \"fixed\"",
+        "public_send(old, arguments.first.upcase)",
+        "return \"x\" if arguments.empty?\n          public_send(old, *arguments)",
+        "value = public_send(old, *arguments)\n          value << \"s\"\n          value",
+    ] {
+        assert_eq!(
+            with_inflector(&wrapped_singularize(body)),
+            unreadable,
+            "{body}"
+        );
+    }
+}

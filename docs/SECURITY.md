@@ -343,11 +343,18 @@ symbol and no guard.
 
 One form of `define_method` with a name that is not a literal keeps the names readable: a wrapper
 that calls the method that it replaces. The statements before it must have
-`alias_method old, name`, and the block must call `public_send(old, ...)`, `send`, or `__send__`.
-The value of `old` must be a string with an interpolation and a literal part that is in none of
-the method names above, as `"#{name}_without_cache"`. A cache has this form. Omen does not prove
-that the wrapper returns the result of the old method. It takes the call of the old method as the
-sign that the wrapper keeps the result.
+`alias_method old, name`. The value of `old` must be a string with an interpolation and a literal
+part that is in none of the method names above, as `"#{name}_without_cache"`. The block must give
+the result of the old method without a change:
+
+- The block has one parameter `*arguments`, and no `return`, `next`, or `break`.
+- Its last statement is `public_send(old, *arguments)`, or `send` or `__send__` in place of
+  `public_send`.
+- Or its last statement is a variable or `variable.dup`. Each assignment of the variable must be
+  such a call or a `cache.fetch(...)` call, and the block must use the variable in no other place.
+  The memoization of Rails has this form.
+
+Any other block, as `public_send(old, *arguments).upcase`, makes the names unreadable.
 
 A guard is a `before_action` callback of the action. Omen reads the symbols, `only:`, and
 `except:` of the call from the syntax tree. A `skip_before_action` call removes a guard for

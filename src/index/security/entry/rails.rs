@@ -4977,11 +4977,128 @@ fn is_derived_name(name: &str, before: Node<'_>, source: &[u8]) -> bool {
     derived
 }
 
+/// Tells if a wrapper block gives the result of the method `old` without a change. The block has
+/// one parameter `*arguments`, and it has no `return`, `next`, or `break`. Its last statement is
+/// one of these forms:
+///
+/// - `public_send(old, *arguments)`, or `send` or `__send__` in place of `public_send`;
+/// - a variable, or `variable.dup`, when each assignment of the variable is such a call or a
+///   `cache.fetch(...)` call of a variable `cache`, as the memoization of Rails does, and the block
+///   uses the variable in no other place.
+fn returns_old_result(block: Node<'_>, old: &str, source: &[u8]) -> bool {
+    let text = |node: Node<'_>| super::syntax::text(node, source);
+    let Some(parameters) = block.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cursor = parameters.walk();
+    let parameters: Vec<Node<'_>> = parameters.named_children(&mut cursor).collect();
+    let [splat] = parameters.as_slice() else {
+        return false;
+    };
+    let Some(arguments) = (splat.kind() == "splat_parameter")
+        .then(|| splat.child_by_field_name("name"))
+        .flatten()
+        .map(text)
+    else {
+        return false;
+    };
+    let is_old_call = |node: Node<'_>| {
+        node.kind() == "call"
+            && node.child_by_field_name("receiver").is_none()
+            && node.child_by_field_name("block").is_none()
+            && node
+                .child_by_field_name("method")
+                .is_some_and(|method| matches!(text(method), "public_send" | "send" | "__send__"))
+            && matches!(
+                call_arguments(node).as_slice(),
+                [first, rest]
+                    if first.kind() == "identifier"
+                        && text(*first) == old
+                        && rest.kind() == "splat_argument"
+                        && rest.named_child(0).is_some_and(|name| {
+                            name.kind() == "identifier" && text(name) == arguments
+                        })
+            )
+    };
+    let Some(body) = block.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    let Some(last) = body
+        .named_children(&mut cursor)
+        .filter(|statement| statement.kind() != "comment")
+        .last()
+    else {
+        return false;
+    };
+    if is_old_call(last) {
+        return !subtree_has_jump(block);
+    }
+    let (variable, final_use) = match last.kind() {
+        "identifier" => (last, last),
+        "call"
+            if last
+                .child_by_field_name("method")
+                .is_some_and(|method| text(method) == "dup")
+                && last.child_by_field_name("arguments").is_none()
+                && last.child_by_field_name("block").is_none() =>
+        {
+            match last.child_by_field_name("receiver") {
+                Some(receiver) if receiver.kind() == "identifier" => (receiver, receiver),
+                _ => return false,
+            }
+        }
+        _ => return false,
+    };
+    let name = text(variable);
+    let is_cache_read = |node: Node<'_>| {
+        node.kind() == "call"
+            && node
+                .child_by_field_name("method")
+                .is_some_and(|method| text(method) == "fetch")
+            && node
+                .child_by_field_name("receiver")
+                .is_some_and(|receiver| receiver.kind() == "identifier")
+    };
+    let mut assigned = false;
+    let mut stack = vec![body];
+    while let Some(node) = stack.pop() {
+        if matches!(node.kind(), "return" | "next" | "break" | "redo" | "retry") {
+            return false;
+        }
+        if node.kind() == "identifier" && text(node) == name && node != final_use {
+            let parent = node.parent();
+            let assignment = parent.filter(|parent| {
+                parent.kind() == "assignment" && parent.child_by_field_name("left") == Some(node)
+            });
+            match assignment.and_then(|assignment| assignment.child_by_field_name("right")) {
+                Some(value) if is_old_call(value) || is_cache_read(value) => assigned = true,
+                _ => return false,
+            }
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+    }
+    assigned
+}
+
+/// Tells if the code has `return`, `next`, `break`, `redo`, or `retry`.
+fn subtree_has_jump(node: Node<'_>) -> bool {
+    let mut stack = vec![node];
+    while let Some(node) = stack.pop() {
+        if matches!(node.kind(), "return" | "next" | "break" | "redo" | "retry") {
+            return true;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+    }
+    false
+}
+
 /// Tells if a `define_method` call with the name `target` is a wrapper that calls the method that
 /// it replaces. The statements before it in its list must have `alias_method <old>, <target>`
-/// with a derived name `<old>`, and the block must call `public_send`, `send`, or `__send__` with
-/// `<old>` as the first argument. Omen takes such a wrapper as one that keeps the result of the
-/// method, as a cache does.
+/// with a derived name `<old>`, and the block must give the result of `<old>` without a change
+/// (see `returns_old_result`).
 fn is_delegating_wrapper(call: Node<'_>, target: &str, source: &[u8]) -> bool {
     let statement = match call.parent() {
         Some(parent) if parent.kind() == "assignment" => parent,
@@ -5018,25 +5135,7 @@ fn is_delegating_wrapper(call: Node<'_>, target: &str, source: &[u8]) -> bool {
     let (Some(old), Some(block)) = (old, call.child_by_field_name("block")) else {
         return false;
     };
-    let mut stack = vec![block];
-    while let Some(node) = stack.pop() {
-        if node.kind() == "call"
-            && node.child_by_field_name("method").is_some_and(|method| {
-                matches!(
-                    super::syntax::text(method, source),
-                    "public_send" | "send" | "__send__"
-                )
-            })
-            && call_arguments(node).first().is_some_and(|first| {
-                first.kind() == "identifier" && super::syntax::text(*first, source) == old
-            })
-        {
-            return true;
-        }
-        let mut cursor = node.walk();
-        stack.extend(node.named_children(&mut cursor));
-    }
-    false
+    returns_old_result(block, old, source)
 }
 
 /// Tells if an opening of `ActiveSupport::Inflector`, or of a class or a module in it, can change
