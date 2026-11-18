@@ -366,6 +366,14 @@ impl Manifests {
     /// Reads a `go.mod`, `.gemspec`, `Cargo.toml`, `package.json`, or TypeScript project file.
     /// `path` is relative to the root of the repository. A different file has
     /// no effect.
+    /// Adds a TypeScript config whatever its name, as for a config that
+    /// `extends` names.
+    pub fn add_project(&mut self, path: &str, text: &str) {
+        if let Some(config) = typescript::project_config(text) {
+            self.projects.insert(path.to_string(), config);
+        }
+    }
+
     pub fn add(&mut self, path: &str, text: &str) {
         let here = directory(path);
         if typescript::is_project_file(file_name(path)) {

@@ -87,6 +87,19 @@ pub fn manifest_files(
     read: ReadFile<'_>,
     list: ListDirectory<'_>,
 ) -> Vec<(PathBuf, Option<Vec<u8>>)> {
+    discover_manifests(root, files, read, list).0
+}
+
+/// A manifest file and its content.
+type ManifestFile = (PathBuf, Option<Vec<u8>>);
+
+/// The result of `manifest_files`, and the manifests that the files give.
+fn discover_manifests(
+    root: &Path,
+    files: &[PathBuf],
+    read: ReadFile<'_>,
+    list: ListDirectory<'_>,
+) -> (Vec<ManifestFile>, Manifests) {
     // A path of the repository in the form that `files` has.
     let absolute = files.first().is_some_and(|file| file.is_absolute());
     let in_form = |relative_path: &str| {
@@ -96,20 +109,28 @@ pub fn manifest_files(
             PathBuf::from(relative_path)
         }
     };
-    let mut found: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
+    let mut found: Vec<ManifestFile> = Vec::new();
     let mut manifests = Manifests::default();
     let mut tried: BTreeSet<String> = BTreeSet::new();
-    let add =
-        |path: PathBuf, manifests: &mut Manifests, found: &mut Vec<(PathBuf, Option<Vec<u8>>)>| {
-            let content = read(&path).ok();
-            if let Some(content) = &content {
-                manifests.add(&relative(root, &path), &String::from_utf8_lossy(content));
+    // A config that `extends` names is a config, whatever its name.
+    let add = |path: PathBuf,
+               extended: bool,
+               manifests: &mut Manifests,
+               found: &mut Vec<ManifestFile>| {
+        let content = read(&path).ok();
+        if let Some(content) = &content {
+            let text = String::from_utf8_lossy(content);
+            if extended {
+                manifests.add_project(&relative(root, &path), &text);
+            } else {
+                manifests.add(&relative(root, &path), &text);
             }
-            found.push((path, content));
-        };
+        }
+        found.push((path, content));
+    };
     for path in manifest_paths(root, files, list) {
         tried.insert(relative(root, &path));
-        add(path, &mut manifests, &mut found);
+        add(path, false, &mut manifests, &mut found);
     }
     // The search for a package that `extends` names and that the index has
     // not read tries each parent directory of the known packages. The number
@@ -119,7 +140,12 @@ pub fn manifest_files(
     let mut probes = PROBES_PER_MANIFEST * (found.len() + 1);
     for _ in 0..EXTENDS_ROUNDS {
         let packages = &manifests.node_packages;
-        let mut wanted = manifests.projects.unread(packages);
+        let mut wanted: Vec<(String, bool)> = manifests
+            .projects
+            .unread(packages)
+            .into_iter()
+            .map(|path| (path, true))
+            .collect();
         // A workspace package is often next to the other packages. Its
         // `package.json` gives the directory of the package.
         let parents: BTreeSet<&str> = packages
@@ -144,30 +170,30 @@ pub fn manifest_files(
                     } else {
                         format!("{parent}/{directory}/package.json")
                     };
-                    wanted.push(path);
+                    wanted.push((path, false));
                 }
             }
         }
-        wanted.retain(|path| tried.insert(path.clone()));
+        wanted.retain(|(path, _)| tried.insert(path.clone()));
         let listed = |path: &Path| {
             path.parent()
                 .is_some_and(|directory| list(directory).iter().any(|entry| entry == path))
         };
         let mut added = false;
-        for path in wanted {
+        for (path, extended) in wanted {
             let path = in_form(&path);
             // Only a file that the listing of its directory has is read.
             if !listed(&path) {
                 continue;
             }
-            add(path, &mut manifests, &mut found);
+            add(path, extended, &mut manifests, &mut found);
             added = true;
         }
         if !added {
             break;
         }
     }
-    found
+    (found, manifests)
 }
 
 /// Reads the manifest files that `manifest_files` gives.
@@ -177,13 +203,7 @@ fn read_manifests(
     read: ReadFile<'_>,
     list: ListDirectory<'_>,
 ) -> Manifests {
-    let mut manifests = Manifests::default();
-    for (path, content) in manifest_files(root, files, read, list) {
-        if let Some(content) = content {
-            manifests.add(&relative(root, &path), &String::from_utf8_lossy(&content));
-        }
-    }
-    manifests
+    discover_manifests(root, files, read, list).1
 }
 
 /// The files of one directory of the file system, without the directories.
@@ -394,10 +414,11 @@ mod tests {
             ),
             (
                 "packages/config/tsconfig.shared.json",
-                "{ \"extends\": \"./tsconfig.base.json\" }",
+                "{ \"extends\": \"./base\" }",
             ),
+            // A config that `extends` names can have any name.
             (
-                "packages/config/tsconfig.base.json",
+                "packages/config/base.json",
                 "{ \"compilerOptions\": { \"paths\": { \"@shared/*\": [\"../shared/src/*\"] } } }",
             ),
             (
