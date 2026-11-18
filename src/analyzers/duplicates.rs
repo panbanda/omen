@@ -1,20 +1,20 @@
-//! Code clone/duplicate detection using MinHash with LSH.
+//! Code clone/duplicate detection by the exact Jaccard similarity of shingles.
 //!
-//! Uses Locality-Sensitive Hashing for O(n) average-case candidate filtering,
-//! then verifies with actual Jaccard similarity calculation.
+//! Each fragment is a multiset of token shingles. A prefix filter gives each
+//! pair that can be at the similarity threshold, and the exact Jaccard
+//! similarity decides. The search does not miss a pair at the threshold.
 //!
 //! # References
 //!
 //! - Broder, A.Z. (1997) "On the Resemblance and Containment of Documents"
-//!   SEQUENCES '97 (MinHash algorithm)
-//! - Indyk, P., Motwani, R. (1998) "Approximate Nearest Neighbors: Towards
-//!   Removing the Curse of Dimensionality" (LSH theory)
+//!   SEQUENCES '97 (shingles and the Jaccard similarity)
+//! - Bayardo, R.J., Ma, Y., Srikant, R. (2007) "Scaling Up All Pairs
+//!   Similarity Search", WWW '07 (the prefix filter)
 //!
 //! # Configuration
 //!
-//! Default: 200 hashes, 20 bands x 10 rows, and the similarity threshold of
-//! `[duplicates]` in the configuration (0.9).
-//! These parameters provide good precision/recall balance for code clones.
+//! Default: 5-token shingles, and the similarity threshold of `[duplicates]`
+//! in the configuration (0.9).
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -67,9 +67,6 @@ pub struct Config {
     pub min_tokens: usize,
     pub similarity_threshold: f64,
     pub shingle_size: usize,
-    pub num_hash_functions: usize,
-    pub num_bands: usize,
-    pub rows_per_band: usize,
     pub normalize_identifiers: bool,
     pub normalize_literals: bool,
     pub ignore_comments: bool,
@@ -88,9 +85,6 @@ impl Default for Config {
             min_tokens: configured.min_tokens,
             similarity_threshold: configured.min_similarity,
             shingle_size: 5,
-            num_hash_functions: 200,
-            num_bands: 20,
-            rows_per_band: 10,
             normalize_identifiers: true,
             normalize_literals: true,
             ignore_comments: true,
@@ -100,7 +94,7 @@ impl Default for Config {
     }
 }
 
-/// Duplicates analyzer using MinHash with LSH.
+/// Duplicates analyzer: exact Jaccard similarity of shingles.
 pub struct Analyzer {
     config: Config,
     max_file_size: usize,
@@ -358,7 +352,6 @@ impl Analyzer {
             exact_hash: hash_tokens(&tokens),
             normalized_hash: hash_tokens(&normalized_tokens),
             tokens: normalized_tokens,
-            signature: None, // Set later
         })
     }
 
@@ -383,92 +376,67 @@ impl Analyzer {
         result
     }
 
-    /// Compute the MinHash signature of the shingles of a fragment.
-    fn compute_minhash(&self, shingles: &[u64]) -> MinHashSignature {
-        let mut values = vec![u64::MAX; self.config.num_hash_functions];
+    /// Find each pair of fragments whose exact Jaccard similarity is at the
+    /// threshold, with the prefix filter of Bayardo, Ma, and Srikant (2007).
+    ///
+    /// Each set is put in one global sequence, from the rarest shingle to the
+    /// most frequent one. If `J(x, y) >= t`, then `|x ∩ y| >= ceil(t * |x|)`,
+    /// so the first `|x| - ceil(t * |x|) + 1` shingles of `x` and of `y` have
+    /// a shingle in common. Each pair with this property is a candidate, and
+    /// the exact similarity decides. No pair at the threshold is missed.
+    fn find_clone_pairs(&self, fragments: &[CodeFragment]) -> Vec<ClonePair> {
+        let threshold = self.config.similarity_threshold.clamp(0.0, 1.0);
 
-        for shingle_hash in shingles {
-            for (i, value) in values.iter_mut().enumerate() {
-                let h = hash_u64_with_seed(*shingle_hash, i as u64);
-                if h < *value {
-                    *value = h;
-                }
+        let mut frequency: HashMap<u64, u32> = HashMap::new();
+        for fragment in fragments {
+            for &shingle in &fragment.shingles {
+                *frequency.entry(shingle).or_default() += 1;
+            }
+        }
+        let prefixes: Vec<Vec<u64>> = fragments
+            .par_iter()
+            .map(|fragment| {
+                let mut ordered = fragment.shingles.clone();
+                ordered.sort_unstable_by_key(|shingle| (frequency[shingle], *shingle));
+                // The small subtraction keeps a product such as 0.7 * 10 = 7.000000000000001
+                // from a ceiling of 8, which would make the prefix too short.
+                let required = (threshold * ordered.len() as f64 - 1e-9).ceil().max(0.0) as usize;
+                let length = (ordered.len() + 1).saturating_sub(required.max(1));
+                ordered.truncate(length.min(ordered.len()));
+                ordered
+            })
+            .collect();
+
+        let mut index: HashMap<u64, Vec<usize>> = HashMap::new();
+        for (fragment_index, prefix) in prefixes.iter().enumerate() {
+            for &shingle in prefix {
+                index.entry(shingle).or_default().push(fragment_index);
             }
         }
 
-        MinHashSignature { values }
-    }
-
-    /// Find clone pairs using LSH for O(n) average-case candidate filtering.
-    fn find_clone_pairs_lsh(&self, fragments: &[CodeFragment]) -> Vec<ClonePair> {
-        let bands = self.config.num_bands;
-        let rows_per_band = self.config.rows_per_band;
-
-        // Create LSH buckets for each band
-        let mut lsh_buckets: Vec<HashMap<u64, Vec<usize>>> =
-            (0..bands).map(|_| HashMap::new()).collect();
-
-        // Hash each fragment into buckets
-        for (idx, fragment) in fragments.iter().enumerate() {
-            let Some(ref sig) = fragment.signature else {
-                continue;
-            };
-            if sig.values.is_empty() {
-                continue;
-            }
-
-            for (band, bucket) in lsh_buckets.iter_mut().enumerate().take(bands) {
-                let start = band * rows_per_band;
-                let end = (start + rows_per_band).min(sig.values.len());
-                if start >= end {
-                    continue;
-                }
-
-                let band_hash = hash_band(&sig.values[start..end], band as u64);
-                bucket.entry(band_hash).or_default().push(idx);
-            }
-        }
-
-        // Find candidate pairs from buckets
-        let mut candidate_pairs: HashSet<(usize, usize)> = HashSet::new();
-        for band_buckets in &lsh_buckets {
-            for bucket in band_buckets.values() {
-                if bucket.len() < 2 {
-                    continue;
-                }
-                for i in 0..bucket.len() {
-                    for j in (i + 1)..bucket.len() {
-                        let (a, b) = if bucket[i] < bucket[j] {
-                            (bucket[i], bucket[j])
-                        } else {
-                            (bucket[j], bucket[i])
-                        };
-                        candidate_pairs.insert((a, b));
-                    }
-                }
-            }
-        }
-
-        // LSH gives the candidates. The exact Jaccard similarity decides.
-        let mut pairs = Vec::new();
-        for (idx_a, idx_b) in candidate_pairs {
-            let frag_a = &fragments[idx_a];
-            let frag_b = &fragments[idx_b];
-
-            // Skip if same file and overlapping
-            if frag_a.file == frag_b.file
-                && frag_a.start_line <= frag_b.end_line
-                && frag_b.start_line <= frag_a.end_line
-            {
-                continue;
-            }
-
-            let similarity = exact_jaccard(&frag_a.shingles, &frag_b.shingles);
-            if similarity >= self.config.similarity_threshold {
-                pairs.push(ClonePair { idx_a, idx_b });
-            }
-        }
-
+        let mut pairs: Vec<ClonePair> = prefixes
+            .par_iter()
+            .enumerate()
+            .flat_map_iter(|(idx_b, prefix)| {
+                let mut candidates: Vec<usize> = prefix
+                    .iter()
+                    .flat_map(|shingle| index[shingle].iter().copied())
+                    .filter(|&idx_a| idx_a < idx_b)
+                    .collect();
+                candidates.sort_unstable();
+                candidates.dedup();
+                candidates.into_iter().filter_map(move |idx_a| {
+                    let frag_a = &fragments[idx_a];
+                    let frag_b = &fragments[idx_b];
+                    let overlapping = frag_a.file == frag_b.file
+                        && frag_a.start_line <= frag_b.end_line
+                        && frag_b.start_line <= frag_a.end_line;
+                    let similarity = exact_jaccard(&frag_a.shingles, &frag_b.shingles);
+                    (!overlapping && similarity >= threshold).then_some(ClonePair { idx_a, idx_b })
+                })
+            })
+            .collect();
+        pairs.sort_unstable_by_key(|pair| (pair.idx_a, pair.idx_b));
         pairs
     }
 
@@ -637,7 +605,7 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn description(&self) -> &'static str {
-        "Find duplicated code (Type 1, 2, 3 clones) using MinHash with LSH"
+        "Find duplicated code (Type 1, 2, 3 clones) by the exact Jaccard similarity of shingles"
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
@@ -681,13 +649,7 @@ impl AnalyzerTrait for Analyzer {
             total_lines += (fragment.end_line - fragment.start_line + 1) as usize;
         }
 
-        // Compute MinHash signatures in parallel
-        all_fragments.par_iter_mut().for_each(|frag| {
-            frag.signature = Some(self.compute_minhash(&frag.shingles));
-        });
-
-        // Find clone pairs using LSH
-        let clone_pairs = self.find_clone_pairs_lsh(&all_fragments);
+        let clone_pairs = self.find_clone_pairs(&all_fragments);
 
         // Group clones using Union-Find
         let grouped = self.group_clones(&all_fragments, &clone_pairs);
@@ -789,19 +751,12 @@ struct CodeFragment {
     /// literals.
     exact_hash: u64,
     normalized_hash: u64,
-    signature: Option<MinHashSignature>,
 }
 
 /// Internal clone pair representation.
 struct ClonePair {
     idx_a: usize,
     idx_b: usize,
-}
-
-/// MinHash signature for similarity estimation.
-#[derive(Clone)]
-struct MinHashSignature {
-    values: Vec<u64>,
 }
 
 // Output types
@@ -1325,8 +1280,7 @@ fn tokenize(content: &str) -> Vec<String> {
 ///
 /// Each shingle hash includes the occurrence number of its token window, so
 /// the n-th copy of a window is a different element. The Jaccard similarity
-/// of two such sets is the multiset Jaccard similarity, and MinHash estimates
-/// it. With a plain set, a function with many copies of one block has the
+/// of two such sets is the multiset Jaccard similarity. With a plain set, a function with many copies of one block has the
 /// same shingles as a function with few copies.
 fn generate_k_shingles(tokens: &[String], k: usize) -> Vec<u64> {
     if tokens.is_empty() {
@@ -1387,28 +1341,6 @@ fn exact_jaccard(left: &[u64], right: &[u64]) -> f64 {
 
 fn hash_tokens(tokens: &[String]) -> u64 {
     xxhash_rust::xxh3::xxh3_64(tokens.join(" ").as_bytes())
-}
-
-/// Hash a u64 value with a seed using murmur-style mixing.
-fn hash_u64_with_seed(value: u64, seed: u64) -> u64 {
-    let mut h = value ^ seed;
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xff51afd7ed558ccd);
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xc4ceb9fe1a85ec53);
-    h ^= h >> 33;
-    h
-}
-
-/// Hash a band portion of a MinHash signature.
-fn hash_band(values: &[u64], seed: u64) -> u64 {
-    const FNV_PRIME: u64 = 0x00000100000001B3;
-    let mut h = seed ^ 0xcbf29ce484222325; // FNV offset basis
-    for &v in values {
-        h ^= v;
-        h = h.wrapping_mul(FNV_PRIME);
-    }
-    h
 }
 
 /// Calculate percentile from sorted values.
@@ -1503,6 +1435,32 @@ mod tests {
                 ("b.go", "c.go", CloneType::Type2),
             ]
         );
+    }
+
+    /// The exact Jaccard similarity of this pair is 0.79. MinHash LSH with 20 bands
+    /// of 10 rows did not give it as a candidate, so a pair above the
+    /// threshold 0.7 was not reported.
+    #[test]
+    fn test_clone_finds_each_pair_at_the_threshold() {
+        let original = "pub fn sum_first(values: &[u32]) -> u32 {\n    let mut total = 0;\n    let mut count = 0;\n    for value in values {\n        if *value > 10 {\n            total += value * 2;\n            count += 1;\n        } else if *value > 5 {\n            total += value + 3;\n            count += 2;\n        } else {\n            total += 1;\n        }\n    }\n    if count > 4 {\n        total / count\n    } else {\n        total\n    }\n}\n";
+        let near = original.replace("sum_first", "sum_near").replace(
+            "        total\n    }\n}",
+            "        let scaled = total.saturating_add(count);\n        scaled.saturating_sub(1)\n    }\n}",
+        );
+        let tmp_dir = TempDir::new().unwrap();
+        fs::write(tmp_dir.path().join("a.rs"), original).unwrap();
+        fs::write(tmp_dir.path().join("b.rs"), near).unwrap();
+        let config = CoreConfig::default();
+        let file_set = FileSet::from_path(tmp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(tmp_dir.path()));
+        let analysis = Analyzer::new()
+            .with_min_tokens(10)
+            .with_similarity_threshold(0.7)
+            .analyze(&ctx)
+            .unwrap();
+        assert_eq!(analysis.clones.len(), 1, "{:?}", analysis.clones);
+        let similarity = analysis.clones[0].similarity;
+        assert!((0.79..0.8).contains(&similarity), "{similarity}");
     }
 
     /// The similarity counts each repeated shingle. A function with three
@@ -1636,7 +1594,7 @@ mod tests {
     }
 
     #[test]
-    fn test_minhash_similarity() {
+    fn test_exact_jaccard_of_equal_tokens() {
         let analyzer = Analyzer::new();
 
         // Identical tokens should have perfect similarity
@@ -1647,7 +1605,7 @@ mod tests {
     }
 
     #[test]
-    fn test_minhash_similarity_different() {
+    fn test_exact_jaccard_of_different_tokens() {
         let analyzer = Analyzer::new();
 
         // Completely different tokens should have similarity 0
@@ -2022,11 +1980,6 @@ func funcB() string {
             cfg.similarity_threshold > 0.0 && cfg.similarity_threshold <= 1.0,
             "SimilarityThreshold should be in (0, 1]"
         );
-        assert!(
-            cfg.num_hash_functions > 0,
-            "NumHashFunctions should be positive"
-        );
-        assert!(cfg.num_bands > 0, "NumBands should be positive");
         assert!(cfg.exclude_tests, "exclude_tests should default to true");
     }
 
