@@ -219,7 +219,14 @@ struct Resolver<'a> {
     exported_cache: RwLock<HashMap<ExportQuery, Arc<Vec<Id>>>>,
     package_cache: RwLock<HashMap<usize, Arc<Vec<usize>>>>,
     visible_cache: RwLock<HashMap<usize, Arc<Vec<usize>>>>,
+    /// The `cfg` twins that `twin_members` found, or an empty list when the
+    /// members are not twins.
+    twin_members_cache: RwLock<HashMap<TwinQuery, Arc<Vec<Id>>>>,
 }
+
+/// The types, the name, and the number of arguments of one lookup of the
+/// members of `cfg` twin types.
+type TwinQuery = (Vec<Id>, String, usize);
 
 /// The file and the name of one lookup of an exported name.
 type ExportQuery = (usize, String);
@@ -314,6 +321,7 @@ impl<'a> Resolver<'a> {
             references_by_start,
             ruby_children: OnceLock::new(),
             types_cache: RwLock::new(HashMap::new()),
+            twin_members_cache: RwLock::new(HashMap::new()),
             exported_cache: RwLock::new(HashMap::new()),
             package_cache: RwLock::new(HashMap::new()),
             visible_cache: RwLock::new(HashMap::new()),
@@ -1278,6 +1286,33 @@ impl<'a> Resolver<'a> {
         Some(self.types_of_text(declared, callee.0, element))
     }
 
+    /// The members with the name `name` of the types, when they are `cfg`
+    /// twins, or an empty list. Two Rust items of one name under different
+    /// `cfg` attributes, as `#[cfg(unix)] mod a` and `#[cfg(windows)] mod a`,
+    /// are one item.
+    ///
+    /// The members of one type can include the members of each type with its
+    /// name and container. Thus the search for each type costs the number of
+    /// the types, and each call of one path must not search again.
+    fn twin_members(&self, types: &[Id], name: &str, arity: usize) -> Arc<Vec<Id>> {
+        let query = (types.to_vec(), name.to_string(), arity);
+        if let Some(found) = self.twin_members_cache.read().get(&query) {
+            return found.clone();
+        }
+        let mut members: Vec<Id> = types
+            .iter()
+            .flat_map(|owner| self.members(*owner, name, arity, &mut BTreeSet::new()))
+            .collect();
+        members.sort();
+        members.dedup();
+        if !self.are_condition_twins(&members) {
+            members.clear();
+        }
+        let found = Arc::new(members);
+        self.twin_members_cache.write().insert(query, found.clone());
+        found
+    }
+
     fn on_types(
         &self,
         types: &[Id],
@@ -1300,21 +1335,12 @@ impl<'a> Resolver<'a> {
                 SymbolKind::Interface | SymbolKind::Trait
             )
         });
-        // Two Rust items of one name under different `cfg` attributes, as
-        // `#[cfg(unix)] mod a` and `#[cfg(windows)] mod a`, are one item.
         let one_rust_file =
             self.family(file) == Family::Rust && types.iter().all(|owner| owner.0 == types[0].0);
         if !dynamic && types.len() > 1 && one_rust_file {
-            // The members of one type can include the members of the types
-            // with its name and container.
-            let mut members: Vec<Id> = types
-                .iter()
-                .flat_map(|owner| self.members(*owner, name, arity, &mut BTreeSet::new()))
-                .collect();
-            members.sort();
-            members.dedup();
-            if self.are_condition_twins(&members) {
-                return Outcome::offered(basis, members);
+            let twins = self.twin_members(types, name, arity);
+            if !twins.is_empty() {
+                return Outcome::offered(basis, twins.to_vec());
             }
         }
         if dynamic || types.len() > 1 {
@@ -3265,6 +3291,81 @@ mod false_edge_tests {
             rows_of(&[("a.rs", source)], "a.rs", "f"),
             ["14 run>m::f UniqueCandidate QualifiedPath [a.rs#m.f, a.rs#m.f~2]"]
         );
+    }
+
+    /// `modules` modules `a` under different `cfg` attributes, each with
+    /// `f` and `members` other functions, and `calls` calls of `a::f`.
+    fn calls_into_twin_modules_resolve_at(
+        modules: usize,
+        members: usize,
+        calls: usize,
+    ) -> std::time::Duration {
+        let mut source = String::new();
+        for module in 0..modules {
+            source.push_str(&format!(
+                "#[cfg(feature = \"f{module}\")]\nmod a {{\n    pub fn f() {{}}\n"
+            ));
+            for member in 0..members {
+                source.push_str(&format!("    pub fn g{member}() {{}}\n"));
+            }
+            source.push_str("}\n");
+        }
+        source.push_str("fn run() {\n");
+        source.push_str(&"    a::f();\n".repeat(calls));
+        source.push_str("}\n");
+        let files = [("a.rs", source.as_str())];
+        let started = std::time::Instant::now();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let twins = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| {
+                reference.resolution.status == super::Status::UniqueCandidate
+                    && reference.resolution.candidates.len() == modules
+            })
+            .count();
+        assert_eq!(twins, calls);
+        elapsed
+    }
+
+    #[test]
+    fn test_calls_into_many_twin_modules_resolve_to_each_twin() {
+        calls_into_twin_modules_resolve_at(20, 20, 20);
+    }
+
+    /// The best time of two runs at `size` and at `2 * size` of the parameter
+    /// that `run` grows.
+    fn assert_doubles_at_most(
+        label: &str,
+        size: usize,
+        run: impl Fn(usize) -> std::time::Duration,
+    ) {
+        let best = |size: usize| (0..2).map(|_| run(size)).min().expect("two runs");
+        let small = best(size);
+        let large = best(size * 2);
+        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
+        assert!(
+            large < allowed,
+            "{label}: {small:?} at {size}, {large:?} at {}",
+            size * 2
+        );
+        assert!(large.as_secs() < 60, "{label}: {large:?}");
+    }
+
+    /// Each call has an edge to each module, thus the edges are
+    /// `calls * modules`. The time must grow with the edges, also when the
+    /// modules have many members.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_calls_into_twin_modules_resolve_in_linear_time() {
+        assert_doubles_at_most("modules", 800, |size| {
+            calls_into_twin_modules_resolve_at(size, 10, 800)
+        });
+        assert_doubles_at_most("members", 10_000, |size| {
+            calls_into_twin_modules_resolve_at(20, size, 2_000)
+        });
     }
 
     /// An `impl` block under one `cfg` attribute of `64 * size` bytes has
