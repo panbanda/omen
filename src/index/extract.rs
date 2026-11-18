@@ -420,6 +420,7 @@ impl<'tree> Context<'_, 'tree> {
             local_name,
             target_file: ImportTarget::Unresolved,
             target_symbol: None,
+            type_only: false,
         }
     }
 

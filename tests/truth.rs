@@ -688,6 +688,7 @@ fn observed_imports_keep_each_target_of_a_grouped_import() {
         local_name: Some(name.to_string()),
         target_file: ImportTarget::Resolved(target.to_string()),
         target_symbol: None,
+        type_only: false,
     };
     let bindings = [
         binding("left", "pkg/left.py"),
