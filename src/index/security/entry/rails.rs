@@ -4019,82 +4019,79 @@ impl Program {
         let mut listed = PersistentMap::default();
         let mut only_skips = PersistentMap::default();
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
-        {
-            if let Some(parent) = &parent {
-                names = parent.names.clone();
-                listed = parent.listed.clone();
-                only_skips = parent.only_skips.clone();
-                action_gaps = parent.action_gaps.clone();
-            }
-            for (index, callback) in callbacks.iter().enumerate() {
-                let global = offset + index;
-                if let Some(reason) = callback.uncertain() {
-                    match &callback.only {
-                        Some(only) if !callback.unreadable => {
-                            for action in only {
-                                if callback
-                                    .except
-                                    .as_ref()
-                                    .is_some_and(|except| except.contains(action))
-                                {
-                                    continue;
-                                }
-                                let known = action_gaps.get(action).copied();
-                                action_gaps.insert(
-                                    action.clone(),
-                                    known.map_or(reason, |known: GuardsUnknownReason| {
-                                        known.min(reason)
-                                    }),
-                                );
+        if let Some(parent) = &parent {
+            names = parent.names.clone();
+            listed = parent.listed.clone();
+            only_skips = parent.only_skips.clone();
+            action_gaps = parent.action_gaps.clone();
+        }
+        for (index, callback) in callbacks.iter().enumerate() {
+            let global = offset + index;
+            if let Some(reason) = callback.uncertain() {
+                match &callback.only {
+                    Some(only) if !callback.unreadable => {
+                        for action in only {
+                            if callback
+                                .except
+                                .as_ref()
+                                .is_some_and(|except| except.contains(action))
+                            {
+                                continue;
                             }
+                            let known = action_gaps.get(action).copied();
+                            action_gaps.insert(
+                                action.clone(),
+                                known
+                                    .map_or(reason, |known: GuardsUnknownReason| known.min(reason)),
+                            );
                         }
-                        _ => gap = first_reason(gap, Some(reason)),
                     }
+                    _ => gap = first_reason(gap, Some(reason)),
                 }
-                let decides_always = !callback.skip
-                    || callback.unreadable
-                    || (callback.only.is_none() && callback.except.is_none());
-                let is_only_skip = callback.skip && !callback.unreadable && callback.only.is_some();
-                for name in &callback.names {
-                    by_name.entry(name.clone()).or_default().push(index);
-                    if is_only_skip {
-                        continue;
-                    }
-                    let mut state: NameState = names.get(name).cloned().unwrap_or_default();
-                    if decides_always {
-                        state = NameState {
-                            always: Some(Link::new(callback, global, None)),
-                            others: None,
-                        };
-                    } else {
-                        state.others = Some(Link::new(callback, global, state.others.take()));
-                    }
-                    names.insert(name.clone(), state);
-                }
-                if callback.unreadable {
+            }
+            let decides_always = !callback.skip
+                || callback.unreadable
+                || (callback.only.is_none() && callback.except.is_none());
+            let is_only_skip = callback.skip && !callback.unreadable && callback.only.is_some();
+            for name in &callback.names {
+                by_name.entry(name.clone()).or_default().push(index);
+                if is_only_skip {
                     continue;
                 }
-                let eligible = callback.only.iter().chain(&callback.except).flatten();
-                let mut seen: HashSet<&String> = HashSet::new();
-                for action in eligible {
-                    if !seen.insert(action) {
-                        continue;
-                    }
-                    let mut set: Listing = listed.get(action).cloned().unwrap_or_default();
-                    set.callbacks.insert(global, Arc::clone(callback));
-                    set.weight += callback.names.len() + 1;
-                    listed.insert(action.clone(), set);
+                let mut state: NameState = names.get(name).cloned().unwrap_or_default();
+                if decides_always {
+                    state = NameState {
+                        always: Some(Link::new(callback, global, None)),
+                        others: None,
+                    };
+                } else {
+                    state.others = Some(Link::new(callback, global, state.others.take()));
                 }
-                if is_only_skip {
-                    for action in callback.only.iter().flatten() {
-                        let excepted = callback
-                            .except
-                            .as_ref()
-                            .is_some_and(|except| except.contains(action));
-                        if !excepted {
-                            let older = only_skips.get(action).cloned();
-                            only_skips.insert(action.clone(), Link::new(callback, global, older));
-                        }
+                names.insert(name.clone(), state);
+            }
+            if callback.unreadable {
+                continue;
+            }
+            let eligible = callback.only.iter().chain(&callback.except).flatten();
+            let mut seen: HashSet<&String> = HashSet::new();
+            for action in eligible {
+                if !seen.insert(action) {
+                    continue;
+                }
+                let mut set: Listing = listed.get(action).cloned().unwrap_or_default();
+                set.callbacks.insert(global, Arc::clone(callback));
+                set.weight += callback.names.len() + 1;
+                listed.insert(action.clone(), set);
+            }
+            if is_only_skip {
+                for action in callback.only.iter().flatten() {
+                    let excepted = callback
+                        .except
+                        .as_ref()
+                        .is_some_and(|except| except.contains(action));
+                    if !excepted {
+                        let older = only_skips.get(action).cloned();
+                        only_skips.insert(action.clone(), Link::new(callback, global, older));
                     }
                 }
             }
