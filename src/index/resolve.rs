@@ -175,6 +175,28 @@ fn is_union(text: &str) -> bool {
     })
 }
 
+/// The result type of a constructor type without spaces, from the text
+/// after `new`: `T` for `(make:()=>T)=>T`. The arrow of the result follows
+/// the parameter list, thus an arrow in a parameter or in the result does
+/// not count.
+fn constructor_result(text: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    for (position, character) in text.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return text[position + 1..].strip_prefix("=>");
+                }
+            }
+            _ if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
 /// The parts of the text of a type at each `|` that is not in brackets. The
 /// `>` of an arrow `=>` does not close a bracket.
 fn top_level_union(text: &str) -> Vec<&str> {
@@ -230,6 +252,8 @@ struct Resolver<'a> {
     /// type that contains them.
     constructors_by_container: Vec<HashMap<&'a str, Vec<usize>>>,
     by_name: HashMap<&'a str, Vec<Id>>,
+    /// The symbols by the name of their container and their own name.
+    by_container: HashMap<(&'a str, &'a str), Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
     locals_by_name: Vec<HashMap<&'a str, Vec<usize>>>,
@@ -291,6 +315,7 @@ type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
 impl<'a> Resolver<'a> {
     fn new(files: &'a [FileSymbols], manifests: &'a Manifests) -> Self {
         let mut by_name: HashMap<&str, Vec<Id>> = HashMap::new();
+        let mut by_container: HashMap<(&str, &str), Vec<Id>> = HashMap::new();
         let mut by_file = HashMap::new();
         for (file, facts) in files.iter().enumerate() {
             by_file.insert(facts.file.as_str(), file);
@@ -299,6 +324,12 @@ impl<'a> Resolver<'a> {
                     .entry(symbol.name.as_str())
                     .or_default()
                     .push((file, position));
+                if let Some(container) = &symbol.container {
+                    by_container
+                        .entry((container.as_str(), symbol.name.as_str()))
+                        .or_default()
+                        .push((file, position));
+                }
             }
         }
         let locals_by_owner = files
@@ -385,6 +416,7 @@ impl<'a> Resolver<'a> {
             php_names,
             constructors_by_container,
             by_name,
+            by_container,
             by_file,
             locals_by_name,
             locals_by_owner,
@@ -902,13 +934,20 @@ impl<'a> Resolver<'a> {
         let type_symbol = self.symbol(owner);
         let namespace = type_symbol.kind == SymbolKind::Module;
         let owner_path = self.member_path(owner);
+        // Only a symbol whose container has the name of the type can be a
+        // member of the type.
+        let family = self.family(owner.0);
         let found: Vec<Id> = self
-            .named(name, owner.0)
+            .by_container
+            .get(&(type_symbol.name.as_str(), name))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|id| self.family(id.0) == family)
             .filter(|id| {
                 let member = self.symbol(*id);
                 let member_path = &self.facts(*id).container_path;
                 is_callable(member)
-                    && member.container.as_deref() == Some(type_symbol.name.as_str())
                     // Two types can have one name. A member in the same file
                     // belongs to this type when its path is the path of the
                     // type. A member in a different file belongs to this type
@@ -1554,10 +1593,8 @@ impl<'a> Resolver<'a> {
         !parts.is_empty()
             && parts.iter().all(|part| {
                 let part = part.strip_prefix("abstract").unwrap_or(part);
-                if part.starts_with("new(") {
-                    return part
-                        .rsplit_once("=>")
-                        .is_some_and(|(_, result)| result == parameter);
+                if let Some(rest) = part.strip_prefix("new") {
+                    return constructor_result(rest) == Some(parameter);
                 }
                 // An alias with type arguments, as `ServiceIdentifier<T>`.
                 let Some((alias, arguments)) =
@@ -4817,6 +4854,32 @@ mod ecma_generic_tests {
     const SERVICES: &str = "export class Repo {\n  plain(): number {\n    return 1;\n  }\n}\n\nexport class T {\n  plain(): number {\n    return 2;\n  }\n}\n";
     const MAIN: &str = "import { Container } from './di';\nimport { Repo } from './services';\n\nexport function run(): number {\n  const a = Container.get(Repo).plain();\n  const b = Container.make(() => new Repo()).plain();\n  const c = Container.first([new Repo()]).plain();\n  const d = Container.build(Repo).plain();\n  return a + b + c + d;\n}\n";
 
+    /// `new () => () => T` makes a function, not a `T`, thus the argument
+    /// does not give the type of the result.
+    #[test]
+    fn test_constructor_of_a_function_does_not_give_the_result_typescript() {
+        let di = "export type Factory<T> = new () => () => T;\nexport type Direct<T> = new (make: () => T) => T;\n\nclass ContainerClass {\n  wrapped<T>(type: Factory<T>): T {\n    return undefined as T;\n  }\n\n  direct<T>(type: Direct<T>): T {\n    return undefined as T;\n  }\n}\n\nexport const Container = new ContainerClass();\n";
+        let main = "import { Container } from './di';\nimport { Repo } from './services';\n\nexport function run(): number {\n  return Container.wrapped(Repo).plain() + Container.direct(Repo).plain();\n}\n";
+        for extension in ["ts", "tsx"] {
+            let di_file = format!("di.{extension}");
+            let services = format!("services.{extension}");
+            let main_file = format!("main.{extension}");
+            let files = [
+                (di_file.as_str(), di),
+                (services.as_str(), SERVICES),
+                (main_file.as_str(), main),
+            ];
+            let found: Vec<String> = rows(&files, &main_file)
+                .into_iter()
+                .filter(|row| row.contains(">(..).plain "))
+                .collect();
+            let repo = format!("[services.{extension}#Repo.plain]");
+            assert_eq!(found.len(), 2, "{found:?}");
+            assert!(!found[0].ends_with(&repo), "{found:?}");
+            assert!(found[1].ends_with(&repo), "{found:?}");
+        }
+    }
+
     #[test]
     fn test_generic_result_of_a_constructor_argument_typescript() {
         for extension in ["ts", "tsx"] {
@@ -5004,31 +5067,35 @@ mod ecma_timing_tests {
 
     /// `size` classes, and one `Container.get` call of each class.
     fn container_calls_at(size: usize) -> std::time::Duration {
-        let mut services = String::new();
-        let mut main = String::from("import { Container } from './di';\nimport * as services from './services';\n\nexport function run(): void {\n");
+        let mut owned = vec![("di.ts".to_string(), DI.to_string())];
+        let mut main = String::from("import { Container } from './di';\n");
+        let mut body = String::from("\nexport function run(): void {\n");
         for position in 0..size {
-            services.push_str(&format!(
-                "export class S{position} {{\n  plain{position}(): void {{}}\n}}\n"
+            owned.push((
+                format!("s{position}.ts"),
+                format!("export class S{position} {{\n  plain(): void {{}}\n}}\n"),
             ));
-            main.push_str(&format!(
-                "  Container.get(services.S{position}).plain{position}();\n"
-            ));
+            main.push_str(&format!("import {{ S{position} }} from './s{position}';\n"));
+            body.push_str(&format!("  Container.get(S{position}).plain();\n"));
         }
+        main.push_str(&body);
         main.push_str("}\n");
-        let files = [
-            ("di.ts", DI),
-            ("services.ts", services.as_str()),
-            ("main.ts", main.as_str()),
-        ];
+        owned.push(("main.ts".to_string(), main));
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
         let started = std::time::Instant::now();
         let found = rows(&files, "main.ts");
         let elapsed = started.elapsed();
-        let last = format!("[services.ts#S{}.plain{}]", size - 1, size - 1);
-        assert!(
-            found.iter().any(|row| row.ends_with(&last)),
-            "{:?}",
-            found.last()
+        // Each class has `plain`, thus only the class argument gives one edge.
+        let last = format!(
+            "{} run>(..).plain UniqueCandidate ReceiverDeclaredType [s{}.ts#S{}.plain]",
+            2 * size + 3,
+            size - 1,
+            size - 1
         );
+        assert!(found.contains(&last), "{:?}", found.last());
         elapsed
     }
 
