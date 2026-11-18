@@ -50,7 +50,6 @@ fn listed(language: Language) -> bool {
 /// entry in the change that corrects the table. Do not add an entry.
 const KNOWN_UNKNOWN_KINDS: &[&str] = &[
     "decision/CSharp/enhanced_for_statement",
-    "decision/Java/switch_statement",
     "decision/Python/comprehension",
     "flat/C/catch_clause",
     "nesting/CSharp/enhanced_for_statement",

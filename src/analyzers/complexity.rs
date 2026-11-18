@@ -40,7 +40,7 @@ use crate::core::{
 use crate::index::model::Symbol;
 use crate::parser::queries::{
     get_decision_node_types, get_flat_node_types, get_nested_scope_node_types,
-    get_nesting_node_types, get_operator,
+    get_nesting_node_types, get_operator, is_default_branch,
 };
 use crate::parser::{self, ParseResult, Parser};
 
@@ -513,7 +513,10 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
         let kind = current.kind();
 
         // Count decision points
-        if current.is_named() && decision_types.contains(&kind) {
+        if current.is_named()
+            && decision_types.contains(&kind)
+            && !is_default_branch(&current, source, lang)
+        {
             count += 1;
         }
 
@@ -1884,50 +1887,129 @@ fn drain(v: &mut Vec<i32>) {
         );
     }
 
-    #[test]
-    fn test_complexity_go_case_clauses() {
-        let code = br#"
-package main
-
-func classify(x int) string {
-    switch x {
-    case 0:
-        return "zero"
-    case 1:
-        return "one"
-    default:
-        return "other"
-    }
-}
-"#;
-        let result = parse_and_analyze(code, Language::Go, "test.go");
-        assert_eq!(result.functions.len(), 1);
-        // baseline 1 + expression_switch_statement 1 + expression_case * 2 = 4
-        // (default_case is not counted)
+    /// Each probe has a `switch` or `match` with two cases and a default.
+    /// McCabe gives one decision point for each case that is not the
+    /// default, and none for the `switch` node, so the cyclomatic
+    /// complexity is 1 + 2 = 3.
+    fn assert_two_case_switch(code: &str, lang: Language, filename: &str) {
+        let result = parse_and_analyze(code.as_bytes(), lang, filename);
+        assert_eq!(result.functions.len(), 1, "{filename}: {code}");
         assert_eq!(
-            result.functions[0].metrics.cyclomatic, 4,
-            "Go switch with 2 case clauses: 1 base + 1 switch + 2 cases = 4"
+            result.functions[0].metrics.cyclomatic, 3,
+            "{filename}: {code}"
         );
     }
 
     #[test]
-    fn test_complexity_typescript_switch_case() {
-        let code = br#"
-function classify(x: number): string {
-    switch (x) {
-        case 0: return "zero";
-        case 1: return "one";
-        default: return "other";
+    fn test_switch_cases_go() {
+        for body in [
+            "switch x { case 0: g() ; case 1, 2: g() ; default: g() }",
+            "switch v.(type) { case int: g() ; case string: g() ; default: g() }",
+            "select { case <-c: g() ; case c <- 1: g() ; default: g() }",
+        ] {
+            let code = format!("package p\nfunc f(x int, v any, c chan int) {{ {body} }}\n");
+            assert_two_case_switch(&code, Language::Go, "a.go");
+        }
     }
-}
-"#;
-        let result = parse_and_analyze(code, Language::TypeScript, "test.ts");
-        assert_eq!(result.functions.len(), 1);
-        // baseline 1 + switch_statement 1 + switch_case * 2 = 4
-        // (default_clause is not a switch_case, so not counted)
-        assert!(
-            result.functions[0].metrics.cyclomatic >= 4,
-            "TypeScript switch with 2 case clauses should count each case as a decision point"
+
+    #[test]
+    fn test_switch_cases_rust() {
+        // A `match` is exhaustive, so its last arm is the default.
+        for body in [
+            "match x { 0 => a(), 1 | 2 => b(), _ => c() }",
+            "match x { 0 => a(), 1 => b(), n => c(n) }",
+        ] {
+            let code = format!("fn f(x: i32) {{ {body} }}\n");
+            assert_two_case_switch(&code, Language::Rust, "a.rs");
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_python() {
+        assert_two_case_switch(
+            "def f(x):\n    match x:\n        case 0:\n            pass\n        case 1 | 2:\n            pass\n        case _:\n            pass\n",
+            Language::Python,
+            "a.py",
+        );
+    }
+
+    #[test]
+    fn test_switch_cases_python_guarded_wildcard_is_a_case() {
+        let code = "def f(x, y):\n    match x:\n        case 0:\n            pass\n        case _ if y:\n            pass\n";
+        assert_two_case_switch(code, Language::Python, "a.py");
+    }
+
+    #[test]
+    fn test_switch_cases_ecmascript() {
+        let code = "function f(x) { switch (x) { case 0: a(); break; case 1: b(); break; default: c(); } }\n";
+        for (lang, filename) in [
+            (Language::TypeScript, "a.ts"),
+            (Language::Tsx, "a.tsx"),
+            (Language::JavaScript, "a.js"),
+            (Language::Jsx, "a.jsx"),
+        ] {
+            assert_two_case_switch(code, lang, filename);
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_java() {
+        for body in [
+            "switch (x) { case 0: a(); break; case 1: b(); break; default: c(); }",
+            "switch (x) { case 0 -> a(); case 1, 2 -> b(); default -> c(); }",
+            "int y = switch (x) { case 0 -> 1; case 1 -> 2; default -> 0; };",
+        ] {
+            let code = format!("class A {{ void f(int x) {{ {body} }} }}\n");
+            assert_two_case_switch(&code, Language::Java, "A.java");
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_csharp() {
+        for body in [
+            "switch (x) { case 0: A(); break; case int n when n > 2: B(); break; default: C(); break; }",
+            "var y = x switch { 0 => 1, 1 => 2, _ => 0 };",
+        ] {
+            let code = format!("class A {{ void F(int x) {{ {body} }} }}\n");
+            assert_two_case_switch(&code, Language::CSharp, "A.cs");
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_c_and_cpp() {
+        let code = "void f(int x) { switch (x) { case 0: a(); break; case 1: b(); break; default: c(); } }\n";
+        assert_two_case_switch(code, Language::C, "a.c");
+        assert_two_case_switch(code, Language::Cpp, "a.cpp");
+    }
+
+    #[test]
+    fn test_switch_cases_ruby() {
+        for body in [
+            "case x\n  when 0 then a\n  when 1, 2 then b\n  else c\n  end",
+            "case x\n  in 0 then a\n  in Integer then b\n  else c\n  end",
+        ] {
+            let code = format!("def f(x)\n  {body}\nend\n");
+            assert_two_case_switch(&code, Language::Ruby, "a.rb");
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_php() {
+        for body in [
+            "switch ($x) { case 0: a(); break; case 1: b(); break; default: c(); }",
+            "$y = match($x) { 0 => 1, 1, 2 => 2, default => 0 };",
+        ] {
+            let code = format!("<?php\nfunction f($x) {{ {body} }}\n");
+            assert_two_case_switch(&code, Language::Php, "a.php");
+        }
+    }
+
+    #[test]
+    fn test_switch_cases_bash() {
+        assert_two_case_switch(
+            "f() {\n  case \"$1\" in\n    a) echo 0 ;;\n    b|c) echo 1 ;;\n    *) echo 2 ;;\n  esac\n}\n",
+            Language::Bash,
+            "a.sh",
         );
     }
 

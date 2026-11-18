@@ -3,21 +3,22 @@
 use crate::core::Language;
 
 /// Get decision point node types for cyclomatic complexity.
+///
+/// A `switch` or `match` with N branches has N outgoing edges, so it adds
+/// N - 1 decision points. The table has the case kinds and not the `switch`
+/// kinds. `is_default_branch` removes the default case of each one.
 pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
         Language::Go => &[
             "if_statement",
             "for_statement",
-            "select_statement",
-            "type_switch_statement",
-            "expression_switch_statement",
-            // Each case is an independent path per McCabe's methodology,
-            // consistent with C/C++ (case_statement) and Ruby (when).
             "expression_case",
+            "type_case",
+            "communication_case",
         ],
         Language::Rust => &[
             "if_expression",
-            "match_expression",
+            "match_arm",
             "for_expression",
             // while_expression covers both `while cond` and `while let pat = expr`
             // in tree-sitter-rust 0.23+, which uses let_condition as a child node
@@ -33,6 +34,7 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "try_statement",
             "elif_clause",
             "except_clause",
+            "case_clause",
             "comprehension",
             "conditional_expression",
         ],
@@ -42,11 +44,8 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "for_in_statement",
             "while_statement",
             "do_statement",
-            "switch_statement",
             "ternary_expression",
             "catch_clause",
-            // Each case is an independent path per McCabe's methodology,
-            // consistent with C/C++ (case_statement) and Ruby (when).
             "switch_case",
         ],
         Language::Java => &[
@@ -55,8 +54,7 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "enhanced_for_statement",
             "while_statement",
             "do_statement",
-            "switch_statement",
-            "switch_expression",
+            "switch_label",
             "catch_clause",
             "ternary_expression",
         ],
@@ -66,8 +64,8 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "enhanced_for_statement",
             "while_statement",
             "do_statement",
-            "switch_statement",
-            "switch_expression",
+            "switch_section",
+            "switch_expression_arm",
             "catch_clause",
             "conditional_expression",
         ],
@@ -76,7 +74,6 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "for_statement",
             "while_statement",
             "do_statement",
-            "switch_statement",
             "case_statement",
             "conditional_expression",
         ],
@@ -86,8 +83,8 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "while",
             "until",
             "for",
-            "case",
             "when",
+            "in_clause",
             "rescue",
             "elsif",
             "conditional",
@@ -98,7 +95,8 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "foreach_statement",
             "while_statement",
             "do_statement",
-            "switch_statement",
+            "case_statement",
+            "match_conditional_expression",
             "catch_clause",
             "else_if_clause",
             "conditional_expression",
@@ -107,11 +105,59 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "if_statement",
             "for_statement",
             "while_statement",
-            "case_statement",
+            "case_item",
             "elif_clause",
             "ternary_expression",
         ],
     }
+}
+
+/// Whether a case node of `get_decision_node_types` is the default branch of
+/// its `switch` or `match`. The default branch adds no decision point.
+pub fn is_default_branch(node: &tree_sitter::Node<'_>, source: &[u8], lang: Language) -> bool {
+    let first_token = || node.child(0).map(|child| child.kind());
+    let text = |child: tree_sitter::Node<'_>| child.utf8_text(source).unwrap_or("");
+    match (lang, node.kind()) {
+        (Language::C | Language::Cpp, "case_statement")
+        | (Language::Java, "switch_label")
+        | (Language::CSharp, "switch_section") => first_token() == Some("default"),
+        (Language::CSharp, "switch_expression_arm") => {
+            node.named_child(0).map(|child| child.kind()) == Some("discard")
+        }
+        // A `match` is exhaustive, so the last arm is the default.
+        (Language::Rust, "match_arm") => {
+            let mut sibling = node.next_named_sibling();
+            while let Some(next) = sibling {
+                if next.kind() == "match_arm" {
+                    return false;
+                }
+                sibling = next.next_named_sibling();
+            }
+            true
+        }
+        (Language::Python, "case_clause") => {
+            node.child_by_field_name("guard").is_none()
+                && named_children_of_kind(node, "case_pattern")
+                    .iter()
+                    .all(|pattern| text(*pattern) == "_")
+        }
+        (Language::Bash, "case_item") => {
+            let mut cursor = node.walk();
+            let values: Vec<_> = node.children_by_field_name("value", &mut cursor).collect();
+            !values.is_empty() && values.iter().all(|value| text(*value) == "*")
+        }
+        _ => false,
+    }
+}
+
+fn named_children_of_kind<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    kind: &str,
+) -> Vec<tree_sitter::Node<'tree>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter(|child| child.kind() == kind)
+        .collect()
 }
 
 /// Get nesting node types for cognitive complexity.
