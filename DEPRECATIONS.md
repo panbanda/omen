@@ -23,9 +23,10 @@ placed in a doc comment or code comment at each site.
 | Deprecated | Replacement |
 |---|---|
 | Rust API: the fields `num_hash_functions`, `num_bands`, and `rows_per_band` of `omen::analyzers::duplicates::Config` | None. The clone search is exact and ignores these fields. |
+| Rust API: `omen::commands::analyzers::defect_analyzer(days)` | `defect_analyzer_with_config(config, days)`, which uses the `[duplicates]` table of the configuration. |
 
-The configuration file never had these keys. Only code that uses the `omen`
-library can set them.
+The configuration file never had the MinHash keys. Only code that uses the
+`omen` library can set them.
 
 ## Removed in 5.0
 
