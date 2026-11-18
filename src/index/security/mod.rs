@@ -39,6 +39,10 @@ pub struct EntrySummary {
     pub framework: String,
     pub route: Option<String>,
     pub guards: Vec<String>,
+    /// `false` when code that omen did not read can add a guard or remove one.
+    pub guards_complete: bool,
+    /// Why the guard list is not complete.
+    pub guards_unknown_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +69,10 @@ pub fn symbol_security(analysis: &analysis::Analysis, symbol_key: &str) -> Symbo
                 .as_ref()
                 .map(|route| format!("{} {}", route.method, route.path)),
             guards: entry.guards.clone(),
+            guards_complete: entry.guards_complete,
+            guards_unknown_reason: entry
+                .guards_unknown_reason
+                .map(|reason| reason.name().to_string()),
         });
     let sinks_in_body = analysis
         .sinks
@@ -331,11 +339,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_bare_calls_of_locals_scale_linearly() {
-        crate::index::security::entry::tests::assert_scales_linearly(
-            "bare calls",
-            20_000,
-            many_bare_calls_at,
-        );
+        crate::index::timing::assert_scales_linearly("bare calls", 20_000, many_bare_calls_at);
     }
 
     fn found(language: Language, files: &[(&str, &str)]) -> Vec<Found> {
@@ -537,6 +541,28 @@ mod tests {
         );
         let result = sinks(Language::Python, &[("a.py", source)]);
         assert!(!result[0].flags.in_test);
+    }
+
+    #[test]
+    fn a_cfg_test_module_with_a_second_attribute_or_a_comment_has_the_flag_in_test() {
+        let source = "#[cfg(test)]\n#[allow(\n    clippy::disallowed_methods,\n    reason = \"the tests run a process\"\n)]\n// A comment.\nmod tests {\n    fn second(pointer: *const u8) -> u8 {\n        unsafe { *pointer }\n    }\n}\n\n#[test]\n/// The documentation.\nfn third(pointer: *const u8) {\n    unsafe { *pointer };\n}\n\n#[cfg(not(test))]\nmod real {\n    fn fourth(pointer: *const u8) -> u8 {\n        unsafe { *pointer }\n    }\n}\n";
+        let result = sinks(Language::Rust, &[("a.rs", source)]);
+        let flags: Vec<(u32, bool)> = result
+            .iter()
+            .map(|sink| (sink.range.start_line, sink.flags.in_test))
+            .collect();
+        assert_eq!(flags, [(9, true), (16, true), (22, false)]);
+    }
+
+    #[test]
+    fn a_sink_in_a_test_callback_has_the_flag_in_test() {
+        let source = "function run(text) {\n  eval(text);\n}\n\ndescribe(\"run\", () => {\n  it(\"evaluates\", () => {\n    eval(\"1\");\n  });\n});\n";
+        let result = sinks(Language::JavaScript, &[("src/a.js", source)]);
+        let flags: Vec<(u32, bool)> = result
+            .iter()
+            .map(|sink| (sink.range.start_line, sink.flags.in_test))
+            .collect();
+        assert_eq!(flags, [(2, false), (7, true)]);
     }
 
     #[test]

@@ -80,13 +80,17 @@ takes: the value in the configuration, or the built-in default.
 | `clones` | `similarity` | `duplicates.min_similarity` (0.9) |
 | `clones` | `include_tests` | `false`; `exclude_tests` then applies |
 | `defect` | `since` | `defect.since` (30d) |
+| `changes` | `since` | `changes.since` (30d). The value `all` is an `invalid_argument` error. |
 | `hotspot` | `since` | `hotspot.since` (90d) |
 | `temporal` | `since` | `30d` |
+| each tool with `exclude_tests` | `exclude_tests` | `false` |
 | `flags` | `provider` | `feature_flags.providers` |
 | `flags` | `stale_days` | `feature_flags.stale_days` (90) |
 
-`changes` reads `changes.since`, and `satd` reads `satd.markers`. They
-have no parameter for these values.
+`satd` reads `satd.markers`. It has no parameter for this value.
+
+`docs/LISTS_AND_WINDOWS.md` gives the default window of each history tool,
+the `churn_window` block that each of them gives, and the order of each list.
 
 `tests/parity.rs` compares each tool with its command on a fixture repository,
 with and without a configuration file. Its tables list each permitted
@@ -167,7 +171,9 @@ each element of an array, such as `/files/*/functions`.
 A hint comes only from the data of the result. When `has_more` is `true`, the
 first kind of hint repeats the call with `offset` set to `next_offset`. The
 tools `get_symbol` and `impact` give a hint for `impact` and `get_symbol`
-when the result has symbols to follow. `reason` states the fact that causes
+when the result has symbols to follow. A history tool gives a hint when its
+list is empty and a wider window exists: the same call with `since` set to
+`churn_window.next_since`. `reason` states the fact that causes
 the hint. A hint is not an instruction, and an agent can ignore it.
 
 `fingerprint` is a blake3 hash of the relative names and the contents of the
@@ -289,6 +295,17 @@ each other path.
 is `true`, send the same call with `offset` set to `next_offset`. The pages
 together hold each item one time.
 
+Each list that a tool pages is in rank order: the row with the most risk is
+first. `docs/LISTS_AND_WINDOWS.md` gives the order of each list. `limit` of
+`complexity` applies to the functions of all the files as one list, with the
+highest cyclomatic complexity first. A file without a function on the page is
+not in the result, and `truncated` has an entry for `/files`.
+
+Each row of a list of files or of symbols has `is_test`. With `exclude_tests`,
+a tool removes the rows that are test code before the pagination, and
+`result.tests_excluded` gives their number. `total_items` is then the number
+of the other rows.
+
 The primary list of `score` is the `components` object. `limit` and `offset`
 apply to its entries in the sequence of their keys. `skipped_components` and
 the overall score are complete on each page.
@@ -328,6 +345,16 @@ encoding metadata, saves at least 128 UTF-8 bytes. This headroom rejects margina
 byte savings that can increase tokens. This runtime check is not a promise
 of fewer tokens for every tokenizer or response. Exact token counts are evaluated
 separately by the benchmark. Small responses may remain unchanged.
+
+## Security facts in tool results
+
+The tool `security` gives each entry point with `guards`, `guards_complete`, and
+`guards_unknown_reason`. The tools `get_symbol` and `impact` give the same three fields in
+`security.entry_point`, when the symbol is the handler of an entry point. If `guards_complete`
+is `false`, code that omen did not read can add a guard or remove one. Then an empty `guards`
+list does not tell that the entry point has no guard. The summary of `security` has
+`entry_points_with_incomplete_guards` and `incomplete_guards_by_reason`. See "Guards that omen
+did not read" in `docs/SECURITY.md` for each reason.
 
 ## What is guaranteed
 

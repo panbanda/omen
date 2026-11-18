@@ -3,6 +3,12 @@ source: tests/output_shape.rs
 expression: "shape(&output, case.dynamic_key_objects)"
 ---
 {
+  "churn_window": {
+    "anchor_date": "string",
+    "commits_matched": "number",
+    "days": "number",
+    "history_complete": "bool"
+  },
   "couplings": [
     {
       "cochange_count": "number",
@@ -10,7 +16,8 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "commits_b": "number",
       "coupling_strength": "number",
       "file_a": "string",
-      "file_b": "string"
+      "file_b": "string",
+      "is_test": "bool"
     }
   ],
   "generated_at": "string",

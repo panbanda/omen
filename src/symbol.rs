@@ -172,6 +172,7 @@ pub fn report_with_reader(
                 qualified_name: index.symbols[i].qualified_name.clone(),
                 file: index.symbols[i].file.clone(),
                 line: index.symbols[i].line,
+                is_test: index.symbols[i].is_test,
             })
         })
         .collect();
@@ -184,6 +185,7 @@ pub fn report_with_reader(
                 qualified_name: index.symbols[i].qualified_name.clone(),
                 file: index.symbols[i].file.clone(),
                 line: index.symbols[i].line,
+                is_test: index.symbols[i].is_test,
             })
         })
         .collect();
@@ -1041,6 +1043,7 @@ mod tests {
             line: 1,
             end_line: 1,
             signature: String::new(),
+            is_test: false,
         };
         assert_eq!(
             container_of(&symbol("a.cpp#A.B.f~2", "f")),

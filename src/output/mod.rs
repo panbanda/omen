@@ -123,7 +123,140 @@ pub fn truncate_lists(value: &mut Value, top: usize, offset: usize) -> usize {
     total_omitted
 }
 
+/// The numbers that give the order of the functions of a `complexity`
+/// report: the cyclomatic complexity, and then the cognitive complexity.
+pub const COMPLEXITY_RANK: [&str; 2] = ["/metrics/cyclomatic", "/metrics/cognitive"];
+
+/// What `page_ranked_children` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RankedPage {
+    /// The number of children before the page.
+    pub total: usize,
+    pub returned: usize,
+    /// The parents that have no child on the page. They are not in the result.
+    pub parents_omitted: usize,
+}
+
+/// Pages the `child` lists of the elements of the `parent` list as one list
+/// in rank order.
+///
+/// `rank` has JSON pointers into a child. A higher number is first, and the
+/// second pointer breaks a tie of the first. The `file` of the parent and the
+/// `start_line` of the child break the last tie. A parent stays only when a
+/// child of it is on the page. The parents are in the order of their first
+/// child. `top` 0 keeps each child after the offset.
+///
+/// Thus a page of a `complexity` report has the most complex functions, and
+/// only the files that hold them.
+pub fn page_ranked_children(
+    value: &mut Value,
+    parent: &str,
+    child: &str,
+    rank: &[&str],
+    top: usize,
+    offset: usize,
+) -> Option<RankedPage> {
+    let parents = value.get_mut(parent)?.as_array_mut()?;
+    struct Row {
+        parent: usize,
+        child: Value,
+        rank: Vec<f64>,
+        line: u64,
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for (position, element) in parents.iter_mut().enumerate() {
+        let Some(children) = element.get_mut(child).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for item in children.drain(..) {
+            rows.push(Row {
+                parent: position,
+                rank: rank
+                    .iter()
+                    .map(|pointer| item.pointer(pointer).and_then(Value::as_f64).unwrap_or(0.0))
+                    .collect(),
+                line: item.get("start_line").and_then(Value::as_u64).unwrap_or(0),
+                child: item,
+            });
+        }
+    }
+    let file_of = |position: usize| parents[position].get("file").and_then(Value::as_str);
+    rows.sort_by(|left, right| {
+        let by_rank = right
+            .rank
+            .iter()
+            .zip(&left.rank)
+            .map(|(right, left)| right.total_cmp(left))
+            .find(|order| order.is_ne())
+            .unwrap_or(std::cmp::Ordering::Equal);
+        by_rank
+            .then_with(|| file_of(left.parent).cmp(&file_of(right.parent)))
+            .then_with(|| left.parent.cmp(&right.parent))
+            .then_with(|| left.line.cmp(&right.line))
+    });
+    let total = rows.len();
+    let limit = if top == 0 { usize::MAX } else { top };
+    let mut kept: Vec<(usize, Vec<Value>)> = Vec::new();
+    // The index in `kept` of each parent that has a child on the page.
+    let mut kept_index: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut returned = 0;
+    for row in rows.into_iter().skip(offset).take(limit) {
+        returned += 1;
+        match kept_index.get(&row.parent) {
+            Some(&index) => kept[index].1.push(row.child),
+            None => {
+                kept_index.insert(row.parent, kept.len());
+                kept.push((row.parent, vec![row.child]));
+            }
+        }
+    }
+    let parent_count = parents.len();
+    let mut old: Vec<Option<Value>> = std::mem::take(parents).into_iter().map(Some).collect();
+    for (position, children) in kept {
+        let Some(mut element) = old[position].take() else {
+            continue;
+        };
+        element[child] = Value::Array(children);
+        parents.push(element);
+    }
+    Some(RankedPage {
+        total,
+        returned,
+        parents_omitted: parent_count - parents.len(),
+    })
+}
+
 fn truncate_nested_primary(value: &mut Value, top: usize, offset: usize) -> Option<usize> {
+    let has_complexity_functions =
+        value
+            .get("files")
+            .and_then(Value::as_array)
+            .is_some_and(|files| {
+                files.iter().any(|file| {
+                    file.get("functions")
+                        .and_then(Value::as_array)
+                        .is_some_and(|functions| {
+                            functions
+                                .iter()
+                                .any(|function| function.pointer(COMPLEXITY_RANK[0]).is_some())
+                        })
+                })
+            });
+    if has_complexity_functions {
+        let page =
+            page_ranked_children(value, "files", "functions", &COMPLEXITY_RANK, top, offset)?;
+        let omitted = page.total.saturating_sub(offset) - page.returned;
+        let map = value.as_object_mut()?;
+        for (key, count) in [
+            ("functions_omitted", omitted),
+            ("files_omitted", page.parents_omitted),
+        ] {
+            if count > 0 {
+                map.insert(key.to_string(), Value::Number(count.into()));
+            }
+        }
+        return Some(omitted);
+    }
     let map = value.as_object_mut()?;
     if map
         .get("files")
@@ -602,6 +735,133 @@ fn format_value_as_text<W: Write>(value: &Value, writer: &mut W, indent: usize) 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn function(name: &str, line: u64, cyclomatic: u64, cognitive: u64) -> Value {
+        json!({"name": name, "start_line": line,
+               "metrics": {"cyclomatic": cyclomatic, "cognitive": cognitive}})
+    }
+
+    fn complexity_report() -> Value {
+        json!({
+            "files": [
+                {"file": "a.rs", "avg_cyclomatic": 2.0,
+                 "functions": [function("a1", 1, 1, 0), function("a2", 9, 7, 3)]},
+                {"file": "b.rs", "avg_cyclomatic": 9.0,
+                 "functions": [function("b1", 1, 12, 9), function("b2", 20, 7, 5)]},
+                {"file": "c.rs", "avg_cyclomatic": 1.0, "functions": [function("c1", 1, 1, 0)]},
+                {"file": "d.rs", "avg_cyclomatic": 0.0, "functions": []}
+            ],
+            "summary": {"total_functions": 5}
+        })
+    }
+
+    fn names(report: &Value) -> Vec<(String, Vec<String>)> {
+        report["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| {
+                (
+                    file["file"].as_str().unwrap().to_string(),
+                    file["functions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|function| function["name"].as_str().unwrap().to_string())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn pairs(rows: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
+        rows.iter()
+            .map(|(file, functions)| {
+                (
+                    file.to_string(),
+                    functions.iter().map(|name| name.to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_ranked_page_has_the_most_complex_functions_and_only_their_files() {
+        let mut report = complexity_report();
+        let page = page_ranked_children(&mut report, "files", "functions", &COMPLEXITY_RANK, 3, 0)
+            .unwrap();
+        assert_eq!(
+            page,
+            RankedPage {
+                total: 5,
+                returned: 3,
+                parents_omitted: 2
+            }
+        );
+        // `b2` is before `a2`: the cognitive complexity breaks the tie.
+        assert_eq!(
+            names(&report),
+            pairs(&[("b.rs", &["b1", "b2"]), ("a.rs", &["a2"])])
+        );
+        // The values of a file that are not in the list stay.
+        assert_eq!(report["files"][0]["avg_cyclomatic"], 9.0);
+    }
+
+    #[test]
+    fn test_ranked_pages_together_have_each_function_one_time() {
+        let mut second = complexity_report();
+        page_ranked_children(&mut second, "files", "functions", &COMPLEXITY_RANK, 3, 3).unwrap();
+        // The path and the line break the last tie.
+        assert_eq!(
+            names(&second),
+            pairs(&[("a.rs", &["a1"]), ("c.rs", &["c1"])])
+        );
+        let mut all = complexity_report();
+        let page =
+            page_ranked_children(&mut all, "files", "functions", &COMPLEXITY_RANK, 0, 0).unwrap();
+        assert_eq!(page.returned, 5);
+        assert_eq!(page.parents_omitted, 1);
+        assert_eq!(
+            names(&all),
+            pairs(&[
+                ("b.rs", &["b1", "b2"]),
+                ("a.rs", &["a2", "a1"]),
+                ("c.rs", &["c1"])
+            ])
+        );
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_page_of_the_functions_of_many_files_is_made_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("files", 40_000, |size| {
+            let files: Vec<Value> = (0..size)
+                .map(|position| {
+                    json!({"file": format!("f{position}.rs"),
+                           "functions": [function("f", 1, position as u64 % 7, 0)]})
+                })
+                .collect();
+            let mut report = json!({ "files": files });
+            let started = std::time::Instant::now();
+            let page =
+                page_ranked_children(&mut report, "files", "functions", &COMPLEXITY_RANK, 0, 0)
+                    .unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(page.returned, size);
+            elapsed
+        });
+    }
+
+    #[test]
+    fn test_top_of_a_complexity_report_states_what_it_omitted() {
+        let mut report = complexity_report();
+        let omitted = truncate_lists(&mut report, 2, 0);
+        assert_eq!(omitted, 3);
+        assert_eq!(report["functions_omitted"], 3);
+        assert_eq!(report["files_omitted"], 3);
+        assert_eq!(names(&report), pairs(&[("b.rs", &["b1", "b2"])]));
+        assert_eq!(report["summary"]["total_functions"], 5);
+    }
 
     #[test]
     fn test_format_default_is_json() {

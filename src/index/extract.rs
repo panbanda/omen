@@ -16,8 +16,10 @@ use super::lang;
 use super::members::{self, MemberFacts, PendingBlock, Recorder, SymbolRow};
 use super::model::{
     symbol_key, Exported, ImportBinding, ImportKind, ImportTarget, Receiver, Reference,
-    ReferenceKind, Resolution, ResolutionStatus, SharedStr, Span, Symbol, SymbolKind, NO_ARITY,
+    ReferenceKind, Resolution, ResolutionStatus, SharedStr, Span, Symbol, SymbolKind, TestRole,
+    NO_ARITY,
 };
+use super::test_code::{self, MarkContext, MarkTable, TestMark};
 use crate::core::Language;
 use crate::parser::ParseResult;
 
@@ -169,6 +171,9 @@ pub struct LinkFacts {
     pub prepends: Vec<String>,
     pub bases: Vec<String>,
     pub named_by_binding: bool,
+    /// A test runner calls the definition when the file of the definition is
+    /// test code. See `test_code::MarkKind::EntryInTestCode`.
+    pub test_entry_in_test_code: bool,
     pub condition: Option<Condition>,
     pub self_wrapper: Option<&'static str>,
     /// The names, different from its own, under which the module exports
@@ -904,6 +909,11 @@ struct Extractor<'a, 'tree> {
     language: Language,
     members: Option<Recorder>,
     memo: Memo,
+    test_mark_kinds: &'static [&'static str],
+    /// The ancestors that have a kind of `test_code::owner_kinds`, the nearest last.
+    test_owners: Vec<test_code::Owner<'tree>>,
+    test_marks: Vec<TestMark>,
+    in_test_file: bool,
 }
 
 /// What the walk does for the nodes of one kind.
@@ -915,6 +925,7 @@ struct KindFacts {
     local: bool,
     value: bool,
     scope: bool,
+    test_mark: bool,
     rule: Option<DefinitionRule>,
     /// The roles of the kind in the facts of the members, as `members::kind_bits` gives.
     member_bits: u8,
@@ -939,6 +950,7 @@ impl<'tree> Extractor<'_, 'tree> {
             local: self.local_kinds.contains(&kind),
             value: self.value_kinds.contains(&kind),
             scope: self.spec.scope_kinds().contains(&kind),
+            test_mark: self.test_mark_kinds.contains(&kind),
             rule: self.rules.get(kind).copied(),
             member_bits: self.members.as_ref().map_or(0, |recorder| {
                 members::kind_bits(self.language, &recorder.syntax, kind)
@@ -1042,9 +1054,23 @@ impl<'tree> Extractor<'_, 'tree> {
             local,
             value,
             scope: opens_scope,
+            test_mark,
             rule,
             member_bits,
         } = self.kind_facts(node);
+        if test_mark {
+            test_code::marks(
+                node,
+                &MarkContext {
+                    language: self.language,
+                    source: self.source,
+                    ancestors: &self.ancestors,
+                    owners: &self.test_owners,
+                    in_test_file: self.in_test_file,
+                },
+                &mut self.test_marks,
+            );
+        }
         if member_bits != 0 {
             if let Some(recorder) = self.members.as_mut() {
                 recorder.visit(
@@ -1213,7 +1239,13 @@ impl<'tree> Extractor<'_, 'tree> {
                     let owner = self.spec.return_owner(node, self.source);
                     self.return_owners.push(owner);
                 }
-                self.ancestors.push(node);
+                test_code::push_ancestor(
+                    node,
+                    self.language,
+                    self.source,
+                    &mut self.ancestors,
+                    &mut self.test_owners,
+                );
                 depth += 1;
                 continue;
             }
@@ -1225,7 +1257,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 if !cursor.goto_parent() {
                     return;
                 }
-                if let Some(left) = self.ancestors.pop() {
+                if let Some(left) = self.ancestors.last().copied() {
                     if self
                         .return_owners
                         .last()
@@ -1234,6 +1266,7 @@ impl<'tree> Extractor<'_, 'tree> {
                         self.return_owners.pop();
                     }
                 }
+                test_code::pop_ancestor(&mut self.ancestors, &mut self.test_owners);
                 depth -= 1;
             }
         }
@@ -1276,9 +1309,28 @@ pub struct FileSymbols {
     pub members: MemberFacts,
     /// The BLAKE3 hash of the bytes that gave these facts.
     pub content_hash: [u8; 32],
+    /// The byte ranges that the syntax makes test code, in order. No range is
+    /// in a different range. See `crate::index::test_code`.
+    pub test_ranges: Vec<std::ops::Range<usize>>,
+    /// The first line and the last line of each range of `test_ranges`.
+    pub test_lines: Vec<(u32, u32)>,
+    /// The whole file is test code: its path follows a test convention, or a
+    /// `#[cfg(test)]` declaration of a different file names it.
+    pub test_file: bool,
 }
 
 impl FileSymbols {
+    /// The byte is in test code. This is the one answer for each consumer
+    /// that has a position and no symbol, as a sink has.
+    pub fn is_test_at(&self, byte: usize) -> bool {
+        self.test_file || test_code::is_in_ranges(&self.test_ranges, byte)
+    }
+
+    /// The line is in test code. Lines start at 1.
+    pub fn is_test_at_line(&self, line: u32) -> bool {
+        self.test_file || test_code::is_in_lines(&self.test_lines, line)
+    }
+
     /// Tells if the symbols at `positions` are the definitions of one Rust
     /// item under different `cfg` conditions.
     ///
@@ -1708,8 +1760,14 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         language: parsed.language,
         members: Recorder::new(parsed.language),
         memo: Memo::default(),
+        test_mark_kinds: test_code::mark_kinds(parsed.language),
+        test_owners: Vec::new(),
+        test_marks: Vec::new(),
+        in_test_file: test_code::is_test_path(file, parsed.language),
     };
     extractor.walk(parsed.root_node());
+    let test_file = extractor.in_test_file;
+    let mark_table = MarkTable::new(std::mem::take(&mut extractor.test_marks));
 
     let imports = extractor.imports;
     let modules = extractor.modules;
@@ -1794,6 +1852,19 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         } else {
             Vec::new()
         };
+        let (mut test_role, test_entry_in_test_code) =
+            mark_table.role(draft.node.byte_range(), test_file);
+        let is_callable = matches!(
+            draft.kind,
+            SymbolKind::Function | SymbolKind::Method | SymbolKind::Constructor
+        );
+        if test_file
+            && is_callable
+            && test_role == TestRole::Support
+            && test_code::is_test_by_name(parsed.language, &draft.name)
+        {
+            test_role = TestRole::Entry;
+        }
         symbols.push(Symbol {
             key: symbol_key(file, &draft.container_path, &draft.name, ordinal).into(),
             signature: signature(&draft, &parsed.source),
@@ -1808,6 +1879,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             body_range: draft.body.as_ref().map(Span::of),
             exported,
             scip_symbol: None,
+            test_role,
         });
         link_facts.push(LinkFacts {
             container_path: draft.container_path,
@@ -1823,6 +1895,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             prepends: draft.prepends,
             bases: draft.bases,
             named_by_binding: draft.named_by_binding,
+            test_entry_in_test_code,
             condition: draft.condition,
             self_wrapper: draft.self_wrapper,
             export_aliases,
@@ -2034,6 +2107,9 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         rebound: rebound_names(parsed),
         members: member_facts,
         content_hash: *blake3::hash(&parsed.source).as_bytes(),
+        test_ranges: mark_table.ranges,
+        test_lines: mark_table.lines,
+        test_file,
     }
 }
 

@@ -174,7 +174,10 @@ pub fn coverage(languages: &[Language], experimental: bool) -> Coverage {
     }
     statement.push_str(
         "Omen does not follow data, and it follows only the calls and the function references \
-         that the index resolves. An empty result does not mean that the code is safe.",
+         that the index resolves. \
+         An entry point with `guards_complete: false` can have a guard that omen did not read, \
+         or can lack a guard that omen lists. \
+         An empty result does not mean that the code is safe.",
     );
     Coverage {
         languages: names.into_iter().collect(),

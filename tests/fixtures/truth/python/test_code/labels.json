@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "language": "python",
+  "split": "development",
+  "oracle": "Author-reviewed. CPython 3.14 compiles each file with `python3 -I -B -m py_compile`. pytest is not in the case, thus the tests did not run. The harness does not run the code.",
+  "closed_world": false,
+  "sinks_closed_world": false,
+  "not_applicable": [
+
+  ],
+  "tests": [
+    {"label":"fixture","category":"entry_by_syntax","file":"app/service.py","line":20,"name":"database","role":"entry"},
+    {"label":"test_case_class","category":"entry_by_syntax","file":"app/service.py","line":24,"name":"ServiceCheck","role":"entry"},
+    {"label":"test_case_hook","category":"entry_by_name","file":"app/service.py","line":25,"name":"setUp","role":"entry"},
+    {"label":"test_case_method","category":"entry_by_name","file":"app/service.py","line":28,"name":"test_runs","role":"entry"},
+    {"label":"test_file_function","category":"entry_by_name","file":"tests/test_service.py","line":8,"name":"test_runs","role":"entry"},
+    {"label":"test_file_class","category":"entry_by_name","file":"tests/test_service.py","line":12,"name":"TestService","role":"entry"},
+    {"label":"test_file_method","category":"entry_by_name","file":"tests/test_service.py","line":13,"name":"test_method","role":"entry"},
+    {"label":"conftest_hook","category":"entry_by_name","file":"conftest.py","line":1,"name":"pytest_configure","role":"entry"},
+    {"label":"test_case_helper","category":"support","file":"app/service.py","line":31,"name":"helper","role":"support"},
+    {"label":"test_file_helper","category":"support","file":"tests/test_service.py","line":4,"name":"helper","role":"support"},
+    {"label":"production","category":"not_test","file":"app/service.py","line":6,"name":"production","role":"none"},
+    {"label":"test_like_function","category":"not_test","file":"app/service.py","line":10,"name":"test_connection","role":"none"},
+    {"label":"test_like_class","category":"not_test","file":"app/service.py","line":14,"name":"TestRegistry","role":"none"},
+    {"label":"test_like_method","category":"not_test","file":"app/service.py","line":15,"name":"test_entry","role":"none"}
+  ]
+}

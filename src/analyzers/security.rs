@@ -47,6 +47,13 @@ pub struct Summary {
     pub sinks_by_category: BTreeMap<String, usize>,
     pub entry_points: usize,
     pub entry_points_by_kind: BTreeMap<String, usize>,
+    /// The entry points with a guard list that is not complete. An empty guard list of such an
+    /// entry point does not tell that it has no guard.
+    #[serde(default)]
+    pub entry_points_with_incomplete_guards: usize,
+    /// The entry points with a guard list that is not complete, by the reason.
+    #[serde(default)]
+    pub incomplete_guards_by_reason: BTreeMap<String, usize>,
     pub paths: usize,
     pub sinks_with_path: usize,
     pub sinks_with_no_known_entry: usize,
@@ -67,6 +74,10 @@ pub struct Report {
     pub no_known_entry: Vec<String>,
     pub choke_points: Vec<ChokePoint>,
     pub coverage: Coverage,
+    /// Present only with `--exclude-tests`: the number of sinks in test code
+    /// that are not in `sinks`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests_excluded: Option<usize>,
 }
 
 impl Report {
@@ -78,10 +89,19 @@ impl Report {
                 .or_insert(0) += 1;
         }
         let mut entry_points_by_kind = BTreeMap::new();
+        let mut incomplete_guards_by_reason = BTreeMap::new();
         for entry in &analysis.entry_points {
             *entry_points_by_kind
                 .entry(entry.kind.name().to_string())
                 .or_insert(0) += 1;
+            if !entry.guards_complete {
+                let reason = entry
+                    .guards_unknown_reason
+                    .map_or("not_known", |reason| reason.name());
+                *incomplete_guards_by_reason
+                    .entry(reason.to_string())
+                    .or_insert(0) += 1;
+            }
         }
         let reachability = analysis.reachability;
         let with_path: std::collections::BTreeSet<&str> = reachability
@@ -94,6 +114,8 @@ impl Report {
             sinks_by_category,
             entry_points: analysis.entry_points.len(),
             entry_points_by_kind,
+            entry_points_with_incomplete_guards: incomplete_guards_by_reason.values().sum(),
+            incomplete_guards_by_reason,
             paths: reachability.paths.len(),
             sinks_with_path: with_path.len(),
             sinks_with_no_known_entry: reachability.no_known_entry.len(),
@@ -110,6 +132,7 @@ impl Report {
             no_known_entry: reachability.no_known_entry,
             choke_points: reachability.choke_points,
             coverage: analysis.coverage,
+            tests_excluded: None,
         }
     }
 
@@ -140,6 +163,23 @@ impl Report {
         self
     }
 
+    /// The report without the sinks and the entry points that are in test
+    /// code. `tests_excluded` gives the number of removed sinks. The paths
+    /// do not change, because no path starts or ends in test code. The
+    /// summary keeps the totals.
+    pub fn without_tests(mut self) -> Self {
+        let before = self.sinks.len();
+        self.sinks.retain(|sink| !sink.flags.in_test);
+        self.suppressed.retain(|found| !found.sink.flags.in_test);
+        self.entry_points.retain(|entry| !entry.in_test);
+        let keys: std::collections::BTreeSet<&str> =
+            self.sinks.iter().map(|sink| sink.key.as_str()).collect();
+        self.no_known_entry
+            .retain(|key| keys.contains(key.as_str()));
+        self.tests_excluded = Some(before - self.sinks.len());
+        self
+    }
+
     /// The report as a JSON value, with the fields of one section.
     pub fn section(&self, section: Section) -> Value {
         let mut value = serde_json::to_value(self).unwrap_or(Value::Null);
@@ -151,14 +191,16 @@ impl Report {
                 "suppressed",
                 "invalid_suppressions",
                 "coverage",
+                "tests_excluded",
             ],
-            Section::Surface => &["summary", "entry_points", "coverage"],
+            Section::Surface => &["summary", "entry_points", "coverage", "tests_excluded"],
             Section::Paths => &[
                 "summary",
                 "paths",
                 "no_known_entry",
                 "choke_points",
                 "coverage",
+                "tests_excluded",
             ],
         };
         if let Some(map) = value.as_object_mut() {
@@ -433,6 +475,9 @@ pub fn sarif(report: &Report) -> Value {
                 "coverage": report.coverage,
                 "sinks_with_no_known_entry": report.summary.sinks_with_no_known_entry,
                 "entry_points": report.summary.entry_points,
+                "entry_points_with_incomplete_guards":
+                    report.summary.entry_points_with_incomplete_guards,
+                "incomplete_guards_by_reason": report.summary.incomplete_guards_by_reason,
                 "experimental_off": report.coverage.experimental_off,
             },
         }],
@@ -547,6 +592,24 @@ mod tests {
         assert_eq!(report.summary.sinks_with_path, 1);
         assert_eq!(report.summary.sinks_with_no_known_entry, 1);
         assert_eq!(report.summary.suppressed, 0);
+    }
+
+    #[test]
+    fn the_summary_and_the_sarif_count_the_guard_lists_that_are_not_complete() {
+        let report = report();
+        assert_eq!(report.summary.entry_points_with_incomplete_guards, 1);
+        assert_eq!(
+            report.summary.incomplete_guards_by_reason["layer_not_read"],
+            1
+        );
+        assert!(report.coverage.statement.contains("guards_complete"));
+        let value = sarif(&report);
+        let properties = &value["runs"][0]["properties"];
+        assert_eq!(properties["entry_points_with_incomplete_guards"], 1);
+        assert_eq!(
+            properties["incomplete_guards_by_reason"],
+            json!({"layer_not_read": 1})
+        );
     }
 
     #[test]

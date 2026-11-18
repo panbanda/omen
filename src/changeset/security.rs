@@ -384,7 +384,7 @@ impl SecuritySection<'_> {
                 entry.kind.name(),
                 cell(&entry.framework),
                 route,
-                cell(&entry.guards.join(", ")),
+                cell(&entry.guards_text()),
                 location(&entry.file, entry.range.start_line)
             ));
         }
@@ -655,6 +655,7 @@ mod tests {
         assert!(text.contains("| Sinks added | 1 |"), "{text}");
         assert!(text.contains("<summary>New sinks</summary>"));
         assert!(text.contains("<summary>New entry points</summary>"));
+        assert!(text.contains("unknown (layer"), "{text}");
         assert_eq!(text.matches("```mermaid").count(), 2);
         assert!(text.contains("flowchart LR"));
         assert!(text.contains("classDef changed"));

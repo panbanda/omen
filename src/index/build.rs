@@ -122,6 +122,7 @@ impl CodeIndex {
         link_files(&mut facts);
         let manifests = read_manifests(root, files, read, list);
         resolve_imports(&mut facts, &manifests);
+        super::test_code::link_files(&mut facts);
         resolve_references_with(&mut facts, &manifests);
         Self { files: facts }
     }
