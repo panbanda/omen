@@ -57,7 +57,7 @@ When developers write `TODO: fix this later` or `HACK: this is terrible but work
 | Requirement | TODO, FEAT              | Missing features or incomplete implementations |
 | Test        | FAILING, SKIP, DISABLED | Tests that are broken or turned off            |
 | Performance | SLOW, OPTIMIZE, PERF    | Code that works but needs to be faster         |
-| Security    | SECURITY, VULN, UNSAFE  | Known security issues                          |
+| Security    | `XXX:`, `VULN:`, `UNSAFE:` | Known security issues. Only a tag at the start of a comment counts |
 
 **Why it matters:** [Potdar and Shihab's 2014 study](https://ieeexplore.ieee.org/document/6976075) found that SATD comments often stay in codebases for years. The longer they stay, the harder they are to fix because people forget the context. [Maldonado and Shihab (2015)](https://ieeexplore.ieee.org/document/7332619) showed that design debt is the most common and most dangerous type.
 
@@ -164,7 +164,7 @@ Omen combines multiple signals to predict defect probability using PMAT-weighted
 - **Age** (code age and stability)
 - **Total** size (lines of code)
 
-Each file gets a risk score from 0% to 100%.
+Each file gets a risk score from 0% to 100%. The complexity factor uses the largest cyclomatic complexity of a function in the file, on a percentile scale for one function. The duplication factor is the part of the lines of the file that are in a clone pair of `omen clones`, with the same configuration.
 
 **Why it matters:** You can't review everything equally. [Menzies et al. (2007)](https://ieeexplore.ieee.org/document/4027145) showed that defect prediction helps teams focus testing and code review on the files most likely to have problems. [Rahman et al. (2014)](https://dl.acm.org/doi/10.1145/2568225.2568269) found that even simple models outperform random file selection for finding bugs.
 
@@ -410,25 +410,25 @@ Omen builds a graph showing which files import which other files, then calculate
 
 Hotspots are files that are both complex AND frequently modified. A simple file that changes often is probably fine - it's easy to work with. A complex file that rarely changes is also manageable - you can leave it alone. But a complex file that changes constantly? That's where bugs breed.
 
-Omen calculates hotspot scores using the **geometric mean** of normalized churn and complexity:
+Omen calculates the hotspot score as the product of two percentile ranks:
 
 ```
-hotspot = sqrt(churn_percentile * complexity_percentile)
+hotspot = (churn_percentile / 100) * (complexity_percentile / 100)
 ```
 
-Both factors are normalized against industry benchmarks using empirical CDFs, so scores are comparable across projects:
+Each percentile is a rank in a different set of files:
 
-- **Churn percentile** - Where this file's commit count ranks against typical OSS projects
-- **Complexity percentile** - Where the average cognitive complexity ranks against industry benchmarks
+- **Churn percentile** - The rank of the churn score of the file among the files that changed in the window. The churn score is 1 for each commit, and 1 more for each 100 changed lines. If one of ten files changed, its churn percentile is 50, not 95.
+- **Complexity percentile** - The rank of the sum of the cyclomatic complexity of the functions of the file, among the files that have a complexity result. As in Tornhill, this measure grows with the size of the file.
 
 Each row has the two values that its percentiles rank: `churn_score` and `total_complexity`, the sum of the cyclomatic complexity of the functions of the file. `avg_complexity` is the mean for one function, and the score does not use it. See [docs/LISTS_AND_WINDOWS.md](docs/LISTS_AND_WINDOWS.md).
 
 | Hotspot Score | Severity | Action                 |
 | ------------- | -------- | ---------------------- |
-| >= 0.6        | Critical | Prioritize immediately |
-| >= 0.4        | High     | Schedule for review    |
-| >= 0.25       | Moderate | Monitor                |
-| < 0.25        | Low      | Healthy                |
+| >= 0.81       | Critical | Prioritize immediately |
+| >= 0.64       | High     | Schedule for review    |
+| >= 0.36       | Moderate | Monitor                |
+| < 0.36        | Low      | Healthy                |
 
 **Why it matters:** [Adam Tornhill's "Your Code as a Crime Scene"](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) introduced hotspot analysis as a way to find the most impactful refactoring targets. His research shows that a small percentage of files (typically 4-8%) contain most of the bugs. [Graves et al. (2000)](https://ieeexplore.ieee.org/document/859533) and [Nagappan et al. (2005)](https://www.microsoft.com/en-us/research/publication/use-of-relative-code-churn-measures-to-predict-system-defect-density/) demonstrated that relative code churn is a strong defect predictor.
 
@@ -623,7 +623,7 @@ Each component metric is normalized to a 0-100 scale where higher is always bett
 4. **Severity-aware** - Weight items by impact, not just count
 
 For example, SATD (Self-Admitted Technical Debt) uses severity-weighted scoring:
-- Critical (SECURITY, VULN): 4x weight
+- Critical (a tag such as `XXX:` or `VULN:` at the start of a comment): 4x weight
 - High (FIXME, BUG): 2x weight
 - Medium (HACK, REFACTOR): 1x weight
 - Low (TODO, NOTE): 0.25x weight

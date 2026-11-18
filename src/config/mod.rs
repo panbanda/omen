@@ -252,7 +252,8 @@ impl Default for ComplexityConfig {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SatdConfig {
-    /// Markers to detect in addition to the built-in markers.
+    /// Markers to detect in addition to the built-in markers. A marker of
+    /// this list is debt at each position in a comment.
     pub markers: Vec<String>,
 }
 

@@ -78,6 +78,16 @@ not report one. The security cases are in the directories `security` and
   resolver of the index can select it. For this reason, Ruby, PHP, C, C++, and
   Bash keep the `same_name_symbol` rows in the case `security_decoys`.
 
+## Entry point labels
+
+An `entry_points` label can state three more facts. A label without one of these fields does
+not check that fact.
+
+- `symbol` is the key of the handler symbol. `null` states that the entry point has no symbol.
+- `guards_complete` tells if the guard list is complete.
+- `guards_unknown_reason` is the reason for a list that is not complete. `null` states that
+  omen gives no reason.
+
 ## Test labels
 
 A `tests` label states the relation of one definition, or of one line, to test

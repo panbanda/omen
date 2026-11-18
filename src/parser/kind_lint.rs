@@ -48,18 +48,7 @@ fn listed(language: Language) -> bool {
 
 /// Kinds that the grammars do not have, as `table/language/kind`. Remove an
 /// entry in the change that corrects the table. Do not add an entry.
-const KNOWN_UNKNOWN_KINDS: &[&str] = &[
-    "decision/CSharp/enhanced_for_statement",
-    "decision/Java/switch_statement",
-    "decision/Php/elseif_clause",
-    "decision/Python/comprehension",
-    "flat/C/catch_clause",
-    "flat/CSharp/else_clause",
-    "flat/Go/else_clause",
-    "flat/Java/else_clause",
-    "flat/Php/elseif_clause",
-    "nesting/CSharp/enhanced_for_statement",
-];
+const KNOWN_UNKNOWN_KINDS: &[&str] = &["decision/Python/comprehension"];
 
 /// The node kinds of the symbol extraction of the shared index.
 fn index_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {

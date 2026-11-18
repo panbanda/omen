@@ -30,14 +30,21 @@ pub fn clones_analyzer(
     include_tests: bool,
 ) -> analyzers::duplicates::Analyzer {
     let configured = &config.duplicates;
-    analyzers::duplicates::Analyzer::new()
+    analyzers::duplicates::Analyzer::from_config(config)
         .with_min_tokens(min_tokens.unwrap_or(configured.min_tokens))
         .with_similarity_threshold(similarity.unwrap_or(configured.min_similarity))
         .with_exclude_tests(!include_tests && config.exclude_tests)
 }
 
+/// DEPRECATED(remove-in: 6.0): use `defect_analyzer_with_config`. This
+/// constructor uses the default `[duplicates]` table.
+#[deprecated(since = "5.2.0", note = "use `defect_analyzer_with_config`")]
 pub fn defect_analyzer(days: u32) -> analyzers::defect::Analyzer {
     analyzers::defect::Analyzer::new().with_churn_days(days)
+}
+
+pub fn defect_analyzer_with_config(config: &Config, days: u32) -> analyzers::defect::Analyzer {
+    analyzers::defect::Analyzer::from_config(config).with_churn_days(days)
 }
 
 pub fn hotspot_analyzer(days: u32) -> analyzers::hotspot::Analyzer {
@@ -291,7 +298,7 @@ pub fn run_defect(
         config,
         format,
         Some(&request.scope),
-        defect_analyzer(window),
+        defect_analyzer_with_config(config, window),
         out,
     )
     .map(drop)
@@ -445,6 +452,15 @@ pub fn run_changes(
 mod tests {
     use super::*;
     use crate::commands::testing::repository;
+
+    /// The one-argument constructor of 5.0 stays until 6.0.
+    #[test]
+    #[allow(deprecated)]
+    fn test_defect_analyzer_keeps_the_signature_of_5_0() {
+        let constructor: fn(u32) -> analyzers::defect::Analyzer = defect_analyzer;
+        let _ = constructor(30);
+        let _ = defect_analyzer_with_config(&Config::default(), 30);
+    }
 
     #[test]
     fn test_plain_analyzer_writes_its_report() {
