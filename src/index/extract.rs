@@ -137,11 +137,12 @@ pub struct Draft<'tree> {
 /// one name in one scope are legal only when no build has the two.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Condition {
-    /// The text of each `cfg` attribute of the definition and of the items
-    /// that contain it, from the outer item, without white space.
-    pub attributes: String,
-    /// The text of the nearest `impl` block before its body, or an empty text.
-    pub implementation: String,
+    /// For the definition and for each item that contains it and has `cfg`
+    /// attributes, from the outer item, the ID of the text of these
+    /// attributes without white space. The IDs are of one file.
+    pub attributes: Vec<usize>,
+    /// The ID of the text of the nearest `impl` block before its body.
+    pub implementation: Option<usize>,
 }
 
 /// Facts that only `link_files` and the resolver use. They are not a part of
@@ -1084,7 +1085,7 @@ impl FileSymbols {
                 (Some(condition), Some(lead_condition)) => {
                     same_item
                         && condition.implementation == lead_condition.implementation
-                        && seen.insert(condition.attributes.as_str())
+                        && seen.insert(condition.attributes.as_slice())
                 }
                 _ => false,
             }

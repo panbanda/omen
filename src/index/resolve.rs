@@ -3220,6 +3220,68 @@ mod false_edge_tests {
         assert!(rows[0].contains(" Ambiguous "), "{rows:?}");
     }
 
+    /// An `impl` block under one `cfg` attribute of `64 * size` bytes has
+    /// `size` methods, and each method calls a function with a twin.
+    fn methods_under_a_long_condition_resolve_at(size: usize) -> std::time::Duration {
+        let features: Vec<String> = (0..size)
+            .map(|number| format!("feature = \"feature_with_a_long_name_{number:020}\""))
+            .collect();
+        let features = features.join(", ");
+        let mut source = format!("struct Engine;\n\n#[cfg(any({features}))]\nimpl Engine {{\n");
+        source.push_str("    fn step(&self) {}\n");
+        for number in 0..size {
+            source.push_str(&format!(
+                "    fn run{number}(&self) {{\n        self.step();\n    }}\n"
+            ));
+        }
+        source.push_str(&format!(
+            "}}\n\n#[cfg(not(any({features})))]\nimpl Engine {{\n    fn step(&self) {{}}\n}}\n"
+        ));
+        let files = [("a.rs", source.as_str())];
+        let started = std::time::Instant::now();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let twins = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| {
+                reference.resolution.status == super::Status::UniqueCandidate
+                    && reference.resolution.candidates.len() == 2
+            })
+            .count();
+        assert_eq!(twins, size);
+        elapsed
+    }
+
+    #[test]
+    fn test_methods_under_a_long_condition_resolve_to_the_twins() {
+        methods_under_a_long_condition_resolve_at(50);
+    }
+
+    /// Each method must not copy or compare the text of the `cfg` attribute of
+    /// its `impl` block.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_methods_under_a_long_condition_resolve_in_linear_time() {
+        let size = 8_000;
+        let best = |size: usize| {
+            (0..2)
+                .map(|_| methods_under_a_long_condition_resolve_at(size))
+                .min()
+                .expect("two runs")
+        };
+        let small = best(size);
+        let large = best(size * 2);
+        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
+        assert!(
+            large < allowed,
+            "{small:?} at {size} methods, {large:?} at {} methods",
+            size * 2
+        );
+        assert!(large.as_secs() < 60, "{large:?}");
+    }
+
     #[test]
     fn test_rust_local_that_wraps_self_calls_the_enclosing_type() {
         let source = "use std::sync::Arc;\n\nstruct Node;\n\nstruct Other;\n\nimpl Other {\n    fn start(&self) {}\n}\n\nimpl Node {\n    fn start(&self) {}\n\n    fn run(self, text: String) {\n        let this = Arc::new(self);\n        this.start();\n    }\n\n    fn share(self: &Arc<Self>) {\n        let again = Arc::clone(&self);\n        again.start();\n        let copy = self.clone();\n        copy.start();\n    }\n\n    fn chain(self, other: Other) {\n        let that = Arc::new(other);\n        that.start();\n        let late = Arc::new(self).start();\n        late.start();\n    }\n}\n";

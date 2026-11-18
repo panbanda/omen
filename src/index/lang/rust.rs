@@ -2,6 +2,7 @@
 
 use tree_sitter::Node;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -67,6 +68,13 @@ const FUNCTION_SIGNATURE_ITEM: &str = "function_signature_item";
 /// The number of the `cfg` attributes in the memo of the extraction.
 const CONDITION_MEMO: u8 = 0;
 
+/// The number of the table of text IDs in the memo of the extraction.
+const TEXT_ID_MEMO: u8 = 1;
+
+/// The number of the text ID of an `impl` block header in the memo of the
+/// extraction.
+const IMPLEMENTATION_MEMO: u8 = 2;
+
 /// The types that hold the object of a method and give its methods.
 const SELF_WRAPPERS: [&str; 2] = ["Arc", "Rc"];
 
@@ -127,13 +135,34 @@ fn type_modules(mut node: Node<'_>, context: &Context<'_, '_>) -> Vec<String> {
     }
 }
 
-/// The `cfg` attributes of each child of `parent` that has one, by the ID of
-/// the child. The function reads the children of a parent one time, because a
-/// search for the attributes before each child costs the number of the children.
-fn child_conditions(parent: Node<'_>, context: &Context<'_, '_>) -> Rc<HashMap<usize, String>> {
+/// The ID of `text` in the file. Two texts have one ID only when they are
+/// equal. A definition keeps the ID and not the text, because many
+/// definitions can have the text of one long attribute.
+fn text_id(text: String, context: &Context<'_, '_>) -> usize {
+    let key = (0, TEXT_ID_MEMO);
+    let table = context.memo.borrow().get(&key).cloned();
+    let table =
+        match table.and_then(|found| found.downcast::<RefCell<HashMap<String, usize>>>().ok()) {
+            Some(table) => table,
+            None => {
+                let table = Rc::new(RefCell::new(HashMap::new()));
+                context.memo.borrow_mut().insert(key, table.clone());
+                table
+            }
+        };
+    let mut table = table.borrow_mut();
+    let next = table.len();
+    *table.entry(text).or_insert(next)
+}
+
+/// The text ID of the `cfg` attributes of each child of `parent` that has
+/// one, by the ID of the child. The function reads the children of a parent
+/// one time, because a search for the attributes before each child costs the
+/// number of the children.
+fn child_conditions(parent: Node<'_>, context: &Context<'_, '_>) -> Rc<HashMap<usize, usize>> {
     let key = (parent.id(), CONDITION_MEMO);
     if let Some(found) = context.memo.borrow().get(&key) {
-        if let Ok(found) = Rc::clone(found).downcast::<HashMap<usize, String>>() {
+        if let Ok(found) = Rc::clone(found).downcast::<HashMap<usize, usize>>() {
             return found;
         }
     }
@@ -148,7 +177,7 @@ fn child_conditions(parent: Node<'_>, context: &Context<'_, '_>) -> Rc<HashMap<u
                 pending.push_str(&text);
             }
         } else if !kind.contains("comment") && !pending.is_empty() {
-            found.insert(child.id(), std::mem::take(&mut pending));
+            found.insert(child.id(), text_id(std::mem::take(&mut pending), context));
         }
     }
     let found = Rc::new(found);
@@ -156,15 +185,37 @@ fn child_conditions(parent: Node<'_>, context: &Context<'_, '_>) -> Rc<HashMap<u
     found
 }
 
+/// The text ID of the header of an `impl` block, which is the text before its
+/// body with one space between the words.
+fn implementation_id(block: Node<'_>, context: &Context<'_, '_>) -> usize {
+    let key = (block.id(), IMPLEMENTATION_MEMO);
+    if let Some(found) = context.memo.borrow().get(&key) {
+        if let Ok(found) = Rc::clone(found).downcast::<usize>() {
+            return *found;
+        }
+    }
+    let end = block
+        .child_by_field_name("body")
+        .map_or(block.end_byte(), |body| body.start_byte());
+    let header = context.source.get(block.start_byte()..end);
+    let header = String::from_utf8_lossy(header.unwrap_or_default());
+    let id = text_id(
+        header.split_whitespace().collect::<Vec<&str>>().join(" "),
+        context,
+    );
+    context.memo.borrow_mut().insert(key, Rc::new(id));
+    id
+}
+
 /// The `cfg` attributes of a function and of the items that contain it.
 fn condition(node: Node<'_>, context: &Context<'_, '_>) -> Option<Condition> {
-    let mut attributes = String::new();
+    let mut attributes = Vec::new();
     let mut implementation = None;
     let scopes = context.scopes.iter().map(|scope| scope.node);
     for item in scopes.chain([node]) {
         if let Some(parent) = context.parent(item) {
-            if let Some(text) = child_conditions(parent, context).get(&item.id()) {
-                attributes.push_str(text);
+            if let Some(id) = child_conditions(parent, context).get(&item.id()) {
+                attributes.push(*id);
             }
         }
         if item.kind() == IMPL_ITEM {
@@ -174,17 +225,9 @@ fn condition(node: Node<'_>, context: &Context<'_, '_>) -> Option<Condition> {
     if attributes.is_empty() {
         return None;
     }
-    let implementation = implementation.map(|block| {
-        let end = block
-            .child_by_field_name("body")
-            .map_or(block.end_byte(), |body| body.start_byte());
-        let header = context.source.get(block.start_byte()..end);
-        let header = String::from_utf8_lossy(header.unwrap_or_default());
-        header.split_whitespace().collect::<Vec<&str>>().join(" ")
-    });
     Some(Condition {
         attributes,
-        implementation: implementation.unwrap_or_default(),
+        implementation: implementation.map(|block| implementation_id(block, context)),
     })
 }
 
