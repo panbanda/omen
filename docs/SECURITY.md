@@ -192,6 +192,7 @@ each form against the source of Rails 7.2.2.
 | `def get(*)`, `def post(*)`, `def put(*)`, `def patch(*)`, or `def delete(*)` with an empty body, as a statement of the `draw` block | Read. Rails evaluates the block with `instance_exec`, so the definition replaces the helper of the mapper of this `draw` call. From that statement on, a call of the helper gives no route, and `resources` and `resource` give no route for that request method. `match` does not use the helpers. |
 | Any other definition of a method of the mapper in a `draw` block, and `alias`, `undef`, `define_method`, `define_singleton_method`, `alias_method`, `undef_method`, `remove_method`, `singleton_class`, `extend`, `instance_eval`, `class_eval`, or `module_eval` in it | The `draw` block gives no route. A definition with another name is a helper of the file. Omen reads no route from its body, and it changes nothing. |
 | `get`, `post`, `put`, `patch`, `delete` with a string path or a symbol path | Read, with the options `to`, `controller`, `action`, `on`, `as`, `constraints`, `defaults`, `anchor`, and `format`. The options `path:` and `internal:`, `via:` on a helper, and a `**` splat skip the route. |
+| A route with no controller in a `namespace` block or a `scope module:` block, as `get "settings"` in `namespace :site` | Read as `site#settings`. `add_controller_module` of Rails takes the module as the controller when the route and its blocks give none. |
 | A string path of two or more parts with no `to:` and no `action:`, as `put "topics/bulk"` | Read as `topics#bulk`, as `get_to_from_path` of Rails gives it. Each part has only letters, digits, `_`, and `-`. A `-` becomes `_` in the controller and in the action. |
 | A target that is not a controller action, as `redirect("/new")`, a Rack application, or a lambda | The route is an entry point, because the server answers it. It has no symbol, because no controller action runs. Its guards are the constraint objects of the route and of its blocks. |
 | `match` with `via:` | Read. A call without `via:` is skipped. Omen knows only symbols: `:all` alone gives `ANY`, and another symbol gives its upper case form with dashes, as `:m_search` gives `M-SEARCH`. A string, such as `"all"`, and `:all` with another value give no entry. |
@@ -211,6 +212,9 @@ each form against the source of Rails 7.2.2.
 | A `before_action` call with a name that is not a literal or with a block and no name, a `skip_before_action` call with a name that is not a literal, a callback call with a receiver, `skip_callback`, `set_callback`, and `reset_callbacks` | The guards of the class, and of each class that inherits from it, are not complete, with the reason `unreadable_callback`. The guards that omen read stay in the list. |
 | `around_action`, `prepend_around_action`, and `skip_around_action` | Not read. The guards of the class, and of each class that inherits from it, are not complete, with the reason `around_callback`. |
 | `append_before_action` | Read as `before_action`. |
+| `protect_from_forgery` and `skip_forgery_protection` | Read as `before_action :verify_authenticity_token` and as the skip of it, with the options `only:`, `except:`, `if:`, `unless:`, and `prepend:`. Rails 7.2.2 defines them in this way. |
+| `http_basic_authenticate_with` | Read as a callback with the name `http_basic_authenticate_with`, with the options `only:`, `except:`, `if:`, and `unless:`. |
+| A call of a class method in a class body, as `requires_plugin "chat"` | See "Class methods that register callbacks". |
 | A superclass that omen cannot find in the repository, other than `ActionController::Base`, `ActionController::API`, `ActionController::Metal`, and `AbstractController::Base` | The guards of the class, and of each class that inherits from it, are not complete, with the reason `unresolved_superclass`. |
 | A key with quotes and a colon, as `"only": :index`, `"if": :ok`, `"module": "admin"` | The key is a symbol, as in Ruby. Only a key with `=>` is a string key. |
 | `include`, `extend`, `prepend`, or `class_eval` in a controller or in a superclass, and a call of a callback method, `include`, `extend`, `prepend`, or `class_eval` with the constant of a class as the receiver, in any file | The guards of that class, and of each class that inherits from it, are not complete. The reason is `included_module`, `callback_outside_class`, or `unreadable_callback`. A module can add or remove callbacks with `included do`, and omen does not read them. The guards that omen read stay in the list. |
@@ -355,6 +359,37 @@ In each of these cases the callback can run, so the guards are not complete. The
 `conditional_callback` for a condition, and `unreadable_callback` for a list that is not a
 literal. A callback with a literal `only:` list makes only the actions of the list not
 complete.
+
+### Class methods that register callbacks
+
+An application can define a class method that calls `before_action`, and a controller can call
+that method in its body. Omen reads a call without a receiver that is a statement of the class
+body, or of a branch of a condition in it. A call in a block is not such a call.
+
+Omen searches the name in the class and then in each superclass in the repository. A definition
+is `def self.name` in a class body, or `def name` in `class << self`. The definition of the
+nearest class decides. Omen reads the body of the definition as it reads a class body, and it
+applies the callbacks at the place of the call.
+
+- A body with no callback call changes nothing, as a method that only sets a variable.
+- A body with `before_action :name` and literal options gives that callback.
+- A body with `before_action do ... end`, or with a lambda, gives a guard with the name of the
+  class method. `requires_plugin` of an application with such a body gives the guard
+  `requires_plugin`.
+- A call in a branch that omen cannot evaluate gives conditional callbacks.
+
+The guards are not complete, with the reason `unresolved_macro`, in these conditions:
+
+- No class of the chain defines the name, and the name is not in the list below.
+- The class has two definitions of the name.
+- The body calls `super`, calls a different class method without a receiver, or has a callback
+  call that omen cannot read, as `before_action :check, options`.
+
+These names register no `before_action` callback, and omen ignores a call of them: the
+visibility calls and the attribute calls of Ruby, `require`, `delegate`, `class_attribute`,
+`layout`, `helper`, `helper_method`, `rescue_from`, the `after_action` family, `wrap_parameters`,
+`respond_to`, `etag`, `content_security_policy`, and `permissions_policy`. The constant
+`CLASS_METHODS_WITHOUT_CALLBACKS` in `src/index/security/entry/rails.rs` has the full list.
 
 A `before_action` call replaces an earlier callback with the same name, as Rails does. The
 replaced callback is gone for each action. If `ApplicationController` has `before_action :auth`

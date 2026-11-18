@@ -24,5 +24,10 @@ Rails.application.routes.draw do
     get "missing" => "missing#index"
     get "rack" => RackApp
     get "staff" => "admin/staff#index"
+    get "plugins" => "plugins#index"
+    get "widgets" => "widgets#index"
+    namespace :site do
+      get "settings"
+    end
   end
 end

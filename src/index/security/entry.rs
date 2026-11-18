@@ -651,6 +651,9 @@ struct Context<'a> {
     rails_handled: std::cell::RefCell<std::collections::HashMap<rails::HandlerKey, rails::Handler>>,
     /// Tells for a chain of modules and a controller if the repository has the class.
     rails_known: std::cell::RefCell<std::collections::HashMap<(usize, rails::ControllerKey), bool>>,
+    /// The controller that a chain of modules names, by the id of the chain.
+    rails_module_controllers:
+        std::cell::RefCell<std::collections::HashMap<usize, rails::ScopedController>>,
     /// The names that a Rails routes file assigns a value to.
     rails_assigned: std::sync::OnceLock<std::collections::HashSet<String>>,
     /// The position of the first symbol of the file for each start of a name.
@@ -716,6 +719,7 @@ impl<'a> Context<'a> {
             rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_handled: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_known: std::cell::RefCell::new(std::collections::HashMap::new()),
+            rails_module_controllers: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_assigned: std::sync::OnceLock::new(),
             symbol_starts: std::sync::OnceLock::new(),
             callables_here: std::sync::OnceLock::new(),

@@ -913,3 +913,212 @@ fn timing_a_chain_of_conditional_callbacks_resolves_in_linear_time() {
         a_chain_of_conditional_callbacks_at,
     );
 }
+
+const MACRO_BASE: &str = "class ApplicationController\n  before_action :base\n\n  def self.requires_login(arg = {})\n    @requires_login_arg = arg\n  end\n\n  def self.requires_plugin(plugin_name)\n    before_action do\n      raise PluginDisabled if disabled?(plugin_name)\n    end\n  end\n\n  def self.requires_admin\n    before_action :ensure_admin\n    before_action :ensure_fresh, only: :show\n  end\n\n  class << self\n    def requires_staff\n      before_action :ensure_staff\n    end\n  end\nend\n";
+
+fn macro_rows(base: &str, body: &str) -> Vec<String> {
+    let routes = draw("  get \"index\" => \"a#index\"\n  get \"show\" => \"a#show\"");
+    let child = format!(
+        "class AController < ApplicationController\n  {body}\n  def index; end\n  def show; end\nend\n"
+    );
+    guard_rows(
+        &routes,
+        &[
+            ("app/controllers/application_controller.rb", base),
+            ("app/controllers/a_controller.rb", &child),
+        ],
+    )
+}
+
+#[test]
+fn a_class_method_of_the_chain_gives_the_callbacks_that_it_registers() {
+    for (body, index, show) in [
+        ("requires_login", "[base] complete", "[base] complete"),
+        (
+            "requires_login(key: 1)",
+            "[base] complete",
+            "[base] complete",
+        ),
+        (
+            "requires_plugin \"chat\"",
+            "[base, requires_plugin] complete",
+            "[base, requires_plugin] complete",
+        ),
+        (
+            "requires_admin",
+            "[base, ensure_admin] complete",
+            "[base, ensure_admin, ensure_fresh] complete",
+        ),
+        (
+            "requires_staff",
+            "[base, ensure_staff] complete",
+            "[base, ensure_staff] complete",
+        ),
+        (
+            "requires_admin if ENV[\"X\"]",
+            "[base] conditional_callback",
+            "[base] conditional_callback",
+        ),
+        (
+            "before_action :own\n  requires_staff\n  skip_before_action :base, only: :show",
+            "[base, own, ensure_staff] complete",
+            "[own, ensure_staff] complete",
+        ),
+    ] {
+        assert_eq!(
+            macro_rows(MACRO_BASE, body),
+            [format!("/index {index}"), format!("/show {show}")],
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_class_method_that_omen_cannot_resolve_makes_the_guards_not_complete() {
+    for body in [
+        "unknown_macro",
+        "load_and_authorize_resource",
+        "authorize_with :admin, only: :show",
+        "configure do\n    limit 1\n  end",
+    ] {
+        assert_eq!(
+            macro_rows(MACRO_BASE, body),
+            [
+                "/index [base] unresolved_macro",
+                "/show [base] unresolved_macro"
+            ],
+            "{body}"
+        );
+    }
+    for definition in [
+        "def self.guarded(*names)\n    before_action(*names)\n  end",
+        "def self.guarded(options = {})\n    before_action :checked, options\n  end",
+        "def self.guarded(options = {})\n    before_action :checked, **options\n  end",
+        "def self.guarded\n    super\n  end",
+        "def self.guarded\n    other_macro\n  end",
+        "def self.guarded\n    include Extra\n  end",
+        "def self.guarded\n    before_action :one\n  end\n  def self.guarded\n    before_action :two\n  end",
+        "def self.guarded\n    send(:before_action, :one)\n  end",
+    ] {
+        let base = format!("class ApplicationController\n  before_action :base\n  {definition}\nend\n");
+        let rows = macro_rows(&base, "guarded");
+        assert_eq!(rows.len(), 2, "{definition}");
+        assert!(
+            rows.iter().all(|row| row.ends_with(" unresolved_macro")
+                || row.ends_with(" unreadable_callback")
+                || row.ends_with(" included_module")),
+            "{definition}: {rows:?}"
+        );
+    }
+}
+
+#[test]
+fn a_class_method_of_ruby_or_of_rails_that_registers_no_callback_changes_nothing() {
+    let body = "layout false\n  helper_method :current\n  rescue_from(Failure) { |error| render plain: error.message }\n  attr_reader :state\n  after_action :log\n  public\n  NAME = compute(1)\n  self.page_size = 10\n  Registry.add(self)\n  content_security_policy do |policy|\n    policy.default_src :self\n  end";
+    assert_eq!(
+        macro_rows(MACRO_BASE, body),
+        ["/index [base] complete", "/show [base] complete"]
+    );
+}
+
+#[test]
+fn the_forgery_protection_calls_of_rails_are_callbacks() {
+    for (body, index, show) in [
+        (
+            "protect_from_forgery with: :exception",
+            "[base, verify_authenticity_token] complete",
+            "[base, verify_authenticity_token] complete",
+        ),
+        (
+            "protect_from_forgery\n  skip_forgery_protection only: :index",
+            "[base] complete",
+            "[base, verify_authenticity_token] complete",
+        ),
+        (
+            "protect_from_forgery prepend: true, except: [:show]",
+            "[verify_authenticity_token, base] complete",
+            "[base] complete",
+        ),
+        (
+            "http_basic_authenticate_with name: \"a\", password: \"b\", only: :show",
+            "[base] complete",
+            "[base, http_basic_authenticate_with] complete",
+        ),
+    ] {
+        assert_eq!(
+            macro_rows(MACRO_BASE, body),
+            [format!("/index {index}"), format!("/show {show}")],
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn the_nearest_definition_of_a_class_method_decides() {
+    let routes = draw("  get \"index\" => \"a#index\"");
+    let classes = "class ApplicationController\n  def self.guarded\n    before_action :far\n  end\nend\nclass MiddleController < ApplicationController\n  def self.guarded\n    before_action :near\n  end\nend\nclass AController < MiddleController\n  guarded\n  def index; end\nend\n";
+    assert_eq!(
+        guard_rows(&routes, &[("app/controllers/all.rb", classes)]),
+        ["/index [near] complete"]
+    );
+}
+
+fn a_chain_of_macro_calls_at(depth: usize) -> std::time::Duration {
+    let mut routes = String::new();
+    let mut classes = String::from(
+        "class C0Controller\n  def self.guarded\n    before_action :checked\n  end\n  def show; end\nend\n",
+    );
+    for number in 1..=depth {
+        routes.push_str(&format!("  get \"r{number}\" => \"c{number}#show\"\n"));
+        classes.push_str(&format!(
+            "class C{number}Controller < C{}Controller\n  guarded\n  def self.own{number}\n  end\n  def show; end\nend\n",
+            number - 1
+        ));
+    }
+    let routes = draw(&routes);
+    let files = [
+        ("config/routes.rb", routes.as_str()),
+        ("app/controllers/chain.rb", classes.as_str()),
+    ];
+    let (found, elapsed) = entries_lean(Language::Ruby, &files);
+    assert_eq!(found.len(), depth);
+    assert!(found
+        .iter()
+        .all(|entry| entry.guards == ["checked"] && entry.guards_complete));
+    elapsed
+}
+
+#[test]
+fn a_chain_of_classes_that_call_a_class_method_of_the_first_class_resolves() {
+    a_chain_of_macro_calls_at(20);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_a_chain_of_macro_calls_resolves_in_linear_time() {
+    assert_scales_linearly("macro calls", 1_500, a_chain_of_macro_calls_at);
+}
+
+#[test]
+fn a_route_without_a_controller_in_a_module_has_the_module_as_its_controller() {
+    let routes = draw(
+        "  namespace :webhooks do\n    get \"show\"\n    get :index\n    get \"other\", action: :aws\n  end\n  scope module: \"admin\" do\n    scope module: \"users\" do\n      get \"deep\"\n    end\n  end\n  namespace :admin do\n    namespace :users do\n      get \"index\"\n    end\n  end\n  get \"alone\"",
+    );
+    assert_eq!(
+        rows(&routes, &[WEBHOOKS, ADMIN_USERS]),
+        sorted(&[
+            "GET /webhooks/show WebhooksController.show [check]",
+            "GET /webhooks/index WebhooksController.index [check]",
+            "GET /webhooks/other WebhooksController.aws [check]",
+            "GET /deep - [ensure_admin]",
+            "GET /admin/users/index Admin.UsersController.index [ensure_admin]",
+            "GET /alone - []",
+        ])
+    );
+}
+
+#[test]
+fn a_proc_target_is_a_rack_endpoint() {
+    let routes = draw("  get \"/favicon.ico\", to: proc { [200, {}, [\"\"]] } if Rails.env.test?");
+    assert_eq!(guard_rows(&routes, &[]), ["/favicon.ico [] rack_endpoint"]);
+}

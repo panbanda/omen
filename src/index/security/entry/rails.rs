@@ -23,7 +23,11 @@
 //! - Guards. The guards are the `before_action` callbacks of the action in the order of Rails. A
 //!   callback replaces an earlier callback with the same name. A callback with a condition, a
 //!   list that is not a literal, or a place in a block adds no guard. A `skip_before_action` call
-//!   with such a place removes the guard.
+//!   with such a place removes the guard. A call of a class method of the chain that registers
+//!   callbacks gives those callbacks.
+//! - Complete lists. When code that omen did not read can add a guard or remove one, the route
+//!   keeps the guards that omen read, and it gives a reason. Omen does not report such a list
+//!   as complete.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -2383,9 +2387,16 @@ impl<'a> Context<'a> {
                 };
                 match (read("controller"), read("action")) {
                     (Some(controller), Some(action)) => {
+                        // Without a controller, `add_controller_module` of Rails takes the
+                        // module of the blocks as the controller: `get "x"` in
+                        // `namespace :site` is `site#x`.
                         let controller = controller
                             .map(ControllerRef::Text)
-                            .or_else(|| scope.controller.clone().map(ControllerRef::Scoped));
+                            .or_else(|| scope.controller.clone().map(ControllerRef::Scoped))
+                            .or_else(|| {
+                                self.module_controller(&scope.modules)
+                                    .map(ControllerRef::Scoped)
+                            });
                         let from_path = (!root
                             && !path_text.is_empty()
                             && path_text
@@ -2441,6 +2452,27 @@ impl<'a> Context<'a> {
                 unknown,
             });
         }
+    }
+
+    /// The controller that the modules of the blocks name, as `/admin/users` for the modules
+    /// `admin` and `users`. The file keeps the controller of each chain of modules, so each
+    /// route of a block does not build the text again.
+    fn module_controller(&self, modules: &Modules) -> Option<ScopedController> {
+        if modules.id() == 0 {
+            return None;
+        }
+        let known = self
+            .rails_module_controllers
+            .borrow()
+            .get(&modules.id())
+            .cloned();
+        Some(known.unwrap_or_else(|| {
+            let controller = ScopedController::new(format!("/{}", modules.to_vec().join("/")));
+            self.rails_module_controllers
+                .borrow_mut()
+                .insert(modules.id(), controller.clone());
+            controller
+        }))
     }
 
     /// The kind of a route target that is not a string: a `redirect` call of the mapper, or
@@ -2993,21 +3025,44 @@ impl<'a> Context<'a> {
             current = parent.clone();
         }
         let mut program =
-            program.unwrap_or_else(|| Arc::new(Program::layer(None, Vec::new(), None)));
+            program.unwrap_or_else(|| Arc::new(Program::layer(None, Vec::new(), None, None)));
         for class in chain.iter().rev() {
             let mut own: Vec<Callback> = Vec::new();
             let mut gap = shared
                 .unresolved_parents
                 .contains(class)
                 .then_some(GuardsUnknownReason::UnresolvedSuperclass);
+            let defined = self.rails_class_macros(shared, class);
+            let mut macros = program.macros.clone();
+            for (name, body) in defined.iter() {
+                macros.insert(name.clone(), body.clone());
+            }
             for (position, index) in shared.classes.get(class).into_iter().flatten() {
                 let class_callbacks = self.rails_callbacks(shared, *position, *index);
-                own.extend(class_callbacks.list.iter().cloned());
                 gap = first_reason(gap, class_callbacks.gap);
+                for statement in &class_callbacks.list {
+                    match statement {
+                        Statement::Callback(callback) => own.push(callback.clone()),
+                        Statement::Macro { name, conditional } => {
+                            let Some(Some(body)) = macros.get(name) else {
+                                gap = first_reason(gap, Some(GuardsUnknownReason::UnresolvedMacro));
+                                continue;
+                            };
+                            if body.gap.is_some() {
+                                gap = first_reason(gap, Some(GuardsUnknownReason::UnresolvedMacro));
+                            }
+                            own.extend(body.callbacks.iter().map(|callback| {
+                                let mut callback = callback.clone();
+                                callback.conditional |= conditional;
+                                callback
+                            }));
+                        }
+                    }
+                }
             }
             gap = first_reason(gap, self.named_outside_the_class(class));
-            if !own.is_empty() || gap.is_some() {
-                program = Arc::new(Program::layer(Some(program), own, gap));
+            if !own.is_empty() || gap.is_some() || !defined.is_empty() {
+                program = Arc::new(Program::layer(Some(program), own, gap, Some(macros)));
             }
             shared
                 .programs
@@ -3073,6 +3128,109 @@ impl<'a> Context<'a> {
                 None => return found,
             }
         }
+    }
+
+    /// The class methods that the openings of the class define, by name: `def self.name` in the
+    /// class body, and `def name` in `class << self`. A class method can register callbacks, as
+    /// `def self.requires_login` can call `before_action`. The value is what a call of the method
+    /// in a class body does. It is `None` for a name with two definitions in the class. The index
+    /// keeps the result.
+    fn rails_class_macros(&self, shared: &RailsShared, identity: &str) -> Arc<MacroTable> {
+        if let Some(found) = shared.macros.lock().get(identity) {
+            return Arc::clone(found);
+        }
+        let mut table = MacroTable::new();
+        for (position, index) in shared.classes.get(identity).into_iter().flatten() {
+            self.with_class_body(*position, *index, |reader, class| {
+                let body = class.child_by_field_name("body").unwrap_or(class);
+                let mut cursor = body.walk();
+                let mut definitions: Vec<Node<'_>> = Vec::new();
+                for statement in body.named_children(&mut cursor) {
+                    match statement.kind() {
+                        "singleton_method"
+                            if statement
+                                .child_by_field_name("object")
+                                .is_some_and(|object| reader.text(object) == "self") =>
+                        {
+                            definitions.push(statement)
+                        }
+                        "singleton_class"
+                            if statement
+                                .child_by_field_name("value")
+                                .is_some_and(|value| reader.text(value) == "self") =>
+                        {
+                            let inner = statement.child_by_field_name("body").unwrap_or(statement);
+                            let mut inner_cursor = inner.walk();
+                            definitions.extend(
+                                inner
+                                    .named_children(&mut inner_cursor)
+                                    .filter(|method| method.kind() == "method"),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                for definition in definitions {
+                    let Some(name) = definition.child_by_field_name("name") else {
+                        continue;
+                    };
+                    let name = reader.text(name).to_string();
+                    let body = match table.get(&name) {
+                        Some(_) => None,
+                        None => Some(Arc::new(reader.read_macro(definition, &name))),
+                    };
+                    table.insert(name, body);
+                }
+            });
+        }
+        let table = Arc::new(table);
+        shared
+            .macros
+            .lock()
+            .insert(identity.to_string(), Arc::clone(&table));
+        table
+    }
+
+    /// What a call of the class method does to the callbacks of the class that calls it. The
+    /// body is read as a class body is read. A `before_action` call with a block and no name gets
+    /// the name of the method, so the guard has a name. A `super` call, a call of another class
+    /// method, and a callback that omen cannot read make the body not readable.
+    fn read_macro(&self, definition: Node<'_>, name: &str) -> MacroBody {
+        let mut callbacks = ClassCallbacks {
+            macro_name: Some(name.to_string()),
+            ..ClassCallbacks::default()
+        };
+        if let Some(body) = definition.child_by_field_name("body") {
+            let mut stack = vec![body];
+            while let Some(node) = stack.pop() {
+                if node.kind() == "super" {
+                    callbacks.note(GuardsUnknownReason::UnresolvedMacro);
+                    break;
+                }
+                let mut cursor = node.walk();
+                stack.extend(node.named_children(&mut cursor));
+            }
+            self.collect_callbacks(body, false, 0, &mut callbacks);
+        }
+        let mut body = MacroBody {
+            callbacks: Vec::new(),
+            gap: callbacks.gap,
+        };
+        for statement in callbacks.list {
+            match statement {
+                Statement::Callback(callback) => {
+                    if callback.unreadable {
+                        body.gap =
+                            first_reason(body.gap, Some(GuardsUnknownReason::UnresolvedMacro));
+                    }
+                    body.callbacks.push(callback);
+                }
+                Statement::Macro { .. } => {
+                    body.gap = first_reason(body.gap, Some(GuardsUnknownReason::UnresolvedMacro));
+                }
+            }
+        }
+        body
     }
 
     /// The callback calls in the body of the class, in source order. A call in a method, or in a
@@ -3326,12 +3484,30 @@ impl<'a> Context<'a> {
                 }
             }
             "case" | "case_match" | "do_block" | "block" | "lambda" => {
-                self.collect_callbacks(node, true, depth, out)
+                out.blocks += 1;
+                self.collect_callbacks(node, true, depth, out);
+                out.blocks -= 1;
             }
-            "call" => match self.rails_callback(node) {
+            "identifier" => {
+                let name = self.text(node);
+                let forgery = matches!(name, "protect_from_forgery" | "skip_forgery_protection");
+                if forgery {
+                    out.list.push(Statement::Callback(Callback::named(
+                        "verify_authenticity_token",
+                        name == "skip_forgery_protection",
+                        conditional || out.blocks > 0,
+                    )));
+                } else if out.blocks == 0 && !CLASS_METHODS_WITHOUT_CALLBACKS.contains(&name) {
+                    out.list.push(Statement::Macro {
+                        name: name.to_string(),
+                        conditional,
+                    });
+                }
+            }
+            "call" => match self.rails_callback(node, out.macro_name.as_deref()) {
                 Some(mut callback) if node.child_by_field_name("receiver").is_none() => {
                     callback.conditional |= conditional;
-                    out.list.push(callback);
+                    out.list.push(Statement::Callback(callback));
                 }
                 _ => {
                     let method = node
@@ -3343,12 +3519,23 @@ impl<'a> Context<'a> {
                         out.note(GuardsUnknownReason::UnreadableCallback);
                     } else if method.contains("around_action") || method.contains("around_filter") {
                         out.note(GuardsUnknownReason::AroundCallback);
+                    } else if out.blocks == 0
+                        && node.child_by_field_name("receiver").is_none()
+                        && !CLASS_METHODS_WITHOUT_CALLBACKS.contains(&method)
+                    {
+                        // A call of a class method in the class body can register callbacks.
+                        out.list.push(Statement::Macro {
+                            name: method.to_string(),
+                            conditional,
+                        });
                     }
                     let mut cursor = node.walk();
                     let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
                     for child in children {
                         if matches!(child.kind(), "do_block" | "block") {
-                            self.collect_callback_node(child, conditional, depth + 1, out);
+                            out.blocks += 1;
+                            self.collect_callbacks(child, true, depth, out);
+                            out.blocks -= 1;
                         } else if subtree_has_callback(child, self.source, 0) {
                             out.note(GuardsUnknownReason::UnreadableCallback);
                         }
@@ -3368,23 +3555,52 @@ impl<'a> Context<'a> {
 
     /// The names, the `only:` and `except:` lists, and the conditions of a callback call.
     /// A list that is not a literal makes the callback unreadable. See `Callback::applies_to`.
-    fn rails_callback(&self, call: Node<'_>) -> Option<Callback> {
-        let (skip, mut prepend) = match self.text(call.child_by_field_name("method")?) {
+    ///
+    /// Three calls of Rails register one callback with a fixed name. `protect_from_forgery` is
+    /// `before_action :verify_authenticity_token`, and `skip_forgery_protection` is the skip of
+    /// it. `http_basic_authenticate_with` registers a block, and the guard has the name of the
+    /// call. `anonymous` is the name for a `before_action` call with a block and no name, when
+    /// the call is in a class method.
+    fn rails_callback(&self, call: Node<'_>, anonymous: Option<&str>) -> Option<Callback> {
+        let method = self.text(call.child_by_field_name("method")?);
+        let (skip, mut prepend) = match method {
             "before_action" | "before_filter" | "append_before_action" | "append_before_filter" => {
                 (false, false)
             }
             "prepend_before_action" | "prepend_before_filter" => (false, true),
-            "skip_before_action" | "skip_before_filter" => (true, false),
+            "skip_before_action" | "skip_before_filter" | "skip_forgery_protection" => {
+                (true, false)
+            }
+            "protect_from_forgery" | "http_basic_authenticate_with" => (false, false),
             _ => return None,
+        };
+        let fixed = match method {
+            "protect_from_forgery" | "skip_forgery_protection" => Some("verify_authenticity_token"),
+            "http_basic_authenticate_with" => Some(method),
+            _ => None,
         };
         let arguments = Self::arguments_of(call);
         let bindings = &Bindings::default();
         let options = self.rails_options(&arguments, bindings);
-        let names = Self::rails_positional(&arguments)
-            .into_iter()
-            .map(|argument| self.rails_literal(argument, bindings))
-            .collect::<Option<Vec<String>>>()?;
-        // A callback with a block and no name is a guard that omen cannot name.
+        let positional = Self::rails_positional(&arguments);
+        let has_block = call.child_by_field_name("block").is_some()
+            || matches!(positional.as_slice(), [one] if one.kind() == "lambda");
+        let names = match (fixed, anonymous) {
+            (Some(fixed), _) if positional.is_empty() => vec![fixed.to_string()],
+            (Some(_), _) => return None,
+            // A callback with a block and no name is a guard. In a class method, it gets the
+            // name of the method. In a class body, omen cannot name it.
+            (None, Some(anonymous)) if !skip && has_block && positional.len() <= 1 => {
+                if positional.len() == 1 && positional[0].kind() != "lambda" {
+                    return None;
+                }
+                vec![anonymous.to_string()]
+            }
+            _ => positional
+                .into_iter()
+                .map(|argument| self.rails_literal(argument, bindings))
+                .collect::<Option<Vec<String>>>()?,
+        };
         if !skip && names.is_empty() {
             return None;
         }
@@ -3448,6 +3664,20 @@ struct Callback {
 }
 
 impl Callback {
+    /// A callback call with one name and no option.
+    fn named(name: &str, skip: bool, conditional: bool) -> Self {
+        Self {
+            skip,
+            names: vec![name.to_string()],
+            places: HashMap::from([(name.to_string(), 0)]),
+            only: None,
+            except: None,
+            unreadable: false,
+            conditional,
+            prepend: false,
+        }
+    }
+
     /// Why omen does not know if the callback runs: a list that omen cannot read, or a
     /// condition.
     fn uncertain(&self) -> Option<GuardsUnknownReason> {
@@ -3519,9 +3749,98 @@ fn ordered_names(slots: &PersistentMap<String, Slot>) -> Vec<String> {
 /// class are not complete.
 #[derive(Default)]
 struct ClassCallbacks {
-    list: Vec<Callback>,
+    list: Vec<Statement>,
+    gap: Option<GuardsUnknownReason>,
+    /// The number of blocks around the statement that omen reads now. A call in a block is not
+    /// a call of a class method in the class body.
+    blocks: usize,
+    /// The name of the class method whose body omen reads, when it reads one.
+    macro_name: Option<String>,
+}
+
+/// A statement of a class body that can change the callbacks.
+enum Statement {
+    Callback(Callback),
+    /// A call of a class method that omen must resolve in the chain of the class.
+    Macro {
+        name: String,
+        conditional: bool,
+    },
+}
+
+/// What a call of a class method does to the callbacks of the class that calls it.
+struct MacroBody {
+    callbacks: Vec<Callback>,
+    /// The body has a statement that omen cannot read.
     gap: Option<GuardsUnknownReason>,
 }
+
+/// The class methods of one class by name. `None` is a name with two definitions.
+type MacroTable = std::collections::BTreeMap<String, Option<Arc<MacroBody>>>;
+
+/// The class methods of Ruby and of Rails that a class body calls, and that register no
+/// `before_action` callback. A call of any other name must resolve to a class method of the
+/// chain, or the guards are not complete.
+const CLASS_METHODS_WITHOUT_CALLBACKS: [&str; 58] = [
+    "private",
+    "public",
+    "protected",
+    "private_constant",
+    "public_constant",
+    "private_class_method",
+    "public_class_method",
+    "module_function",
+    "attr_reader",
+    "attr_writer",
+    "attr_accessor",
+    "attr_internal",
+    "attr_internal_reader",
+    "attr_internal_writer",
+    "attr_internal_accessor",
+    "alias_method",
+    "alias_attribute",
+    "define_method",
+    "require",
+    "require_relative",
+    "require_dependency",
+    "load",
+    "puts",
+    "raise",
+    "freeze",
+    "using",
+    "delegate",
+    "delegate_missing_to",
+    "class_attribute",
+    "cattr_reader",
+    "cattr_writer",
+    "cattr_accessor",
+    "mattr_reader",
+    "mattr_writer",
+    "mattr_accessor",
+    "thread_mattr_accessor",
+    "layout",
+    "helper",
+    "helper_method",
+    "helper_attr",
+    "rescue_from",
+    "after_action",
+    "append_after_action",
+    "prepend_after_action",
+    "skip_after_action",
+    "wrap_parameters",
+    "respond_to",
+    "etag",
+    "default_form_builder",
+    "default_url_options",
+    "content_security_policy",
+    "content_security_policy_report_only",
+    "permissions_policy",
+    "skip_parameter_encoding",
+    "param_encoding",
+    "self",
+    "nil",
+    "__method__",
+];
 
 impl ClassCallbacks {
     fn note(&mut self, reason: GuardsUnknownReason) {
@@ -3663,6 +3982,9 @@ struct Program {
     /// Why the guards of one action are not complete, by action: a callback with an `only:` list
     /// has a condition.
     action_gaps: PersistentMap<String, GuardsUnknownReason>,
+    /// The class methods of this layer and of the superclasses, by name. The method of the
+    /// nearest class hides the others.
+    macros: PersistentMap<String, Option<Arc<MacroBody>>>,
     default: std::sync::OnceLock<Arc<DefaultGuards>>,
     /// The guards of an action that a list names, as this layer has them, by action.
     resolved: Mutex<HashMap<String, PersistentMap<String, Slot>>>,
@@ -3685,6 +4007,7 @@ impl Program {
         parent: Option<Arc<Program>>,
         callbacks: Vec<Callback>,
         gap: Option<GuardsUnknownReason>,
+        macros: Option<PersistentMap<String, Option<Arc<MacroBody>>>>,
     ) -> Self {
         let offset = parent
             .as_ref()
@@ -3786,6 +4109,7 @@ impl Program {
             only_skips,
             gap,
             action_gaps,
+            macros: macros.unwrap_or_default(),
             default: std::sync::OnceLock::new(),
             resolved: Mutex::new(HashMap::new()),
         }
@@ -5007,6 +5331,7 @@ pub(super) struct RailsShared {
     mounts: std::sync::OnceLock<HashMap<String, MountState>>,
     engine_modules: Mutex<HashMap<String, Option<Vec<String>>>>,
     callbacks: Mutex<HashMap<Placed, Arc<ClassCallbacks>>>,
+    macros: Mutex<HashMap<String, Arc<MacroTable>>>,
     visibility: Mutex<HashMap<String, Arc<Visibility>>>,
     programs: Mutex<HashMap<String, Arc<Program>>>,
     handled: Mutex<HashMap<ActionKey, Handler>>,
@@ -5064,6 +5389,7 @@ impl RailsShared {
             mounts: std::sync::OnceLock::new(),
             engine_modules: Mutex::new(HashMap::new()),
             callbacks: Mutex::new(HashMap::new()),
+            macros: Mutex::new(HashMap::new()),
             visibility: Mutex::new(HashMap::new()),
             programs: Mutex::new(HashMap::new()),
             handled: Mutex::new(HashMap::new()),
