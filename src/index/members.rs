@@ -16,6 +16,7 @@ use crate::core::Language;
 use crate::parser::queries::{
     get_decision_node_types, get_nested_scope_node_types, get_operator, is_default_branch,
 };
+use crate::parser::Walk;
 
 /// The syntax of the classes of one language.
 #[derive(Debug, Clone, Copy)]
@@ -196,13 +197,17 @@ fn type_parameter_names(language: Language, node: Node<'_>) -> Vec<(usize, usize
 }
 
 fn first_identifier(node: Node<'_>) -> Option<Node<'_>> {
-    if node.kind() == "identifier" {
-        return Some(node);
-    }
-    let mut cursor = node.walk();
-    let found = node
-        .named_children(&mut cursor)
-        .find_map(|child| first_identifier(child));
+    let mut found = None;
+    crate::parser::walk_preorder(node, |descendant| {
+        if descendant != node && !descendant.is_named() {
+            Walk::SkipChildren
+        } else if descendant.kind() == "identifier" {
+            found = Some(descendant);
+            Walk::Stop
+        } else {
+            Walk::Children
+        }
+    });
     found
 }
 
@@ -1143,6 +1148,23 @@ fn is_primitive_type(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_first_identifier_below_deep_nesting() {
+        use crate::parser::deep;
+        let found = deep::on_small_stack(|| {
+            let source = format!("{}\n", deep::nest("(", "x", ")"));
+            let parsed = crate::parser::Parser::new()
+                .parse(
+                    source.as_bytes(),
+                    crate::core::Language::Python,
+                    std::path::Path::new("a.py"),
+                )
+                .unwrap();
+            first_identifier(parsed.root_node()).map(|node| parsed.node_text(&node).to_string())
+        });
+        assert_eq!(found.as_deref(), Some("x"));
+    }
 
     fn nested_scopes_of_one_name_are_looked_up_in_logarithmic_time_at(
         size: usize,

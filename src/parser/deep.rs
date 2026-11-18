@@ -19,10 +19,11 @@ pub struct DeepSource {
     pub language: Language,
     pub file: String,
     pub source: String,
-    /// Each level opens a function, a class, or a module. Some code outside
-    /// the walks, such as `Node::parent`, takes time in proportion to the
-    /// depth for each scope, so these sources are slow to analyze.
-    pub nests_scopes: bool,
+    /// Code outside the walks takes time in proportion to the depth for each
+    /// level of this source: `Node::parent` or `Node::prev_sibling` for each
+    /// nested scope, block, or declarator, or the text of each call of a chain. The shared sources of
+    /// the tests leave out these sources.
+    pub slow: bool,
 }
 
 impl DeepSource {
@@ -61,13 +62,13 @@ fn deep(language: Language, file: &str, source: String) -> DeepSource {
         language,
         file: file.to_string(),
         source,
-        nests_scopes: false,
+        slow: false,
     }
 }
 
-fn scoped(language: Language, file: &str, source: String) -> DeepSource {
+fn slow(language: Language, file: &str, source: String) -> DeepSource {
     DeepSource {
-        nests_scopes: true,
+        slow: true,
         ..deep(language, file, source)
     }
 }
@@ -96,7 +97,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                     nest("if x {", "", "}")
                 ),
             ),
-            scoped(
+            slow(
                 l,
                 "closures.go",
                 format!(
@@ -109,7 +110,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                 "sum.go",
                 format!("package p\nfunc f() int {{ return {sum} }}\n"),
             ),
-            deep(
+            slow(
                 l,
                 "calls.go",
                 format!("package p\nfunc f() {{ {calls} }}\n"),
@@ -136,13 +137,13 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                 "blocks.rs",
                 format!("fn f(x: bool) {{ {} }}\n", nest("if x {", "", "}")),
             ),
-            scoped(
+            slow(
                 l,
                 "closures.rs",
                 format!("fn f() {{ let g = {}; }}\n", nest("|| ", "1", "")),
             ),
             deep(l, "sum.rs", format!("fn f() -> i32 {{ {sum} }}\n")),
-            deep(l, "calls.rs", format!("fn f() {{ {calls}; }}\n")),
+            slow(l, "calls.rs", format!("fn f() {{ {calls}; }}\n")),
             deep(l, "members.rs", format!("fn f() {{ {members}; }}\n")),
             deep(l, "paths.rs", format!("fn f() {{ {paths}; }}\n")),
             deep(l, "uses.rs", format!("use {};\n", nest("a::{", "b", "}"))),
@@ -151,7 +152,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                 "arrays.rs",
                 format!("fn f() {{ let x = {}; }}\n", nest("[", "1", "]")),
             ),
-            scoped(l, "modules.rs", nest("mod m {", "fn f() {}", "}")),
+            slow(l, "modules.rs", nest("mod m {", "fn f() {}", "}")),
             deep(
                 l,
                 "types.rs",
@@ -170,9 +171,9 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                 format!("def f():\n    return {}\n", nest("[", "1", "]")),
             ),
             deep(l, "sum.py", format!("def f():\n    return {sum}\n")),
-            deep(l, "calls.py", format!("def f():\n    {calls}\n")),
+            slow(l, "calls.py", format!("def f():\n    {calls}\n")),
             deep(l, "members.py", format!("def f():\n    {members}\n")),
-            scoped(
+            slow(
                 l,
                 "lambdas.py",
                 format!("def f():\n    return {}\n", nest("lambda: ", "1", "")),
@@ -202,18 +203,18 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                     &file("blocks"),
                     format!("function f(x) {{ {} }}\n", nest("if (x) {", "", "}")),
                 ),
-                scoped(
+                slow(
                     l,
                     &file("arrows"),
                     format!("const f = {};\n", nest("() => ", "1", "")),
                 ),
-                scoped(l, &file("functions"), nest("function f() {", "", "}")),
+                slow(l, &file("functions"), nest("function f() {", "", "}")),
                 deep(
                     l,
                     &file("sum"),
                     format!("function f() {{ return {sum}; }}\n"),
                 ),
-                deep(l, &file("calls"), format!("function f() {{ {calls}; }}\n")),
+                slow(l, &file("calls"), format!("function f() {{ {calls}; }}\n")),
                 deep(
                     l,
                     &file("members"),
@@ -258,7 +259,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                     nest("if (x) {", "", "}")
                 ),
             ),
-            scoped(
+            slow(
                 l,
                 "Lambdas.java",
                 format!(
@@ -271,7 +272,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                 "Sum.java",
                 format!("class A {{ int f() {{ return {sum}; }} }}\n"),
             ),
-            deep(
+            slow(
                 l,
                 "Calls.java",
                 format!("class A {{ void f() {{ {calls}; }} }}\n"),
@@ -281,7 +282,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                 "Members.java",
                 format!("class A {{ void f() {{ {members}; }} }}\n"),
             ),
-            scoped(l, "Classes.java", nest("class A {", "void f() {}", "}")),
+            slow(l, "Classes.java", nest("class A {", "void f() {}", "}")),
         ],
         Language::C => vec![
             deep(
@@ -289,13 +290,13 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                 "parens.c",
                 format!("int f(void) {{ return {parentheses}; }}\n"),
             ),
-            deep(
+            slow(
                 l,
                 "blocks.c",
                 format!("void f(int x) {{ {} }}\n", nest("if (x) {", "", "}")),
             ),
             deep(l, "sum.c", format!("int f(void) {{ return {sum}; }}\n")),
-            deep(
+            slow(
                 l,
                 "pointers.c",
                 format!("int {}f(void) {{ return 0; }}\n", "*".repeat(DEPTH)),
@@ -328,7 +329,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                 "blocks.cpp",
                 format!("void f(bool x) {{ {} }}\n", nest("if (x) {", "", "}")),
             ),
-            scoped(
+            slow(
                 l,
                 "lambdas.cpp",
                 format!(
@@ -336,16 +337,16 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                     nest("[]{ return ", "1", "; }")
                 ),
             ),
-            scoped(
+            slow(
                 l,
                 "namespaces.cpp",
                 nest("namespace a {", "void f() {}", "}"),
             ),
-            scoped(l, "classes.cpp", nest("struct A {", "void f() {}", "};")),
+            slow(l, "classes.cpp", nest("struct A {", "void f() {}", "};")),
             deep(l, "sum.cpp", format!("int f() {{ return {sum}; }}\n")),
             deep(l, "members.cpp", format!("void f() {{ {members}; }}\n")),
             deep(l, "paths.cpp", format!("void f() {{ {paths}; }}\n")),
-            deep(
+            slow(
                 l,
                 "pointers.cpp",
                 format!("int {}f() {{ return 0; }}\n", "*".repeat(DEPTH)),
@@ -370,7 +371,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                     nest("if (x) {", "", "}")
                 ),
             ),
-            scoped(
+            slow(
                 l,
                 "Lambdas.cs",
                 format!(
@@ -378,14 +379,14 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                     nest("() => ", "1", "")
                 ),
             ),
-            scoped(l, "Classes.cs", nest("class A {", "void F() {}", "}")),
-            scoped(l, "Namespaces.cs", nest("namespace A {", "class B {}", "}")),
+            slow(l, "Classes.cs", nest("class A {", "void F() {}", "}")),
+            slow(l, "Namespaces.cs", nest("namespace A {", "class B {}", "}")),
             deep(
                 l,
                 "Sum.cs",
                 format!("class A {{ int F() {{ return {sum}; }} }}\n"),
             ),
-            deep(
+            slow(
                 l,
                 "Calls.cs",
                 format!("class A {{ void F() {{ {calls}; }} }}\n"),
@@ -403,20 +404,20 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                 "arrays.rb",
                 format!("def f\n  {}\nend\n", nest("[", "1", "]")),
             ),
-            scoped(l, "modules.rb", nest("module A\n", "def f\nend\n", "end\n")),
+            slow(l, "modules.rb", nest("module A\n", "def f\nend\n", "end\n")),
             deep(
                 l,
                 "blocks.rb",
                 format!("def f\n{}end\n", nest("if x\n", "", "end\n")),
             ),
-            scoped(
+            slow(
                 l,
                 "lambdas.rb",
                 format!("def f\n  {}\nend\n", nest("-> { ", "1", " }")),
             ),
             deep(l, "sum.rb", format!("def f\n  {sum}\nend\n")),
-            deep(l, "calls.rb", format!("def f\n  {calls}\nend\n")),
-            deep(
+            slow(l, "calls.rb", format!("def f\n  {calls}\nend\n")),
+            slow(
                 l,
                 "paths.rb",
                 format!("def f\n  A{}\nend\n", "::B".repeat(DEPTH)),
@@ -437,7 +438,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                     nest("if ($x) {", "", "}")
                 ),
             ),
-            scoped(
+            slow(
                 l,
                 "arrows.php",
                 format!("<?php\n$f = {};\n", nest("fn() => ", "1", "")),
@@ -452,7 +453,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
                 "sum.php",
                 format!("<?php\nfunction f() {{ return {sum}; }}\n"),
             ),
-            deep(
+            slow(
                 l,
                 "calls.php",
                 format!("<?php\nfunction f() {{ $a{}; }}\n", "->b()".repeat(DEPTH)),
@@ -494,13 +495,13 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
 }
 
 /// The deep sources of every language with their syntax trees, without the
-/// sources that nest scopes. The trees are parsed one time for all tests.
+/// slow sources. The trees are parsed one time for all tests.
 pub fn parsed_deep_sources() -> &'static [(DeepSource, ParseResult)] {
     static PARSED: OnceLock<Vec<(DeepSource, ParseResult)>> = OnceLock::new();
     PARSED.get_or_init(|| {
         all_deep_sources()
             .into_par_iter()
-            .filter(|source| !source.nests_scopes)
+            .filter(|source| !source.slow)
             .map(|source| {
                 let parsed = source.parse();
                 (source, parsed)

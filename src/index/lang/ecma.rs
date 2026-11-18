@@ -441,14 +441,21 @@ impl Ecma {
     }
 
     fn collect_supertypes(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<String>) {
+        // A stack in place of recursion, in the order of a recursive walk.
         let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
+        let mut pending: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+        pending.reverse();
+        while let Some(child) = pending.pop() {
             match child.kind() {
                 TYPE_ARGUMENTS => {}
                 IDENTIFIER | TYPE_IDENTIFIER | NESTED_TYPE_IDENTIFIER | MEMBER_EXPRESSION => {
                     out.push(context.text(child))
                 }
-                _ => self.collect_supertypes(child, context, out),
+                _ => {
+                    let mut cursor = child.walk();
+                    let children: Vec<Node<'_>> = child.named_children(&mut cursor).collect();
+                    pending.extend(children.into_iter().rev());
+                }
             }
         }
     }
@@ -468,27 +475,24 @@ fn parameter_name(name: String) -> LocalName {
 
 /// Adds each name that a parameter pattern binds: `{a, b: c, ...d}`, `[e]`, `f = 1`.
 fn pattern_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
-    match node.kind() {
-        IDENTIFIER | "shorthand_property_identifier_pattern" => {
-            out.push(parameter_name(context.text(node)));
-        }
-        "pair_pattern" => {
-            if let Some(value) = node.child_by_field_name("value") {
-                pattern_names(value, context, out);
+    // A stack in place of recursion, because a pattern can nest to any depth.
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        match node.kind() {
+            IDENTIFIER | "shorthand_property_identifier_pattern" => {
+                out.push(parameter_name(context.text(node)));
             }
-        }
-        "assignment_pattern" | "object_assignment_pattern" => {
-            if let Some(left) = node.child_by_field_name("left") {
-                pattern_names(left, context, out);
+            "pair_pattern" => pending.extend(node.child_by_field_name("value")),
+            "assignment_pattern" | "object_assignment_pattern" => {
+                pending.extend(node.child_by_field_name("left"));
             }
-        }
-        "object_pattern" | "array_pattern" | "rest_pattern" => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                pattern_names(child, context, out);
+            "object_pattern" | "array_pattern" | "rest_pattern" => {
+                let mut cursor = node.walk();
+                let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+                pending.extend(children.into_iter().rev());
             }
+            _ => {}
         }
-        _ => {}
     }
 }
 

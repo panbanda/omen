@@ -773,47 +773,48 @@ impl FileContext<'_> {
     }
 
     /// Walks the tree for the sinks that are not calls.
-    fn tree_sinks(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
-        let kind = node.kind();
-        if self.syntax.string_kinds.contains(&kind) {
-            let literal = syntax::text(node, self.source);
-            if let Some(prefix) = syntax::token_prefix(literal) {
+    /// The walk uses a cursor and not recursion, because generated source can
+    /// have a very deep tree.
+    fn tree_sinks(&self, root: Node<'_>, sinks: &mut Vec<Sink>) {
+        crate::parser::walk_preorder(root, |node| {
+            let kind = node.kind();
+            if self.syntax.string_kinds.contains(&kind) {
+                let literal = syntax::text(node, self.source);
+                if let Some(prefix) = syntax::token_prefix(literal) {
+                    sinks.push(self.sink(
+                        SinkCategory::HardcodedCredential,
+                        Span::of(&node),
+                        self.enclosing_key(node.start_byte()),
+                        prefix,
+                        SinkBasis::Builtin,
+                        false,
+                    ));
+                }
+                return crate::parser::Walk::SkipChildren;
+            }
+            if self.syntax.unsafe_kinds.contains(&kind)
+                && self.has_target(|target| matches!(target, Target::UnsafeBlock))
+            {
                 sinks.push(self.sink(
-                    SinkCategory::HardcodedCredential,
+                    SinkCategory::MemoryUnsafe,
                     Span::of(&node),
                     self.enclosing_key(node.start_byte()),
-                    prefix,
+                    "unsafe",
                     SinkBasis::Builtin,
                     false,
                 ));
             }
-            return;
-        }
-        if self.syntax.unsafe_kinds.contains(&kind)
-            && self.has_target(|target| matches!(target, Target::UnsafeBlock))
-        {
-            sinks.push(self.sink(
-                SinkCategory::MemoryUnsafe,
-                Span::of(&node),
-                self.enclosing_key(node.start_byte()),
-                "unsafe",
-                SinkBasis::Builtin,
-                false,
-            ));
-        }
-        if self.syntax.mention_kinds.contains(&kind) && self.mention(node, sinks) {
-            return;
-        }
-        if self.syntax.keyed_kinds.contains(&kind) {
-            self.keyed_field(node, sinks);
-        }
-        if self.syntax.assignment_kinds.contains(&kind) {
-            self.assignment(node, sinks);
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.tree_sinks(child, sinks);
-        }
+            if self.syntax.mention_kinds.contains(&kind) && self.mention(node, sinks) {
+                return crate::parser::Walk::SkipChildren;
+            }
+            if self.syntax.keyed_kinds.contains(&kind) {
+                self.keyed_field(node, sinks);
+            }
+            if self.syntax.assignment_kinds.contains(&kind) {
+                self.assignment(node, sinks);
+            }
+            crate::parser::Walk::Children
+        });
     }
 
     fn has_target(&self, test: impl Fn(&Target) -> bool) -> bool {

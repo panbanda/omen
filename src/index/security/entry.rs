@@ -18,7 +18,7 @@ use super::syntax;
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ResolutionBasis, ResolutionStatus, Span, Symbol, SymbolKind};
-use crate::parser::ParseResult;
+use crate::parser::{ParseResult, Walk};
 
 mod fastapi;
 mod go_routes;
@@ -455,6 +455,12 @@ fn python_function_guards(root: Node<'_>, source: &[u8], range: &Span) -> Vec<St
 
 /// Tells if a declaration or a typed parameter binds `name` to a text with a marker.
 fn bound_to_marker(node: Node<'_>, source: &[u8], name: &str, markers: &[&str]) -> bool {
+    crate::parser::find_preorder(node, |node| binds_to_marker(node, source, name, markers))
+        .is_some()
+}
+
+/// Tells if `node` itself binds `name` to a text with one of the markers.
+fn binds_to_marker(node: Node<'_>, source: &[u8], name: &str, markers: &[&str]) -> bool {
     const BINDINGS: [(&str, &[&str], &[&str]); 5] = [
         ("variable_declarator", &["name"], &["value"]),
         ("assignment", &["left"], &["right"]),
@@ -513,11 +519,7 @@ fn bound_to_marker(node: Node<'_>, source: &[u8], name: &str, markers: &[&str]) 
             }
         }
     }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
-    children
-        .into_iter()
-        .any(|child| bound_to_marker(child, source, name, markers))
+    false
 }
 
 /// The local bindings of a Go file, by name.
@@ -620,14 +622,18 @@ impl<'a> Context<'a> {
 
     /// The first string literal in the node, or in its descendants.
     fn first_string(&self, node: Node<'_>) -> Option<String> {
-        if self.is_string(node) {
-            return Some(self.string_of(node));
-        }
-        let mut cursor = node.walk();
-        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-        children
-            .into_iter()
-            .find_map(|child| self.first_string(child))
+        let mut found = None;
+        crate::parser::walk_preorder(node, |descendant| {
+            if descendant != node && !descendant.is_named() {
+                Walk::SkipChildren
+            } else if self.is_string(descendant) {
+                found = Some(self.string_of(descendant));
+                Walk::Stop
+            } else {
+                Walk::Children
+            }
+        });
+        found
     }
 
     fn imports(&self, module: &str) -> bool {
@@ -1919,28 +1925,30 @@ impl<'a> Context<'a> {
     }
 
     fn method_router<'t>(&self, node: Node<'t>, out: &mut Vec<(String, Option<Node<'t>>)>) {
-        if node.kind() != "call_expression" {
-            return;
-        }
-        let Some(function) = node.child_by_field_name("function") else {
-            return;
-        };
-        let handler = Self::arguments_of(node).first().copied();
-        match function.kind() {
-            "identifier" if HTTP_VERBS.contains(&self.text(function)) => {
-                out.push((self.text(function).to_uppercase(), handler));
-            }
-            "field_expression" => {
-                if let Some(field) = function.child_by_field_name("field") {
-                    if HTTP_VERBS.contains(&self.text(field)) {
-                        out.push((self.text(field).to_uppercase(), handler));
+        let mut node = node;
+        while node.kind() == "call_expression" {
+            let Some(function) = node.child_by_field_name("function") else {
+                return;
+            };
+            let handler = Self::arguments_of(node).first().copied();
+            match function.kind() {
+                "identifier" if HTTP_VERBS.contains(&self.text(function)) => {
+                    out.push((self.text(function).to_uppercase(), handler));
+                    return;
+                }
+                "field_expression" => {
+                    if let Some(field) = function.child_by_field_name("field") {
+                        if HTTP_VERBS.contains(&self.text(field)) {
+                            out.push((self.text(field).to_uppercase(), handler));
+                        }
                     }
+                    let Some(value) = function.child_by_field_name("value") else {
+                        return;
+                    };
+                    node = value;
                 }
-                if let Some(value) = function.child_by_field_name("value") {
-                    self.method_router(value, out);
-                }
+                _ => return,
             }
-            _ => {}
         }
     }
 
@@ -2038,15 +2046,16 @@ impl<'a> Context<'a> {
 }
 
 fn collect_strings(node: Node<'_>, context: &Context<'_>, out: &mut Vec<String>) {
-    if context.is_string(node) {
-        out.push(context.string_of(node));
-        return;
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-    for child in children {
-        collect_strings(child, context, out);
-    }
+    crate::parser::walk_preorder(node, |descendant| {
+        if descendant != node && !descendant.is_named() {
+            Walk::SkipChildren
+        } else if context.is_string(descendant) {
+            out.push(context.string_of(descendant));
+            Walk::SkipChildren
+        } else {
+            Walk::Children
+        }
+    });
 }
 
 #[cfg(test)]
@@ -2060,6 +2069,129 @@ mod tests {
     use crate::index::resolve::resolve_references;
     pub(super) use crate::index::timing::assert_scales_linearly;
     use crate::parser::Parser;
+
+    /// The entry points of one file, found on a thread with a small stack.
+    fn deep_entries(language: Language, file: &'static str, source: String) -> Vec<EntryPoint> {
+        crate::parser::deep::on_small_stack(move || entries(language, &[(file, source.as_str())]))
+    }
+
+    fn frameworks(found: &[EntryPoint]) -> Vec<String> {
+        found.iter().map(|entry| entry.framework.clone()).collect()
+    }
+
+    /// `bound_to_marker` reads each node of a file with deep nesting.
+    #[test]
+    fn an_axum_router_in_a_variable_beside_deep_nesting() {
+        use crate::parser::deep::nest;
+        let source = format!(
+            "use axum::routing::get;\n\nasync fn list() {{}}\n\nfn deep() -> i32 {{ {} }}\n\nfn app() {{\n    let router = Router::new();\n    router.route(\"/x\", get(list));\n}}\n",
+            nest("(", "1", ")")
+        );
+        deep_entries(Language::Rust, "main.rs", source);
+    }
+
+    /// `method_router` reads each call of a long chain of methods.
+    #[test]
+    fn an_axum_route_with_a_long_chain_of_methods() {
+        let source = format!(
+            "use axum::{{routing::get, Router}};\n\nasync fn list() {{}}\n\npub fn app() -> Router {{\n    Router::new().route(\"/x\", get(list){})\n}}\n",
+            ".post(list)".repeat(crate::parser::deep::DEPTH)
+        );
+        let found = deep_entries(Language::Rust, "main.rs", source);
+        assert!(frameworks(&found).contains(&"axum".to_string()));
+    }
+
+    /// `first_string` reads each level of a deep annotation argument.
+    #[test]
+    fn a_spring_mapping_with_a_deep_path() {
+        use crate::parser::deep::nest;
+        let source = format!(
+            "@RestController\npublic class UserController {{\n    @GetMapping({})\n    public String show() {{\n        return \"\";\n    }}\n}}\n",
+            nest("(", "\"/users\"", ")")
+        );
+        deep_entries(Language::Java, "UserController.java", source);
+    }
+
+    /// `collect_strings` reads each level of the methods of a Flask route.
+    #[test]
+    fn a_flask_route_with_deep_methods() {
+        use crate::parser::deep::nest;
+        let source = format!(
+            "from flask import Flask\n\napp = Flask(__name__)\n\n@app.route(\"/x\", methods={})\ndef update():\n    return 1\n",
+            nest("[", "\"POST\"", "]")
+        );
+        deep_entries(Language::Python, "app.py", source);
+    }
+
+    fn go_main(body: &str) -> String {
+        format!(
+            "package main\n\nimport \"net/http\"\n\nfunc health(w http.ResponseWriter, r *http.Request) {{}}\n\nfunc auth(next http.Handler) http.Handler {{ return next }}\n\nfunc main() {{\n\tmux := http.NewServeMux()\n{body}\n\thttp.ListenAndServe(\":80\", mux)\n}}\n"
+        )
+    }
+
+    /// `go_handler_at` reads each wrapper call around a handler.
+    #[test]
+    fn a_go_handler_inside_deep_wrapper_calls() {
+        use crate::parser::deep::nest;
+        let body = format!("\tmux.Handle(\"/c\", {})", nest("wrap(", "health", ")"));
+        deep_entries(Language::Go, "main.go", go_main(&body));
+    }
+
+    /// `go_callee` and `go_guard_name` read each call of a chain of calls.
+    #[test]
+    fn a_go_handler_wrapped_by_a_long_chain_of_calls() {
+        let body = format!(
+            "\tmux.Handle(\"/c\", auth{}(http.HandlerFunc(health)))",
+            "()".repeat(crate::parser::deep::DEPTH)
+        );
+        deep_entries(Language::Go, "main.go", go_main(&body));
+    }
+
+    fn gin_main(body: &str) -> String {
+        format!(
+            "package main\n\nimport \"github.com/gin-gonic/gin\"\n\nfunc show(c *gin.Context) {{}}\n\nfunc main() {{\n\trouter := gin.Default()\n{body}\n\trouter.GET(\"/a\", show)\n}}\n"
+        )
+    }
+
+    /// `escape` reads each parenthesis around an argument.
+    #[test]
+    fn a_go_router_inside_deep_parentheses() {
+        use crate::parser::deep::nest;
+        let body = format!("\tuse({})", nest("(", "router", ")"));
+        deep_entries(Language::Go, "main.go", gin_main(&body));
+    }
+
+    /// `literal_values` reads each level of a composite literal.
+    #[test]
+    fn a_go_router_inside_a_deep_composite_literal() {
+        use crate::parser::deep::nest;
+        let body = format!(
+            "\tvalues := []any{{{}}}\n\t_ = values",
+            nest("{", "router", "}")
+        );
+        deep_entries(Language::Go, "main.go", gin_main(&body));
+    }
+
+    /// `eval` reads each call of a long chain of groups.
+    #[test]
+    fn a_go_router_with_a_long_chain_of_groups() {
+        let body = format!(
+            "\trouter{}.GET(\"/b\", show)",
+            ".Group(\"/g\")".repeat(crate::parser::deep::DEPTH)
+        );
+        deep_entries(Language::Go, "main.go", gin_main(&body));
+    }
+
+    /// `eval` reads each parenthesis around the value of a router.
+    #[test]
+    fn a_go_router_made_inside_deep_parentheses() {
+        use crate::parser::deep::nest;
+        let body = format!(
+            "\tother := {}\n\tother.GET(\"/b\", show)",
+            nest("(", "gin.Default()", ")")
+        );
+        deep_entries(Language::Go, "main.go", gin_main(&body));
+    }
 
     #[test]
     fn concurrent_requests_for_one_file_parse_it_once() {

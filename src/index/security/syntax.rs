@@ -178,11 +178,8 @@ pub fn key_value(node: Node<'_>, source: &[u8]) -> Option<(String, String)> {
 }
 
 fn has_descendant(node: Node<'_>, test: &dyn Fn(Node<'_>) -> bool) -> bool {
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
-    children
-        .into_iter()
-        .any(|child| test(child) || has_descendant(child, test))
+    crate::parser::find_preorder(node, |descendant| descendant != node && test(descendant))
+        .is_some()
 }
 
 fn is_interpolation(kind: &str) -> bool {
@@ -259,14 +256,21 @@ fn is_composable(node: Node<'_>, source: &[u8]) -> bool {
 /// A string that code builds from parts: a concatenation with a literal, an
 /// interpolation, or a call of a formatting function.
 pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -> bool {
-    match node.kind() {
+    let mut node = node;
+    while matches!(
+        node.kind(),
         "parenthesized_expression"
-        | "reference_expression"
-        | "unary_expression"
-        | "await_expression"
-        | "argument" => node
-            .named_child(0)
-            .is_some_and(|inner| is_built_string(inner, source, syntax)),
+            | "reference_expression"
+            | "unary_expression"
+            | "await_expression"
+            | "argument"
+    ) {
+        let Some(inner) = node.named_child(0) else {
+            return false;
+        };
+        node = inner;
+    }
+    match node.kind() {
         "binary_expression" | "binary_operator" | "binary" | "additive_expression" => {
             let mut cursor = node.walk();
             let joins = node
@@ -295,10 +299,14 @@ pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -
 
 /// A literal without an interpolation.
 pub fn is_literal(node: Node<'_>) -> bool {
-    let kind = node.kind();
-    if matches!(kind, "parenthesized_expression" | "argument") {
-        return node.named_child(0).is_some_and(is_literal);
+    let mut node = node;
+    while matches!(node.kind(), "parenthesized_expression" | "argument") {
+        let Some(inner) = node.named_child(0) else {
+            return false;
+        };
+        node = inner;
     }
+    let kind = node.kind();
     if kind.contains("string") {
         return !has_interpolation(node);
     }
