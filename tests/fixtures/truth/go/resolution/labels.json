@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed. `go vet ./...` accepts the module. The harness does not run the code. The case checks the resolution of Go calls through package qualifiers.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "rand", "category": "type", "file": "local/rand.go", "name": "Rand", "kind": "struct", "container": null, "start_line": 3, "end_line": 3, "exported": true},
+    {"label": "rand_int", "category": "method", "file": "local/rand.go", "name": "Int", "kind": "method", "container": "Rand", "start_line": 5, "end_line": 5, "exported": true},
+    {"label": "run_external", "category": "free_function", "file": "main.go", "name": "runExternal", "kind": "function", "container": null, "start_line": 9, "end_line": 11, "exported": false},
+    {"label": "run_local", "category": "free_function", "file": "main.go", "name": "runLocal", "kind": "function", "container": null, "start_line": 13, "end_line": 15, "exported": false}
+  ],
+  "calls": [
+    {"label": "external_type_of_same_name", "category": "wrong_receiver", "caller": "run_external", "line": 10, "callee_text": "source.Int", "expected": []},
+    {"label": "repository_type", "category": "declared_type_receiver", "caller": "run_local", "line": 14, "callee_text": "source.Int", "expected": ["rand_int"], "status": "not_external"}
+  ]
+}

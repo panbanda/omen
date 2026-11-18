@@ -9,6 +9,8 @@
 pub mod external;
 #[cfg(test)]
 mod function_references;
+#[cfg(test)]
+mod go_calls;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, OnceLock};
@@ -719,6 +721,13 @@ impl<'a> Resolver<'a> {
                     found.extend(self.exported(*target, name).iter().copied().filter(is_type));
                 }
                 return found;
+            }
+            // A Go qualifier of a type is always the name of an imported
+            // package. The import of a package of the repository has the
+            // name of its package clause, thus no import here names a
+            // package of the repository.
+            if self.family(file) == Family::Go {
+                return Vec::new();
             }
         }
         let found = in_files(&[file]);
