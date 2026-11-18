@@ -242,6 +242,28 @@ omen diff --target abc123
 omen -f markdown diff --target main
 ```
 
+**Change set as JSON:**
+
+With `-f json`, `omen diff` gives the risk and the change set. The change set has `summary`, `symbols`, `files`, `new_findings`, `notes`, and `security`. The MCP tool `diff` gives the same data. Each entry of `symbols` has the state of the symbol, its signature and its complexity before and after, its direct callers, and its number of transitive callers.
+
+The order of `symbols` is the same in the JSON and in the comment:
+
+1. A symbol that is not test code comes before a symbol that is test code.
+2. A changed or removed symbol comes before an added symbol.
+3. A symbol with more transitive callers comes first.
+4. The key decides between two symbols that are equal in the other rules.
+
+| Flag | Default | Meaning |
+| ---- | ------- | ------- |
+| `--top`, `--offset` | none | Page `symbols`. `symbols_omitted` gives the number of symbols after the page. The counts in `summary` are always complete. |
+| `--max-callers` | 20 | Maximum number of `direct_callers` of one symbol. `direct_caller_count` is always complete. The value 0 removes the limit. |
+
+```bash
+omen -f json diff --target main --top 20
+```
+
+The text format gives the risk only.
+
 **Pull-request comment:**
 
 With `-f markdown`, `omen diff` writes a comment for a pull request. The first line is `<!-- omen:diff -->`, so a CI step can find and replace its own comment. A CI step can pipe the text into `gh pr comment --body-file -`. Omen does not call a forge API.

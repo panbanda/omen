@@ -5,10 +5,14 @@
 //! match one import path give [`ImportTarget::Ambiguous`]. The files of one
 //! package give [`ImportTarget::Package`], which is a certain target.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+pub mod cargo;
+
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+use parking_lot::RwLock;
 
 use super::extract::FileSymbols;
-use super::model::{ImportBinding, ImportKind, ImportTarget};
+use super::model::{ImportBinding, ImportKind, ImportTarget, SymbolKind};
 use crate::core::Language;
 
 /// The facts of the repository that the module maps use.
@@ -24,6 +28,27 @@ struct Repository<'a> {
     by_directory_suffix: HashMap<&'a str, Vec<usize>>,
     /// The files that declare the package or the namespace of the key.
     by_module: HashMap<&'a str, Vec<usize>>,
+    /// The files that the manifests make the root of a Rust crate.
+    rust_roots: BTreeSet<String>,
+    /// The files of `rust_roots` that declare a child module with `mod name;`,
+    /// by their directory and the name of the module. A directory can have
+    /// many roots, thus a search through them for each module costs too much.
+    rust_roots_by_child: HashMap<(String, String), Vec<String>>,
+    /// The root file of the library of each Rust package, by the directory of the package.
+    rust_libraries: HashMap<&'a str, String>,
+    /// The directory of a dependency whose library has a name that is not
+    /// the key of the dependency, as `[lib] name` gives. The key is the
+    /// directory of the manifest and the name of the library.
+    rust_library_names: HashMap<(&'a str, &'a str), String>,
+    /// The modules that a Rust file defines itself, outside each other
+    /// module: the file and the name of the module.
+    rust_inline_modules: HashSet<(&'a str, &'a str)>,
+    /// The Rust files and the names of the child modules that they declare
+    /// with `mod name;`.
+    rust_module_declarations: HashSet<(&'a str, &'a str)>,
+    /// The results of `rust_parent`. Each import with `super` or `crate`
+    /// asks for the parent of its file.
+    rust_parents: RwLock<HashMap<String, Option<String>>>,
 }
 
 /// The module tree of the Rust files of an index: which file is the root of a crate, the
@@ -53,7 +78,7 @@ impl<'a> RustModules<'a> {
     /// The file of the child module `name` that `mod name;` in `file` declares.
     pub fn child(&self, file: &str, name: &str) -> Option<String> {
         self.repository
-            .rust_child(&Repository::rust_children(file), name)
+            .rust_child(&self.repository.rust_children(file), name)
     }
 }
 
@@ -73,6 +98,8 @@ impl<'a> Repository<'a> {
         let mut by_suffix: HashMap<&str, Vec<usize>> = HashMap::new();
         let mut by_directory_suffix: HashMap<&str, Vec<usize>> = HashMap::new();
         let mut by_module: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut rust_inline_modules = HashSet::new();
+        let mut rust_module_declarations = HashSet::new();
         for (position, file) in files.iter().enumerate() {
             by_path.insert(file.file.as_str(), position);
             for suffix in suffixes(&file.file) {
@@ -87,8 +114,25 @@ impl<'a> Repository<'a> {
             for module in &file.modules {
                 by_module.entry(module.as_str()).or_default().push(position);
             }
+            if file.language == Language::Rust {
+                rust_inline_modules.extend(
+                    file.symbols
+                        .iter()
+                        .filter(|symbol| {
+                            symbol.kind == SymbolKind::Module && symbol.container.is_none()
+                        })
+                        .map(|symbol| (file.file.as_str(), symbol.name.as_str())),
+                );
+                rust_module_declarations.extend(
+                    file.imports
+                        .iter()
+                        .filter(|binding| binding.kind == ImportKind::ModuleDeclaration)
+                        .filter_map(|binding| binding.local_name.as_deref())
+                        .map(|child| (file.file.as_str(), child)),
+                );
+            }
         }
-        Self {
+        let mut repository = Self {
             files,
             paths: files.iter().map(|file| file.file.as_str()).collect(),
             manifests,
@@ -96,7 +140,87 @@ impl<'a> Repository<'a> {
             by_suffix,
             by_directory_suffix,
             by_module,
+            rust_roots: BTreeSet::new(),
+            rust_roots_by_child: HashMap::new(),
+            rust_libraries: HashMap::new(),
+            rust_library_names: HashMap::new(),
+            rust_inline_modules,
+            rust_module_declarations,
+            rust_parents: RwLock::new(HashMap::new()),
+        };
+        repository.read_rust_packages();
+        repository
+    }
+
+    /// Finds the root files of the crates of each package: the library, the
+    /// targets that have a `path` key, the build script, `src/main.rs`, and
+    /// each file of a directory in which `cargo` makes a target of each file.
+    fn read_rust_packages(&mut self) {
+        let manifests = self.manifests;
+        let mut roots = BTreeSet::new();
+        for (here, package) in &manifests.rust_packages {
+            if package.library_name.is_none() {
+                continue;
+            }
+            let library = package
+                .library_path
+                .clone()
+                .or_else(|| join(here, "src/lib.rs"));
+            if let Some(library) = self.existing(library) {
+                self.rust_libraries.insert(here.as_str(), library.clone());
+                roots.insert(library);
+            }
+            for path in &package.target_paths {
+                roots.extend(self.existing(Some(path.clone())));
+            }
+            roots.extend(self.existing(join(here, "src/main.rs")));
+            for targets in &package.target_directories {
+                roots.extend(
+                    self.in_directories(targets)
+                        .filter(|file| {
+                            file.language == Language::Rust && directory(&file.file) == targets
+                        })
+                        .map(|file| file.file.clone()),
+                );
+            }
         }
+        for (here, package) in &manifests.rust_packages {
+            for (key, dependency) in &package.dependencies {
+                // A dependency with a `package` key has the name of its key.
+                if dependency.package != *key {
+                    continue;
+                }
+                let cargo::CrateSource::Repository(target) = manifests.rust_crate_in(here, key)
+                else {
+                    continue;
+                };
+                let library = manifests
+                    .rust_packages
+                    .get(&target)
+                    .and_then(|package| package.library_name.as_deref());
+                if let Some(library) = library.filter(|library| *library != key.as_str()) {
+                    self.rust_library_names
+                        .insert((here.as_str(), library), target);
+                }
+            }
+        }
+        for root in &roots {
+            let Some(position) = self.by_path.get(root.as_str()) else {
+                continue;
+            };
+            let declared = self.files[*position]
+                .imports
+                .iter()
+                .filter(|binding| binding.kind == ImportKind::ModuleDeclaration)
+                .filter_map(|binding| binding.local_name.clone());
+            for child in declared {
+                self.rust_roots_by_child
+                    .entry((directory(root).to_string(), child))
+                    .or_default()
+                    .push(root.clone());
+            }
+        }
+        self.rust_roots = roots;
     }
 
     /// The files in the directories whose path is `suffix` or ends with
@@ -118,11 +242,10 @@ pub struct Manifests {
     pub go_modules: BTreeMap<String, String>,
     /// The directories in which Ruby `require` looks for a file.
     pub ruby_load_roots: BTreeSet<String>,
-    /// The library name of each `Cargo.toml` file, by the directory of the file.
-    pub rust_crates: BTreeMap<String, String>,
-    /// The names with which Rust source refers to the dependencies of each
-    /// `Cargo.toml` file, by the directory of the file.
-    pub rust_dependencies: BTreeMap<String, BTreeSet<String>>,
+    /// The facts of each `Cargo.toml` file, by the directory of the file.
+    pub rust_packages: BTreeMap<String, cargo::Package>,
+    /// The directories of the Rust packages, by the name of their library.
+    pub rust_library_directories: BTreeMap<String, BTreeSet<String>>,
     /// The packages that the `package.json` files of the repository name.
     pub node_packages: Vec<NodePackage>,
 }
@@ -196,8 +319,8 @@ impl Default for Manifests {
         Self {
             go_modules: BTreeMap::new(),
             ruby_load_roots: [String::new(), "lib".to_string()].into(),
-            rust_crates: BTreeMap::new(),
-            rust_dependencies: BTreeMap::new(),
+            rust_packages: BTreeMap::new(),
+            rust_library_directories: BTreeMap::new(),
             node_packages: Vec::new(),
         }
     }
@@ -222,100 +345,53 @@ impl Manifests {
                 self.ruby_load_roots.extend(join(here, &root));
             }
         } else if file_name(path) == "Cargo.toml" {
-            self.rust_crates
-                .extend(rust_library_name(text).map(|name| (here.to_string(), name)));
-            self.rust_dependencies
-                .insert(here.to_string(), rust_dependency_names(text));
+            let Some(package) = cargo::package(here, text) else {
+                return;
+            };
+            if let Some(library) = &package.library_name {
+                self.rust_library_directories
+                    .entry(library.clone())
+                    .or_default()
+                    .insert(here.to_string());
+            }
+            self.rust_packages.insert(here.to_string(), package);
         }
     }
 
-    /// Tells if the `Cargo.toml` file nearest to `file` declares a dependency
-    /// that Rust source calls `name`.
-    pub fn declares_rust_dependency(&self, file: &str, name: &str) -> bool {
-        // A dependency that is a crate of the repository is not external.
-        if self.rust_crates.values().any(|library| library == name) {
-            return false;
-        }
+    /// The source of the crate that Rust source in `file` calls `name`.
+    pub fn rust_crate(&self, file: &str, name: &str) -> cargo::CrateSource {
+        self.rust_crate_in(directory(file), name)
+    }
+
+    /// The source of the crate that Rust source in `directory` calls `name`.
+    fn rust_crate_in(&self, directory: &str, name: &str) -> cargo::CrateSource {
+        cargo::crate_source(
+            &self.rust_packages,
+            &self.rust_library_directories,
+            directory,
+            name,
+        )
+    }
+
+    /// The directory of the manifest nearest to `file`.
+    fn rust_manifest_directory(&self, file: &str) -> Option<&str> {
         let mut here = directory(file);
         loop {
-            if let Some(names) = self.rust_dependencies.get(here) {
-                return names.contains(name);
+            if let Some((found, _)) = self.rust_packages.get_key_value(here) {
+                return Some(found.as_str());
             }
             if here.is_empty() {
-                return false;
+                return None;
             }
             here = directory(here);
         }
     }
-}
 
-/// The names with which Rust source refers to the dependencies in a
-/// `Cargo.toml` file. A name has `_` for `-`. The key of a dependency is its
-/// name in the source, also when `package` renames it. The tables are
-/// `dependencies`, `dev-dependencies`, `build-dependencies`, and
-/// `workspace.dependencies`, and the same tables of `target.<condition>`. A
-/// dependency whose value has a `path` key, in any form of TOML, is a crate of
-/// the repository and is not in the result. A manifest that does not parse has
-/// no dependency.
-pub fn rust_dependency_names(cargo_toml: &str) -> BTreeSet<String> {
-    const KINDS: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
-    let Ok(manifest) = toml::from_str::<toml::Table>(cargo_toml) else {
-        return BTreeSet::new();
-    };
-    let mut tables: Vec<&toml::Table> = Vec::new();
-    fn table_of(value: Option<&toml::Value>) -> Option<&toml::Table> {
-        value.and_then(toml::Value::as_table)
+    /// Tells if the `Cargo.toml` file nearest to `file` declares a dependency
+    /// that Rust source calls `name`, and that is not a crate of the repository.
+    pub fn declares_rust_dependency(&self, file: &str, name: &str) -> bool {
+        self.rust_crate(file, name) == cargo::CrateSource::External
     }
-    for kind in KINDS {
-        tables.extend(table_of(manifest.get(kind)));
-    }
-    tables.extend(table_of(
-        table_of(manifest.get("workspace")).and_then(|w| w.get("dependencies")),
-    ));
-    if let Some(targets) = table_of(manifest.get("target")) {
-        for target in targets.values().filter_map(|value| value.as_table()) {
-            for kind in KINDS {
-                tables.extend(table_of(target.get(kind)));
-            }
-        }
-    }
-    let mut names = BTreeSet::new();
-    for table in tables {
-        for (key, value) in table {
-            let is_path = value
-                .as_table()
-                .is_some_and(|dependency| dependency.contains_key("path"));
-            if !is_path {
-                names.insert(key.replace('-', "_"));
-            }
-        }
-    }
-    names
-}
-
-/// The name with which Rust source refers to the library of a `Cargo.toml`
-/// file: the `name` of `[lib]`, or the `name` of `[package]` with `_` for `-`.
-pub fn rust_library_name(cargo_toml: &str) -> Option<String> {
-    let mut section = "";
-    let mut package = None;
-    let mut library = None;
-    for line in cargo_toml.lines().map(str::trim) {
-        if line.starts_with('[') {
-            section = line;
-            continue;
-        }
-        let name = line
-            .strip_prefix("name")
-            .map(str::trim_start)
-            .and_then(|rest| rest.strip_prefix('='))
-            .map(|value| value.trim().trim_matches('"').to_string());
-        match (section, name) {
-            ("[package]", Some(name)) => package = Some(name.replace('-', "_")),
-            ("[lib]", Some(name)) => library = Some(name),
-            _ => {}
-        }
-    }
-    library.or(package)
 }
 
 /// The `require_paths` of a gem specification. Without the assignment, the
@@ -644,11 +720,13 @@ impl Repository<'_> {
         }
     }
 
-    /// The directory that has the child modules of the module in `file`.
-    fn rust_children(file: &str) -> String {
+    /// The directory that has the child modules of the module in `file`. The
+    /// root file of a crate has its child modules in its own directory, for
+    /// each name of the root file.
+    fn rust_children(&self, file: &str) -> String {
         let here = directory(file);
         let stem = file_name(file).trim_end_matches(".rs");
-        if ["main", "lib", "mod"].contains(&stem) {
+        if ["main", "lib", "mod"].contains(&stem) || self.rust_roots.contains(file) {
             here.to_string()
         } else {
             join(here, stem).unwrap_or_default()
@@ -657,33 +735,50 @@ impl Repository<'_> {
 
     /// The file of the module that declares the module in `file`.
     fn rust_parent(&self, file: &str) -> Option<String> {
+        if let Some(found) = self.rust_parents.read().get(file) {
+            return found.clone();
+        }
+        let found = self.find_rust_parent(file);
+        self.rust_parents
+            .write()
+            .insert(file.to_string(), found.clone());
+        found
+    }
+
+    fn find_rust_parent(&self, file: &str) -> Option<String> {
+        if self.rust_roots.contains(file) {
+            return None;
+        }
         let here = directory(file);
         let stem = file_name(file).trim_end_matches(".rs");
         // The module that declares the child module `child` in `children`.
         let owner = |children: &str, child: &str| -> Option<String> {
-            let mut found: Vec<String> = ["main.rs", "lib.rs", "mod.rs"]
+            let mut found: BTreeSet<String> = ["main.rs", "lib.rs", "mod.rs"]
                 .iter()
                 .filter_map(|root| self.existing(join(children, root)))
                 .collect();
+            let named_roots = self
+                .rust_roots_by_child
+                .get(&(children.to_string(), child.to_string()));
+            found.extend(named_roots.into_iter().flatten().cloned());
             if let Some((above, name)) = children.rsplit_once('/') {
                 found.extend(self.existing(join(above, &format!("{name}.rs"))));
             } else if !children.is_empty() {
                 found.extend(self.existing(Some(format!("{children}.rs"))));
             }
-            // A directory can have `lib.rs` and `main.rs`. The root that has
+            // A directory can have two or more roots. The root that has
             // `mod child;` is the parent.
             if found.len() > 1 {
                 found.retain(|candidate| {
-                    self.files.iter().any(|facts| {
-                        facts.file == *candidate
-                            && facts.imports.iter().any(|binding| {
-                                binding.kind == ImportKind::ModuleDeclaration
-                                    && binding.local_name.as_deref() == Some(child)
-                            })
-                    })
+                    self.rust_module_declarations
+                        .contains(&(candidate.as_str(), child))
                 });
             }
-            (found.len() == 1).then(|| found.remove(0))
+            let mut found = found.into_iter();
+            match (found.next(), found.next()) {
+                (Some(only), None) => Some(only),
+                _ => None,
+            }
         };
         match stem {
             "main" | "lib" => None,
@@ -703,16 +798,22 @@ impl Repository<'_> {
                 return None;
             }
         }
-        ["main.rs", "lib.rs"]
-            .contains(&file_name(&current))
-            .then_some(current)
+        let is_root = ["main.rs", "lib.rs"].contains(&file_name(&current))
+            || self.rust_roots.contains(current.as_str());
+        is_root.then_some(current)
     }
 
     fn rust(&self, binding: &ImportBinding) -> ImportTarget {
+        // `mod name;` declares a child of the module of the file. A crate with the same
+        // name is a different module.
+        if binding.kind == ImportKind::ModuleDeclaration {
+            return self
+                .rust_child(&self.rust_children(&binding.file), &binding.module_path)
+                .map_or(ImportTarget::Unresolved, ImportTarget::Resolved);
+        }
         match self.rust_walk(&binding.file, &binding.module_path) {
             None => ImportTarget::Unresolved,
             Some((module, true, _)) => ImportTarget::Resolved(module),
-            Some(_) if binding.kind == ImportKind::ModuleDeclaration => ImportTarget::Unresolved,
             Some(_) => ImportTarget::External,
         }
     }
@@ -744,23 +845,37 @@ impl Repository<'_> {
                 moved = true;
                 segments.next();
             }
-            // The name of a library of the repository, as a test or a
-            // binary of the package uses it.
-            Some(first) => {
-                let roots: Vec<String> = self
-                    .manifests
-                    .rust_crates
-                    .iter()
-                    .filter(|(_, name)| name.as_str() == first)
-                    .filter_map(|(root, _)| self.existing(join(root, "src/lib.rs")))
-                    .collect();
-                if let [root] = roots.as_slice() {
-                    module = root.clone();
-                    moved = true;
-                    segments.next();
+            // A module in the file is not a module file. The path stays
+            // in the file, and no segment after it names a file.
+            Some(first) if self.rust_inline_modules.contains(&(file, first)) => {
+                return Some((module, true, false));
+            }
+            // A name that is not a child module of the file can be the name
+            // of a crate. The manifest of the file tells which crate it is.
+            Some(first) if self.rust_child(&self.rust_children(file), first).is_none() => {
+                match self.manifests.rust_crate(file, first) {
+                    cargo::CrateSource::Repository(package) => {
+                        // Without the library file, the path has no target.
+                        module = self.rust_libraries.get(package.as_str())?.clone();
+                        moved = true;
+                        segments.next();
+                    }
+                    cargo::CrateSource::OutsideRepository => return None,
+                    cargo::CrateSource::NotDeclared => {
+                        let renamed = self
+                            .manifests
+                            .rust_manifest_directory(file)
+                            .and_then(|here| self.rust_library_names.get(&(here, first)));
+                        if let Some(package) = renamed {
+                            module = self.rust_libraries.get(package.as_str())?.clone();
+                            moved = true;
+                            segments.next();
+                        }
+                    }
+                    cargo::CrateSource::External => {}
                 }
             }
-            None => {}
+            _ => {}
         }
         while segments.peek() == Some(&"super") {
             module = self.rust_parent(&module)?;
@@ -769,7 +884,7 @@ impl Repository<'_> {
         }
         let mut complete = true;
         for segment in segments {
-            match self.rust_child(&Self::rust_children(&module), segment) {
+            match self.rust_child(&self.rust_children(&module), segment) {
                 Some(child) => {
                     module = child;
                     moved = true;
@@ -1096,6 +1211,11 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
                     .iter()
                     .filter(|_| file.language == Language::Rust)
                     .filter_map(|reference| reference.qualifier.as_deref())
+                    .chain(
+                        file.value_sites
+                            .qualifiers()
+                            .filter(|_| file.language == Language::Rust),
+                    )
                     .flat_map(|qualifier| {
                         // The path before a type names the module of the type.
                         let module = qualifier.rsplit_once("::").map(|(module, _)| module);
@@ -1229,31 +1349,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_inline_dependency_is_a_path_dependency_only_with_a_path_key() {
-        let manifest = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nalgo = { package = \"pathfinding\", version = \"4\" }\nlocal = { path = \"../local\", version = \"1\" }\nspaced = { version = \"1\", path = \"x\" } # path\nplain = \"1\"\n";
-        let names = rust_dependency_names(manifest);
-        let found: Vec<&str> = names.iter().map(String::as_str).collect();
-        assert_eq!(found, ["algo", "plain"]);
-    }
-
-    #[test]
-    fn test_path_key_in_any_form_of_toml_makes_a_repository_crate() {
-        let manifest = "[dependencies]\nlocal_alias.path = \"../local\"\nlocal_alias.package = \"local-pkg\"\ntabled = \"1\"\nexternal = { version = \"1\" }\n\n[dependencies.long_form]\npath = \"../long\"\n\n[dependencies.long_external]\nversion = \"2\"\n\n[target.'cfg(unix)'.dependencies]\ntarget_local = { path = \"../t\" }\ntarget_external = \"1\"\n\n[workspace.dependencies]\nshared_local = { path = \"shared\" }\nshared_external = \"3\"\n";
-        let names = rust_dependency_names(manifest);
-        let found: Vec<&str> = names.iter().map(String::as_str).collect();
-        assert_eq!(
-            found,
-            [
-                "external",
-                "long_external",
-                "shared_external",
-                "tabled",
-                "target_external"
-            ]
-        );
-    }
-
-    #[test]
     fn test_go_module_path() {
         assert_eq!(
             go_module_path("// c\nmodule example.com/shop\n\ngo 1.21\n").as_deref(),
@@ -1268,5 +1363,71 @@ mod tests {
         assert_eq!(join("a/b", "../c/./d").as_deref(), Some("a/c/d"));
         assert_eq!(join("", "x").as_deref(), Some("x"));
         assert_eq!(join("a", "../../x"), None);
+    }
+
+    /// `roots` integration tests declare `mod common;`, and the shared module
+    /// has `imports` imports with `crate::`. The parent of the shared module
+    /// is one of many roots, thus it has no one parent.
+    fn imports_of_a_module_of_many_roots_resolve_at(
+        roots: usize,
+        imports: usize,
+    ) -> std::time::Duration {
+        let manifest = "[package]\nname = \"kit\"\n";
+        let mut owned = vec![
+            ("Cargo.toml".to_string(), manifest.to_string()),
+            ("src/lib.rs".to_string(), "pub fn run() {}\n".to_string()),
+        ];
+        for root in 0..roots {
+            owned.push((format!("tests/t{root}.rs"), "mod common;\n".to_string()));
+        }
+        let shared: String = (0..imports)
+            .map(|import| format!("use crate::helper{import};\n"))
+            .collect();
+        owned.push(("tests/common/mod.rs".to_string(), shared));
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let facts = super::testing::index(&files);
+        let elapsed = started.elapsed();
+        let shared = facts
+            .iter()
+            .find(|file| file.file == "tests/common/mod.rs")
+            .expect("the shared module");
+        assert_eq!(shared.imports.len(), imports);
+        assert!(shared
+            .imports
+            .iter()
+            .all(|binding| binding.target_file == ImportTarget::Unresolved));
+        elapsed
+    }
+
+    #[test]
+    fn test_imports_of_a_module_of_many_roots_are_unresolved() {
+        imports_of_a_module_of_many_roots_resolve_at(20, 20);
+    }
+
+    /// The search for the parent of the shared module must not occur again
+    /// for each import.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_imports_of_a_module_of_many_roots_resolve_in_linear_time() {
+        let size = 2_000;
+        let best = |size: usize| {
+            (0..2)
+                .map(|_| imports_of_a_module_of_many_roots_resolve_at(size, size))
+                .min()
+                .expect("two runs")
+        };
+        let small = best(size);
+        let large = best(size * 2);
+        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
+        assert!(
+            large < allowed,
+            "{small:?} at {size}, {large:?} at {}",
+            size * 2
+        );
+        assert!(large.as_secs() < 60, "{large:?}");
     }
 }

@@ -316,9 +316,7 @@ fn full_command(changes: &ChangeSet) -> String {
 
 fn sorted_symbols(changes: &ChangeSet) -> Vec<&SymbolChange> {
     let mut symbols: Vec<&SymbolChange> = changes.symbols.iter().collect();
-    symbols.sort_by(|left, right| {
-        (&left.file, left.line, &left.key).cmp(&(&right.file, right.line, &right.key))
-    });
+    symbols.sort_by(|left, right| left.review_order(right));
     symbols
 }
 
@@ -624,6 +622,7 @@ mod tests {
             }],
             transitive_callers: 3,
             weakest_basis: Some("same_file".to_string()),
+            is_test: false,
         }
     }
 

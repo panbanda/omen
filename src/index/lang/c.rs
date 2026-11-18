@@ -226,6 +226,10 @@ pub(crate) fn exported(draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported
 }
 
 impl LanguageSpec for C {
+    fn value_syntax(&self) -> crate::index::calls::ValueSyntax {
+        super::values::C
+    }
+
     fn block_kinds(&self) -> Vec<&'static str> {
         vec!["compound_statement"]
     }

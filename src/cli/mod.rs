@@ -79,7 +79,16 @@ pub enum Command {
     #[command(alias = "jit")]
     Changes(ChangesArgs),
 
-    /// Analyze a specific diff (PR review)
+    /// Give the risk and the change set of a branch (PR review)
+    #[command(
+        long_about = "Give the risk of the changes on the current branch in relation to a target ref.\n\n\
+        With `-f json`, the output also has the change set: `summary`, `symbols`, `files`, \
+        `new_findings`, and `security`. The symbols that are not test code come first. Then a \
+        changed or removed symbol comes before an added symbol. Then the symbol with more \
+        transitive callers comes first. `--top` and `--offset` page `symbols`. The counts in \
+        `summary` are always complete.\n\n\
+        With `-f markdown`, the output is a comment for a pull request with the same order."
+    )]
     #[command(alias = "pr")]
     Diff(DiffArgs),
 
@@ -305,6 +314,10 @@ pub struct DiffArgs {
     /// Node cap of the call graph in the Markdown comment
     #[arg(long, default_value_t = crate::changeset::markdown::DEFAULT_MAX_NODES)]
     pub max_nodes: usize,
+
+    /// Cap of the direct callers of each symbol in the JSON (0 = unlimited)
+    #[arg(long, default_value_t = crate::commands::diff::DEFAULT_MAX_CALLERS)]
+    pub max_callers: usize,
 
     // `diff` has no file set to filter, so it takes only the pagination flags
     // and not the full `AnalyzerArgs`.
@@ -2308,6 +2321,16 @@ mod tests {
         };
         assert_eq!(args.max_bytes, 60000);
         assert_eq!(args.max_nodes, 30);
+        assert_eq!(args.max_callers, 20);
+    }
+
+    #[test]
+    fn test_diff_max_callers_flag_parses() {
+        let cli = parse(&["omen", "diff", "--max-callers", "0"]);
+        let Command::Diff(args) = cli.command else {
+            panic!("expected Diff command");
+        };
+        assert_eq!(args.max_callers, 0);
     }
 
     #[test]

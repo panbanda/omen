@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "language": "csharp",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid C#. The type `Library` and the ASP.NET framework are not in the case. `library.Cleanup` names a method of `Library`, and `JobController.cs` does not name the class `Other`. The harness does not run the code.",
+  "closed_world": false,
+  "references": [
+    {
+      "label": "method_group",
+      "user": "JobController.cs#JobController.CreateJob",
+      "line": 25,
+      "name": "Audit",
+      "expected": ["JobController.cs#JobController.Audit"]
+    },
+    {
+      "label": "local_function_as_callback",
+      "user": "JobController.cs#JobController.CreateJob",
+      "line": 24,
+      "name": "LoadModule",
+      "expected": ["JobController.cs#JobController.CreateJob.LoadModule"]
+    },
+    {
+      "label": "shadowed_name",
+      "user": "JobController.cs#JobController.Shadowed",
+      "line": 32,
+      "name": "Audit",
+      "expected": []
+    },
+    {
+      "label": "same_name_in_file_without_import",
+      "user": "JobController.cs#JobController.OtherFile",
+      "line": 39,
+      "name": "Cleanup",
+      "expected": []
+    },
+    {
+      "label": "name_in_comment",
+      "user": "JobController.cs#JobController.TextOnly",
+      "line": 46,
+      "name": "Audit",
+      "expected": []
+    },
+    {
+      "label": "name_in_string",
+      "user": "JobController.cs#JobController.TextOnly",
+      "line": 47,
+      "name": "Audit",
+      "expected": []
+    }
+  ],
+  "paths": [
+    {
+      "label": "handler_to_nested_callback",
+      "entry_file": "JobController.cs",
+      "entry_line": 17,
+      "sink_file": "JobController.cs",
+      "sink_line": 22,
+      "steps": [
+        "JobController.cs#JobController.CreateJob",
+        "JobController.cs#JobController.CreateJob.LoadModule"
+      ],
+      "weakest_basis": "lexical_scope",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "handler_to_method_group",
+      "entry_file": "JobController.cs",
+      "entry_line": 17,
+      "sink_file": "JobController.cs",
+      "sink_line": 14,
+      "steps": [
+        "JobController.cs#JobController.CreateJob",
+        "JobController.cs#JobController.Audit"
+      ],
+      "weakest_basis": "enclosing_type",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "shadowed_name_has_no_path",
+      "entry_file": "JobController.cs",
+      "entry_line": 29,
+      "sink_file": "JobController.cs",
+      "sink_line": 14,
+      "flagged": false
+    },
+    {
+      "label": "file_without_import_has_no_path",
+      "entry_file": "JobController.cs",
+      "entry_line": 36,
+      "sink_file": "Other.cs",
+      "sink_line": 8,
+      "flagged": false
+    },
+    {
+      "label": "text_has_no_path",
+      "entry_file": "JobController.cs",
+      "entry_line": 43,
+      "sink_file": "JobController.cs",
+      "sink_line": 14,
+      "flagged": false
+    }
+  ]
+}

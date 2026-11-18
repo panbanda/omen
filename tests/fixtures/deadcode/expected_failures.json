@@ -1,7 +1,1 @@
-[
-  {
-    "id": "php/deadcode/alive/live_value",
-    "reason": "omen reports liveValue in main.php as dead. A string names the callable in array_map, and the analysis does not read it.",
-    "tracking": "phase-2-deadcode"
-  }
-]
+[]

@@ -583,11 +583,10 @@ fn compare_symbols(
             weakest_basis: edges
                 .weakest_basis(key)
                 .map(|basis| basis.name().to_string()),
+            is_test: is_test_symbol(&file.file, Some(symbol)),
         });
     }
-    changes.sort_by(|left, right| {
-        (&left.file, left.line, &left.key).cmp(&(&right.file, right.line, &right.key))
-    });
+    changes.sort_by(SymbolChange::review_order);
     (changes, alias)
 }
 

@@ -372,7 +372,7 @@ const PRIMARY_LISTS: &[(&str, &str)] = &[
     ("clones", "/clones"),
     ("defect", "/files"),
     ("changes", "/commits"),
-    ("diff", "/recommendations"),
+    ("diff", "/symbols"),
     ("tdg", "/files"),
     ("graph", "/nodes"),
     ("hotspot", "/hotspots"),
@@ -463,9 +463,16 @@ struct CutCase {
 }
 
 /// `run` has one caller and nine callees. `helper` in `util.rs` has three
-/// callers. The limit cuts only the paged list: `callers` of `get_symbol`,
-/// and the levels of `impact`.
+/// callers. The branch adds three symbols after `main~1`. The limit cuts only
+/// the paged list: `callers` of `get_symbol`, the levels of `impact`, and
+/// `symbols` of `diff`.
 const CUT_CASES: &[CutCase] = &[
+    CutCase {
+        tool: "diff",
+        command: &["diff", "--target", "main~1", "--top", "1", "--offset", "1"],
+        arguments: r#"{"base": "main~1", "limit": 1, "offset": 1}"#,
+        cuts: true,
+    },
     CutCase {
         tool: "get_symbol",
         command: &["symbol", "run", "--top", "1"],
@@ -524,8 +531,10 @@ fn a_limit_cuts_the_same_lists_on_the_two_sides() {
         if let Some(map) = cli.as_object_mut() {
             map.retain(|key, _| !key.ends_with("_omitted"));
         }
+        let cli = without_exemptions(case.tool, cli);
+        let mcp = without_exemptions(case.tool, envelope["result"].clone());
         let mut places = Vec::new();
-        differences("", &cli, &envelope["result"], &mut places);
+        differences("", &cli, &mcp, &mut places);
         found.extend(places.into_iter().map(|place| format!("{name}: {place}")));
     }
     assert_no_differences(found);
@@ -538,6 +547,7 @@ const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
     (("outline", "file"), "file"),
     (("clones", "include_tests"), "include_tests"),
     (("diff", "base"), "target"),
+    (("diff", "max_callers"), "max_callers"),
     (("churn", "since"), "since"),
     (("changes", "since"), "since"),
     (("defect", "since"), "since"),

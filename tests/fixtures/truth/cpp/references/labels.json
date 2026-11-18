@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "language": "cpp",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid C++. `cleanup` in `main.cpp` is a pointer variable that a different translation unit defines, and the function `cleanup` of `other.cpp` is static. The nested function is a lambda that a local name holds. The harness does not run the code.",
+  "closed_world": false,
+  "references": [
+    {
+      "label": "function_pointer_by_name",
+      "user": "main.cpp#main",
+      "line": 35,
+      "name": "audit",
+      "expected": ["main.cpp#audit"]
+    },
+    {
+      "label": "lambda_as_callback",
+      "user": "main.cpp#main",
+      "line": 33,
+      "name": "load",
+      "expected": ["main.cpp#main.load"]
+    },
+    {
+      "label": "member_function_pointer",
+      "user": "main.cpp#Job.start",
+      "line": 17,
+      "name": "step",
+      "expected": ["main.cpp#Job.step"]
+    },
+    {
+      "label": "shadowed_name",
+      "user": "main.cpp#shadowed",
+      "line": 23,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "same_name_in_file_without_declaration",
+      "user": "main.cpp#main",
+      "line": 36,
+      "name": "cleanup",
+      "expected": []
+    },
+    {
+      "label": "name_in_comment",
+      "user": "main.cpp#text_only",
+      "line": 27,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "name_in_string",
+      "user": "main.cpp#text_only",
+      "line": 28,
+      "name": "audit",
+      "expected": []
+    }
+  ],
+  "paths": [
+    {
+      "label": "main_to_lambda",
+      "entry_file": "main.cpp",
+      "entry_line": 31,
+      "sink_file": "main.cpp",
+      "sink_line": 32,
+      "steps": ["main.cpp#main", "main.cpp#main.load"],
+      "weakest_basis": "lexical_scope",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "main_to_callback",
+      "entry_file": "main.cpp",
+      "entry_line": 31,
+      "sink_file": "main.cpp",
+      "sink_line": 8,
+      "steps": ["main.cpp#main", "main.cpp#audit"],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "main_to_member_function_pointer",
+      "entry_file": "main.cpp",
+      "entry_line": 31,
+      "sink_file": "main.cpp",
+      "sink_line": 13,
+      "steps": ["main.cpp#main", "main.cpp#Job.start", "main.cpp#Job.step"],
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "file_without_declaration_has_no_path",
+      "entry_file": "main.cpp",
+      "entry_line": 31,
+      "sink_file": "other.cpp",
+      "sink_line": 4,
+      "flagged": false
+    }
+  ]
+}

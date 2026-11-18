@@ -105,6 +105,35 @@ impl ResolutionSummary {
     }
 }
 
+/// The candidates of a reference that are in the view, and the basis of the
+/// edge to them. Without a basis, the reference gives no edge.
+fn edge_of(
+    reference: &super::model::Reference,
+    by_key: &HashMap<SharedStr, usize>,
+) -> (Vec<usize>, Option<ResolutionBasis>) {
+    let resolution = &reference.resolution;
+    let candidates: Vec<usize> = resolution
+        .candidates
+        .iter()
+        .filter_map(|key| by_key.get(key).copied())
+        .collect();
+    let is_edge = matches!(
+        resolution.status,
+        ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
+    );
+    // One candidate that has only the name is an edge when the
+    // caller of the view asks for the basis `NameOnly`.
+    let by_name_only = resolution.status == ResolutionStatus::Ambiguous
+        && resolution.basis == Some(ResolutionBasis::NameOnly)
+        && candidates.len() == 1;
+    let basis = match (is_edge, by_name_only) {
+        (true, _) => resolution.basis,
+        (false, true) => Some(ResolutionBasis::NameOnly),
+        (false, false) => None,
+    };
+    (candidates, basis)
+}
+
 pub struct CallView {
     /// The definitions, in the order of the file and the position. A field
     /// is not in the view.
@@ -116,6 +145,10 @@ pub struct CallView {
     /// with the basis `NameOnly`. It is an edge only on request.
     callees: Vec<Vec<(usize, ResolutionBasis)>>,
     callers: Vec<Vec<(usize, ResolutionBasis)>>,
+    /// For each definition, the functions that it uses as a value, with the
+    /// basis of the resolution of the name. Such a use is not a call, and it
+    /// is not in `callees`: the definition can cause the function to run.
+    function_references: Vec<Vec<(usize, ResolutionBasis)>>,
     stored_calls: Vec<StoredCall>,
     call_resolution_ranges: Vec<Range<usize>>,
     /// The counts of all call sites of the input, also of the calls that
@@ -187,26 +220,8 @@ impl CallView {
             let Some(caller) = caller else {
                 continue;
             };
+            let (candidates, basis) = edge_of(reference, &by_key);
             let resolution = &reference.resolution;
-            let candidates: Vec<usize> = resolution
-                .candidates
-                .iter()
-                .filter_map(|key| by_key.get(key).copied())
-                .collect();
-            let is_edge = matches!(
-                resolution.status,
-                ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
-            );
-            // One candidate that has only the name is an edge when the
-            // caller of the view asks for the basis `NameOnly`.
-            let by_name_only = resolution.status == ResolutionStatus::Ambiguous
-                && resolution.basis == Some(ResolutionBasis::NameOnly)
-                && candidates.len() == 1;
-            let basis = match (is_edge, by_name_only) {
-                (true, _) => resolution.basis,
-                (false, true) => Some(ResolutionBasis::NameOnly),
-                (false, false) => None,
-            };
             if let Some(basis) = basis {
                 for candidate in &candidates {
                     callees[caller].insert((*candidate, basis));
@@ -230,6 +245,23 @@ impl CallView {
                 candidates: candidates.iter().map(|position| *position as u32).collect(),
             });
         }
+        let mut function_references: Vec<BTreeSet<(usize, ResolutionBasis)>> =
+            vec![BTreeSet::new(); symbols.len()];
+        for reference in index
+            .files
+            .iter()
+            .filter(|file| keep(&file.file))
+            .flat_map(|file| &file.function_references)
+        {
+            let user = reference
+                .enclosing
+                .as_deref()
+                .and_then(|key| by_key.get(key).copied());
+            if let (Some(user), (candidates, Some(basis))) = (user, edge_of(reference, &by_key)) {
+                function_references[user]
+                    .extend(candidates.into_iter().map(|function| (function, basis)));
+            }
+        }
         let mut stored_calls = Vec::new();
         let mut call_resolution_ranges = Vec::with_capacity(symbols.len());
         for calls in evidence {
@@ -246,6 +278,10 @@ impl CallView {
                 .map(|set| set.into_iter().collect())
                 .collect(),
             callers: callers
+                .into_iter()
+                .map(|set| set.into_iter().collect())
+                .collect(),
+            function_references: function_references
                 .into_iter()
                 .map(|set| set.into_iter().collect())
                 .collect(),
@@ -318,6 +354,12 @@ impl CallView {
     /// can occur with more than one basis. The list is in the order of the definitions.
     pub fn callee_edges(&self, symbol: usize) -> &[(usize, ResolutionBasis)] {
         &self.callees[symbol]
+    }
+
+    /// The functions that one definition uses as a value, with the basis of the resolution
+    /// of each name. These edges are not calls, and `callee_edges` does not have them.
+    pub fn function_reference_edges(&self, symbol: usize) -> &[(usize, ResolutionBasis)] {
+        &self.function_references[symbol]
     }
 
     /// The call sites in the body of one definition, in source order.
