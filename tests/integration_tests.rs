@@ -2124,19 +2124,62 @@ fn test_all_payload_names_the_clones_analyzer_by_its_command() {
     assert!(!names.contains(&"duplicates"), "{names:?}");
 }
 
+/// A repository with three commits by two authors in `src/cli/`. A history
+/// analyzer of the omen checkout depends on the depth of the clone: in a
+/// shallow clone, `ownership` gives no author to the lines of the boundary
+/// commit and lists no file.
+fn write_history_repository() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    let git = |arguments: &[&str]| isolated_git(temp.path(), arguments);
+    let source = temp.path().join("src/cli");
+    std::fs::create_dir_all(&source).unwrap();
+    git(&["init", "-q"]);
+    std::fs::write(
+        source.join("mod.rs"),
+        "pub fn parse(value: u32) -> u32 {\n    if value > 1 { value } else { 0 }\n}\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "add the parser"]);
+    std::fs::write(
+        source.join("run.rs"),
+        "use super::parse;\n\npub fn run() -> u32 {\n    parse(2)\n}\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&[
+        "commit",
+        "-q",
+        "--author",
+        "Other <other@example.com>",
+        "-m",
+        "add the runner",
+    ]);
+    std::fs::write(
+        source.join("mod.rs"),
+        "pub fn parse(value: u32) -> u32 {\n    if value > 2 { value } else { 1 }\n}\n",
+    )
+    .unwrap();
+    git(&["commit", "-q", "-a", "-m", "change the parser"]);
+    temp
+}
+
 #[test]
 fn test_file_records_use_only_the_file_key() {
-    for command in [
-        "complexity",
-        "churn",
-        "cohesion",
-        "ownership",
-        "graph",
-        "defect",
-        "tdg",
+    let history = write_history_repository();
+    let history_path = history.path().to_str().unwrap();
+    for (command, repository) in [
+        ("complexity", "."),
+        ("churn", history_path),
+        ("cohesion", "."),
+        ("ownership", history_path),
+        ("graph", "."),
+        ("defect", history_path),
+        ("tdg", "."),
     ] {
         let output = omen()
-            .args(["-p", ".", "-f", "json", command, "--glob", "src/cli/**"])
+            .args(["-p", repository, "-f", "json", command])
+            .args(["--glob", "src/cli/**"])
             .output()
             .expect("command runs");
         assert!(output.status.success(), "{command} failed");

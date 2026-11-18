@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "language": "csharp",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid C#: tree-sitter gives no error node for a file. The .NET SDK, NUnit, and xUnit are not available here, thus no compiler ran. The harness does not run the code.",
+  "closed_world": false,
+  "sinks_closed_world": false,
+  "not_applicable": [
+    {"dimension":"tests","category":"entry_by_name","reason":"NUnit, xUnit, and MSTest find a test by its attribute. No test tool of C# finds a test by its name."}
+  ],
+  "tests": [
+    {"label":"nunit_fixture","category":"entry_by_syntax","file":"src/Checks.cs","line":7,"name":"NUnitChecks","role":"entry"},
+    {"label":"nunit_test","category":"entry_by_syntax","file":"src/Checks.cs","line":15,"name":"GivesOne","role":"entry"},
+    {"label":"nunit_hook","category":"entry_by_syntax","file":"src/Checks.cs","line":10,"name":"Prepare","role":"entry"},
+    {"label":"xunit_fact","category":"entry_by_syntax","file":"src/Checks.cs","line":29,"name":"IsOne","role":"entry"},
+    {"label":"xunit_theory","category":"entry_by_syntax","file":"src/Checks.cs","line":35,"name":"AcceptsEachValue","role":"entry"},
+    {"label":"helper_in_fixture","category":"support","file":"src/Checks.cs","line":20,"name":"Check","role":"support"},
+    {"label":"class_with_facts","category":"support","file":"src/Checks.cs","line":26,"name":"XunitChecks","role":"support"},
+    {"label":"helper_in_class_with_facts","category":"support","file":"src/Checks.cs","line":40,"name":"Build","role":"support"},
+    {"label":"helper_in_test_directory","category":"support","file":"tests/Shared.cs","line":5,"name":"Build","role":"support"},
+    {"label":"production","category":"not_test","file":"src/Service.cs","line":7,"name":"Production","role":"none"},
+    {"label":"test_like_name","category":"not_test","file":"src/Service.cs","line":13,"name":"TestConnection","role":"none"}
+  ]
+}

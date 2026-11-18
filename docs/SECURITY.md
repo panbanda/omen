@@ -45,8 +45,9 @@ The MCP tool `security` has the same sections and filters. The tools `symbol` an
 
 A sink has a basis: `imported_symbol` (an import binds the callee), `builtin` (the
 language gives the name), or `name_only` (only the name is evidence). A sink in test
-code has the flag `in_test`. A call with only literal arguments has the flag
-`constant_argument`.
+code has the flag `in_test`. The rule for test code is in `docs/TEST_CODE.md`: it
+uses the syntax and the path of the file. A call with only literal arguments has the
+flag `constant_argument`.
 
 The precision of each category on real repositories is in
 `docs/benchmarks/security-precision.md`. A category with a precision below 50

@@ -28,6 +28,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                   "string"
                 ],
                 "file": "string",
+                "is_test": "bool",
                 "language": "string",
                 "lcom": "number",
                 "loc": "number",

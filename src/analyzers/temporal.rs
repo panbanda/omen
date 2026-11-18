@@ -206,12 +206,7 @@ impl Analyzer {
             })
             .collect();
 
-        // Sort by coupling strength (highest first)
-        couplings.sort_by(|a, b| {
-            b.coupling_strength
-                .partial_cmp(&a.coupling_strength)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        rank_couplings(&mut couplings);
 
         let generated_at = Utc::now();
         let total_files = file_paths.len();
@@ -219,12 +214,26 @@ impl Analyzer {
 
         Ok(Analysis {
             generated_at: generated_at.to_rfc3339(),
-            period_days: self.config.days,
+            period_days: (self.config.days != u32::MAX).then_some(self.config.days),
             min_cochanges: self.config.min_cochanges,
             couplings,
             summary,
+            churn_window: None,
         })
     }
+}
+
+/// Puts the strongest coupling first. Of two couplings with the same
+/// strength, the one with more co-changes is first, because it has more
+/// evidence. The paths break a tie: the pairs come from a hash map.
+fn rank_couplings(couplings: &mut [FileCoupling]) {
+    couplings.sort_by(|a, b| {
+        b.coupling_strength
+            .total_cmp(&a.coupling_strength)
+            .then_with(|| b.cochange_count.cmp(&a.cochange_count))
+            .then_with(|| a.file_a.cmp(&b.file_a))
+            .then_with(|| a.file_b.cmp(&b.file_b))
+    });
 }
 
 impl AnalyzerTrait for Analyzer {
@@ -253,7 +262,12 @@ impl AnalyzerTrait for Analyzer {
         let commits = ctx.git_log_with_stats(Some(&since), None)?;
         let exclude_tests = ctx.config.exclude_tests;
         let exclude_patterns = &ctx.config.exclude_patterns;
-        self.analyze_commits_filtered(&commits, exclude_tests, exclude_patterns)
+        let mut analysis =
+            self.analyze_commits_filtered(&commits, exclude_tests, exclude_patterns)?;
+        analysis.churn_window = ctx
+            .churn_window(self.config.days, commits.len())
+            .map(|window| window.for_rows(analysis.couplings.len()));
+        Ok(analysis)
     }
 }
 
@@ -326,14 +340,17 @@ fn calculate_summary(couplings: &[FileCoupling], total_files: usize) -> Summary 
 pub struct Analysis {
     /// When the analysis was generated.
     pub generated_at: String,
-    /// Number of days of history analyzed.
-    pub period_days: u32,
+    /// The days of history that the analysis read. `None` is all the history.
+    pub period_days: Option<u32>,
     /// Minimum co-change threshold used.
     pub min_cochanges: u32,
     /// File couplings found, sorted by strength descending.
     pub couplings: Vec<FileCoupling>,
     /// Summary statistics.
     pub summary: Summary,
+    /// The window that gave these numbers. See `crate::git::ChurnWindow`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub churn_window: Option<crate::git::ChurnWindow>,
 }
 
 /// Represents the temporal coupling between two files.
@@ -574,7 +591,8 @@ mod tests {
     fn test_analysis_serialization() {
         let analysis = Analysis {
             generated_at: "2024-01-01T00:00:00Z".to_string(),
-            period_days: 30,
+            period_days: Some(30),
+            churn_window: None,
             min_cochanges: 3,
             couplings: vec![FileCoupling {
                 file_a: "a.rs".to_string(),

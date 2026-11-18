@@ -174,6 +174,7 @@ fn inline_handlers<'i>(index: &'i CodeIndex, entries: &[EntryPoint]) -> Vec<Func
                 parent: None,
                 references: Vec::new(),
                 function_references: Vec::new(),
+                is_test: entry.in_test,
             });
             values.len() - 1
         });
@@ -950,7 +951,7 @@ mod tests {
     #[test]
     #[ignore = "timing test: run in release with --ignored"]
     fn timing_bytes_after_a_deep_nest_of_inline_handlers_resolve_in_linear_time() {
-        super::super::entry::tests::assert_scales_linearly(
+        crate::index::timing::assert_scales_linearly(
             "bytes after a nest",
             20_000,
             innermost_after_a_deep_nest,
@@ -974,7 +975,7 @@ mod tests {
         };
         // The index of one large function is outside the measure. Only the steps of the inline
         // handlers are measured.
-        super::super::entry::tests::assert_scales_linearly("inline handlers", 4_000, |size| {
+        crate::index::timing::assert_scales_linearly("inline handlers", 4_000, |size| {
             let text = source(size);
             let paths = [PathBuf::from("server.js")];
             let read = |_: &Path| Ok(text.as_bytes().to_vec());

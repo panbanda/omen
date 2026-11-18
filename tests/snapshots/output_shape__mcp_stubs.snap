@@ -25,6 +25,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                 ],
                 "category": "string",
                 "file": "string",
+                "is_test": "bool",
                 "language": "string",
                 "line": "number",
                 "lines": [

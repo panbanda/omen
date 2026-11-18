@@ -41,6 +41,8 @@ pub struct ViewSymbol {
     pub line: u32,
     pub end_line: u32,
     pub signature: String,
+    /// The definition is test code. See `crate::index::test_code`.
+    pub is_test: bool,
 }
 
 /// The place of a definition.
@@ -183,6 +185,8 @@ pub struct FunctionValue<'r> {
     pub references: Vec<&'r Reference>,
     /// The function references in the function value. The index gives them to `enclosing`.
     pub function_references: Vec<&'r Reference>,
+    /// The function value is test code.
+    pub is_test: bool,
 }
 
 pub struct CallView {
@@ -277,6 +281,7 @@ impl CallView {
                     line: symbol.range.start_line,
                     end_line: symbol.range.end_line,
                     signature: symbol.signature.clone(),
+                    is_test: symbol.is_test(),
                 });
             }
         }
@@ -390,6 +395,7 @@ impl CallView {
                 body_start: value.range.start_byte,
                 has_body: true,
                 file_local: false,
+                is_test: value.is_test,
                 qualified_name: value.key.clone(),
                 kind: SymbolKind::Function,
                 file: value.file.clone(),

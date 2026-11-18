@@ -403,9 +403,16 @@ impl McpServer {
             context = context.with_git_path(git_root);
         }
         let result = analyzer.analyze(&context)?;
+        let mut value = serde_json::to_value(result)?;
+        crate::commands::test_rows::mark(
+            &mut value,
+            analyzer.name(),
+            &context,
+            arguments.excludes_tests(),
+        );
         Ok(ToolOutput::Data(ToolData {
             git_skipped_reason,
-            ..ToolData::new(serde_json::to_value(result)?)
+            ..ToolData::new(value)
         }))
     }
 

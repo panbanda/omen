@@ -41,10 +41,15 @@ impl RiskLevel {
 /// Based on empirical research + ownership research (Bird et al. 2011).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Weights {
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub churn: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub complexity: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub duplication: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub coupling: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub ownership: f32,
 }
 
@@ -633,6 +638,8 @@ impl AnalyzerTrait for Analyzer {
             summary.p95_probability = percentile(&probs, 95.0);
         }
 
+        let mut file_scores = file_scores;
+        rank_files(&mut file_scores);
         Ok(Analysis {
             files: file_scores,
             summary,
@@ -640,6 +647,17 @@ impl AnalyzerTrait for Analyzer {
             churn_window: ctx.churn_window(self.config.churn_days, git.commits_matched),
         })
     }
+}
+
+/// Puts the file with the highest probability first. The path breaks a tie.
+/// Thus the first page of the list has the files with the most risk.
+fn rank_files(files: &mut [FileScore]) {
+    files.sort_by(|left, right| {
+        right
+            .probability
+            .total_cmp(&left.probability)
+            .then_with(|| left.file.cmp(&right.file))
+    });
 }
 
 /// Internal file metrics.
@@ -680,9 +698,12 @@ pub struct Analysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileScore {
     pub file: String,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub probability: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub confidence: f32,
     pub risk_level: RiskLevel,
+    #[serde(serialize_with = "crate::core::decimal::f32_map_as_decimal")]
     pub contributing_factors: HashMap<String, f32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recommendations: Vec<String>,
@@ -694,8 +715,11 @@ pub struct Summary {
     pub high_risk_count: usize,
     pub medium_risk_count: usize,
     pub low_risk_count: usize,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub avg_probability: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub p50_probability: f32,
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub p95_probability: f32,
 }
 
@@ -799,6 +823,43 @@ fn sigmoid(raw_score: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn score(file: &str, probability: f32) -> FileScore {
+        FileScore {
+            file: file.to_string(),
+            probability,
+            confidence: 0.85,
+            risk_level: RiskLevel::from_probability(probability),
+            contributing_factors: HashMap::from([("churn".to_string(), 0.239)]),
+            recommendations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_files_are_in_the_order_of_the_probability_and_then_of_the_path() {
+        let mut files = vec![
+            score("a.rs", 0.1),
+            score("c.rs", 0.7),
+            score("b.rs", 0.7),
+            score("d.rs", 0.9),
+        ];
+        rank_files(&mut files);
+        let order: Vec<&str> = files.iter().map(|file| file.file.as_str()).collect();
+        assert_eq!(order, ["d.rs", "b.rs", "c.rs", "a.rs"]);
+    }
+
+    #[test]
+    fn test_json_has_the_decimal_of_each_weight_and_factor() {
+        let weights = serde_json::to_value(Weights::default()).unwrap();
+        for (name, weight) in weights.as_object().unwrap() {
+            let text = weight.to_string();
+            assert!(text.len() <= 4, "{name}: {text}");
+        }
+        let row = serde_json::to_value(score("a.rs", 0.3)).unwrap();
+        assert_eq!(row["probability"].to_string(), "0.3");
+        assert_eq!(row["confidence"].to_string(), "0.85");
+        assert_eq!(row["contributing_factors"]["churn"].to_string(), "0.239");
+    }
 
     #[test]
     fn test_with_precomputed_complexity() {

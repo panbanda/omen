@@ -25,6 +25,7 @@ pub struct SearchResult {
     /// End line in file (1-indexed).
     pub end_line: u32,
     /// Similarity score (0-1, higher is more similar).
+    #[serde(serialize_with = "crate::core::decimal::f32_as_decimal")]
     pub score: f32,
     /// Cyclomatic complexity (if computed during indexing).
     #[serde(skip_serializing_if = "Option::is_none")]
