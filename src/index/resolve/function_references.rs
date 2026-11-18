@@ -594,6 +594,28 @@ fn test_rust_function_item_as_a_value() {
 }
 
 #[test]
+fn test_rust_function_value_with_a_module_path_resolves_through_the_module_files() {
+    let files = [
+        ("Cargo.toml", "[package]\nname = \"app\"\n"),
+        ("src/lib.rs", "mod routes;\nmod server;\n"),
+        ("src/routes/mod.rs", "pub mod health;\n"),
+        ("src/routes/health.rs", "pub fn check() {}\n"),
+        ("src/other.rs", "pub fn check() {}\n"),
+        (
+            "src/server.rs",
+            "fn app() {\n    spawn(crate::routes::health::check);\n    spawn(super::routes::health::check);\n}\n",
+        ),
+    ];
+    assert_eq!(
+        rows(&files, "src/server.rs"),
+        [
+            "2 app>crate::routes::health::check UniqueCandidate QualifiedPath [src/routes/health.rs#check]",
+            "3 app>super::routes::health::check UniqueCandidate QualifiedPath [src/routes/health.rs#check]",
+        ]
+    );
+}
+
+#[test]
 fn test_rust_local_value_and_a_type_are_not_function_references() {
     let source = "struct Config;\n\nfn parse(text: &str) -> usize {\n    text.len()\n}\n\nfn run(parse: usize) {\n    spawn(parse);\n    spawn(Config);\n}\n\nfn other() {\n    let parse = 1;\n    spawn(parse);\n}\n";
     assert!(one("a.rs", source).is_empty());
