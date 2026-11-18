@@ -551,6 +551,41 @@ fn a_definition_in_the_draw_block_that_omen_cannot_model_gives_no_route() {
 }
 
 #[test]
+fn a_definition_in_a_branch_that_never_runs_changes_nothing() {
+    for definition in [
+        "if false\n    def patch(*)\n      super\n    end\n  end",
+        "unless true\n    alias patch get\n  end",
+        "if true\n  else\n    define_method(:get) { |*| }\n  end",
+        "def patch(*)\n    super\n  end if nil",
+        "case true\n  when false\n    undef get\n  end",
+    ] {
+        let routes = format!(
+            "Rails.application.routes.draw do\n  {definition}\n  get \"a\" => \"webhooks#show\"\nend\n"
+        );
+        assert_eq!(
+            rows(&routes, &[WEBHOOKS]),
+            ["GET /a WebhooksController.show [check]"],
+            "{definition}"
+        );
+    }
+}
+
+#[test]
+fn a_mount_in_a_branch_that_never_runs_mounts_nothing() {
+    for mount in [
+        "if false\n  Rails.application.routes.append do\n    mount Blog::Engine, at: \"/blog\"\n  end\nend\n",
+        "Rails.application.routes.draw do\n  unless true\n    mount Blog::Engine, at: \"/blog\"\n  end\nend\n",
+    ] {
+        assert!(
+            engine_rows(&[("plugins/blog/plugin.rb", mount)]).is_empty(),
+            "{mount}"
+        );
+    }
+    let live = "if true\n  Rails.application.routes.append do\n    mount Blog::Engine, at: \"/blog\"\n  end\nend\n";
+    assert_eq!(engine_rows(&[("plugins/blog/plugin.rb", live)]).len(), 2);
+}
+
+#[test]
 fn a_draw_call_in_a_draw_block_gives_no_route() {
     let routes = draw(
         "  scope \"x\" do\n    Rails.application.routes.draw do\n      get \"a\" => \"webhooks#show\"\n    end\n  end",

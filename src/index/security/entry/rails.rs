@@ -1462,6 +1462,25 @@ impl<'a> Context<'a> {
         alive
     }
 
+    /// The named children of a node, without a branch that a literal condition or a literal
+    /// `case` makes dead.
+    fn live_children<'t>(&self, node: Node<'t>) -> Vec<Node<'t>> {
+        let alive = (node.kind() == "case")
+            .then(|| self.case_alive(node))
+            .flatten();
+        let mut cursor = node.walk();
+        let children: Vec<Node<'t>> = node.named_children(&mut cursor).collect();
+        children
+            .into_iter()
+            .filter(|child| {
+                !Self::is_dead_branch(node, *child)
+                    && alive
+                        .as_ref()
+                        .is_none_or(|alive| alive.contains(&child.id()))
+            })
+            .collect()
+    }
+
     /// Tells if a literal condition makes the branch of `child` dead: `if false`, `if nil`,
     /// `unless true`, and the `else` of `if true`. A condition that is not a literal is live.
     fn is_dead_branch(parent: Node<'_>, child: Node<'_>) -> bool {
@@ -1826,8 +1845,7 @@ impl<'a> Context<'a> {
                 }
                 _ => {}
             }
-            let mut cursor = node.walk();
-            stack.extend(node.named_children(&mut cursor));
+            stack.extend(self.live_children(node));
         }
         Some(disabled)
     }
@@ -1897,9 +1915,11 @@ impl<'a> Context<'a> {
                 }
                 _ => {}
             }
-            let mut cursor = node.walk();
-            let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-            stack.extend(children.into_iter().map(|child| (child, inner.clone())));
+            stack.extend(
+                self.live_children(node)
+                    .into_iter()
+                    .map(|child| (child, inner.clone())),
+            );
         }
     }
 

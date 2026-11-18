@@ -191,7 +191,7 @@ each form against the source of Rails 7.2.2.
 | `each` and `each_with_index` on a literal array, and `each` and `each_pair` on a literal hash | Read. See "Loops over literal lists". |
 | Devise blocks, `concern`, any other loop, and any block that omen does not know | The block is skipped. |
 | `def get(*)`, `def post(*)`, `def put(*)`, `def patch(*)`, or `def delete(*)` with an empty body, as a statement of the `draw` block | Read. Rails evaluates the block with `instance_exec`, so the definition replaces the helper of the mapper of this `draw` call. From that statement on, a call of the helper gives no route, and `resources` and `resource` give no route for that request method. `match` does not use the helpers. |
-| Any other definition of a method of the mapper in a `draw` block, and `alias`, `undef`, `define_method`, `define_singleton_method`, `alias_method`, `undef_method`, `remove_method`, `singleton_class`, `extend`, `instance_eval`, `class_eval`, or `module_eval` in it | The `draw` block gives no route. A definition with another name is a helper of the file. Omen reads no route from its body, and it changes nothing. |
+| Any other definition of a method of the mapper in a `draw` block, and `alias`, `undef`, `define_method`, `define_singleton_method`, `alias_method`, `undef_method`, `remove_method`, `singleton_class`, `extend`, `instance_eval`, `class_eval`, or `module_eval` in it | The `draw` block gives no route. A definition with another name is a helper of the file. Omen reads no route from its body, and it changes nothing. A definition or a call in a branch that a literal condition or a literal `case` makes dead changes nothing. |
 | `get`, `post`, `put`, `patch`, `delete` with a string path or a symbol path | Read, with the options `to`, `controller`, `action`, `on`, `as`, `constraints`, `defaults`, `anchor`, and `format`. The options `path:` and `internal:`, `via:` on a helper, and a `**` splat skip the route. |
 | A route with no controller in a `namespace` block or a `scope module:` block, as `get "settings"` in `namespace :site` | Read as `site#settings`. `add_controller_module` of Rails takes the module as the controller when the route and its blocks give none. |
 | A string path of two or more parts with no `to:` and no `action:`, as `put "topics/bulk"` | Read as `topics#bulk`, as `get_to_from_path` of Rails gives it. Each part has only letters, digits, `_`, and `-`. A `-` becomes `_` in the controller and in the action. |
@@ -310,7 +310,8 @@ conditions give no route for the engine:
 - a mount in a `resources` block or a `resource` block
 
 Omen does not read a `mount` call in any other place, as in a method or in the `draw` block of
-an engine. It does not read a mount with a target that is not a constant. If such a call mounts the engine
+an engine. A `mount` call or a `draw` block in a branch that a literal condition makes dead mounts
+nothing. It does not read a mount with a target that is not a constant. If such a call mounts the engine
 a second time, omen gives the routes of the first mount only.
 
 `isolate_namespace Blog` in the body of the engine class gives the module `blog` to each route:
