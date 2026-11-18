@@ -1,5 +1,8 @@
 //! JavaScript, JSX, TypeScript, and TSX symbols.
 
+use std::collections::HashSet;
+use std::rc::Rc;
+
 use tree_sitter::Node;
 
 use crate::core::Language;
@@ -299,6 +302,25 @@ fn is_private_member(member: Node<'_>, name: Node<'_>, context: &Context<'_, '_>
     restricted
 }
 
+/// The names of [`names_exported_by_statement`], read one time for each
+/// module. Without the memo, each declaration of a large module reads all the
+/// statements of the module.
+fn module_exported_names(program: Node<'_>, context: &Context<'_, '_>) -> Rc<HashSet<String>> {
+    let key = (program.id(), 0);
+    if let Some(found) = context.memo.borrow().get(&key) {
+        if let Ok(found) = Rc::clone(found).downcast::<HashSet<String>>() {
+            return found;
+        }
+    }
+    let names: Rc<HashSet<String>> = Rc::new(
+        names_exported_by_statement(program, context)
+            .into_iter()
+            .collect(),
+    );
+    context.memo.borrow_mut().insert(key, names.clone());
+    names
+}
+
 /// The local names that the module exports with a statement that is not on the
 /// definition: `export { a }`, `export default a`, `module.exports = { a }`,
 /// `module.exports.a = a`, and `exports.a = a`.
@@ -406,7 +428,7 @@ fn declaration_exported<'tree>(
         // An export statement can name only a declaration at the top level of the module.
         return Exported::NotExported;
     }
-    exported_if(names_exported_by_statement(parent, context).contains(&name.to_string()))
+    exported_if(module_exported_names(parent, context).contains(name))
 }
 
 /// The visibility of the variable that holds an object literal.

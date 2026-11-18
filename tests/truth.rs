@@ -284,6 +284,7 @@ fn observed_sinks(trees: &[omen::parser::ParseResult], files: &[FileSymbols]) ->
             category: sink.category.name().to_string(),
             basis: sink.basis.name().to_string(),
             in_test: sink.flags.in_test,
+            in_generated: sink.flags.in_generated,
             constant_argument: sink.flags.constant_argument,
         })
         .collect()
@@ -307,6 +308,11 @@ fn observed_entry_points(
                 .map(|route| route.parameters)
                 .unwrap_or_default(),
             guards: entry.guards,
+            symbol: entry.symbol,
+            guards_complete: entry.guards_complete,
+            guards_unknown_reason: entry
+                .guards_unknown_reason
+                .map(|reason| reason.name().to_string()),
         })
         .collect()
 }

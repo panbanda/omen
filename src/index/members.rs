@@ -13,7 +13,9 @@ use tree_sitter::Node;
 use super::extract::{Local, Scope, ScopeRole};
 use super::model::{SharedStr, SymbolKind};
 use crate::core::Language;
-use crate::parser::queries::{get_decision_node_types, get_nested_scope_node_types, get_operator};
+use crate::parser::queries::{
+    get_decision_node_types, get_nested_scope_node_types, get_operator, is_default_branch,
+};
 
 /// The syntax of the classes of one language.
 #[derive(Debug, Clone, Copy)]
@@ -429,10 +431,10 @@ fn range_of(node: Node<'_>) -> (usize, usize) {
 }
 
 impl Recorder {
-    /// A node of a decision kind adds a decision point. A logical expression adds one when its operator is a logical operator.
+    /// A node of a decision kind adds a decision point, but the default case of a `switch` does not. A logical expression adds one when its operator is a logical operator.
     fn adds_decision(&self, node: Node<'_>, source: &[u8]) -> bool {
         if !LOGICAL_KINDS.contains(&node.kind()) {
-            return true;
+            return !is_default_branch(&node, source, self.language);
         }
         matches!(
             get_operator(&node, source),

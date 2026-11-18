@@ -155,7 +155,10 @@ pub(super) static DEFECT: ToolSpec = ToolSpec {
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
         let days = window_days(arguments, server.config.defect.since.days())?;
-        server.analyze(arguments, crate::commands::analyzers::defect_analyzer(days))
+        server.analyze(
+            arguments,
+            crate::commands::analyzers::defect_analyzer_with_config(&server.config, days),
+        )
     },
 };
 
@@ -445,6 +448,7 @@ const SECURITY_CATEGORIES: &[&str] = &[
     "tls_verification_disabled",
     "hardcoded_credential",
     "memory_unsafe",
+    "unsafe_html_output",
 ];
 
 pub(super) static SECURITY: ToolSpec = ToolSpec {
