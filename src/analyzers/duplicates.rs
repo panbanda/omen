@@ -354,7 +354,12 @@ impl Analyzer {
     ) -> Option<CodeFragment> {
         // Normalize and tokenize
         let normalized = self.normalize_code(lines, lang);
-        let tokens = tokenize(&normalized);
+        let comments = if self.config.ignore_comments {
+            CommentSyntax::of(lang)
+        } else {
+            CommentSyntax::default()
+        };
+        let tokens = tokenize(&normalized, comments);
 
         // Normalize tokens with a FRESH identifier map for each fragment.
         // This ensures structurally identical code in different files produces
@@ -1194,14 +1199,64 @@ fn is_operator_or_delimiter(token: &str) -> bool {
     )
 }
 
+/// The comment syntax that `tokenize` skips.
+#[derive(Debug, Clone, Copy, Default)]
+struct CommentSyntax {
+    /// `//` to the end of the line, and `/* ... */`.
+    slashes: bool,
+    /// `#` to the end of the line.
+    hash: bool,
+}
+
+impl CommentSyntax {
+    fn of(lang: &str) -> Self {
+        Self {
+            // Python `//` is floor division.
+            slashes: !matches!(lang, "python" | "ruby" | "bash"),
+            hash: matches!(lang, "python" | "ruby" | "bash" | "php"),
+        }
+    }
+
+    /// Whether a comment starts at `start`. `previous` is the character
+    /// before `start`, and `next` is the character after it.
+    fn starts_at(self, c: char, previous: Option<char>, next: Option<char>) -> bool {
+        match c {
+            // The end of a JavaScript regular expression such as `/\//` has
+            // the escaped `/` next to the closing `/`.
+            '/' => self.slashes && previous != Some('\\') && matches!(next, Some('/' | '*')),
+            // PHP `#[...]` is an attribute.
+            '#' => self.hash && next != Some('['),
+            _ => false,
+        }
+    }
+}
+
 /// Tokenize code into tokens.
-fn tokenize(content: &str) -> Vec<String> {
+fn tokenize(content: &str, comments: CommentSyntax) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut chars = content.char_indices().peekable();
 
     while let Some((start, c)) = chars.next() {
         // Skip whitespace
         if c.is_whitespace() {
+            continue;
+        }
+
+        let previous = content[..start].chars().next_back();
+        let next = chars.peek().map(|(_, next)| *next);
+        if comments.starts_at(c, previous, next) {
+            if c == '/' && next == Some('*') {
+                chars.next();
+                let mut star = false;
+                for (_, current) in chars.by_ref() {
+                    if star && current == '/' {
+                        break;
+                    }
+                    star = current == '*';
+                }
+            } else {
+                while chars.next_if(|(_, current)| *current != '\n').is_some() {}
+            }
             continue;
         }
 
@@ -1424,6 +1479,66 @@ mod tests {
         );
     }
 
+    /// A type 1 clone can differ in comments. A comment at the end of a line
+    /// or in a line is not a token. Text in a string and the Python `//`
+    /// operator are tokens.
+    #[test]
+    fn test_clone_type_ignores_comments_in_a_line() {
+        let go = BASE_FUNCTION;
+        let js = "function total(items) {\n  let sum = 0;\n  const url = \"http://a\";\n  for (const item of items) {\n    if (item > 10) {\n      sum += item * 2;\n    } else {\n      sum += item;\n    }\n  }\n  return sum + url.length;\n}\n";
+        let py = "def total(items):\n    result = 0\n    for item in items:\n        if item > 10:\n            result += item // 2\n        else:\n            result += item\n    return result\n";
+        let cases: &[(&str, &str, String, CloneType)] = &[
+            (
+                "a.go",
+                go,
+                go.replace("sum := 0", "sum := 0 // start at zero"),
+                CloneType::Type1,
+            ),
+            (
+                "a.go",
+                go,
+                go.replace("item * 2", "item /* + */ * 2"),
+                CloneType::Type1,
+            ),
+            (
+                "a.js",
+                js,
+                js.replace("let sum = 0;", "let sum = 0; // start"),
+                CloneType::Type1,
+            ),
+            (
+                "a.js",
+                js,
+                js.replace("http://a", "http://b"),
+                CloneType::Type2,
+            ),
+            (
+                "a.py",
+                py,
+                py.replace("result = 0", "result = 0  # start"),
+                CloneType::Type1,
+            ),
+            (
+                "a.py",
+                py,
+                py.replace("item // 2", "item / 2"),
+                CloneType::Type3,
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (name, original, changed, expected) in cases {
+            let other = name.replace("a.", "b.");
+            let analysis = analyze_sources(&[(name, original), (&other, changed)]);
+            let types: Vec<CloneType> = analysis.clones.iter().map(|c| c.clone_type).collect();
+            if types != [*expected] {
+                failures.push(format!(
+                    "{name} {types:?}, expected {expected:?}: {changed}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     fn only_clone(analysis: &Analysis) -> &Clone {
         assert_eq!(analysis.clones.len(), 1, "{:?}", analysis.clones);
         &analysis.clones[0]
@@ -1576,7 +1691,7 @@ mod tests {
 
     #[test]
     fn test_tokenize() {
-        let tokens = tokenize("func main() { x := 42 }");
+        let tokens = tokenize("func main() { x := 42 }", CommentSyntax::of("go"));
         assert!(tokens.contains(&"func".to_string()));
         assert!(tokens.contains(&"main".to_string()));
         assert!(tokens.contains(&"42".to_string()));
@@ -1586,7 +1701,7 @@ mod tests {
 
     #[test]
     fn test_tokenize_with_strings() {
-        let tokens = tokenize(r#"x := "hello world""#);
+        let tokens = tokenize(r#"x := "hello world""#, CommentSyntax::of("go"));
         assert!(tokens.contains(&"x".to_string()));
         assert!(tokens.contains(&r#""hello world""#.to_string()));
     }
