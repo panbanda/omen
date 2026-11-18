@@ -413,7 +413,14 @@ impl<'a> Resolver<'a> {
     fn same_package(&self, left: usize, right: usize) -> bool {
         let (left_file, right_file) = (&self.files[left], &self.files[right]);
         match self.family(left) {
-            Family::Go => directory(&left_file.file) == directory(&right_file.file),
+            // Only a test file sees the test files of its package, and an
+            // external test package `name_test` is a different package.
+            Family::Go => {
+                let is_test = |path: &str| path.ends_with("_test.go");
+                directory(&left_file.file) == directory(&right_file.file)
+                    && (is_test(&left_file.file) || !is_test(&right_file.file))
+                    && left_file.modules.first() == right_file.modules.first()
+            }
             Family::Java | Family::CSharp | Family::Php => left_file
                 .modules
                 .iter()

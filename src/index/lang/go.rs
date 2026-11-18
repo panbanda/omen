@@ -540,6 +540,45 @@ mod tests {
         );
     }
 
+    /// A `_test.go` file is not a part of the package that an import gives.
+    /// Only the external tests of the same directory see the test files of the
+    /// package, as `export_test.go`.
+    #[test]
+    fn test_import_does_not_give_the_test_files_of_the_package() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            ("go.mod", "module example.com/shop\n"),
+            ("a/a.go", "package a\n"),
+            (
+                "a/a_test.go",
+                "package a\n\nimport \"example.com/shop/b\"\n",
+            ),
+            ("a/export_test.go", "package a\n"),
+            (
+                "a/external_test.go",
+                "package a_test\n\nimport \"example.com/shop/a\"\n",
+            ),
+            ("a/other_test.go", "package a_test\n"),
+            ("b/b.go", "package b\n\nimport \"example.com/shop/a\"\n"),
+            (
+                "b/b_test.go",
+                "package b\n\nimport \"example.com/shop/a\"\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "b/b.go"),
+            ["3 Module example.com/shop/a a->a a/a.go"]
+        );
+        assert_eq!(
+            rows(&files, "b/b_test.go"),
+            ["3 Module example.com/shop/a a->a a/a.go"]
+        );
+        assert_eq!(
+            rows(&files, "a/external_test.go"),
+            ["3 Module example.com/shop/a a->a package(a/a.go,a/a_test.go,a/export_test.go)"]
+        );
+    }
+
     #[test]
     fn test_import_without_a_go_mod_file_is_unresolved() {
         use crate::index::imports::testing::rows;

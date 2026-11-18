@@ -7,15 +7,21 @@
   "symbols": [
     {"label": "rand", "category": "type", "file": "local/rand.go", "name": "Rand", "kind": "struct", "container": null, "start_line": 3, "end_line": 3, "exported": true},
     {"label": "rand_int", "category": "method", "file": "local/rand.go", "name": "Int", "kind": "method", "container": "Rand", "start_line": 5, "end_line": 5, "exported": true},
-    {"label": "run_external", "category": "free_function", "file": "main.go", "name": "runExternal", "kind": "function", "container": null, "start_line": 9, "end_line": 11, "exported": false},
-    {"label": "run_local", "category": "free_function", "file": "main.go", "name": "runLocal", "kind": "function", "container": null, "start_line": 13, "end_line": 15, "exported": false},
     {"label": "base_json", "category": "method", "file": "local/base.go", "name": "JSON", "kind": "method", "container": "Base", "start_line": 5, "end_line": 5, "exported": true},
-    {"label": "context", "category": "type", "file": "main.go", "name": "Context", "kind": "struct", "container": null, "start_line": 17, "end_line": 20, "exported": true},
-    {"label": "render", "category": "free_function", "file": "main.go", "name": "render", "kind": "function", "container": null, "start_line": 22, "end_line": 24, "exported": false}
+    {"label": "store_open", "category": "free_function", "file": "store/store.go", "name": "Open", "kind": "function", "container": null, "start_line": 3, "end_line": 3, "exported": true},
+    {"label": "run_external", "category": "free_function", "file": "main.go", "name": "runExternal", "kind": "function", "container": null, "start_line": 10, "end_line": 12, "exported": false},
+    {"label": "run_local", "category": "free_function", "file": "main.go", "name": "runLocal", "kind": "function", "container": null, "start_line": 14, "end_line": 16, "exported": false},
+    {"label": "context", "category": "type", "file": "main.go", "name": "Context", "kind": "struct", "container": null, "start_line": 18, "end_line": 21, "exported": true},
+    {"label": "render", "category": "free_function", "file": "main.go", "name": "render", "kind": "function", "container": null, "start_line": 23, "end_line": 25, "exported": false},
+    {"label": "main", "category": "free_function", "file": "main.go", "name": "main", "kind": "function", "container": null, "start_line": 27, "end_line": 32, "exported": false}
   ],
   "calls": [
-    {"label": "external_type_of_same_name", "category": "wrong_receiver", "caller": "run_external", "line": 10, "callee_text": "source.Int", "expected": []},
-    {"label": "repository_type", "category": "declared_type_receiver", "caller": "run_local", "line": 14, "callee_text": "source.Int", "expected": ["rand_int"], "status": "not_external"},
-    {"label": "promoted_method", "category": "declared_type_receiver", "caller": "render", "line": 23, "callee_text": "ctx.JSON", "expected": ["base_json"], "status": "not_external"}
+    {"label": "external_type_of_same_name", "category": "wrong_receiver", "caller": "run_external", "line": 11, "callee_text": "source.Int", "expected": []},
+    {"label": "repository_type", "category": "declared_type_receiver", "caller": "run_local", "line": 15, "callee_text": "source.Int", "expected": ["rand_int"], "status": "not_external"},
+    {"label": "promoted_method", "category": "declared_type_receiver", "caller": "render", "line": 24, "callee_text": "ctx.JSON", "expected": ["base_json"], "status": "not_external"},
+    {"label": "package_function", "category": "static_qualified", "caller": "main", "line": 31, "callee_text": "store.Open", "expected": ["store_open"]}
+  ],
+  "imports": [
+    {"label": "package_without_its_tests", "category": "package", "file": "main.go", "line": 7, "path": "example.com/resolution/store", "names": [{"name": "store", "alias": null}], "required_file": "store/store.go"}
   ]
 }

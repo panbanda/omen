@@ -15,6 +15,9 @@ use super::extract::FileSymbols;
 use super::model::{ImportBinding, ImportKind, ImportTarget, SymbolKind};
 use crate::core::Language;
 
+/// The end of the name of a Go test file.
+const GO_TEST_SUFFIX: &str = "_test.go";
+
 /// The facts of the repository that the module maps use.
 struct Repository<'a> {
     files: &'a [FileSymbols],
@@ -522,6 +525,7 @@ impl Repository<'_> {
             return ImportTarget::Unresolved;
         };
         let path = &binding.module_path;
+        let importer_is_test = binding.file.ends_with(GO_TEST_SUFFIX);
         // The files of the package directory, for a module whose path starts the import path.
         let package = |root: &String, name: &String| -> Option<BTreeSet<String>> {
             let directory_of_package = if path == name {
@@ -529,11 +533,23 @@ impl Repository<'_> {
             } else {
                 join(root, path.strip_prefix(&format!("{name}/"))?)?
             };
+            // A `_test.go` file is a part of the package only for the tests
+            // of the same directory, and a `_test` package is never a part of it.
+            let sees_tests = importer_is_test && here == directory_of_package;
+            let in_package = |file: &FileSymbols| {
+                !file.file.ends_with(GO_TEST_SUFFIX)
+                    || (sees_tests
+                        && !file
+                            .modules
+                            .first()
+                            .is_some_and(|package| package.ends_with("_test")))
+            };
             Some(
                 self.in_directories(&directory_of_package)
                     .filter(|file| {
                         file.language == Language::Go
                             && directory(&file.file) == directory_of_package
+                            && in_package(file)
                     })
                     .map(|file| file.file.clone())
                     .collect(),
@@ -1130,7 +1146,7 @@ fn inline_module_symbol(facts: &FileSymbols, name: &str) -> Option<String> {
 fn go_package_names(files: &mut [FileSymbols]) {
     let declared: BTreeMap<&str, &str> = files
         .iter()
-        .filter(|file| file.language == Language::Go && !file.file.ends_with("_test.go"))
+        .filter(|file| file.language == Language::Go && !file.file.ends_with(GO_TEST_SUFFIX))
         .filter_map(|file| Some((file.file.as_str(), file.modules.first()?.as_str())))
         // No file can import a `main` package.
         .filter(|(_, package)| *package != "main")

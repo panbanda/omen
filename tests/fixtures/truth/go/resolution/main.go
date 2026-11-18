@@ -4,6 +4,7 @@ import (
 	"math/rand/v2"
 
 	"example.com/resolution/local"
+	"example.com/resolution/store"
 )
 
 func runExternal(source *rand.Rand) int {
@@ -27,4 +28,5 @@ func main() {
 	runExternal(nil)
 	runLocal(nil)
 	render(&Context{})
+	store.Open()
 }

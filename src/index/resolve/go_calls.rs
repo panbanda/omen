@@ -72,3 +72,39 @@ fn test_two_embedded_fields_with_one_method_give_no_edge() {
         ["17 run>both.Close Ambiguous ReceiverDeclaredType [a.go#Left.Close, a.go#Right.Close]"]
     );
 }
+
+/// A `_test.go` file is in the package only for the files of its own
+/// directory that are tests, and a `_test` package is a different package.
+#[test]
+fn test_package_of_a_test_file() {
+    let files = [
+        ("go.mod", "module example.com/shop\n"),
+        (
+            "a/a.go",
+            "package a\n\nfunc load() {}\n\nfunc run() {\n\tcheck()\n\tload()\n}\n",
+        ),
+        (
+            "a/a_test.go",
+            "package a\n\nfunc check() {}\n\nfunc TestRun() {\n\tload()\n}\n",
+        ),
+        (
+            "a/external_test.go",
+            "package a_test\n\nfunc load() {}\n\nfunc TestOther() {\n\tcheck()\n}\n",
+        ),
+    ];
+    assert_eq!(
+        rows(&files, "a/a.go"),
+        [
+            "6 run>check Unresolved - []",
+            "7 run>load UniqueCandidate SameFile [a/a.go#load]",
+        ]
+    );
+    assert_eq!(
+        rows(&files, "a/a_test.go"),
+        ["6 TestRun>load UniqueCandidate SamePackage [a/a.go#load]"]
+    );
+    assert_eq!(
+        rows(&files, "a/external_test.go"),
+        ["6 TestOther>check Unresolved - []"]
+    );
+}
