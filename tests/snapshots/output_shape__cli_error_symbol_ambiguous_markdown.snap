@@ -1,0 +1,14 @@
+---
+source: tests/output_shape.rs
+expression: text
+---
+3 definitions agree with the symbol `helper`. Select one with its key or its start line.
+
+Run one of these commands:
+
+- `main.rs#shadow.helper` (Function in `shadow`) at main.rs:38
+  omen -p <root> symbol 'main.rs#shadow.helper'
+- `other.rs#helper` (Function) at other.rs:1
+  omen -p <root> symbol 'other.rs#helper'
+- `util.rs#helper` (Function) at util.rs:1
+  omen -p <root> symbol 'util.rs#helper'

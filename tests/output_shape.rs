@@ -490,6 +490,12 @@ const MCP_ERROR_CASES: &[McpErrorCase] = &[
         r#"{"name": "helper"}"#,
     ),
     mcp_error(
+        "ambiguous_impact",
+        "ambiguous",
+        "impact",
+        r#"{"symbol": "helper"}"#,
+    ),
+    mcp_error(
         "path_outside_root",
         "path_outside_root",
         "complexity",
@@ -806,4 +812,47 @@ fn mcp_tool_errors() {
         without_repository_path(&mut body, &repository);
         insta::assert_json_snapshot!(format!("mcp_error_{}", case.snapshot), body);
     }
+}
+
+/// A `symbol` or `impact` command with a name that does not select one
+/// definition. The command writes the error to stdout and exits with 1. The
+/// snapshot holds the values, because the values are the contract.
+const CLI_LOOKUP_FAILURES: &[(&str, &[&str])] = &[
+    // The fixture has `helper` in `util.rs`, in `other.rs`, and in `main.rs`.
+    ("symbol_ambiguous", &["symbol", "helper", "--no-source"]),
+    ("impact_ambiguous", &["impact", "helper"]),
+    ("symbol_not_found", &["symbol", "helpr"]),
+];
+
+#[test]
+fn cli_lookup_failures() {
+    let directory = fixture_repository();
+    let repository = directory.path();
+    let canonical = repository
+        .canonicalize()
+        .expect("repository path")
+        .to_string_lossy()
+        .into_owned();
+    for (snapshot, arguments) in CLI_LOOKUP_FAILURES {
+        let output = omen(repository)
+            .args(*arguments)
+            .output()
+            .expect("omen starts");
+        assert_eq!(output.status.code(), Some(1), "{snapshot}");
+        let mut body: Value = serde_json::from_slice(&output.stdout).expect("JSON error");
+        without_repository_path(&mut body, &repository.to_string_lossy());
+        without_repository_path(&mut body, &canonical);
+        insta::assert_json_snapshot!(format!("cli_error_{snapshot}"), body);
+    }
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_omen"))
+        .arg("-p")
+        .arg(repository)
+        .args(["symbol", "helper"])
+        .output()
+        .expect("omen starts");
+    assert_eq!(output.status.code(), Some(1));
+    let text = String::from_utf8_lossy(&output.stdout)
+        .replace(&*repository.to_string_lossy(), "<root>")
+        .replace(&canonical, "<root>");
+    insta::assert_snapshot!("cli_error_symbol_ambiguous_markdown", text);
 }

@@ -28,6 +28,8 @@ pub struct ViewSymbol {
     pub name: String,
     /// The first byte of the body, or of the declaration when it has no body.
     pub body_start: usize,
+    /// The definition has a body. A C prototype and an abstract method do not.
+    pub has_body: bool,
     pub qualified_name: String,
     pub kind: SymbolKind,
     pub file: String,
@@ -153,6 +155,7 @@ impl CallView {
                     body_start: symbol
                         .body_range
                         .map_or(symbol.range.start_byte, |body| body.start_byte),
+                    has_body: symbol.body_range.is_some(),
                     qualified_name: symbol.key.to_string(),
                     kind: symbol.kind,
                     file: file.file.clone(),

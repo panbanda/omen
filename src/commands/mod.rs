@@ -23,6 +23,7 @@ pub mod diff;
 pub mod eval;
 pub mod gate;
 pub mod impact;
+pub mod lookup;
 #[cfg(feature = "mutation")]
 pub mod mutation;
 pub mod outline;

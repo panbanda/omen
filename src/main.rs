@@ -23,6 +23,7 @@ use omen::commands::context::ContextRequest;
 use omen::commands::diff::DiffRequest;
 use omen::commands::eval::EvalRequest;
 use omen::commands::impact::ImpactRequest;
+use omen::commands::lookup::CommandLine;
 use omen::commands::outline::OutlineRequest;
 use omen::commands::scope::Scope;
 use omen::commands::score::{ScoreRequest, TrendRequest};
@@ -36,6 +37,17 @@ use omen::output::Format;
 /// The scope of a command, with the commit of `--ref` for a local repository.
 fn scope_of(cli: &Cli, args: &omen::cli::AnalyzerArgs) -> Scope {
     Scope::from(args).with_ref(commands::repository::local_ref(cli))
+}
+
+/// The command line that each choice of an ambiguous symbol name repeats.
+fn symbol_command_line(command: &str, name: &str) -> CommandLine {
+    let arguments: Vec<String> = std::env::args_os()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+    match omen::cli::symbol_name_position(&arguments) {
+        Some(position) => CommandLine::from_process(arguments, position),
+        None => CommandLine::plain(command, name),
+    }
 }
 
 fn logging_filter(verbose: bool, rust_log: Option<&str>) -> EnvFilter {
@@ -351,6 +363,8 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 min_basis: args.min_basis,
                 scope: scope_of(cli, &args.common),
                 git_ref: commands::repository::local_ref(cli).map(str::to_string),
+                start_line: args.start_line,
+                command_line: symbol_command_line("impact", &args.symbol),
             };
             commands::impact::run(path, &config, &request, format, &mut stdout())?;
         }
@@ -362,6 +376,8 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 min_basis: args.min_basis,
                 scope: scope_of(cli, &args.common),
                 git_ref: commands::repository::local_ref(cli).map(str::to_string),
+                start_line: args.start_line,
+                command_line: symbol_command_line("symbol", &args.name),
             };
             commands::symbol::run(path, &config, &request, format, &mut stdout())?;
         }

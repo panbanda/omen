@@ -133,7 +133,7 @@ const MAX_SUGGESTIONS: usize = 3;
 ///
 /// The sequence is the edit distance, then the name. Thus the result is the
 /// same for each run.
-pub(in crate::mcp) fn nearest<'a>(target: &str, candidates: &[&'a str]) -> Vec<&'a str> {
+pub(crate) fn nearest<'a>(target: &str, candidates: &[&'a str]) -> Vec<&'a str> {
     let target = target.to_lowercase();
     let length = target.chars().count();
     let threshold = (length / 3).max(1);

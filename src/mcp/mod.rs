@@ -17,6 +17,7 @@ mod tools;
 
 /// Reference decoder for the `omen.tables.v1` compact encoding.
 pub use compact::decode;
+pub(crate) use tools::validate::nearest;
 
 use error::{ErrorCode, ToolError};
 use tools::{Arguments, HandlerResult, ToolData, ToolOutput};
@@ -516,8 +517,10 @@ mod tests {
         assert_eq!(
             ambiguous["error"]["suggestions"],
             json!([
-                {"name": "same.rb#A.helper", "start_line": 2, "signature": "def helper"},
-                {"name": "same.rb#B.helper", "start_line": 7, "signature": "def helper"}
+                {"name": "same.rb#A.helper", "kind": "Method", "container": "A", "file": "same.rb",
+                 "start_line": 2, "signature": "def helper", "arguments": {"name": "same.rb#A.helper"}},
+                {"name": "same.rb#B.helper", "kind": "Method", "container": "B", "file": "same.rb",
+                 "start_line": 7, "signature": "def helper", "arguments": {"name": "same.rb#B.helper"}}
             ])
         );
         assert!(ambiguous.get("result").is_none());
@@ -543,8 +546,10 @@ mod tests {
         assert_eq!(
             ambiguous["error"]["suggestions"],
             json!([
-                {"name": "same.rb#A.helper", "start_line": 2},
-                {"name": "same.rb#B.helper", "start_line": 7}
+                {"name": "same.rb#A.helper", "kind": "Method", "container": "A", "file": "same.rb",
+                 "start_line": 2, "signature": "def helper", "arguments": {"name": "same.rb#A.helper"}},
+                {"name": "same.rb#B.helper", "kind": "Method", "container": "B", "file": "same.rb",
+                 "start_line": 7, "signature": "def helper", "arguments": {"name": "same.rb#B.helper"}}
             ])
         );
         let selected = call(
@@ -553,6 +558,8 @@ mod tests {
             json!({"name": "same.rb:helper", "start_line": 7}),
         );
         assert!(selected.get("isError").is_none(), "{selected}");
+        let by_key = call(&server, "task_context", json!({"name": "same.rb#B.helper"}));
+        assert!(by_key.get("isError").is_none(), "{by_key}");
 
         let absent = error_of(&server, "task_context", json!({"name": "helpe"}));
         assert_eq!(absent["error"]["code"], "not_found");

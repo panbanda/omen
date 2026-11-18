@@ -3,6 +3,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use super::lookup::{write_failure, CommandLine};
 use super::scope::{index_scope, Scope};
 use crate::analyzers::impact::{analyze_view, Direction};
 use crate::config::Config;
@@ -19,6 +20,10 @@ pub struct ImpactRequest {
     pub scope: Scope,
     /// Read the files at this commit and not in the working tree.
     pub git_ref: Option<String>,
+    /// The line on which the definition starts. It selects one of two definitions with one name.
+    pub start_line: Option<u32>,
+    /// The command line that each choice of an ambiguous name repeats.
+    pub command_line: CommandLine,
 }
 
 pub fn run(
@@ -34,17 +39,26 @@ pub fn run(
         ctx = ctx.with_content_source(source);
     }
     let view = CallView::from_index(&*ctx.code_index()?);
-    let mut report = analyze_view(
+    let selected = analyze_view(
         &view,
         &request.symbol,
+        request.start_line,
         request.depth,
         request.direction,
         request.min_basis,
     );
-    if let Some(first) = report.resolved.first() {
-        let analysis = crate::analyzers::security::analyze_context(&ctx)?;
-        report.security = Some(crate::index::security::symbol_security(&analysis, first));
-    }
+    let mut report = match selected {
+        Err(crate::core::Error::SymbolLookup(failure)) => {
+            write_failure(&failure, "symbol", &request.command_line, format, out)?;
+            return Err(crate::core::Error::SymbolLookup(failure));
+        }
+        other => other?,
+    };
+    let analysis = crate::analyzers::security::analyze_context(&ctx)?;
+    report.security = Some(crate::index::security::symbol_security(
+        &analysis,
+        &report.resolved[0],
+    ));
     let mut out = out;
     format_with_limits(
         serde_json::to_value(&report)?,
@@ -68,6 +82,8 @@ mod tests {
             min_basis: ResolutionBasis::SamePackage,
             scope: Scope::default(),
             git_ref: None,
+            start_line: None,
+            command_line: CommandLine::plain("impact", symbol),
         }
     }
 
@@ -93,9 +109,79 @@ mod tests {
         assert_eq!(value["total_callers"], 0);
     }
 
+    /// A repository with `helper` in `shop.py` and in `util.py`.
+    fn two_helpers() -> (tempfile::TempDir, PathBuf) {
+        let (directory, path) = repository();
+        std::fs::write(path.join("util.py"), "def helper():\n    return 2\n").expect("write");
+        (directory, path)
+    }
+
     #[test]
-    fn test_an_unknown_symbol_resolves_to_nothing() {
-        let value = report(&request("missing", Direction::Both));
-        assert_eq!(value["resolved"], serde_json::json!([]));
+    fn test_an_ambiguous_name_writes_the_choices_and_fails() {
+        let (_directory, path) = two_helpers();
+        let mut out = Vec::new();
+        let error = run(
+            &path,
+            &Config::default(),
+            &request("helper", Direction::Both),
+            Format::Json,
+            &mut out,
+        )
+        .expect_err("ambiguous");
+        assert!(
+            matches!(error, crate::core::Error::SymbolLookup(_)),
+            "{error}"
+        );
+        assert_eq!(error.exit_status(), 1);
+        let value: serde_json::Value = serde_json::from_slice(&out).expect("json");
+        assert_eq!(value["error"]["code"], "ambiguous");
+        let commands: Vec<&str> = value["error"]["suggestions"]
+            .as_array()
+            .expect("suggestions")
+            .iter()
+            .map(|choice| choice["command"].as_str().expect("command"))
+            .collect();
+        assert_eq!(
+            commands,
+            [
+                "omen impact 'shop.py#helper'",
+                "omen impact 'util.py#helper'"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_a_start_line_selects_one_definition() {
+        let (_directory, path) = two_helpers();
+        let mut selected = request("helper", Direction::Both);
+        selected.start_line = Some(1);
+        let mut out = Vec::new();
+        assert!(run(&path, &Config::default(), &selected, Format::Json, &mut out).is_err());
+        selected.symbol = "util.py:helper".to_string();
+        let mut out = Vec::new();
+        run(&path, &Config::default(), &selected, Format::Json, &mut out).expect("impact");
+        let value: serde_json::Value = serde_json::from_slice(&out).expect("json");
+        assert_eq!(value["resolved"], serde_json::json!(["util.py#helper"]));
+    }
+
+    #[test]
+    fn test_an_unknown_name_writes_the_near_names_and_fails() {
+        let (_directory, path) = repository();
+        let mut out = Vec::new();
+        let error = run(
+            &path,
+            &Config::default(),
+            &request("helpr", Direction::Both),
+            Format::Json,
+            &mut out,
+        )
+        .expect_err("not found");
+        assert!(
+            matches!(error, crate::core::Error::SymbolLookup(_)),
+            "{error}"
+        );
+        let value: serde_json::Value = serde_json::from_slice(&out).expect("json");
+        assert_eq!(value["error"]["code"], "not_found");
+        assert_eq!(value["error"]["suggestions"], serde_json::json!(["helper"]));
     }
 }
