@@ -747,7 +747,8 @@ fn calculate_cognitive_complexity(
     }
 }
 
-/// Calculate maximum nesting depth.
+/// Calculate maximum nesting depth. The nesting kinds are those of the
+/// cognitive complexity (`get_nesting_node_types`).
 /// Uses iterative cursor traversal with depth tracking for performance.
 ///
 /// Like `count_decision_points`, does not descend into nested function-like
@@ -755,26 +756,7 @@ fn calculate_cognitive_complexity(
 /// folded into the enclosing function's. The starting `node` itself is
 /// exempt from this boundary check.
 fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_depth: u32) -> u32 {
-    const NESTING_KINDS: &[&str] = &[
-        "if_statement",
-        "if_expression",
-        "if",
-        "unless",
-        "while_statement",
-        "while_expression",
-        "while",
-        "until",
-        "for_statement",
-        "for_expression",
-        "for",
-        "switch_statement",
-        "match_expression",
-        "case",
-        "catch_clause",
-        "except_clause",
-        "rescue",
-    ];
-
+    let nesting_types = get_nesting_node_types(lang);
     let boundary_types = get_nested_scope_node_types(lang);
     let flat_types = get_flat_node_types(lang);
     let mut max_depth = initial_depth;
@@ -810,7 +792,7 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
             && chain_branch(&current, cursor.field_name(), lang, flat_types) == ChainBranch::ElseIf;
         let child_depth = if is_else_if {
             current_depth
-        } else if current.is_named() && NESTING_KINDS.contains(&kind) {
+        } else if current.is_named() && nesting_types.contains(&kind) {
             current_depth + 1
         } else {
             current_depth
@@ -2069,6 +2051,42 @@ fn drain(v: &mut Vec<i32>) {
                 "{code}"
             );
         }
+    }
+
+    /// The maximum nesting uses the nesting kinds of the cognitive
+    /// complexity. Each probe has two nested constructs.
+    #[test]
+    fn test_max_nesting_uses_the_cognitive_nesting_kinds() {
+        let cases: &[(Language, &str, &str)] = &[
+            (Language::TypeScript, "a.ts", "function f(xs, c) { for (const x of xs) { do { g(); } while (c); } }"),
+            (Language::JavaScript, "a.js", "function f(xs, c) { for (const x in xs) { do { g(); } while (c); } }"),
+            (Language::Tsx, "a.tsx", "function f(xs, c) { for (const x of xs) { do { g(); } while (c); } }"),
+            (Language::Java, "A.java", "class A { void f(int[] xs, boolean c) { for (int x : xs) { do { g(); } while (c); } } }"),
+            (Language::Java, "A.java", "class A { void f(int x, boolean c) { switch (x) { case 0 -> { if (c) g(); } default -> g(); } } }"),
+            (Language::CSharp, "A.cs", "class A { void F(int[] xs, bool c) { foreach (var x in xs) { do { G(); } while (c); } } }"),
+            (Language::C, "a.c", "void f(int x, int c) { do { switch (x) { case 0: g(); } } while (c); }"),
+            (Language::Cpp, "a.cpp", "void f(int x, int c) { do { switch (x) { case 0: g(); } } while (c); }"),
+            (Language::Go, "a.go", "package p\nfunc f(x int, a chan int) { switch x { case 0: select { case <-a: g() } } }\n"),
+            (Language::Go, "a.go", "package p\nfunc f(v any, c bool) { switch v.(type) { case int: if c { g() } } }\n"),
+            (Language::Rust, "a.rs", "fn f(c: bool) { loop { while c { g(); } } }"),
+            (Language::Python, "a.py", "def f(x, c):\n    match x:\n        case 0:\n            if c:\n                g()\n"),
+            (Language::Ruby, "a.rb", "def f(x, c)\n  case x\n  in 0\n    if c then g end\n  end\nend\n"),
+            (Language::Php, "a.php", "<?php\nfunction f($xs, $c) { foreach ($xs as $x) { do { g(); } while ($c); } }\n"),
+            (Language::Bash, "a.sh", "f() {\n  case \"$x\" in\n    a) while true; do g; done ;;\n  esac\n}\n"),
+        ];
+        let mut failures = Vec::new();
+        for (lang, filename, code) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            let nesting: Vec<u32> = result
+                .functions
+                .iter()
+                .map(|f| f.metrics.max_nesting)
+                .collect();
+            if nesting != [2] {
+                failures.push(format!("{lang:?} {nesting:?}: {code}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     fn assert_two_case_switch(code: &str, lang: Language, filename: &str) {
