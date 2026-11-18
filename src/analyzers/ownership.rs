@@ -86,32 +86,29 @@ impl Analyzer {
         let mut file_ownerships = Vec::new();
         let mut all_contributors: HashMap<String, u32> = HashMap::new();
 
+        let mut before_boundary = Vec::new();
         for file in &files {
-            if let Ok(Some(ownership)) = self.analyze_file(&git_repo, file, repo_path) {
-                // Aggregate contributor lines across all files
-                for contributor in &ownership.contributors {
-                    *all_contributors
-                        .entry(contributor.name.clone())
-                        .or_insert(0) += contributor.lines_owned;
+            match self.analyze_file(&git_repo, file, repo_path) {
+                Ok(FileBlame::Owned(ownership)) => {
+                    // Aggregate contributor lines across all files
+                    for contributor in &ownership.contributors {
+                        *all_contributors
+                            .entry(contributor.name.clone())
+                            .or_insert(0) += contributor.lines_owned;
+                    }
+                    file_ownerships.push(ownership);
                 }
-                file_ownerships.push(ownership);
+                Ok(FileBlame::BeforeBoundary(lines)) => before_boundary.push(lines),
+                Ok(FileBlame::NoData) | Err(_) => {}
             }
         }
 
-        // Sort by concentration (highest first - most risky)
-        file_ownerships.sort_by(|a, b| {
-            b.concentration
-                .partial_cmp(&a.concentration)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let summary = calculate_summary(&file_ownerships, &all_contributors);
-
-        Ok(Analysis {
-            generated_at: Utc::now().to_rfc3339(),
-            files: file_ownerships,
-            summary,
-        })
+        Ok(build_analysis(
+            file_ownerships,
+            &all_contributors,
+            &before_boundary,
+            !git_repo.is_shallow(),
+        ))
     }
 
     /// Collects all files in a repository.
@@ -127,20 +124,15 @@ impl Analyzer {
     }
 
     /// Analyzes ownership for a single file.
-    fn analyze_file(
-        &self,
-        git_repo: &GitRepo,
-        file: &Path,
-        _root: &Path,
-    ) -> Result<Option<FileOwnership>> {
+    fn analyze_file(&self, git_repo: &GitRepo, file: &Path, _root: &Path) -> Result<FileBlame> {
         let blame_info = match git_repo.blame(file) {
             Ok(info) => info,
-            Err(_) => return Ok(None),
+            Err(_) => return Ok(FileBlame::NoData),
         };
 
         let total_lines = blame_info.total_lines as usize;
         if total_lines < self.config.min_lines {
-            return Ok(None);
+            return Ok(FileBlame::NoData);
         }
 
         // Build contributors from blame info
@@ -157,12 +149,21 @@ impl Analyzer {
 
         // Handle empty contributors (no blame data)
         if contributors.is_empty() {
-            return Ok(None);
+            return Ok(if blame_info.boundary_lines > 0 {
+                FileBlame::BeforeBoundary(blame_info.boundary_lines)
+            } else {
+                FileBlame::NoData
+            });
         }
 
-        // Sort by lines owned (descending)
+        // The name breaks a tie, because the contributors come from a hash map.
         let mut sorted_contributors = contributors.clone();
-        sorted_contributors.sort_by_key(|contributor| std::cmp::Reverse(contributor.lines_owned));
+        sorted_contributors.sort_by(|left, right| {
+            right
+                .lines_owned
+                .cmp(&left.lines_owned)
+                .then_with(|| left.name.cmp(&right.name))
+        });
 
         let primary_owner = sorted_contributors
             .first()
@@ -179,16 +180,69 @@ impl Analyzer {
 
         let risk_level = classify_risk(concentration, sorted_contributors.len());
 
-        Ok(Some(FileOwnership {
+        Ok(FileBlame::Owned(FileOwnership {
             file: file.to_string_lossy().to_string(),
             primary_owner,
             ownership_percent,
             concentration,
             total_lines: total_lines as u32,
+            unattributed_lines: blame_info.boundary_lines,
             contributors: sorted_contributors,
             is_silo,
             risk_level,
         }))
+    }
+}
+
+/// What the blame of one file gives.
+enum FileBlame {
+    Owned(FileOwnership),
+    /// Each line of the file is older than the boundary of a shallow clone.
+    /// The value is the number of lines.
+    BeforeBoundary(u32),
+    /// Git has no blame for the file, or the file is too small.
+    NoData,
+}
+
+/// The note of a result that comes from a shallow clone.
+pub const SHALLOW_HISTORY_NOTE: &str = "The clone is shallow. Git gives each line that is older \
+    than the boundary commit to that commit, thus the author of such a line is not known. \
+    The shares use only the lines that changed after the boundary. \
+    Run `git fetch --unshallow` to get the full history.";
+
+/// Puts the file with the highest concentration first. Of two files with the
+/// same concentration, the one with more lines is first, because more code
+/// depends on one person. The path breaks a tie.
+fn rank_files(files: &mut [FileOwnership]) {
+    files.sort_by(|left, right| {
+        right
+            .concentration
+            .total_cmp(&left.concentration)
+            .then_with(|| right.total_lines.cmp(&left.total_lines))
+            .then_with(|| left.file.cmp(&right.file))
+    });
+}
+
+fn build_analysis(
+    mut files: Vec<FileOwnership>,
+    all_contributors: &HashMap<String, u32>,
+    before_boundary: &[u32],
+    history_complete: bool,
+) -> Analysis {
+    rank_files(&mut files);
+    let mut summary = calculate_summary(&files, all_contributors);
+    summary.files_without_history = before_boundary.len();
+    summary.unattributed_lines = before_boundary
+        .iter()
+        .map(|lines| u64::from(*lines))
+        .chain(files.iter().map(|file| u64::from(file.unattributed_lines)))
+        .sum();
+    Analysis {
+        generated_at: Utc::now().to_rfc3339(),
+        files,
+        summary,
+        history_complete,
+        history_note: (!history_complete).then(|| SHALLOW_HISTORY_NOTE.to_string()),
     }
 }
 
@@ -228,7 +282,7 @@ impl AnalyzerTrait for Analyzer {
         // Phase 1: Parallel blame operations (the expensive part)
         // Each thread reuses its own GitRepo for all files it processes
         let git_path_owned = git_path.to_path_buf();
-        let file_ownerships: Vec<FileOwnership> = files
+        let blames: Vec<FileBlame> = files
             .par_iter()
             .filter_map(|file| {
                 // Get or create thread-local git repo
@@ -245,12 +299,19 @@ impl AnalyzerTrait for Analyzer {
                         ctx.report_progress(current, total_files);
                     }
 
-                    self.analyze_file(repo, file, &git_path_owned)
-                        .ok()
-                        .flatten()
+                    self.analyze_file(repo, file, &git_path_owned).ok()
                 })
             })
             .collect();
+        let mut file_ownerships = Vec::new();
+        let mut before_boundary = Vec::new();
+        for blame in blames {
+            match blame {
+                FileBlame::Owned(ownership) => file_ownerships.push(ownership),
+                FileBlame::BeforeBoundary(lines) => before_boundary.push(lines),
+                FileBlame::NoData => {}
+            }
+        }
 
         // Phase 2: Sequential aggregation (fast, O(n))
         let mut all_contributors: HashMap<String, u32> = HashMap::new();
@@ -262,21 +323,13 @@ impl AnalyzerTrait for Analyzer {
             }
         }
 
-        // Sort by concentration (highest first - most risky)
-        let mut sorted_ownerships = file_ownerships;
-        sorted_ownerships.sort_by(|a, b| {
-            b.concentration
-                .partial_cmp(&a.concentration)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let summary = calculate_summary(&sorted_ownerships, &all_contributors);
-
-        Ok(Analysis {
-            generated_at: Utc::now().to_rfc3339(),
-            files: sorted_ownerships,
-            summary,
-        })
+        let history_complete = GitRepo::open(git_path).is_ok_and(|repo| !repo.is_shallow());
+        Ok(build_analysis(
+            file_ownerships,
+            &all_contributors,
+            &before_boundary,
+            history_complete,
+        ))
     }
 }
 
@@ -347,7 +400,7 @@ fn get_top_contributors(files: &[FileOwnership], n: usize) -> Vec<TopContributor
         *owner_counts.entry(file.primary_owner.clone()).or_insert(0) += 1;
     }
     let mut sorted: Vec<_> = owner_counts.into_iter().collect();
-    sorted.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+    sorted.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
     sorted
         .into_iter()
         .take(n)
@@ -387,6 +440,8 @@ fn calculate_summary(files: &[FileOwnership], all_contributors: &HashMap<String,
         avg_contributors,
         max_concentration,
         top_contributors,
+        files_without_history: 0,
+        unattributed_lines: 0,
     }
 }
 
@@ -395,10 +450,24 @@ fn calculate_summary(files: &[FileOwnership], all_contributors: &HashMap<String,
 pub struct Analysis {
     /// When the analysis was generated.
     pub generated_at: String,
-    /// Per-file ownership data.
+    /// Per-file ownership data. The file with the highest concentration is first.
     pub files: Vec<FileOwnership>,
     /// Summary statistics.
     pub summary: Summary,
+    /// False for a shallow clone. See `history_note`.
+    #[serde(default = "complete_history")]
+    pub history_complete: bool,
+    /// Present only when `history_complete` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_note: Option<String>,
+}
+
+fn complete_history() -> bool {
+    true
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Ownership metrics for a single file.
@@ -414,6 +483,10 @@ pub struct FileOwnership {
     pub concentration: f64,
     /// Total lines in file.
     pub total_lines: u32,
+    /// The lines that are older than the boundary of a shallow clone. Their
+    /// author is not known, and the shares do not include them.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unattributed_lines: u32,
     /// Contributors to the file.
     pub contributors: Vec<Contributor>,
     /// Whether file has only one contributor.
@@ -480,6 +553,13 @@ pub struct Summary {
     pub max_concentration: f64,
     /// Top contributors by files owned.
     pub top_contributors: Vec<TopContributor>,
+    /// The files in which each line is older than the boundary of a shallow
+    /// clone. They are not in `files`.
+    #[serde(default)]
+    pub files_without_history: usize,
+    /// The lines whose author is not known because of a shallow clone.
+    #[serde(default)]
+    pub unattributed_lines: u64,
 }
 
 #[cfg(test)]
@@ -630,6 +710,7 @@ mod tests {
             ownership_percent: 100.0,
             concentration: 1.0,
             total_lines: 100,
+            unattributed_lines: 0,
             contributors: vec![Contributor {
                 name: owner.to_string(),
                 email: format!("{}@test.com", owner.to_lowercase()),
@@ -688,6 +769,7 @@ mod tests {
                 ownership_percent: 80.0,
                 concentration: 0.8,
                 total_lines: 100,
+                unattributed_lines: 0,
                 contributors: vec![
                     Contributor {
                         name: "Alice".to_string(),
@@ -711,6 +793,7 @@ mod tests {
                 ownership_percent: 100.0,
                 concentration: 1.0,
                 total_lines: 50,
+                unattributed_lines: 0,
                 contributors: vec![Contributor {
                     name: "Carol".to_string(),
                     email: "".to_string(),
@@ -750,6 +833,7 @@ mod tests {
             ownership_percent: 75.0,
             concentration: 0.75,
             total_lines: 100,
+            unattributed_lines: 0,
             contributors: vec![Contributor {
                 name: "Alice".to_string(),
                 email: "alice@example.com".to_string(),

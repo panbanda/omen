@@ -486,6 +486,28 @@ mod tests {
     }
 
     #[test]
+    fn a_cfg_test_module_with_a_second_attribute_or_a_comment_has_the_flag_in_test() {
+        let source = "#[cfg(test)]\n#[allow(\n    clippy::disallowed_methods,\n    reason = \"the tests run a process\"\n)]\n// A comment.\nmod tests {\n    fn second(pointer: *const u8) -> u8 {\n        unsafe { *pointer }\n    }\n}\n\n#[test]\n/// The documentation.\nfn third(pointer: *const u8) {\n    unsafe { *pointer };\n}\n\n#[cfg(not(test))]\nmod real {\n    fn fourth(pointer: *const u8) -> u8 {\n        unsafe { *pointer }\n    }\n}\n";
+        let result = sinks(Language::Rust, &[("a.rs", source)]);
+        let flags: Vec<(u32, bool)> = result
+            .iter()
+            .map(|sink| (sink.range.start_line, sink.flags.in_test))
+            .collect();
+        assert_eq!(flags, [(9, true), (16, true), (22, false)]);
+    }
+
+    #[test]
+    fn a_sink_in_a_test_callback_has_the_flag_in_test() {
+        let source = "function run(text) {\n  eval(text);\n}\n\ndescribe(\"run\", () => {\n  it(\"evaluates\", () => {\n    eval(\"1\");\n  });\n});\n";
+        let result = sinks(Language::JavaScript, &[("src/a.js", source)]);
+        let flags: Vec<(u32, bool)> = result
+            .iter()
+            .map(|sink| (sink.range.start_line, sink.flags.in_test))
+            .collect();
+        assert_eq!(flags, [(2, false), (7, true)]);
+    }
+
+    #[test]
     fn a_rust_unsafe_block_is_a_sink_and_a_cfg_test_module_has_the_flag() {
         let source = "pub fn first(pointer: *const u8) -> u8 {\n    unsafe { *pointer }\n}\n\n#[cfg(test)]\nmod tests {\n    fn second(pointer: *const u8) -> u8 {\n        unsafe { *pointer }\n    }\n}\n";
         let result = sinks(Language::Rust, &[("a.rs", source)]);

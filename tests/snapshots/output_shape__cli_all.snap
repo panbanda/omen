@@ -5,6 +5,12 @@ expression: "shape(&output, case.dynamic_key_objects)"
 {
   "analyzers": {
     "changes": {
+      "churn_window": {
+        "anchor_date": "string",
+        "commits_matched": "number",
+        "days": "number",
+        "history_complete": "bool"
+      },
       "commits": [
         {
           "author": "string",
@@ -53,6 +59,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
       },
       "period_days": "number",
       "risk_thresholds": {
+        "basis": "string",
         "high_threshold": "number",
         "medium_threshold": "number"
       },
@@ -81,6 +88,12 @@ expression: "shape(&output, case.dynamic_key_objects)"
       }
     },
     "churn": {
+      "churn_window": {
+        "anchor_date": "string",
+        "commits_matched": "number",
+        "days": "number",
+        "history_complete": "bool"
+      },
       "files": [
         {
           "additions": "number",
@@ -92,6 +105,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "deletions": "number",
           "file": "string",
           "first_commit": "string",
+          "is_test": "bool",
           "last_commit": "string",
           "relative_churn": "number",
           "total_loc": "number",
@@ -133,6 +147,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "file_a": "string",
           "file_b": "string",
           "group_id": "number",
+          "is_test": "bool",
           "lines_a": "number",
           "lines_b": "number",
           "similarity": "number",
@@ -201,6 +216,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
             "string"
           ],
           "file": "string",
+          "is_test": "bool",
           "language": "string",
           "lcom": "number",
           "loc": "number",
@@ -244,6 +260,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "functions": [
             {
               "end_line": "number",
+              "is_test": "bool",
               "metrics": {
                 "cognitive": "number",
                 "cyclomatic": "number",
@@ -254,6 +271,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
               "start_line": "number"
             }
           ],
+          "is_test": "bool",
           "language": "string",
           "total_cognitive": "number",
           "total_cyclomatic": "number"
@@ -280,6 +298,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "confidence": "number",
           "end_line": "number",
           "file": "string",
+          "is_test": "bool",
           "kind": "string",
           "line": "number",
           "name": "string",
@@ -315,6 +334,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
             "ownership": "number"
           },
           "file": "string",
+          "is_test": "bool",
           "probability": "number",
           "recommendations": [
             "string"
@@ -367,6 +387,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "file": "string",
           "in_degree": "number",
           "instability": "number",
+          "is_test": "bool",
           "out_degree": "number",
           "pagerank": "number"
         }
@@ -389,11 +410,14 @@ expression: "shape(&output, case.dynamic_key_objects)"
         {
           "avg_complexity": "number",
           "churn_percentile": "number",
+          "churn_score": "number",
           "commits": "number",
           "complexity_percentile": "number",
           "file": "string",
+          "is_test": "bool",
           "score": "number",
-          "severity": "string"
+          "severity": "string",
+          "total_complexity": "number"
         }
       ],
       "summary": {
@@ -416,6 +440,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           ],
           "file": "string",
           "is_silo": "bool",
+          "is_test": "bool",
           "ownership_percent": "number",
           "primary_owner": "string",
           "risk_level": "string",
@@ -423,9 +448,11 @@ expression: "shape(&output, case.dynamic_key_objects)"
         }
       ],
       "generated_at": "string",
+      "history_complete": "bool",
       "summary": {
         "avg_contributors": "number",
         "bus_factor": "number",
+        "files_without_history": "number",
         "high_risk_count": "number",
         "max_concentration": "number",
         "silo_count": "number",
@@ -435,7 +462,8 @@ expression: "shape(&output, case.dynamic_key_objects)"
             "name": "string"
           }
         ],
-        "total_files": "number"
+        "total_files": "number",
+        "unattributed_lines": "number"
       }
     },
     "repomap": {
@@ -451,6 +479,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
         {
           "file": "string",
           "in_degree": "number",
+          "is_test": "bool",
           "kind": "string",
           "line": "number",
           "name": "string",
@@ -470,6 +499,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
         {
           "category": "string",
           "file": "string",
+          "is_test": "bool",
           "line": "number",
           "marker": "string",
           "severity": "string",
@@ -599,6 +629,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "instability": "number",
           "is_central_connector": "bool",
           "is_hub": "bool",
+          "is_test": "bool",
           "name": "string"
         }
       ],
@@ -649,6 +680,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           ],
           "category": "string",
           "file": "string",
+          "is_test": "bool",
           "language": "string",
           "line": "number",
           "lines": [
@@ -681,6 +713,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "grade": "string",
           "has_critical_defects": "bool",
           "hotspot_score": "number",
+          "is_test": "bool",
           "language": "string",
           "penalties_applied?": [
             {
@@ -704,6 +737,12 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "total_files": "number"
     },
     "temporal": {
+      "churn_window": {
+        "anchor_date": "string",
+        "commits_matched": "number",
+        "days": "number",
+        "history_complete": "bool"
+      },
       "couplings": [
         {
           "cochange_count": "number",
@@ -711,7 +750,8 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "commits_b": "number",
           "coupling_strength": "number",
           "file_a": "string",
-          "file_b": "string"
+          "file_b": "string",
+          "is_test": "bool"
         }
       ],
       "generated_at": "string",

@@ -75,6 +75,7 @@ pub(super) fn build(
     }
 
     let mut hints = data.hints;
+    hints.extend(wider_window_hint(tool, call_arguments, &result));
     if let Some(next_offset) = paging.next_offset {
         let mut arguments = call_arguments.as_object().cloned().unwrap_or_default();
         arguments.insert("offset".to_string(), json!(next_offset));
@@ -111,6 +112,36 @@ pub(super) fn build(
         envelope = compact::encode(envelope);
     }
     envelope
+}
+
+/// The hint for an empty result of a history window that is too narrow.
+///
+/// A history analyzer gives `churn_window.next_since` when its list is empty
+/// and a wider window exists. The hint is the same call with that window.
+fn wider_window_hint(tool: &str, call_arguments: &Value, result: &Value) -> Option<Hint> {
+    let window = result.get("churn_window")?;
+    let next_since = window.get("next_since")?.as_str()?;
+    let commits = window.get("commits_matched")?.as_u64()?;
+    let mut arguments = call_arguments.as_object().cloned().unwrap_or_default();
+    arguments.insert("since".to_string(), json!(next_since));
+    arguments.remove("offset");
+    let matched = match commits {
+        1 => "1 commit".to_string(),
+        commits => format!("{commits} commits"),
+    };
+    let width = match window.get("days").and_then(Value::as_u64) {
+        Some(1) => "1 day".to_string(),
+        Some(days) => format!("{days} days"),
+        None => "all the history".to_string(),
+    };
+    Some(Hint {
+        tool: tool.to_string(),
+        arguments: Value::Object(arguments),
+        reason: format!(
+            "The window of {width} matched {matched}, and the list is empty. \
+             A wider window can have data."
+        ),
+    })
 }
 
 /// What the pagination did to one result.
@@ -242,6 +273,45 @@ fn paginate(pagination: Pagination, value: &mut Value, page: Page) -> Paging {
                 sequence.finish()
             } else {
                 Paging::untouched(None)
+            }
+        }
+        Pagination::Ranked {
+            parent,
+            child,
+            rank,
+        } => {
+            let parents_before = value.get(parent).and_then(Value::as_array).map(Vec::len);
+            let Some(ranked) = crate::output::page_ranked_children(
+                value,
+                parent,
+                child,
+                rank,
+                page.limit,
+                page.offset,
+            ) else {
+                return Paging::untouched(None);
+            };
+            let end = page.offset.saturating_add(ranked.returned);
+            let mut truncated = Vec::new();
+            if ranked.returned < ranked.total {
+                truncated.push(Truncation {
+                    path: format!("/{parent}/*/{child}"),
+                    total: ranked.total,
+                    returned: ranked.returned,
+                });
+            }
+            if let Some(before) = parents_before.filter(|_| ranked.parents_omitted > 0) {
+                truncated.push(Truncation {
+                    path: format!("/{parent}"),
+                    total: before,
+                    returned: before - ranked.parents_omitted,
+                });
+            }
+            Paging {
+                total: Some(ranked.total),
+                returned: Some(ranked.returned),
+                next_offset: (end < ranked.total).then_some(end),
+                truncated,
             }
         }
         Pagination::Children(field) => {
@@ -403,6 +473,48 @@ mod tests {
             false,
         );
         assert_eq!(last["hints"], json!([]));
+    }
+
+    #[test]
+    fn an_empty_result_of_a_narrow_window_gives_a_hint_with_the_next_window() {
+        let result = json!({
+            "couplings": [],
+            "churn_window": {
+                "days": 30, "anchor_date": null, "commits_matched": 1,
+                "history_complete": true, "next_since": "90d"
+            }
+        });
+        let call = json!({"path": "src", "since": "30d", "offset": 5});
+        let envelope = build(
+            "temporal",
+            &call,
+            Pagination::Field("couplings"),
+            ToolData::new(result),
+            page(50, 0),
+            false,
+        );
+        assert_eq!(
+            envelope["hints"],
+            json!([{
+                "tool": "temporal",
+                "arguments": {"path": "src", "since": "90d"},
+                "reason": "The window of 30 days matched 1 commit, and the list is empty. A wider window can have data."
+            }])
+        );
+
+        let with_rows = json!({
+            "couplings": [{"file_a": "a", "file_b": "b"}],
+            "churn_window": {"days": 30, "commits_matched": 9, "history_complete": true}
+        });
+        let envelope = build(
+            "temporal",
+            &call,
+            Pagination::Field("couplings"),
+            ToolData::new(with_rows),
+            page(50, 0),
+            false,
+        );
+        assert_eq!(envelope["hints"], json!([]));
     }
 
     #[test]
@@ -604,6 +716,14 @@ mod tests {
                     .map(|element| &element[child])
                     .collect(),
             ),
+            Pagination::Ranked { parent, child, .. } => arrays(
+                result[parent]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|element| &element[child])
+                    .collect(),
+            ),
             Pagination::Children(field) => {
                 arrays(result[field].as_array().into_iter().flatten().collect())
             }
@@ -682,6 +802,49 @@ mod tests {
         parents: &["files"],
         child: "functions",
     };
+
+    #[test]
+    fn ranked_pagination_gives_the_highest_children_and_only_their_parents() {
+        let function = |name: &str, cyclomatic: u64| json!({"name": name, "start_line": 1, "metrics": {"cyclomatic": cyclomatic, "cognitive": 0}});
+        let result = json!({"files": [
+            {"file": "a.rs", "functions": [function("a1", 1), function("a2", 8)]},
+            {"file": "b.rs", "functions": [function("b1", 20)]},
+            {"file": "c.rs", "functions": [function("c1", 2)]}
+        ]});
+        let ranked = Pagination::Ranked {
+            parent: "files",
+            child: "functions",
+            rank: &crate::output::COMPLEXITY_RANK,
+        };
+        let envelope = envelope("complexity", ranked, result, page(2, 0));
+        let files: Vec<(&str, Vec<&str>)> = envelope["result"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| {
+                (
+                    file["file"].as_str().unwrap(),
+                    file["functions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|function| function["name"].as_str().unwrap())
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(files, [("b.rs", vec!["b1"]), ("a.rs", vec!["a2"])]);
+        assert_eq!(envelope["total_items"], 4);
+        assert_eq!(envelope["returned"], 2);
+        assert_eq!(envelope["next_offset"], 2);
+        assert_eq!(
+            envelope["truncated"],
+            json!([
+                {"path": "/files/*/functions", "total": 4, "returned": 2},
+                {"path": "/files", "total": 3, "returned": 2}
+            ])
+        );
+    }
 
     #[test]
     fn nested_pagination_applies_one_limit_to_all_child_lists() {

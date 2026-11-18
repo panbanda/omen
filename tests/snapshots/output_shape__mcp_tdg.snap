@@ -30,6 +30,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                 "grade": "string",
                 "has_critical_defects": "bool",
                 "hotspot_score": "number",
+                "is_test": "bool",
                 "language": "string",
                 "penalties_applied?": [
                   {

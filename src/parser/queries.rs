@@ -3,21 +3,22 @@
 use crate::core::Language;
 
 /// Get decision point node types for cyclomatic complexity.
+///
+/// A `switch` or `match` with N branches has N outgoing edges, so it adds
+/// N - 1 decision points. The table has the case kinds and not the `switch`
+/// kinds. `is_default_branch` removes the default case of each one.
 pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
         Language::Go => &[
             "if_statement",
             "for_statement",
-            "select_statement",
-            "type_switch_statement",
-            "expression_switch_statement",
-            // Each case is an independent path per McCabe's methodology,
-            // consistent with C/C++ (case_statement) and Ruby (when).
             "expression_case",
+            "type_case",
+            "communication_case",
         ],
         Language::Rust => &[
             "if_expression",
-            "match_expression",
+            "match_arm",
             "for_expression",
             // while_expression covers both `while cond` and `while let pat = expr`
             // in tree-sitter-rust 0.23+, which uses let_condition as a child node
@@ -29,10 +30,9 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "if_statement",
             "for_statement",
             "while_statement",
-            "with_statement",
-            "try_statement",
             "elif_clause",
             "except_clause",
+            "case_clause",
             "comprehension",
             "conditional_expression",
         ],
@@ -42,11 +42,8 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "for_in_statement",
             "while_statement",
             "do_statement",
-            "switch_statement",
             "ternary_expression",
             "catch_clause",
-            // Each case is an independent path per McCabe's methodology,
-            // consistent with C/C++ (case_statement) and Ruby (when).
             "switch_case",
         ],
         Language::Java => &[
@@ -55,29 +52,36 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "enhanced_for_statement",
             "while_statement",
             "do_statement",
-            "switch_statement",
-            "switch_expression",
+            "switch_label",
             "catch_clause",
             "ternary_expression",
         ],
         Language::CSharp => &[
             "if_statement",
             "for_statement",
-            "enhanced_for_statement",
+            "foreach_statement",
             "while_statement",
             "do_statement",
-            "switch_statement",
-            "switch_expression",
+            "switch_section",
+            "switch_expression_arm",
             "catch_clause",
             "conditional_expression",
         ],
-        Language::C | Language::Cpp => &[
+        Language::C => &[
             "if_statement",
             "for_statement",
             "while_statement",
             "do_statement",
-            "switch_statement",
             "case_statement",
+            "conditional_expression",
+        ],
+        Language::Cpp => &[
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "do_statement",
+            "case_statement",
+            "catch_clause",
             "conditional_expression",
         ],
         Language::Ruby => &[
@@ -86,8 +90,8 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "while",
             "until",
             "for",
-            "case",
             "when",
+            "in_clause",
             "rescue",
             "elsif",
             "conditional",
@@ -98,26 +102,107 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "foreach_statement",
             "while_statement",
             "do_statement",
-            "switch_statement",
+            "case_statement",
+            "match_conditional_expression",
             "catch_clause",
-            "elseif_clause",
+            "else_if_clause",
             "conditional_expression",
         ],
         Language::Bash => &[
             "if_statement",
             "for_statement",
             "while_statement",
-            "case_statement",
+            "case_item",
             "elif_clause",
             "ternary_expression",
         ],
     }
 }
 
+/// Whether a case node of `get_decision_node_types` is the default branch of
+/// its `switch` or `match`. The default branch adds no decision point.
+pub fn is_default_branch(node: &tree_sitter::Node<'_>, source: &[u8], lang: Language) -> bool {
+    let first_token = || node.child(0).map(|child| child.kind());
+    let text = |child: tree_sitter::Node<'_>| child.utf8_text(source).unwrap_or("");
+    match (lang, node.kind()) {
+        (Language::C | Language::Cpp, "case_statement")
+        | (Language::Java, "switch_label")
+        | (Language::CSharp, "switch_section") => first_token() == Some("default"),
+        // `_` or `var name` with no `when` matches each remaining value.
+        (Language::CSharp, "switch_expression_arm") => {
+            let guarded = !named_children_of_kind(node, "when_clause").is_empty();
+            let catches_all = node.named_child(0).is_some_and(|pattern| {
+                pattern.kind() == "discard"
+                    || (pattern.kind() == "declaration_pattern"
+                        && pattern
+                            .child_by_field_name("type")
+                            .is_some_and(|kind| kind.kind() == "implicit_type")
+                        && pattern
+                            .child_by_field_name("name")
+                            .is_some_and(|name| name.kind() == "identifier"))
+            });
+            !guarded && catches_all
+        }
+        // A `match` is exhaustive, so the last arm is the default.
+        (Language::Rust, "match_arm") => {
+            let mut sibling = node.next_named_sibling();
+            while let Some(next) = sibling {
+                if next.kind() == "match_arm" {
+                    return false;
+                }
+                sibling = next.next_named_sibling();
+            }
+            true
+        }
+        // `case _:` or a bare capture such as `case rest:`, with no guard. Two
+        // patterns, as in `case _, _:`, are a sequence pattern.
+        (Language::Python, "case_clause") => {
+            let patterns = named_children_of_kind(node, "case_pattern");
+            node.child_by_field_name("guard").is_none()
+                && patterns.len() == 1
+                && (text(patterns[0]) == "_" || is_bare_capture(patterns[0]))
+        }
+        (Language::Bash, "case_item") => {
+            let mut cursor = node.walk();
+            let values: Vec<_> = node.children_by_field_name("value", &mut cursor).collect();
+            values.iter().any(|value| text(*value) == "*")
+        }
+        _ => false,
+    }
+}
+
+/// Whether a Python case pattern is one name, which captures any value.
+/// A dotted name such as `Color.RED` is a value pattern.
+fn is_bare_capture(pattern: tree_sitter::Node<'_>) -> bool {
+    pattern.named_child_count() == 1
+        && pattern
+            .named_child(0)
+            .is_some_and(|name| name.kind() == "dotted_name" && name.named_child_count() == 1)
+}
+
+fn named_children_of_kind<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    kind: &str,
+) -> Vec<tree_sitter::Node<'tree>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter(|child| child.kind() == kind)
+        .collect()
+}
+
 /// Get nesting node types for cognitive complexity.
 pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
-        Language::Ruby => &["if", "unless", "while", "until", "for", "case", "begin"],
+        Language::Ruby => &[
+            "if",
+            "unless",
+            "while",
+            "until",
+            "for",
+            "case",
+            "case_match",
+            "rescue",
+        ],
         Language::Go => &[
             "if_statement",
             "for_statement",
@@ -129,8 +214,8 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
             "if_statement",
             "for_statement",
             "while_statement",
-            "with_statement",
-            "try_statement",
+            "except_clause",
+            "match_statement",
         ],
         Language::Rust => &[
             "if_expression",
@@ -146,23 +231,41 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
             "while_statement",
             "do_statement",
             "switch_statement",
-            "try_statement",
+            "catch_clause",
         ],
-        Language::Java | Language::CSharp => &[
+        Language::Java => &[
             "if_statement",
             "for_statement",
             "enhanced_for_statement",
             "while_statement",
             "do_statement",
             "switch_expression",
-            "try_statement",
+            "catch_clause",
         ],
-        Language::C | Language::Cpp => &[
+        Language::CSharp => &[
+            "if_statement",
+            "for_statement",
+            "foreach_statement",
+            "while_statement",
+            "do_statement",
+            "switch_statement",
+            "switch_expression",
+            "catch_clause",
+        ],
+        Language::C => &[
             "if_statement",
             "for_statement",
             "while_statement",
             "do_statement",
             "switch_statement",
+        ],
+        Language::Cpp => &[
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "do_statement",
+            "switch_statement",
+            "catch_clause",
         ],
         Language::Php => &[
             "if_statement",
@@ -171,7 +274,8 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
             "while_statement",
             "do_statement",
             "switch_statement",
-            "try_statement",
+            "match_expression",
+            "catch_clause",
         ],
         Language::Bash => &[
             "if_statement",
@@ -187,52 +291,31 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
 /// Per SonarSource cognitive complexity spec, these constructs add +1 to complexity
 /// but do NOT increment the nesting level. This includes:
 /// - else/elif/elseif clauses (already inside a nesting if)
-/// - catch/except/rescue clauses (already inside a nesting try)
-/// - break/continue/goto (flow-breaking statements)
+/// - `goto`, and `break` or `continue` to a label (see `is_jump_without_label`)
 ///
 /// Reference: https://www.sonarsource.com/docs/CognitiveComplexity.pdf
 pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
-        Language::Ruby => &["elsif", "else", "when", "rescue", "break", "next", "redo"],
-        Language::Python => &[
-            "else_clause",
-            "elif_clause",
-            "except_clause", // Python's catch equivalent
-            "break_statement",
-            "continue_statement",
-        ],
-        Language::Go => &["else_clause"],
+        // Ruby, Python, C#, C, and C++ have no `break` or `continue` to a label.
+        Language::Ruby => &["elsif", "else"],
+        Language::Python => &["else_clause", "elif_clause"],
+        // Go keeps the `else` body in the `alternative` field of `if_statement`.
+        Language::Go => &["break_statement", "continue_statement", "goto_statement"],
         Language::Rust => &[
             "else_clause",
             // match_arm contributes to flat complexity (each arm is +1 like case)
             "break_expression",
             "continue_expression",
         ],
-        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => &[
-            "else_clause",
-            "catch_clause",
-            "switch_case",
-            "break_statement",
-            "continue_statement",
-        ],
-        Language::Java | Language::CSharp => &[
-            "else_clause",
-            "catch_clause",
-            "break_statement",
-            "continue_statement",
-        ],
-        Language::C | Language::Cpp => &[
-            "else_clause",
-            "case_statement",
-            "catch_clause",
-            "break_statement",
-            "continue_statement",
-            "goto_statement",
-        ],
+        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
+            &["else_clause", "break_statement", "continue_statement"]
+        }
+        Language::Java => &["break_statement", "continue_statement"],
+        Language::CSharp => &["goto_statement"],
+        Language::C | Language::Cpp => &["else_clause", "goto_statement"],
         Language::Php => &[
             "else_clause",
-            "elseif_clause",
-            "catch_clause",
+            "else_if_clause",
             "break_statement",
             "continue_statement",
         ],
@@ -493,23 +576,22 @@ mod tests {
         assert!(rust_types.contains(&"continue_expression"));
         assert!(!rust_types.contains(&"break_statement"));
 
-        // Go only has else_clause (no break/continue as flat complexity)
-        let go_types = get_flat_node_types(Language::Go);
-        assert!(go_types.contains(&"else_clause"));
-        assert_eq!(go_types.len(), 1);
+        // The Go grammar has no `else_clause` kind. Go has jumps to a label.
+        assert!(!get_flat_node_types(Language::Go).contains(&"else_clause"));
+        assert!(get_flat_node_types(Language::Go).contains(&"goto_statement"));
 
-        // Ruby has elsif and rescue
+        // Ruby has elsif. A `rescue` nests, as a `catch` does.
         let ruby_types = get_flat_node_types(Language::Ruby);
         assert!(ruby_types.contains(&"elsif"));
-        assert!(ruby_types.contains(&"rescue"));
+        assert!(get_nesting_node_types(Language::Ruby).contains(&"rescue"));
 
         // C/C++ should include goto_statement
         let c_types = get_flat_node_types(Language::C);
         assert!(c_types.contains(&"goto_statement"));
 
-        // PHP should include elseif_clause
+        // PHP should include else_if_clause
         let php_types = get_flat_node_types(Language::Php);
-        assert!(php_types.contains(&"elseif_clause"));
+        assert!(php_types.contains(&"else_if_clause"));
 
         // Bash should have elif_clause
         let bash_types = get_flat_node_types(Language::Bash);
@@ -569,8 +651,9 @@ pub mod satd {
     /// Performance debt markers.
     pub const PERFORMANCE: &[&str] = &["SLOW", "OPTIMIZE", "PERF", "BOTTLENECK", "INEFFICIENT"];
 
-    /// Security debt markers. omen:ignore
-    pub const SECURITY: &[&str] = &["SECURITY", "VULN", "UNSAFE", "XXX", "INSECURE"];
+    /// Security debt markers. Each one is debt only as a tag at the start of
+    /// the comment, because the same words also explain code. omen:ignore
+    pub const SECURITY: &[&str] = &["VULN", "UNSAFE", "XXX", "INSECURE"];
 
     /// Documentation debt markers.
     pub const DOCUMENTATION: &[&str] = &["DOC", "UNDOCUMENTED", "DOCUMENT", "NODOC", "UNDOC"];

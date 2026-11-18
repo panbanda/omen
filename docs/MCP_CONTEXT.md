@@ -80,13 +80,17 @@ takes: the value in the configuration, or the built-in default.
 | `clones` | `similarity` | `duplicates.min_similarity` (0.9) |
 | `clones` | `include_tests` | `false`; `exclude_tests` then applies |
 | `defect` | `since` | `defect.since` (30d) |
+| `changes` | `since` | `changes.since` (30d). The value `all` is an `invalid_argument` error. |
 | `hotspot` | `since` | `hotspot.since` (90d) |
 | `temporal` | `since` | `30d` |
+| each tool with `exclude_tests` | `exclude_tests` | `false` |
 | `flags` | `provider` | `feature_flags.providers` |
 | `flags` | `stale_days` | `feature_flags.stale_days` (90) |
 
-`changes` reads `changes.since`, and `satd` reads `satd.markers`. They
-have no parameter for these values.
+`satd` reads `satd.markers`. It has no parameter for this value.
+
+`docs/LISTS_AND_WINDOWS.md` gives the default window of each history tool,
+the `churn_window` block that each of them gives, and the order of each list.
 
 `tests/parity.rs` compares each tool with its command on a fixture repository,
 with and without a configuration file. Its tables list each permitted
@@ -167,7 +171,9 @@ each element of an array, such as `/files/*/functions`.
 A hint comes only from the data of the result. When `has_more` is `true`, the
 first kind of hint repeats the call with `offset` set to `next_offset`. The
 tools `get_symbol` and `impact` give a hint for `impact` and `get_symbol`
-when the result has symbols to follow. `reason` states the fact that causes
+when the result has symbols to follow. A history tool gives a hint when its
+list is empty and a wider window exists: the same call with `since` set to
+`churn_window.next_since`. `reason` states the fact that causes
 the hint. A hint is not an instruction, and an agent can ignore it.
 
 `fingerprint` is a blake3 hash of the relative names and the contents of the
@@ -288,6 +294,17 @@ each other path.
 `limit` has the default 50, and the value 0 removes the limit. When `has_more`
 is `true`, send the same call with `offset` set to `next_offset`. The pages
 together hold each item one time.
+
+Each list that a tool pages is in rank order: the row with the most risk is
+first. `docs/LISTS_AND_WINDOWS.md` gives the order of each list. `limit` of
+`complexity` applies to the functions of all the files as one list, with the
+highest cyclomatic complexity first. A file without a function on the page is
+not in the result, and `truncated` has an entry for `/files`.
+
+Each row of a list of files or of symbols has `is_test`. With `exclude_tests`,
+a tool removes the rows that are test code before the pagination, and
+`result.tests_excluded` gives their number. `total_items` is then the number
+of the other rows.
 
 The primary list of `score` is the `components` object. `limit` and `offset`
 apply to its entries in the sequence of their keys. `skipped_components` and
