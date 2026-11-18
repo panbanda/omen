@@ -59,6 +59,7 @@ since = "30d"
 
 [satd]
 # Markers to detect in addition to the built-in markers, such as TODO and FIXME.
+# A marker of this list is debt at each position in a comment.
 markers = []
 
 [duplicates]

@@ -72,8 +72,16 @@ impl Analyzer {
                 if let Some(mat) = regex.find(line) {
                     let marker = mat.as_str().to_uppercase();
 
-                    // Check if this is a valid SATD marker (not a false positive)
-                    if !is_valid_satd_marker(line, mat.start(), &marker) {
+                    // A marker of the configuration is always debt. The tag rule
+                    // of a built-in security marker does not apply to it.
+                    let tag_rule =
+                        category != "custom" && satd::SECURITY.contains(&marker.as_str());
+                    let valid = if tag_rule {
+                        is_tag_at_comment_start(line, &mat, file.language)
+                    } else {
+                        is_valid_satd_marker(line, mat.start(), &marker)
+                    };
+                    if !valid {
                         continue;
                     }
 
@@ -127,10 +135,6 @@ fn has_ignore_directive(line: &str) -> bool {
 ///
 /// Clear markers like TODO, FIXME, HACK, BUG are accepted anywhere. omen:ignore
 fn is_valid_satd_marker(line: &str, match_start: usize, marker: &str) -> bool {
-    if satd::SECURITY.contains(&marker) {
-        return is_tag_at_comment_start(line, match_start, marker);
-    }
-
     // Clear markers (TODO, FIXME, HACK, BUG, etc.) are always valid omen:ignore
     if !AMBIGUOUS_MARKERS.contains(&marker) {
         return true;
@@ -151,16 +155,22 @@ fn is_valid_satd_marker(line: &str, match_start: usize, marker: &str) -> bool {
     false
 }
 
-/// The prefixes that start a comment line, longest first.
-const COMMENT_PREFIXES: &[&str] = &[
-    "///", "//!", "//", "/**", "/*", "'''", "\"\"\"", "--", "#", "*", ";",
-];
+/// The prefixes that start a comment line in the language, longest first.
+fn comment_prefixes(lang: Language) -> &'static [&'static str] {
+    match lang {
+        Language::Python => &["'''", "\"\"\"", "#"],
+        Language::Ruby | Language::Bash => &["#"],
+        Language::Php => &["/**", "//", "/*", "#", "*"],
+        Language::Rust => &["///", "//!", "//", "/**", "/*!", "/*", "*"],
+        _ => &["///", "//", "/**", "/*", "*"],
+    }
+}
 
 /// Whether the marker is a tag at the start of the comment text: `XXX:`,
 /// `UNSAFE(name)`, or an uppercase `XXX` alone. omen:ignore
-fn is_tag_at_comment_start(line: &str, match_start: usize, marker: &str) -> bool {
+fn is_tag_at_comment_start(line: &str, found: &regex::Match<'_>, lang: Language) -> bool {
     let trimmed = line.trim_start();
-    let Some(prefix) = COMMENT_PREFIXES
+    let Some(prefix) = comment_prefixes(lang)
         .iter()
         .find(|prefix| trimmed.starts_with(*prefix))
     else {
@@ -168,16 +178,17 @@ fn is_tag_at_comment_start(line: &str, match_start: usize, marker: &str) -> bool
     };
     let text = trimmed[prefix.len()..].trim_start();
     let text_start = line.len() - text.len();
-    if match_start != text_start {
+    if found.start() != text_start {
         return false;
     }
-    let word = &text[..marker.len()];
-    let next = text[marker.len()..].chars().next();
-    match next {
+    // The match span, not the uppercase marker: `\u{17f}` (long s) is two
+    // bytes, and its uppercase `S` is one.
+    let after = &line[found.end()..];
+    let alone = after.is_empty() || after.starts_with([' ', '\t']) || after.starts_with("*/");
+    match after.chars().next() {
         Some(':' | '(') => true,
         // `Xxx` and `xxx` are placeholder names, not a tag.
-        None | Some(' ' | '\t') => marker == "XXX" && word == "XXX",
-        _ => false,
+        _ => alone && found.as_str() == "XXX",
     }
 }
 
@@ -397,16 +408,27 @@ mod tests {
         assert_eq!(items[1].category, "security");
     }
 
-    fn security_items(lines: &[&str]) -> Vec<String> {
-        let content = lines
-            .iter()
-            .map(|line| format!("{line}\n"))
-            .collect::<String>();
-        let file = SourceFile::from_content("test.rs", Language::Rust, content.into_bytes());
-        Analyzer::new()
+    /// The text of each security item of one line in a file of the language.
+    fn security_items(lang: Language, line: &str) -> Vec<String> {
+        security_items_with(Analyzer::new(), lang, line)
+    }
+
+    fn security_items_with(analyzer: Analyzer, lang: Language, line: &str) -> Vec<String> {
+        let name = match lang {
+            Language::Python => "test.py",
+            Language::Ruby => "test.rb",
+            Language::Bash => "test.sh",
+            Language::Php => "test.php",
+            Language::JavaScript => "test.js",
+            Language::Go => "test.go",
+            Language::Java => "Test.java",
+            _ => "test.rs",
+        };
+        let file = SourceFile::from_content(name, lang, format!("{line}\n").into_bytes());
+        analyzer
             .analyze_file(&file)
             .into_iter()
-            .filter(|item| item.category == "security")
+            .filter(|item| item.category == "security" || item.category == "custom")
             .map(|item| item.text)
             .collect()
     }
@@ -414,38 +436,63 @@ mod tests {
     /// A security marker is debt only as a tag at the start of the comment.
     #[test]
     fn test_security_marker_as_tag_is_debt_in_each_comment_syntax() {
-        let lines = [
-            "// XXX: race on the cache",
-            "# XXX fix the lock order",
-            "/* VULN: the input is not escaped */",
-            " * INSECURE: the token goes over plain HTTP",
-            "-- UNSAFE: no escape of the name",
-            "; XXX(jo): the buffer can overflow",
-            "/// XXX: check the bounds",
-            "//! UNSAFE(review): raw pointer",
-            "    // XXX",
+        let cases = [
+            (Language::Go, "// XXX: race on the cache"),
+            (Language::Python, "# XXX fix the lock order"),
+            (Language::Ruby, "# UNSAFE: no escape of the name"),
+            (Language::Bash, "# VULN: the argument is not quoted"),
+            (Language::Php, "# XXX(jo): the buffer can overflow"),
+            (Language::Java, "/* VULN: the input is not escaped */"),
+            (
+                Language::Java,
+                " * INSECURE: the token goes over plain HTTP",
+            ),
+            (Language::Rust, "/// XXX: check the bounds"),
+            (Language::Rust, "//! UNSAFE(review): raw pointer"),
+            (Language::Rust, "/*! VULN: unchecked input */"),
+            (Language::Rust, "/* XXX*/"),
+            (Language::Rust, "    // XXX"),
+            (Language::Go, "// IN\u{17f}ECURE: plaintext"),
         ];
-        assert_eq!(security_items(&lines).len(), lines.len());
+        let missed: Vec<_> = cases
+            .iter()
+            .filter(|(lang, line)| security_items(*lang, line).len() != 1)
+            .collect();
+        assert!(missed.is_empty(), "{missed:?}");
     }
 
-    /// Gitea and omen comments that use a security word to explain the code.
+    /// Comments that use a security word to explain the code, and code that
+    /// starts with a character of a comment in another language.
     #[test]
     fn test_security_word_in_explanation_is_not_debt() {
-        let lines = [
-            "// findLdapSecurityProtocolByName finds security protocol by its name ignoring case.",
-            "# ignore update to refs/pull/xxx/head, so we don't need to output any information",
-            "/* keep the old \"octicon-xxx\" class name */",
-            " * Security settings",
-            "-- SECURITY: Ensure that the PR is safe",
-            "; It's caller's duty to make every element not bypass its own directly level, to avoid security issues.",
-            "// 'unsafe-inline' is needed by inline script",
-            "// Xxx returns the value",
-            "/// The security facts of the first resolved symbol.",
-            "//! It does not say that a change makes the code vulnerable.",
-            "// TODO Make insecure passwords optional for local accounts",
-            "// unsafe { *pointer }",
+        let cases = [
+            (Language::Go, "// findLdapSecurityProtocolByName finds security protocol by its name ignoring case."),
+            (Language::Python, "# ignore update to refs/pull/xxx/head, so we don't need to output any information"),
+            (Language::Go, "/* keep the old \"octicon-xxx\" class name */"),
+            (Language::Java, " * Security settings"),
+            (Language::JavaScript, "// 'unsafe-inline' is needed by inline script"),
+            (Language::Go, "// Xxx returns the value"),
+            (Language::Rust, "/// The security facts of the first resolved symbol."),
+            (Language::Rust, "//! It does not say that a change makes the code vulnerable."),
+            (Language::Go, "// TODO Make insecure passwords optional for local accounts"),
+            (Language::Rust, "// unsafe { *pointer }"),
+            (Language::JavaScript, ";unsafe(value);"),
+            (Language::JavaScript, "-- UNSAFE: not a comment in JavaScript"),
         ];
-        assert_eq!(security_items(&lines), Vec::<String>::new());
+        let found: Vec<_> = cases
+            .iter()
+            .filter(|(lang, line)| !security_items(*lang, line).is_empty())
+            .collect();
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A marker of the configuration is always debt, also in the middle of a
+    /// comment.
+    #[test]
+    fn test_configured_marker_is_debt_at_any_position() {
+        let analyzer = Analyzer::new().with_custom_markers(&["VULN".to_string()]);
+        let items = security_items_with(analyzer, Language::Go, "// Track VULN separately");
+        assert_eq!(items.len(), 1, "{items:?}");
     }
 
     #[test]
