@@ -322,7 +322,7 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 | `unreadable_dependency` | FastAPI | A dependency is not a name, or the `dependencies` value is not a literal list. Or the file uses the `dependencies` attribute of an object, as `router.dependencies.clear()`, which can change the dependencies that a later route gets. |
 | `wildcard_import` | FastAPI | The file has `from module import *`, which can bind a name again. |
 | `conditional_middleware` | Go router types | A layer method of a router, as `AfterRouting`, is called in a condition, a loop, or a function literal, or a function returns the router with different layers. |
-| `unread_middleware` | chi, echo, gin, gorilla/mux, `net/http`, Go router types | A middleware argument is not a name, or a spread of a slice that omen cannot read. Its guard text is `<expression>` or `<function literal>`. Or a call around the handler is not a conversion, as `http.HandlerFunc(show)`, and not a middleware of the repository, as `middleware.Auth(cfg)(...)`. The handler and the known guards stay. |
+| `unread_middleware` | chi, echo, gin, gorilla/mux, `net/http`, Go router types, Express, Koa, Fastify | A middleware argument is not a name, or a spread of a Go slice that omen cannot read. For Go, its guard text is `<expression>` or `<function literal>`. Or a call around the handler is not a conversion, as `http.HandlerFunc(show)`, and not a middleware of the repository, as `middleware.Auth(cfg)(...)`. For Express, Koa, and Fastify, a middleware argument of the route call is a call, as `limit(5)`, or a function, and omen does not list it. The options object of a Fastify route is not a middleware. The handler and the known guards stay. |
 | `layer_not_read` | See the next table | The framework has a place for guards that omen does not read. |
 
 Omen reads the full chain of the guards only for Rails, for FastAPI, and for the Go routers.
@@ -334,7 +334,10 @@ For each other HTTP framework, omen reads the guards that the route itself decla
 | Rails | The `before_action` chain of the controller and of its superclasses, and the constraint objects of the routes | A guard of Rails itself, such as the CSRF check, and the Rack middleware of the application. These do not make the list incomplete. |
 | FastAPI | The dependencies of the route, of its router, of the application, and of an `include_router` call of the file | A middleware. A file with `add_middleware`, `middleware`, or `FastAPI(middleware=...)` with a value that is not `None` or an empty list gives `layer_not_read`. A middleware in a different file is not seen. |
 | chi, echo, gin, gorilla/mux, `net/http` | The middleware of `Use`, `Pre`, `With`, `Group`, and of the route call, and a wrapper of the handler | A wrapper of the whole router at the server, as `http.ListenAndServe(address, auth(router))`. It does not make the list incomplete. |
-| Express | The middleware names in the route call | `app.use` and `router.use`, a middleware that is a call or a function, and the mount of a router |
+| Express, Koa | The middleware names in the route call | `app.use` and `router.use`, the mount of a router, and a middleware in a different file. A middleware argument that is a call or a function gives `unread_middleware`. |
+| Fastify | The middleware names in the route call | A hook, as `addHook('onRequest', ...)` or `preHandler` in the options, and a plugin of `register` |
+| NestJS, routing-controllers, tsoa | The guard decorators of the package on the class and on the method | A global guard, as `useGlobalGuards` or an `APP_GUARD` provider, the middleware of a module, and the middleware of the application |
+| Decorators of the repository | The options of the route decorator, and each other decorator of the same module on the class and on the method | The code of the decorators that registers the route, which can add or skip a guard, and the middleware of the application |
 | Flask | The known decorators below the route decorator | `before_request`, and a decorator that omen does not know |
 | Django | The known decorators of the view function | The `MIDDLEWARE` setting, a mixin of a class-based view, and a wrapper in `path(...)` |
 | Spring | The known annotations of the class and of the method | The security configuration, such as a `SecurityFilterChain` |
@@ -753,6 +756,101 @@ time. Omen gives the names only. It does not give the type or the source of a pa
 | `before_request` of Flask, a middleware of Django, and a mixin such as `LoginRequiredMixin` | Not read. Thus the guards of each Flask route and each Django route are not complete, with the reason `layer_not_read`. |
 | A handler of Flask | The handler gets only the parameters of the path. Omen lists no other parameter. |
 
+## TypeScript and JavaScript routes
+
+Omen reads the routes of Express, Fastify, Koa (`@koa/router` and `koa-router`), NestJS,
+routing-controllers, tsoa, and the route decorators that a repository defines, as the
+decorators of n8n.
+
+### Registrations
+
+A call `receiver.verb(path, ...middleware, handler)` registers a route when the receiver is a
+framework value. The verbs are `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, and
+`all`. The method of `all` is `ANY`. Each argument between the path and the handler that is a
+name or a member expression is a guard.
+
+| Receiver | Result |
+| --- | --- |
+| A call or a `new` of the constructor of the framework, as `express()`, `express.Router()`, `Router()` of `express`, `fastify()`, or `new Router()` of `@koa/router` | A framework value. The constructor must come from an import or a `require` of the package. |
+| A name with one declaration in its scope, when the value of the declaration is a framework value | A framework value. `const app = this.app` is an alias of the field. Omen reads the initializer of a `let` and does not read a later assignment. |
+| A parameter or a field whose type annotation names a type of the framework, as `Application`, `Router`, or `FastifyInstance` | A framework value. |
+| `this.name` in a method of a class | The field `name` of the class. A type annotation of the field decides. Without one, each assignment of the field in the class must give a framework value: the initializer, an assignment in a method, or a parameter property of the constructor. A class without the field reads the superclass, also in a different file. |
+| `this` in a `function` that is not a method, a name with two declarations, and the constructor itself, as `Router.get` | Not a framework value. `Router` makes a router. It is not a router. |
+| A value of a different type, as a `Map` | Not a framework value, so `this.store.get(key)` is not a route. |
+
+### Decorators
+
+A decorator of a package is a route decorator only when an import of that package gives it.
+
+| Package | Prefix decorator of the class | Verb decorators of the method | Guards |
+| --- | --- | --- | --- |
+| `@nestjs/common` | `Controller` | `Get`, `Post`, `Put`, `Patch`, `Delete`, `Head`, `Options`, `All` | The arguments of `UseGuards` on the class, then on the method |
+| `routing-controllers` | `Controller`, `JsonController` | `Get`, `Post`, `Put`, `Patch`, `Delete`, `Head`, `All` | The arguments of `UseBefore`, and the decorator `Authorized` |
+| `tsoa` | `Route` | `Get`, `Post`, `Put`, `Patch`, `Delete`, `Head`, `Options` | The arguments of `Middlewares`, and the decorator `Security` |
+
+A decorator of the repository is a verb decorator when the index resolves it, through imports,
+re-exports, and `export *`, to a `const` whose value is a call with a verb string as its first
+argument, as `export const Get = RouteFactory('get')`. The framework of the route is
+`repository_decorators`. On a class of such a route:
+
+- A class decorator from the same module that is not a verb decorator is the prefix decorator
+  when its first argument is a path. Without an argument, the default value of the first
+  parameter of its definition gives the prefix, as `(basePath = '/') => ...`.
+- Each other decorator of the method from the same module is a guard, with its arguments, as
+  `GlobalScope('workflow:read')` and `Licensed('feat:sharing')`.
+- In the options object of the verb decorator, each key with the value `true`, as
+  `skipAuth: true`, is a guard. Each element of a `middlewares` list is a guard. When the value of
+  `middlewares` is a name, the name is a guard.
+
+A guard is a declared fact. `skipAuth: true` is a guard because it changes the
+authentication of the route. Omen does not say that a route with a guard is authenticated.
+
+The handler is the decorated method. A verb decorator with a list of paths gives one route for
+each path. A class without a prefix decorator has the empty prefix. A class with two prefix
+decorators has the prefix `${prefix}`, and its routes have no path.
+
+`[[security.entry_points]]` in `omen.toml` adds entry points by the name of the symbol. It does
+not add decorators.
+
+### Paths
+
+| Form | Result |
+| --- | --- |
+| A string, a template, or a `+` of strings | The path. |
+| A `const` name that the scope, an import, or a re-export resolves to a string, a template, or a `+` of such values | The path. |
+| A template part or a name that omen cannot resolve, as `${config.rest}`, a `let`, or a parameter | `path` is `null`. `path_template` keeps the part as `${expression}`. |
+| `app.use(prefix, router)` in the file of the router, also with a template prefix | The prefix goes before the paths of the routes of the router. Mounts in a chain join. A prefix that omen cannot resolve stays as `${expression}` in `path_template`. |
+
+### Inline handlers
+
+A handler that is a function value without a name, as `(req, res) => ...`, has the symbol
+`file#Enclosing.<inline@line:column>`, or `file#<inline@line:column>` at the top level. The
+security analysis adds this symbol to its call graph. A call, a function reference, or a sink in
+the function value belongs to the innermost inline handler that contains it, and not to the
+function around it. The inline handler, or else the function, that contains a handler has a
+function reference to it, because it gives the handler as a value and does not call it. The
+index, and the other commands, do not know the symbol.
+
+### Limits of TypeScript and JavaScript routes
+
+- A controller registry can add a prefix at run time. n8n mounts each `@RestController` under
+  the `/rest` path of its configuration. Omen does not read this prefix, and the path of the
+  route is the path in the source.
+- A router that the file of the route does not mount keeps its own path. Omen does not follow
+  a mount from a different file.
+- A guard that a middleware of the application adds, as `app.use(auth)`, is not a guard of the
+  route.
+- Omen follows at most 16 names, imports, mounts, and superclasses for one value.
+- A router has at most 64 prefixes from its chains of mounts. A router with more prefixes has
+  the prefix `${prefix}`, and its routes have no path. A router in a cycle of mounts has the
+  prefix `${mount cycle}`.
+- In `app.use(first, router)`, a call as `first` is a middleware, as `cors()`. When the call
+  gives a path, as `readPrefix()`, omen does not see the prefix, and the routes of the router
+  keep their own paths.
+- A `let` or `var` value is its initializer when no statement writes the name, or the one
+  value that an assignment gives when the declaration has no initializer. A name with more
+  than one value has no framework.
+
 ## Limits
 
 - Omen does not follow data. A path is a chain of calls and function references that
@@ -771,9 +869,8 @@ time. Omen gives the names only. It does not give the type or the source of a pa
   name that reflection reads, have none.
 - A script and a Python `__main__` block are not symbols. An entry point of this kind
   starts no path.
-- A route is an entry point only when its receiver is a framework object. The receiver
-  is a framework call, a value that the file binds to one, or an import of a
-  constructor of the framework, or of a repository file that binds the name to one.
+- A route is an entry point only when its receiver is a framework value. See the
+  section of each language for the receivers that omen reads.
 - Omen reads the routes of these Go frameworks: `net/http`, gin, chi, echo, and
   gorilla/mux. Omen models the registrations of a valid program. It does not model a
   framework panic. A program that panics at start, as chi does when `Use` follows a

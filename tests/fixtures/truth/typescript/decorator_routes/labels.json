@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "language": "typescript",
+  "split": "development",
+  "oracle": "Author-reviewed. The decorators of `decorators/` copy the shape of the n8n package `@n8n/decorators`: a factory gives `Get` and the other verbs, and `index.ts` re-exports them. The imports of `@nestjs/common` and `some-library` need packages that the case does not include. A compiler did not check the case. The harness does not run the code. The prefix that a controller registry adds at run time is not in the source, so the paths do not have it.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "repository_get_with_scope", "file": "controllers/workflows.controller.ts", "line": 17, "kind": "http_handler", "framework": "repository_decorators", "method": "GET", "path": "/workflows/:id", "parameters": ["id"], "guards": ["GlobalScope('workflow:read')"]},
+    {"label": "repository_post_with_options", "file": "controllers/workflows.controller.ts", "line": 23, "kind": "http_handler", "framework": "repository_decorators", "method": "POST", "path": "/workflows/", "parameters": [], "guards": ["skipAuth: true", "audit", "Licensed('feat:sharing')"]},
+    {"label": "repository_default_prefix", "file": "controllers/workflows.controller.ts", "line": 31, "kind": "http_handler", "framework": "repository_decorators", "method": "DELETE", "path": "/cache", "parameters": [], "guards": []},
+    {"label": "repository_middlewares_by_name", "file": "controllers/workflows.controller.ts", "line": 34, "kind": "http_handler", "framework": "repository_decorators", "method": "GET", "path": "/list", "parameters": [], "guards": ["listMiddlewares"]},
+    {"label": "nest_class_guard", "file": "nest/cats.controller.ts", "line": 11, "kind": "http_handler", "framework": "nestjs", "method": "GET", "path": "/cats/:id", "parameters": ["id"], "guards": ["RolesGuard"]},
+    {"label": "nest_method_guard", "file": "nest/cats.controller.ts", "line": 17, "kind": "http_handler", "framework": "nestjs", "method": "POST", "path": "/cats", "parameters": [], "guards": ["RolesGuard", "AuthGuard"]},
+    {"label": "nest_all_first_path", "file": "nest/cats.controller.ts", "line": 22, "kind": "http_handler", "framework": "nestjs", "method": "ANY", "path": "/cats/a", "parameters": [], "guards": ["RolesGuard"]},
+    {"label": "nest_all_second_path", "file": "nest/cats.controller.ts", "line": 22, "kind": "http_handler", "framework": "nestjs", "method": "ANY", "path": "/cats/b", "parameters": [], "guards": ["RolesGuard"]}
+  ],
+  "paths": [
+    {"label": "repository_route_to_command", "entry_file": "controllers/workflows.controller.ts", "entry_line": 23, "sink_file": "controllers/workflows.controller.ts", "sink_line": 10, "steps": ["controllers/workflows.controller.ts#WorkflowsController.create", "controllers/workflows.controller.ts#runCommand"], "path_count": 1, "guards": ["skipAuth: true", "audit", "Licensed('feat:sharing')"]},
+    {"label": "nest_route_to_command", "entry_file": "nest/cats.controller.ts", "entry_line": 17, "sink_file": "nest/cats.controller.ts", "sink_line": 18, "steps": ["nest/cats.controller.ts#CatsController.run"], "path_count": 1, "guards": ["RolesGuard", "AuthGuard"]}
+  ]
+}
