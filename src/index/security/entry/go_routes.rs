@@ -45,6 +45,14 @@ use crate::index::extract::FileSymbols;
 use crate::index::model::{ImportKind, ImportTarget, Reference, Span, Symbol, SymbolKind};
 
 /// The methods that `Any` registers. gin v1.11.0 `anyMethods`.
+/// The guard text of a middleware argument that is not a name. An entry point with this guard
+/// has a guard list that is not complete.
+pub(super) const UNREAD_GUARD: &str = "<expression>";
+
+/// The guard text of a middleware that is a function literal. It has no name, so the guard list
+/// is not complete.
+pub(super) const UNNAMED_FUNCTION_GUARD: &str = "<function literal>";
+
 const GIN_ANY: [&str; 9] = [
     "GET", "POST", "PUT", "PATCH", "HEAD", "OPTIONS", "DELETE", "CONNECT", "TRACE",
 ];
@@ -3473,8 +3481,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             .map(|argument| {
                 self.context.go_guard_name(*argument).unwrap_or_else(|| {
                     match argument.kind() {
-                        "func_literal" => "<function literal>",
-                        _ => "<expression>",
+                        "func_literal" => UNNAMED_FUNCTION_GUARD,
+                        _ => UNREAD_GUARD,
                     }
                     .to_string()
                 })
@@ -4614,6 +4622,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 guards,
                 basis: EntryBasis::Registered,
                 variant: None,
+                unknown: None,
             };
             let last = drafts.len() - 1;
             drafts[last] = Some((draft, duplicate));

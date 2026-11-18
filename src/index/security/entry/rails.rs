@@ -7,9 +7,11 @@
 //!
 //! - Routes. Omen reads `get`, `post`, `put`, `patch`, `delete`, `match`, `root`, `resources`, and
 //!   `resource`, in `namespace`, `scope`, `controller`, `member`, `collection`, `constraints`, and
-//!   `defaults` blocks. A route needs a literal path, a `draw` call on the routes of the
-//!   application or of an engine that the repository defines, and no unknown option. A route in a
-//!   dead branch, a method, a lambda, a loop, a class body, or an unknown block is skipped.
+//!   `defaults` blocks, and in a loop over a literal list. A route needs a literal path, a `draw`
+//!   call on the routes of the application or of an engine with one mount that omen reads, and no
+//!   option that omen does not model. A route in a dead branch, a method, a lambda, any other
+//!   loop, a class body, or an unknown block is skipped.
+//! - Constraints. A constraint object of a route or of a block around it is a guard of the route.
 //! - Paths. Omen gives the path as the normalization of Journey and of the mapper gives it.
 //!   A nested route needs the singular name of the parent resource, and a `resource` call needs
 //!   the plural of its name. Omen uses the inflection rules of Rails 7.2.2. If an initializer
@@ -21,7 +23,11 @@
 //! - Guards. The guards are the `before_action` callbacks of the action in the order of Rails. A
 //!   callback replaces an earlier callback with the same name. A callback with a condition, a
 //!   list that is not a literal, or a place in a block adds no guard. A `skip_before_action` call
-//!   with such a place removes the guard.
+//!   with such a place removes the guard. A call of a class method of the chain that registers
+//!   callbacks gives those callbacks.
+//! - Complete lists. When code that omen did not read can add a guard or remove one, the route
+//!   keeps the guards that omen read, and it gives a reason. Omen does not report such a list
+//!   as complete.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -31,7 +37,7 @@ use parking_lot::Mutex;
 use tree_sitter::Node;
 
 use super::persistent::PersistentMap;
-use super::{route, Context, Draft, EntryBasis, EntryKind};
+use super::{first_reason, route, Context, Draft, EntryBasis, EntryKind, GuardsUnknownReason};
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
 use crate::index::model::{Span, Symbol};
@@ -60,7 +66,132 @@ const SINGULAR_ACTIONS: [(&str, &str, &str); 7] = [
 ];
 
 /// Options of `resources` that do not change the paths or the controller.
-const HARMLESS_OPTIONS: [&str; 3] = ["constraints", "defaults", "concerns"];
+/// The options of a `scope` call, a `namespace` call, or a resource that omen does not model, and
+/// that can change a path, a controller, or the set of the routes of the block. Rails makes each
+/// other key a default or a requirement of the routes.
+const UNMODELLED_SCOPE_OPTIONS: [&str; 17] = [
+    "path",
+    "module",
+    "controller",
+    "shallow",
+    "shallow_path",
+    "shallow_prefix",
+    "path_names",
+    "via",
+    "action",
+    "to",
+    "only",
+    "except",
+    "param",
+    "concerns",
+    "anchor",
+    "on",
+    "internal",
+];
+
+/// The methods of `ActionDispatch::Routing::Mapper` of Rails 7.2.2. A definition of one of them
+/// in a `draw` block replaces a method that reads the routes.
+const MAPPER_METHODS: [&str; 85] = [
+    "action_options?",
+    "action_path",
+    "add_route",
+    "api_only?",
+    "app_name",
+    "apply_action_options",
+    "apply_common_behavior_for",
+    "canonical_action?",
+    "collection",
+    "concern",
+    "concerns",
+    "constraints",
+    "controller",
+    "decomposed_match",
+    "default_url_options",
+    "default_url_options=",
+    "defaults",
+    "define_generate_prefix",
+    "delete",
+    "direct",
+    "draw",
+    "get",
+    "get_to_from_path",
+    "has_named_route?",
+    "initialize",
+    "instance_exec",
+    "map_match",
+    "map_method",
+    "match",
+    "match_root_route",
+    "member",
+    "merge_action_scope",
+    "merge_as_scope",
+    "merge_blocks_scope",
+    "merge_constraints_scope",
+    "merge_controller_scope",
+    "merge_defaults_scope",
+    "merge_format_scope",
+    "merge_module_scope",
+    "merge_options_scope",
+    "merge_path_names_scope",
+    "merge_path_scope",
+    "merge_shallow_path_scope",
+    "merge_shallow_prefix_scope",
+    "merge_shallow_scope",
+    "merge_to_scope",
+    "merge_via_scope",
+    "method_missing",
+    "mount",
+    "name_for_action",
+    "namespace",
+    "nested",
+    "nested_options",
+    "nested_scope?",
+    "new",
+    "options",
+    "param_constraint",
+    "param_constraint?",
+    "parent_resource",
+    "patch",
+    "path_for_action",
+    "path_scope",
+    "post",
+    "prefix_name_for_action",
+    "put",
+    "rails_app?",
+    "resolve",
+    "resource",
+    "resource_method_scope?",
+    "resource_scope",
+    "resource_scope?",
+    "resources",
+    "resources_path_names",
+    "root",
+    "scope",
+    "scope_action_options",
+    "send",
+    "set_member_mappings_for_resource",
+    "shallow",
+    "shallow?",
+    "shallow_nesting_depth",
+    "shallow_scope",
+    "using_match_shorthand?",
+    "with_default_scope",
+    "with_scope_level",
+];
+
+/// The calls that can define, replace, or remove a method of the object that runs them.
+const METHOD_CHANGING_CALLS: [&str; 10] = [
+    "define_method",
+    "define_singleton_method",
+    "alias_method",
+    "undef_method",
+    "remove_method",
+    "singleton_class",
+    "extend",
+    "instance_eval",
+    "class_eval",
+    "module_eval",
+];
 
 /// The scope that the blocks around a route give.
 #[derive(Clone, Default)]
@@ -79,9 +210,31 @@ pub(super) struct Scope {
     draw: bool,
     /// The value of `config.api_only` for the route set of the `draw` call.
     api_only: ApiOnly,
+    /// The values of the parameters of the loops around the route, by name.
+    bindings: Bindings,
+    /// The request constraints of the blocks around the route.
+    constraints: Constraints,
+    /// The number of times that the loops around the route run the route.
+    runs: Runs,
+    /// The `format:` option of the blocks around the route.
+    format: Format,
+    /// The request methods that a definition in the `draw` block disables.
+    disabled: Disabled,
+    /// The modules of the source around the node.
+    lexical: Lexical,
 }
 
 impl Scope {
+    /// Tells if a definition in the `draw` block disables the helper of the request method for a
+    /// call at the byte `at`.
+    fn is_disabled(&self, helper: &str, at: usize) -> bool {
+        VERB_HELPERS
+            .iter()
+            .position(|known| *known == helper)
+            .and_then(|place| self.disabled[place])
+            .is_some_and(|start| at >= start)
+    }
+
     /// The path of a route in a block of `resources`: the path of the blocks, and the nested path of
     /// the resource.
     fn nested_prefix(&self) -> Option<Prefix> {
@@ -101,6 +254,212 @@ pub(super) struct ResourceContext {
     /// The path for the routes of a nested resource. It is `None` when omen does not know the
     /// singular name that the path needs.
     nested: Option<String>,
+}
+
+/// The value of a parameter of a loop over a literal list.
+#[derive(Clone)]
+pub(super) enum Value {
+    Text(String),
+    Symbol(String),
+    Integer(usize),
+}
+
+impl Value {
+    /// The text that an interpolation of the value gives.
+    fn text(&self) -> String {
+        match self {
+            Self::Text(text) | Self::Symbol(text) => text.clone(),
+            Self::Integer(number) => number.to_string(),
+        }
+    }
+}
+
+/// The values of the loop parameters by name. A block does not copy the values of the blocks
+/// around it.
+pub(super) type Bindings = PersistentMap<String, Value>;
+
+/// The request constraints of the blocks around a route, as guard texts in the order of the
+/// source. A constraint with the text of an earlier constraint adds nothing, so the list is not
+/// longer than the guards that a route reports.
+#[derive(Clone, Default)]
+pub(super) struct Constraints {
+    places: PersistentMap<String, usize>,
+    count: usize,
+}
+
+impl Constraints {
+    fn add(&mut self, text: String) {
+        if self.places.get(&text).is_none() {
+            self.places.insert(text, self.count);
+            self.count += 1;
+        }
+    }
+
+    fn names(&self) -> Vec<String> {
+        let mut entries = self.places.entries();
+        entries.sort_by_key(|(_, place)| *place);
+        entries.into_iter().map(|(text, _)| text).collect()
+    }
+}
+
+/// The largest number of times that the loops around a route can run it. Loops in each other
+/// multiply their sizes, so a loop that goes above this number is skipped. Thus omen visits a
+/// node at most this number of times.
+const LOOP_RUN_LIMIT: usize = 4_096;
+
+/// The number of times that the loops around a node run it.
+#[derive(Clone, Copy)]
+pub(super) struct Runs(usize);
+
+impl Default for Runs {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
+/// The `format:` option of a route or of the blocks around it.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(super) enum Format {
+    /// No option, or a literal string, symbol, or regular expression: the path can end with
+    /// `(.:format)`. Omen does not write this optional segment.
+    #[default]
+    Optional,
+    /// `format: false`.
+    Absent,
+    /// `format: true`: the path ends with `.:format`.
+    Required,
+}
+
+/// The helper methods of the mapper for one request method each.
+const VERB_HELPERS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
+
+/// For each helper of `VERB_HELPERS`, the byte after which an empty definition in the `draw` block
+/// replaces the helper.
+pub(super) type Disabled = [Option<usize>; 5];
+
+/// The deepest chain of modules around a constant that omen resolves.
+const LEXICAL_DEPTH_LIMIT: usize = 64;
+
+/// The modules of the source around a node: the identity of each module, the outer module first.
+#[derive(Clone, Default)]
+pub(super) struct Lexical {
+    levels: Modules,
+    depth: usize,
+}
+
+impl Lexical {
+    /// The modules after a `module` statement with the name. A name with a leading `::` starts at
+    /// the top level.
+    fn enter(&self, name: &str) -> Self {
+        let name = name.trim();
+        let dotted = name.trim_start_matches("::").replace("::", ".");
+        let identity = match self.levels.last() {
+            Some(outer) if !name.starts_with("::") => format!("{outer}.{dotted}"),
+            _ => dotted,
+        };
+        Self {
+            levels: self.levels.extend(vec![identity]),
+            depth: self.depth + 1,
+        }
+    }
+}
+
+/// What `scope_inside` gives for a node.
+pub(super) enum Entered {
+    /// Omen cannot read the node.
+    No,
+    One(Rc<Scope>),
+    /// The block of a loop over a literal list: one scope for each item.
+    Each(Vec<Rc<Scope>>),
+}
+
+enum Inside {
+    /// The scope of the parent.
+    Same,
+    New(Rc<Scope>),
+    Each(Vec<Rc<Scope>>),
+}
+
+/// A route target that is not a controller action.
+enum Endpoint {
+    Redirect,
+    Rack,
+    /// A string or a name that omen cannot read as a controller action.
+    Unknown,
+}
+
+/// The route set of a `draw` call.
+enum RoutesOwner {
+    Application,
+    /// The identity of the engine class.
+    Engine(String),
+}
+
+/// The place where the application mounts an engine.
+pub(super) struct Mount {
+    /// The normalized path of the mount.
+    path: String,
+    /// The request constraints of the mount and of the blocks around it.
+    guards: Vec<String>,
+}
+
+pub(super) enum MountState {
+    One(Mount),
+    /// Two mounts, or a mount that omen cannot read.
+    Unknown,
+}
+
+/// Tells if `using_match_shorthand?` of Rails 7.2.2 accepts the path: `a/b` or `/a/b/c`, with
+/// only letters, digits, `_`, and `-` in each part. Rails then reads `a/b` as `a#b`.
+fn is_match_shorthand(path: &str) -> bool {
+    let path = path.strip_suffix("(.:format)").unwrap_or(path);
+    let rest = path.strip_prefix('/').unwrap_or(path);
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    match rest.split_once('/') {
+        Some((first, others)) => {
+            !first.is_empty()
+                && first.chars().all(word)
+                && !others.is_empty()
+                && others.chars().all(|c| word(c) || c == '/')
+        }
+        None => false,
+    }
+}
+
+/// The path with the format that `Mapping.normalize_path` of Rails adds for `format: true`.
+fn formatted_path(path: String, format: Format) -> String {
+    if format == Format::Required {
+        format!("{path}.:format")
+    } else {
+        path
+    }
+}
+
+/// The result of `ActiveSupport::Inflector.underscore` of Rails 7.2.2 for a constant path, with
+/// no acronym: `::` becomes `/`, a `_` goes between a lower case letter or a digit and an upper
+/// case letter, and before the last upper case letter of a run that a lower case letter follows.
+fn underscore(name: &str) -> String {
+    if !name.contains("::") && !name.chars().any(|c| c.is_ascii_uppercase() || c == '-') {
+        return name.to_string();
+    }
+    let characters: Vec<char> = name.replace("::", "/").chars().collect();
+    let mut out = String::with_capacity(characters.len() + 4);
+    for (place, character) in characters.iter().enumerate() {
+        if place > 0 && character.is_ascii_uppercase() {
+            let before = characters[place - 1];
+            let after_lower = characters
+                .get(place + 1)
+                .is_some_and(|next| next.is_ascii_lowercase());
+            if before.is_ascii_lowercase()
+                || before.is_ascii_digit()
+                || (before.is_ascii_uppercase() && after_lower)
+            {
+                out.push('_');
+            }
+        }
+        out.push(if *character == '-' { '_' } else { *character });
+    }
+    out.to_lowercase()
 }
 
 struct Opt<'t> {
@@ -243,9 +602,10 @@ fn decode_escape(escape: &str, out: &mut Vec<u8>) -> Option<()> {
     Some(())
 }
 
-/// The value of a Ruby string literal in double quotes or single quotes. An interpolation, a form
-/// such as `%q(...)`, and an escape that omen does not model give `None`.
-fn evaluate_string(node: Node<'_>, source: &[u8]) -> Option<String> {
+/// The value of a Ruby string literal in double quotes or single quotes. A form such as
+/// `%q(...)`, and an escape that omen does not model give `None`. An interpolation gives `None`,
+/// unless it is the name of a loop parameter of `bindings` alone.
+fn evaluate_string(node: Node<'_>, source: &[u8], bindings: Option<&Bindings>) -> Option<String> {
     let text = super::syntax::text(node, source);
     let mut bytes: Vec<u8> = Vec::new();
     match text.as_bytes().first()? {
@@ -274,6 +634,14 @@ fn evaluate_string(node: Node<'_>, source: &[u8]) -> Option<String> {
                     }
                     "escape_sequence" => {
                         decode_escape(super::syntax::text(part, source), &mut bytes)?
+                    }
+                    "interpolation" => {
+                        let name = part.named_child(0).filter(|name| {
+                            part.named_child_count() == 1 && name.kind() == "identifier"
+                        })?;
+                        let value =
+                            bindings?.get(&super::syntax::text(name, source).to_string())?;
+                        bytes.extend_from_slice(value.text().as_bytes());
                     }
                     _ => return None,
                 }
@@ -654,45 +1022,64 @@ impl<'a> Context<'a> {
             return;
         };
         let scope: &Scope = scope;
+        if scope.is_disabled(name, node.start_byte()) {
+            return;
+        }
         match name {
             "resources" | "resource" => self.rails_resources(node, name == "resource", scope, out),
             _ => self.rails_plain_route(node, name, scope, out),
         }
     }
 
-    /// The text of a string without interpolation, or of a symbol.
-    fn rails_literal(&self, node: Node<'_>) -> Option<String> {
+    /// The text of a string, of a symbol, or of a loop parameter of `bindings`.
+    fn rails_literal(&self, node: Node<'_>, bindings: &Bindings) -> Option<String> {
+        self.rails_value(node, bindings).map(|value| value.text())
+    }
+
+    /// The value of a string, of a symbol, or of a loop parameter of `bindings`. An interpolation
+    /// in a string must be the name of a loop parameter alone.
+    fn rails_value(&self, node: Node<'_>, bindings: &Bindings) -> Option<Value> {
         match node.kind() {
-            "string" => self.ruby_string_value(node),
-            "simple_symbol" => Some(self.text(node).trim_start_matches(':').to_string()),
-            "bare_symbol" | "hash_key_symbol" => Some(self.text(node).to_string()),
+            "string" => evaluate_string(node, self.source, Some(bindings)).map(Value::Text),
+            "bare_string" => {
+                let mut cursor = node.walk();
+                let plain = node
+                    .named_children(&mut cursor)
+                    .all(|part| part.kind() == "string_content");
+                plain.then(|| Value::Text(self.text(node).to_string()))
+            }
+            "simple_symbol" => Some(Value::Symbol(
+                self.text(node).trim_start_matches(':').to_string(),
+            )),
+            "bare_symbol" | "hash_key_symbol" => Some(Value::Symbol(self.text(node).to_string())),
+            "identifier" => bindings.get(&self.text(node).to_string()).cloned(),
             _ => None,
         }
     }
 
-    fn ruby_string_value(&self, node: Node<'_>) -> Option<String> {
-        evaluate_string(node, self.source)
-    }
-
     /// One literal, or a list of literals.
-    fn rails_names(&self, node: Node<'_>) -> Option<Vec<String>> {
+    fn rails_names(&self, node: Node<'_>, bindings: &Bindings) -> Option<Vec<String>> {
         if !matches!(node.kind(), "array" | "symbol_array" | "string_array") {
-            return self.rails_literal(node).map(|name| vec![name]);
+            return self.rails_literal(node, bindings).map(|name| vec![name]);
         }
         let mut cursor = node.walk();
         let items: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
         items
             .into_iter()
-            .map(|item| self.rails_literal(item))
+            .map(|item| self.rails_literal(item, bindings))
             .collect()
     }
 
     /// The pairs of the arguments, from `key: value` and from `{ }` hashes. A splat gives `None`.
-    fn rails_options<'t>(&self, arguments: &[Node<'t>]) -> Option<Options<'t>> {
+    fn rails_options<'t>(
+        &self,
+        arguments: &[Node<'t>],
+        bindings: &Bindings,
+    ) -> Option<Options<'t>> {
         let mut found = Vec::new();
         for argument in arguments {
             match argument.kind() {
-                "pair" => found.push(self.rails_pair(*argument)?),
+                "pair" => found.push(self.rails_pair(*argument, bindings)?),
                 "hash" => {
                     let mut cursor = argument.walk();
                     let pairs: Vec<Node<'t>> = argument.named_children(&mut cursor).collect();
@@ -700,7 +1087,7 @@ impl<'a> Context<'a> {
                         if pair.kind() != "pair" {
                             return None;
                         }
-                        found.push(self.rails_pair(pair)?);
+                        found.push(self.rails_pair(pair, bindings)?);
                     }
                 }
                 "hash_splat_argument" => return None,
@@ -710,16 +1097,17 @@ impl<'a> Context<'a> {
         Some(Options(found))
     }
 
-    fn rails_pair<'t>(&self, pair: Node<'t>) -> Option<Opt<'t>> {
+    fn rails_pair<'t>(&self, pair: Node<'t>, bindings: &Bindings) -> Option<Opt<'t>> {
         let key = pair.child_by_field_name("key")?;
         let value = pair.child_by_field_name("value")?;
         let mut cursor = pair.walk();
         let rocket = pair
             .children(&mut cursor)
             .any(|child| !child.is_named() && child.kind() == "=>");
+        let key = self.rails_value(key, bindings)?;
         Some(Opt {
-            key: self.rails_literal(key)?,
-            string_key: rocket && key.kind() == "string",
+            string_key: rocket && matches!(key, Value::Text(_)),
+            key: key.text(),
             value,
         })
     }
@@ -781,10 +1169,25 @@ impl<'a> Context<'a> {
         node: Node<'_>,
         parent: Option<Node<'_>>,
         outer: Rc<Scope>,
-    ) -> Option<Rc<Scope>> {
+    ) -> Entered {
+        match self.scope_inside_one(node, parent, &outer) {
+            Some(Inside::Same) => Entered::One(outer),
+            Some(Inside::New(scope)) => Entered::One(scope),
+            Some(Inside::Each(scopes)) => Entered::Each(scopes),
+            None => Entered::No,
+        }
+    }
+
+    fn scope_inside_one(
+        &self,
+        node: Node<'_>,
+        parent: Option<Node<'_>>,
+        outer: &Rc<Scope>,
+    ) -> Option<Inside> {
         if !matches!(
             node.kind(),
             "program"
+                | "module"
                 | "body_statement"
                 | "block_body"
                 | "then"
@@ -804,7 +1207,7 @@ impl<'a> Context<'a> {
             return None;
         }
         let Some(parent) = parent else {
-            return Some(outer);
+            return Some(Inside::Same);
         };
         if self.follows_jump(parent, node) {
             return None;
@@ -821,24 +1224,178 @@ impl<'a> Context<'a> {
                 Some(alive) if alive.contains(&node.id()) => {}
                 _ => return None,
             },
+            "module" => {
+                let name = parent.child_by_field_name("name")?;
+                if name == node {
+                    return None;
+                }
+                let mut scope = (**outer).clone();
+                scope.lexical = scope.lexical.enter(self.text(name));
+                return Some(Inside::New(Rc::new(scope)));
+            }
             "call" => {
                 if parent.child_by_field_name("block") != Some(node) {
                     return None;
                 }
-                if matches!(
-                    parent
-                        .child_by_field_name("method")
-                        .map(|method| self.text(method)),
-                    Some("constraints" | "defaults")
-                ) && parent.child_by_field_name("receiver").is_none()
-                {
-                    return Some(outer);
+                if let Some(scopes) = self.rails_loop(parent, outer) {
+                    return scopes.map(Inside::Each);
                 }
-                return self.rails_enter(parent, (*outer).clone()).map(Rc::new);
+                return self
+                    .rails_enter(parent, (**outer).clone())
+                    .map(|scope| Inside::New(Rc::new(scope)));
             }
             _ => {}
         }
-        Some(outer)
+        Some(Inside::Same)
+    }
+
+    /// The scopes of the block of a loop over a literal list: one scope for each item, with the
+    /// values of the block parameters. The outer `None` tells that the call is not such a loop.
+    /// The inner `None` tells that omen cannot expand the loop: an item is not a literal string or
+    /// symbol, the block parameters are not plain names of the right number, the file assigns a
+    /// value to a parameter name, or the loops around the block run it too many times.
+    ///
+    /// Omen reads `each` and `each_with_index` on an array, and `each` and `each_pair` on a hash.
+    fn rails_loop(&self, call: Node<'_>, outer: &Rc<Scope>) -> Option<Option<Vec<Rc<Scope>>>> {
+        let receiver = call.child_by_field_name("receiver")?;
+        let is_hash = match receiver.kind() {
+            "array" | "string_array" | "symbol_array" => false,
+            "hash" => true,
+            _ => return None,
+        };
+        let method = self.text(call.child_by_field_name("method")?);
+        let with_index = match (method, is_hash) {
+            ("each", _) | ("each_pair", true) => false,
+            ("each_with_index", false) => true,
+            _ => return Some(None),
+        };
+        Some(self.rails_loop_scopes(call, receiver, is_hash, with_index, outer))
+    }
+
+    fn rails_loop_scopes(
+        &self,
+        call: Node<'_>,
+        receiver: Node<'_>,
+        is_hash: bool,
+        with_index: bool,
+        outer: &Rc<Scope>,
+    ) -> Option<Vec<Rc<Scope>>> {
+        if !Self::arguments_of(call).is_empty() {
+            return None;
+        }
+        let block = call.child_by_field_name("block")?;
+        let names = self.plain_block_parameters(block)?;
+        let wanted = if is_hash || with_index { 2 } else { 1 };
+        if names.len() != wanted
+            || names
+                .iter()
+                .any(|name| self.rails_assigned().contains(name))
+        {
+            return None;
+        }
+        if wanted == 2 && names[0] == names[1] {
+            return None;
+        }
+        let mut cursor = receiver.walk();
+        let items: Vec<Node<'_>> = receiver.named_children(&mut cursor).collect();
+        let runs = outer.runs.0.checked_mul(items.len().max(1))?;
+        if runs > LOOP_RUN_LIMIT {
+            return None;
+        }
+        let mut rows: Vec<Vec<Value>> = Vec::with_capacity(items.len());
+        for (place, item) in items.into_iter().enumerate() {
+            let row = if is_hash {
+                if item.kind() != "pair" {
+                    return None;
+                }
+                let key = self.rails_value(item.child_by_field_name("key")?, &outer.bindings)?;
+                let value =
+                    self.rails_value(item.child_by_field_name("value")?, &outer.bindings)?;
+                vec![key, value]
+            } else {
+                let value = self.rails_value(item, &outer.bindings)?;
+                if with_index {
+                    vec![value, Value::Integer(place)]
+                } else {
+                    vec![value]
+                }
+            };
+            rows.push(row);
+        }
+        Some(
+            rows.into_iter()
+                .map(|row| {
+                    let mut scope = (**outer).clone();
+                    scope.runs = Runs(runs);
+                    for (name, value) in names.iter().zip(row) {
+                        scope.bindings.insert(name.clone(), value);
+                    }
+                    Rc::new(scope)
+                })
+                .collect(),
+        )
+    }
+
+    /// The names of the parameters of a block, when each parameter is a plain name.
+    fn plain_block_parameters(&self, block: Node<'_>) -> Option<Vec<String>> {
+        let parameters = block.child_by_field_name("parameters")?;
+        let mut cursor = parameters.walk();
+        let names: Option<Vec<String>> = parameters
+            .named_children(&mut cursor)
+            .map(|parameter| {
+                (parameter.kind() == "identifier").then(|| self.text(parameter).to_string())
+            })
+            .collect();
+        names
+    }
+
+    /// The names that the file assigns a value to, or uses as the receiver of a call or of `<<`,
+    /// in any place. A loop parameter with such a name can have a value that is not the item of
+    /// the list, so omen does not expand its loop. One search of the file finds the names.
+    fn rails_assigned(&self) -> &HashSet<String> {
+        self.rails_assigned.get_or_init(|| {
+            let mut names = HashSet::new();
+            let mut stack = vec![self.parsed.root_node()];
+            while let Some(node) = stack.pop() {
+                let targets = match node.kind() {
+                    "assignment" | "operator_assignment" => node.child_by_field_name("left"),
+                    "for" => node.child_by_field_name("pattern"),
+                    "exception_variable" | "rest_assignment" => node.named_child(0),
+                    _ => None,
+                };
+                let mutated = match node.kind() {
+                    "call" => node.child_by_field_name("receiver"),
+                    "binary" => node
+                        .child_by_field_name("operator")
+                        .filter(|operator| self.text(*operator) == "<<")
+                        .and_then(|_| node.child_by_field_name("left")),
+                    _ => None,
+                };
+                if let Some(name) = mutated.filter(|name| name.kind() == "identifier") {
+                    names.insert(self.text(name).to_string());
+                }
+                if let Some(target) = targets {
+                    let mut targets = vec![target];
+                    while let Some(target) = targets.pop() {
+                        if target.kind() == "identifier" {
+                            names.insert(self.text(target).to_string());
+                        } else if matches!(
+                            target.kind(),
+                            "left_assignment_list"
+                                | "destructured_left_assignment"
+                                | "rest_assignment"
+                                | "splat_parameter"
+                        ) {
+                            let mut cursor = target.walk();
+                            targets.extend(target.named_children(&mut cursor));
+                        }
+                    }
+                }
+                let mut cursor = node.walk();
+                stack.extend(node.named_children(&mut cursor));
+            }
+            names
+        })
     }
 
     /// Tells if the node comes after a statement of the same list that jumps out of the block:
@@ -911,65 +1468,41 @@ impl<'a> Context<'a> {
         in_main != runs_when
     }
 
-    /// Tells if the call is `draw` of the routes of the application or of an engine:
-    /// `Rails.application.routes`, `Name::Application.routes`, or `Name::Engine.routes`.
-    fn is_draw_block(&self, call: Node<'_>) -> bool {
-        call.child_by_field_name("method")
-            .is_some_and(|method| self.text(method) == "draw")
-            && call
-                .child_by_field_name("receiver")
-                .is_some_and(|receiver| self.routes_object_is_defined(self.text(receiver)))
-    }
-
     fn rails_enter(&self, call: Node<'_>, mut scope: Scope) -> Option<Scope> {
         let method = self.text(call.child_by_field_name("method")?);
-        let receiver = call.child_by_field_name("receiver").is_some();
-        if self.is_draw_block(call) {
-            let engine = call
-                .child_by_field_name("receiver")
-                .is_some_and(|receiver| {
-                    self.text(receiver)
-                        .trim()
-                        .trim_start_matches("::")
-                        .ends_with("::Engine.routes")
-                });
-            if engine {
+        if let Some(receiver) = call.child_by_field_name("receiver") {
+            if method != "draw" {
                 return None;
             }
-            scope.draw = true;
-            scope.api_only = call
-                .child_by_field_name("receiver")
-                .map_or(ApiOnly::Unknown, |receiver| {
-                    self.rails_api_only(self.text(receiver))
-                });
-            return Some(scope);
-        }
-        if receiver {
-            return None;
-        }
-        if matches!(method, "constraints" | "defaults") {
-            return Some(scope);
+            return self.rails_enter_draw(call, receiver, scope);
         }
         let arguments = Self::arguments_of(call);
-        let options = self.rails_options(&arguments)?;
+        let options = self.rails_options(&arguments, &scope.bindings)?;
         let positional = Self::rails_positional(&arguments);
         match method {
+            "constraints" => {
+                match positional.as_slice() {
+                    [] => {}
+                    [one] => self.add_constraint(*one, &mut scope),
+                    _ => return None,
+                }
+                Some(scope)
+            }
+            "defaults" => Some(scope),
             "namespace" => {
-                if options
-                    .0
-                    .iter()
-                    .any(|option| !matches!(option.key.as_str(), "path" | "module" | "as"))
-                    || positional.len() != 1
-                {
+                if positional.len() != 1 {
                     return None;
                 }
-                let name = self.rails_literal(positional[0])?;
-                let path = options
-                    .get("path")
-                    .map_or(Some(name.clone()), |value| self.rails_literal(value))?;
-                let module = options
-                    .get("module")
-                    .map_or(Some(name), |value| self.rails_literal(value))?;
+                self.rails_scope_options(&options, &["path", "module"], &mut scope)?;
+                let name = self.rails_literal(positional[0], &scope.bindings)?;
+                let path = match options.get("path") {
+                    None => name.clone(),
+                    Some(value) if value.kind() == "nil" => String::new(),
+                    Some(value) => self.rails_literal(value, &scope.bindings)?,
+                };
+                let module = options.get("module").map_or(Some(name), |value| {
+                    self.rails_literal(value, &scope.bindings)
+                })?;
                 scope.prefix = join(&scope.nested_prefix(), &path);
                 scope.modules = scope.modules.extend(split_module(&module));
                 if scope.resource.take().is_some() {
@@ -978,28 +1511,15 @@ impl<'a> Context<'a> {
                 Some(scope)
             }
             "scope" => {
-                const SCOPE_OPTIONS: [&str; 6] = [
-                    "path",
-                    "module",
-                    "controller",
-                    "as",
-                    "constraints",
-                    "defaults",
-                ];
-                if options
-                    .0
-                    .iter()
-                    .any(|option| !SCOPE_OPTIONS.contains(&option.key.as_str()))
-                    || positional.len() > 1
-                {
+                if positional.len() > 1 {
                     return None;
                 }
-                let path = match positional.first() {
-                    Some(argument) => Some(self.rails_literal(*argument)?),
-                    None => match options.get("path") {
-                        Some(value) => Some(self.rails_literal(value)?),
-                        None => None,
-                    },
+                self.rails_scope_options(&options, &["path", "module", "controller"], &mut scope)?;
+                let path = match (positional.first(), options.get("path")) {
+                    (Some(argument), _) => Some(self.rails_literal(*argument, &scope.bindings)?),
+                    (None, Some(value)) if value.kind() == "nil" => None,
+                    (None, Some(value)) => Some(self.rails_literal(value, &scope.bindings)?),
+                    (None, None) => None,
                 };
                 if let Some(path) = path {
                     scope.prefix = join(&scope.prefix, &path);
@@ -1007,10 +1527,12 @@ impl<'a> Context<'a> {
                 if let Some(value) = options.get("module") {
                     scope.modules = scope
                         .modules
-                        .extend(split_module(&self.rails_literal(value)?));
+                        .extend(split_module(&self.rails_literal(value, &scope.bindings)?));
                 }
                 if let Some(value) = options.get("controller") {
-                    scope.controller = Some(ScopedController::new(self.rails_literal(value)?));
+                    scope.controller = Some(ScopedController::new(
+                        self.rails_literal(value, &scope.bindings)?,
+                    ));
                 }
                 Some(scope)
             }
@@ -1018,7 +1540,9 @@ impl<'a> Context<'a> {
                 if positional.len() != 1 || !options.0.is_empty() {
                     return None;
                 }
-                scope.controller = Some(ScopedController::new(self.rails_literal(positional[0])?));
+                scope.controller = Some(ScopedController::new(
+                    self.rails_literal(positional[0], &scope.bindings)?,
+                ));
                 Some(scope)
             }
             "member" | "collection" => {
@@ -1038,10 +1562,7 @@ impl<'a> Context<'a> {
             "resources" | "resource" => {
                 let singular = method == "resource";
                 let definition = self.rails_resource_definition(&positional, &options, &scope)?;
-                if definition.names.len() != 1
-                    || scope.method_scope
-                    || matches!(scope.api_only, ApiOnly::Unknown)
-                {
+                if definition.names.len() != 1 || matches!(scope.api_only, ApiOnly::Unknown) {
                     return None;
                 }
                 let name = &definition.names[0];
@@ -1056,8 +1577,514 @@ impl<'a> Context<'a> {
                 scope.modules = definition.modules.clone();
                 scope.resource = Some(context);
                 scope.method_scope = false;
+                if let Some(format) = definition.format {
+                    scope.format = format;
+                }
+                if let Some(constraint) = definition.constraint {
+                    scope.constraints.add(constraint);
+                }
                 Some(scope)
             }
+            _ => None,
+        }
+    }
+
+    /// The guard text of a `constraints` value: an object that Rails asks if the request matches.
+    /// A hash constrains the segments and the request attributes, and it is not a guard. The text
+    /// is the source with one space for each run of white space. A lambda has the text
+    /// `lambda:` and its line, because its source can be long.
+    fn constraint_text(&self, value: Node<'_>) -> Option<String> {
+        let is_lambda = match value.kind() {
+            "hash" | "nil" | "false" | "pair" | "hash_splat_argument" => return None,
+            "lambda" => true,
+            "call" => {
+                value.child_by_field_name("receiver").is_none()
+                    && value.child_by_field_name("block").is_some()
+                    && value
+                        .child_by_field_name("method")
+                        .is_some_and(|method| matches!(self.text(method), "lambda" | "proc"))
+            }
+            _ => false,
+        };
+        if is_lambda {
+            return Some(format!("lambda:{}", value.start_position().row + 1));
+        }
+        Some(
+            self.text(value)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    }
+
+    fn add_constraint(&self, value: Node<'_>, scope: &mut Scope) {
+        if let Some(text) = self.constraint_text(value) {
+            scope.constraints.add(text);
+        }
+    }
+
+    /// The meaning of a `format:` value. A value that is not a literal gives `None`.
+    fn rails_format(&self, value: Node<'_>) -> Option<Format> {
+        match value.kind() {
+            "true" => Some(Format::Required),
+            "false" => Some(Format::Absent),
+            "nil" | "simple_symbol" | "regex" => Some(Format::Optional),
+            "string" => evaluate_string(value, self.source, None).map(|_| Format::Optional),
+            _ => None,
+        }
+    }
+
+    /// Applies the options of a `scope` call, a `namespace` call, or a resource that all the
+    /// routes of the block get. The caller reads the options of `handled`. A `constraints:` object
+    /// is a guard, and `format:` sets the format. `defaults:`, `as:`, and a key that Rails does not
+    /// know change no path and no controller: Rails makes such a key a default or a requirement
+    /// of each route. An option that changes a path, a controller, or the set of the routes in a
+    /// way that omen does not model gives `None`.
+    fn rails_scope_options(
+        &self,
+        options: &Options<'_>,
+        handled: &[&str],
+        scope: &mut Scope,
+    ) -> Option<()> {
+        for option in &options.0 {
+            if option.string_key {
+                return None;
+            }
+            let key = option.key.as_str();
+            if !handled.contains(&key) && UNMODELLED_SCOPE_OPTIONS.contains(&key) {
+                return None;
+            }
+        }
+        if let Some(value) = options.get("constraints") {
+            self.add_constraint(value, scope);
+        }
+        if let Some(value) = options.get("format") {
+            scope.format = self.rails_format(value)?;
+        }
+        Some(())
+    }
+
+    /// Enters the block of `draw` on the routes of the application, or of an engine with one
+    /// mount that omen can read. A `draw` call in a `draw` block gives `None`: Rails evaluates
+    /// its block with a new mapper, so the blocks around it do not apply.
+    fn rails_enter_draw(
+        &self,
+        call: Node<'_>,
+        receiver: Node<'_>,
+        mut scope: Scope,
+    ) -> Option<Scope> {
+        if scope.draw {
+            return None;
+        }
+        let owner = self.routes_owner(self.text(receiver), &scope.lexical)?;
+        let block = call.child_by_field_name("block")?;
+        let lexical = scope.lexical.clone();
+        let bindings = scope.bindings.clone();
+        let runs = scope.runs;
+        scope = Scope {
+            prefix: Some(Prefix::root()),
+            draw: true,
+            lexical,
+            bindings,
+            runs,
+            disabled: self.rails_draw_definitions(block)?,
+            api_only: self.rails_api_only(&owner),
+            ..Scope::default()
+        };
+        if let RoutesOwner::Engine(identity) = &owner {
+            let mount = match self.rails_mounts().get(identity)? {
+                MountState::One(mount) => mount,
+                MountState::Unknown => return None,
+            };
+            scope.prefix = Prefix::root().push(&mount.path);
+            scope.prefix.as_ref()?;
+            for guard in &mount.guards {
+                scope.constraints.add(guard.clone());
+            }
+            scope.modules = scope.modules.extend(self.rails_engine_module(identity)?);
+        }
+        Some(scope)
+    }
+
+    /// The route set that the receiver of `draw`, `append`, or `prepend` names:
+    /// `Rails.application.routes`, or the routes of a class of the repository with the superclass
+    /// `Rails::Application` or `Rails::Engine`.
+    fn routes_owner(&self, receiver: &str, lexical: &Lexical) -> Option<RoutesOwner> {
+        let base = receiver.trim().strip_suffix(".routes")?;
+        if base == "Rails.application" {
+            return Some(RoutesOwner::Application);
+        }
+        let identity = self.rails_constant(base, lexical)?;
+        match self.rails_class_kind(&identity) {
+            ClassKind::Application => Some(RoutesOwner::Application),
+            ClassKind::Engine => Some(RoutesOwner::Engine(identity)),
+            ClassKind::Other => None,
+        }
+    }
+
+    /// The identity of the class or module that a constant path names at a place with the
+    /// modules of `lexical` around it. Ruby searches the first name in each module from the
+    /// inner one to the outer one, and then at the top level. The other names must be in the
+    /// result. A path with a leading `::` starts at the top level. A constant that the
+    /// repository does not define, and a place in more than `LEXICAL_DEPTH_LIMIT` modules, give
+    /// `None`.
+    fn rails_constant(&self, text: &str, lexical: &Lexical) -> Option<String> {
+        let text = text.trim();
+        let path = text.trim_start_matches("::");
+        if !is_constant_path(path) || lexical.depth > LEXICAL_DEPTH_LIMIT {
+            return None;
+        }
+        let dotted = path.replace("::", ".");
+        let classes = &self.rails_shared().classes;
+        if !text.starts_with("::") {
+            let first = dotted.split('.').next()?;
+            for level in lexical.levels.to_vec().iter().rev() {
+                if classes.contains_key(&format!("{level}.{first}")) {
+                    let full = format!("{level}.{dotted}");
+                    return classes.contains_key(&full).then_some(full);
+                }
+            }
+        }
+        classes.contains_key(&dotted).then_some(dotted)
+    }
+
+    /// Reads the definitions in a `draw` block that replace a method of the mapper. Rails
+    /// evaluates the block with `instance_exec`, so a `def` in it defines a method of the mapper
+    /// of this `draw` call.
+    ///
+    /// An empty definition of `get`, `post`, `put`, `patch`, or `delete` that is a statement of
+    /// the block disables the helper from that statement on: a later call of the helper, and a
+    /// later `resources` call, register no route for it. `match` does not use the helpers. Any
+    /// other definition of a method of the mapper, and a call that can define or remove a method,
+    /// give `None`: omen cannot read the routes of the block. A definition with another name is
+    /// a helper of the file, and it changes nothing.
+    fn rails_draw_definitions(&self, block: Node<'_>) -> Option<Disabled> {
+        let mut disabled: Disabled = [None; 5];
+        let body = block.child_by_field_name("body");
+        let mut stack = vec![block];
+        while let Some(node) = stack.pop() {
+            match node.kind() {
+                "class" | "module" => continue,
+                "alias" | "undef" => {
+                    let mut cursor = node.walk();
+                    let names_mapper = node.named_children(&mut cursor).any(|name| {
+                        MAPPER_METHODS.contains(&self.text(name).trim_start_matches(':'))
+                    });
+                    if names_mapper {
+                        return None;
+                    }
+                    continue;
+                }
+                "method" | "singleton_method" => {
+                    let name = node
+                        .child_by_field_name("name")
+                        .map_or("", |name| self.text(name));
+                    if !MAPPER_METHODS.contains(&name) {
+                        continue;
+                    }
+                    let helper = VERB_HELPERS.iter().position(|helper| *helper == name)?;
+                    let empty = node.child_by_field_name("body").is_none_or(|body| {
+                        let mut cursor = body.walk();
+                        let empty = body
+                            .named_children(&mut cursor)
+                            .all(|statement| statement.kind() == "comment");
+                        empty
+                    });
+                    let statement_of_block = node.parent().is_some() && node.parent() == body;
+                    if node.kind() != "method" || !empty || !statement_of_block {
+                        return None;
+                    }
+                    let start = disabled[helper]
+                        .map_or(node.end_byte(), |known: usize| known.min(node.end_byte()));
+                    disabled[helper] = Some(start);
+                    continue;
+                }
+                "call" => {
+                    let method = node
+                        .child_by_field_name("method")
+                        .map_or("", |method| self.text(method));
+                    if METHOD_CHANGING_CALLS.contains(&method) {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+            let mut cursor = node.walk();
+            stack.extend(node.named_children(&mut cursor));
+        }
+        Some(disabled)
+    }
+
+    /// The mounts of the engines of the repository, by the identity of the engine class.
+    fn rails_mounts(&self) -> &HashMap<String, MountState> {
+        self.rails_shared().mounts.get_or_init(|| {
+            let mut mounts: HashMap<String, MountState> = HashMap::new();
+            for (position, file) in self.all.iter().enumerate() {
+                if file.language != Language::Ruby {
+                    continue;
+                }
+                let Some(parsed) = self.all_parsed.tree(position) else {
+                    continue;
+                };
+                if !parsed
+                    .source
+                    .windows(b"mount".len())
+                    .any(|window| window == b"mount")
+                {
+                    continue;
+                }
+                let reader = Context::new(
+                    &parsed,
+                    &self.all[position],
+                    self.all,
+                    self.all_parsed,
+                    self.rules,
+                );
+                reader.collect_mounts(&mut mounts);
+            }
+            mounts
+        })
+    }
+
+    /// Reads the `mount` calls of the file. Omen reads a call in the block of `draw`, `append`,
+    /// or `prepend` on the routes of the application, in any place of the file, and in the blocks
+    /// in it that omen can enter. A call in any other place is not read.
+    fn collect_mounts(&self, mounts: &mut HashMap<String, MountState>) {
+        let mut stack: Vec<(Node<'_>, Lexical)> =
+            vec![(self.parsed.root_node(), Lexical::default())];
+        while let Some((node, lexical)) = stack.pop() {
+            let mut inner = lexical;
+            match node.kind() {
+                "module" | "class" => {
+                    if let Some(name) = node.child_by_field_name("name") {
+                        inner = inner.enter(self.text(name));
+                    }
+                }
+                "call" => {
+                    if let Some(block) = self.application_routes_block(node, &inner) {
+                        let scope = Scope {
+                            prefix: Some(Prefix::root()),
+                            draw: true,
+                            lexical: inner,
+                            disabled: [None; 5],
+                            ..Scope::default()
+                        };
+                        if self.rails_draw_definitions(block).is_some() {
+                            let scope = Rc::new(scope);
+                            self.walk_scoped(block, Some(node), scope, true, &mut |call, scope| {
+                                self.read_mount(call, scope, mounts);
+                            });
+                        }
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            let mut cursor = node.walk();
+            let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+            stack.extend(children.into_iter().map(|child| (child, inner.clone())));
+        }
+    }
+
+    /// The block of a call of `draw`, `append`, or `prepend` on the routes of the application.
+    fn application_routes_block<'t>(&self, call: Node<'t>, lexical: &Lexical) -> Option<Node<'t>> {
+        let method = self.text(call.child_by_field_name("method")?);
+        if !matches!(method, "draw" | "append" | "prepend") {
+            return None;
+        }
+        let receiver = call.child_by_field_name("receiver")?;
+        match self.routes_owner(self.text(receiver), lexical)? {
+            RoutesOwner::Application => call.child_by_field_name("block"),
+            RoutesOwner::Engine(_) => None,
+        }
+    }
+
+    /// Reads one `mount` call with a constant target: `mount Blog::Engine, at: "/blog"` or
+    /// `mount Blog::Engine => "/blog"`. The second mount of an engine, a path that is not a
+    /// literal, an option other than `at:`, `as:`, `constraints:`, and `defaults:`, and a place
+    /// in a resource make the mount of the engine unknown. A target that is not a constant, or
+    /// that is not an engine of the repository, is not a mount of an engine that omen reads.
+    fn read_mount(&self, call: Node<'_>, scope: &Scope, mounts: &mut HashMap<String, MountState>) {
+        let is_mount = call.child_by_field_name("receiver").is_none()
+            && call
+                .child_by_field_name("method")
+                .is_some_and(|method| self.text(method) == "mount");
+        if !is_mount {
+            return;
+        }
+        let arguments = Self::arguments_of(call);
+        let is_constant = |node: Node<'_>| matches!(node.kind(), "constant" | "scope_resolution");
+        let (target, path, rest) = match arguments.split_first() {
+            Some((first, rest)) if is_constant(*first) => (*first, None, rest),
+            Some((first, rest)) if first.kind() == "pair" => {
+                let (Some(key), Some(value)) = (
+                    first.child_by_field_name("key"),
+                    first.child_by_field_name("value"),
+                ) else {
+                    return;
+                };
+                if !is_constant(key) {
+                    return;
+                }
+                (key, Some(value), rest)
+            }
+            _ => return,
+        };
+        let Some(identity) = self.rails_constant(self.text(target), &scope.lexical) else {
+            return;
+        };
+        if !matches!(self.rails_class_kind(&identity), ClassKind::Engine) {
+            return;
+        }
+        let read = || {
+            let options = self.rails_options(rest, &scope.bindings)?;
+            if !Self::rails_positional(rest).is_empty()
+                || scope.resource.is_some()
+                || scope.method_scope
+            {
+                return None;
+            }
+            let mut guards = scope.constraints.clone();
+            for option in &options.0 {
+                match option.key.as_str() {
+                    "at" | "as" | "defaults" if !option.string_key => {}
+                    "constraints" if !option.string_key => {
+                        if let Some(text) = self.constraint_text(option.value) {
+                            guards.add(text);
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            let path = self.rails_literal(path.or(options.get("at"))?, &scope.bindings)?;
+            Some(Mount {
+                path: join(&scope.prefix, &path)?.text(),
+                guards: guards.names(),
+            })
+        };
+        let state = match (mounts.get(&identity), read()) {
+            (None, Some(mount)) => MountState::One(mount),
+            _ => MountState::Unknown,
+        };
+        mounts.insert(identity, state);
+    }
+
+    /// The modules that the routes of an engine get from `isolate_namespace`, as the parts of a
+    /// module path. An engine without the call has no module.
+    ///
+    /// Omen reads one `isolate_namespace` call with a constant, as a statement of the body of the
+    /// engine class. Rails gives the routes the module `underscore` of the name of the constant.
+    /// A second call, a call in another place, an argument that is not a constant of the
+    /// repository, a name that an acronym of the application can change, and a `default_scope`
+    /// in the class give `None`.
+    fn rails_engine_module(&self, identity: &str) -> Option<Vec<String>> {
+        let shared = self.rails_shared();
+        if let Some(found) = shared.engine_modules.lock().get(identity) {
+            return found.clone();
+        }
+        let mut direct: Vec<String> = Vec::new();
+        let mut total = 0usize;
+        let mut unreadable = false;
+        for (position, index) in shared.classes.get(identity).into_iter().flatten() {
+            self.with_class_body(*position, *index, |reader, class| {
+                let body = class.child_by_field_name("body").unwrap_or(class);
+                let mut stack = vec![class];
+                while let Some(node) = stack.pop() {
+                    let text = match node.kind() {
+                        "call" => node
+                            .child_by_field_name("method")
+                            .map(|name| reader.text(name)),
+                        "identifier" => Some(reader.text(node)),
+                        _ => None,
+                    };
+                    match text {
+                        Some("default_scope" | "default_scope=") => unreadable = true,
+                        Some("isolate_namespace") if node.kind() == "call" => {
+                            total += 1;
+                            let arguments = Self::arguments_of(node);
+                            let statement = node.parent() == Some(body)
+                                && node.child_by_field_name("receiver").is_none()
+                                && node.child_by_field_name("block").is_none();
+                            match arguments.as_slice() {
+                                [one] if statement => direct.push(reader.text(*one).to_string()),
+                                _ => unreadable = true,
+                            }
+                        }
+                        Some("isolate_namespace")
+                            if node.parent().is_none_or(|parent| {
+                                parent.kind() != "call"
+                                    || parent.child_by_field_name("method") != Some(node)
+                            }) =>
+                        {
+                            unreadable = true
+                        }
+                        _ => {}
+                    }
+                    let mut cursor = node.walk();
+                    stack.extend(node.named_children(&mut cursor));
+                }
+            });
+        }
+        let module = (|| {
+            if unreadable || total != direct.len() || direct.len() > 1 {
+                return None;
+            }
+            let Some(name) = direct.first() else {
+                return Some(Vec::new());
+            };
+            let namespace = self.constant_from_identity(name, identity)?;
+            let inflections = self.rails_inflections();
+            let name = namespace.replace('.', "::");
+            if inflections.unreadable_acronym
+                || inflections
+                    .acronyms
+                    .values()
+                    .any(|acronym| name.contains(acronym.as_str()))
+            {
+                return None;
+            }
+            Some(split_module(&underscore(&name)))
+        })();
+        shared
+            .engine_modules
+            .lock()
+            .insert(identity.to_string(), module.clone());
+        module
+    }
+
+    /// The identity that a constant path names in the body of the class with the identity
+    /// `owner`. The modules around the class can be each prefix of the identity, or only the
+    /// whole identity, as `class A::B` has. Omen does not know which, so the result is the one
+    /// class or module that the path can name. A path that can name two gives `None`.
+    fn constant_from_identity(&self, text: &str, owner: &str) -> Option<String> {
+        let text = text.trim();
+        let path = text.trim_start_matches("::");
+        if !is_constant_path(path) {
+            return None;
+        }
+        let dotted = path.replace("::", ".");
+        let classes = &self.rails_shared().classes;
+        let mut found: Vec<String> = Vec::new();
+        if !text.starts_with("::") {
+            let first = dotted.split('.').next()?;
+            let mut end = owner.len();
+            loop {
+                let level = &owner[..end];
+                if classes.contains_key(&format!("{level}.{first}")) {
+                    found.push(format!("{level}.{dotted}"));
+                }
+                match level.rfind('.') {
+                    Some(dot) => end = dot,
+                    None => break,
+                }
+            }
+        }
+        if found.is_empty() || classes.contains_key(dotted.split('.').next()?) {
+            found.push(dotted);
+        }
+        found.dedup();
+        match found.as_slice() {
+            [one] if classes.contains_key(one) => Some(one.clone()),
             _ => None,
         }
     }
@@ -1068,9 +2095,10 @@ impl<'a> Context<'a> {
         options: &Options<'_>,
         scope: &Scope,
     ) -> Option<ResourceDefinition> {
+        let bindings = &scope.bindings;
         let names: Option<Vec<String>> = positional
             .iter()
-            .map(|argument| self.rails_literal(*argument))
+            .map(|argument| self.rails_literal(*argument, bindings))
             .collect();
         let names = names?;
         if names.is_empty() {
@@ -1083,20 +2111,24 @@ impl<'a> Context<'a> {
         let mut as_name = None;
         let mut module: Option<String> = None;
         let mut modules = scope.modules.clone();
+        let mut format = None;
+        let mut constraint = None;
         for option in &options.0 {
             if option.string_key {
                 return None;
             }
             match option.key.as_str() {
-                "only" => only = Some(self.rails_names(option.value)?),
-                "except" => except = self.rails_names(option.value)?,
-                "path" => path = Some(self.rails_literal(option.value)?),
-                "controller" => controller = Some(self.rails_literal(option.value)?),
-                "as" => as_name = Some(self.rails_literal(option.value)?),
-                "format" if option.value.kind() == "false" => {}
-                "module" => module = Some(self.rails_literal(option.value)?),
-                key if HARMLESS_OPTIONS.contains(&key) => {}
-                _ => return None,
+                "only" => only = Some(self.rails_names(option.value, bindings)?),
+                "except" => except = self.rails_names(option.value, bindings)?,
+                "path" => path = Some(self.rails_literal(option.value, bindings)?),
+                "controller" => controller = Some(self.rails_literal(option.value, bindings)?),
+                "as" => as_name = Some(self.rails_literal(option.value, bindings)?),
+                "format" => format = Some(self.rails_format(option.value)?),
+                "module" => module = Some(self.rails_literal(option.value, bindings)?),
+                "constraints" => constraint = self.constraint_text(option.value),
+                "concerns" => {}
+                key if UNMODELLED_SCOPE_OPTIONS.contains(&key) => return None,
+                _ => {}
             }
         }
         if let Some(module) = module {
@@ -1110,21 +2142,26 @@ impl<'a> Context<'a> {
             controller,
             as_name,
             modules,
+            format,
+            constraint,
         })
     }
 
     fn rails_resources(&self, node: Node<'_>, singular: bool, scope: &Scope, out: &mut Vec<Draft>) {
         let arguments = Self::arguments_of(node);
-        let Some(options) = self.rails_options(&arguments) else {
+        let Some(options) = self.rails_options(&arguments, &scope.bindings) else {
             return;
         };
         let positional = Self::rails_positional(&arguments);
         let Some(definition) = self.rails_resource_definition(&positional, &options, scope) else {
             return;
         };
-        if scope.method_scope {
-            return;
+        let format = definition.format.unwrap_or(scope.format);
+        let mut constraints = scope.constraints.clone();
+        if let Some(constraint) = &definition.constraint {
+            constraints.add(constraint.clone());
         }
+        let constraints = constraints.names();
         let api_only = match scope.api_only {
             ApiOnly::On => true,
             ApiOnly::Off => false,
@@ -1142,19 +2179,27 @@ impl<'a> Context<'a> {
             let context = definition.context(singular, name, None);
             let controller = definition.controller_for(singular, name, self.rails_plural(name));
             for (action, verb, suffix) in table {
-                if !definition.allows(action, api_only) {
+                if !definition.allows(action, api_only)
+                    || scope.is_disabled(&verb.to_lowercase(), node.start_byte())
+                {
                     continue;
                 }
-                let path = route_path(&base, &format!("{}{suffix}", context.collection));
+                let path = formatted_path(
+                    route_path(&base, &format!("{}{suffix}", context.collection)),
+                    format,
+                );
                 let variant_path = path.clone();
-                let (symbol, guards) = match &controller {
+                let (symbol, handler_guards, unknown) = match &controller {
                     Some(controller) => self.rails_handler_cached(
                         &definition.modules,
                         &ControllerRef::Text(controller.clone()),
                         action,
                     ),
-                    None => (None, Vec::new()),
+                    None => unresolved_handler(),
                 };
+                let mut guards = constraints.clone();
+                guards.extend(handler_guards);
+                super::keep_first(&mut guards);
                 out.push(Draft {
                     range: Span::of(&node),
                     kind: EntryKind::HttpHandler,
@@ -1164,6 +2209,7 @@ impl<'a> Context<'a> {
                     guards,
                     basis: EntryBasis::Registered,
                     variant: Some(format!("{action}@{name}@{variant_path}")),
+                    unknown,
                 });
             }
         }
@@ -1175,7 +2221,8 @@ impl<'a> Context<'a> {
     /// change the path or the controller. Any other option skips the route.
     fn rails_plain_route(&self, node: Node<'_>, name: &str, scope: &Scope, out: &mut Vec<Draft>) {
         let arguments = Self::arguments_of(node);
-        let Some(options) = self.rails_options(&arguments) else {
+        let bindings = &scope.bindings;
+        let Some(options) = self.rails_options(&arguments, bindings) else {
             return;
         };
         let positional = Self::rails_positional(&arguments);
@@ -1190,21 +2237,33 @@ impl<'a> Context<'a> {
                     .rfind(|option| option.string_key && option.key == first.key)
             });
         let root = name == "root";
+        let mut format = scope.format;
         for option in options.0.iter().filter(|option| !option.string_key) {
             let known = match option.key.as_str() {
-                "to" | "controller" | "action" | "on" | "as" | "constraints" | "defaults"
-                | "anchor" => true,
                 "via" => name == "match",
-                "format" => option.value.kind() == "false",
-                _ => option.value.kind() == "regex",
+                "path" | "internal" => false,
+                _ => true,
             };
             if !known {
                 return;
             }
         }
+        if let Some(value) = options.get("format") {
+            match self.rails_format(value) {
+                Some(found) => format = found,
+                None => return,
+            }
+        }
+        let mut constraints = scope.constraints.clone();
+        if let Some(value) = options.get("constraints") {
+            if let Some(text) = self.constraint_text(value) {
+                constraints.add(text);
+            }
+        }
 
         let mut target_text = None;
         let mut path_node = None;
+        let mut symbol_path = false;
         if root {
             match positional.as_slice() {
                 [] => {}
@@ -1213,9 +2272,13 @@ impl<'a> Context<'a> {
             }
         } else {
             match (positional.as_slice(), rocket) {
-                ([one], None) => path_node = Some((*one, self.rails_literal(*one))),
+                ([one], None) => {
+                    let value = self.rails_value(*one, bindings);
+                    symbol_path = matches!(value, Some(Value::Symbol(_)));
+                    path_node = Some(value.map(|value| value.text()));
+                }
                 ([], Some(option)) => {
-                    path_node = Some((option.value, Some(option.key.clone())));
+                    path_node = Some(Some(option.key.clone()));
                     target_text = Some(option.value);
                 }
                 _ => return,
@@ -1224,21 +2287,17 @@ impl<'a> Context<'a> {
         if let Some(to) = options.get("to") {
             target_text = Some(to);
         }
-        let symbol_path = path_node
-            .as_ref()
-            .is_some_and(|(node, _)| node.kind() != "string")
-            && rocket.is_none();
         let path_text = if root {
             String::new()
         } else {
-            let Some((_, Some(text))) = &path_node else {
+            let Some(Some(text)) = &path_node else {
                 return;
             };
             text.clone()
         };
 
         let on = match options.get("on") {
-            Some(value) => match self.rails_literal(value).as_deref() {
+            Some(value) => match self.rails_literal(value, bindings).as_deref() {
                 Some(on @ ("member" | "collection")) => Some(on.to_string()),
                 _ => return,
             },
@@ -1278,6 +2337,7 @@ impl<'a> Context<'a> {
         } else {
             route_path(&base, &path_text)
         };
+        let full_path = formatted_path(full_path, format);
 
         let no_target = Target {
             controller: None,
@@ -1289,8 +2349,11 @@ impl<'a> Context<'a> {
                 .any(|key| options.get(key).is_some());
         let target = match target_text {
             _ if rocket_with_target => no_target,
-            Some(node) if node.kind() == "string" => {
-                let Some(text) = self.rails_literal(node) else {
+            Some(node)
+                if node.kind() == "string"
+                    || bindings.get(&self.text(node).to_string()).is_some() =>
+            {
+                let Some(Value::Text(text)) = self.rails_value(node, bindings) else {
                     return;
                 };
                 match text.split_once('#') {
@@ -1302,16 +2365,38 @@ impl<'a> Context<'a> {
                 }
             }
             Some(_) => no_target,
+            None if !root
+                && !symbol_path
+                && options.get("action").is_none()
+                && !path_text.ends_with('/')
+                && is_match_shorthand(&path_text) =>
+            {
+                let (controller, action) = path_text
+                    .trim_start_matches('/')
+                    .rsplit_once('/')
+                    .unwrap_or_default();
+                Target {
+                    controller: Some(ControllerRef::Text(controller.replace('-', "_"))),
+                    action: Some(action.replace('-', "_")),
+                }
+            }
             None => {
                 let read = |key: &str| match options.get(key) {
                     None => Some(None),
-                    Some(value) => self.rails_literal(value).map(Some),
+                    Some(value) => self.rails_literal(value, bindings).map(Some),
                 };
                 match (read("controller"), read("action")) {
                     (Some(controller), Some(action)) => {
+                        // Without a controller, `add_controller_module` of Rails takes the
+                        // module of the blocks as the controller: `get "x"` in
+                        // `namespace :site` is `site#x`.
                         let controller = controller
                             .map(ControllerRef::Text)
-                            .or_else(|| scope.controller.clone().map(ControllerRef::Scoped));
+                            .or_else(|| scope.controller.clone().map(ControllerRef::Scoped))
+                            .or_else(|| {
+                                self.module_controller(&scope.modules)
+                                    .map(ControllerRef::Scoped)
+                            });
                         let from_path = (!root
                             && !path_text.is_empty()
                             && path_text
@@ -1336,12 +2421,24 @@ impl<'a> Context<'a> {
             "root" => vec![String::from("GET")],
             verb => vec![verb.to_uppercase()],
         };
-        let (symbol, guards) = match (&target.controller, &target.action) {
+        let (symbol, handler_guards, unknown) = match (&target.controller, &target.action) {
             (Some(controller), Some(action)) => {
                 self.rails_handler_cached(&scope.modules, controller, action)
             }
-            _ => (None, Vec::new()),
+            _ => match target_text
+                .filter(|_| !rocket_with_target)
+                .map(|node| self.endpoint_kind(node))
+            {
+                // A redirect runs no code of the application, so the constraints are all its
+                // guards.
+                Some(Endpoint::Redirect) => (None, Vec::new(), None),
+                Some(Endpoint::Rack) => (None, Vec::new(), Some(GuardsUnknownReason::RackEndpoint)),
+                _ => unresolved_handler(),
+            },
         };
+        let mut guards = constraints.names();
+        guards.extend(handler_guards);
+        super::keep_first(&mut guards);
         for method in methods {
             out.push(Draft {
                 range: Span::of(&node),
@@ -1352,7 +2449,44 @@ impl<'a> Context<'a> {
                 guards: guards.clone(),
                 basis: EntryBasis::Registered,
                 variant: None,
+                unknown,
             });
+        }
+    }
+
+    /// The controller that the modules of the blocks name, as `/admin/users` for the modules
+    /// `admin` and `users`. The file keeps the controller of each chain of modules, so each
+    /// route of a block does not build the text again.
+    fn module_controller(&self, modules: &Modules) -> Option<ScopedController> {
+        if modules.id() == 0 {
+            return None;
+        }
+        let known = self
+            .rails_module_controllers
+            .borrow()
+            .get(&modules.id())
+            .cloned();
+        Some(known.unwrap_or_else(|| {
+            let controller = ScopedController::new(format!("/{}", modules.to_vec().join("/")));
+            self.rails_module_controllers
+                .borrow_mut()
+                .insert(modules.id(), controller.clone());
+            controller
+        }))
+    }
+
+    /// The kind of a route target that is not a string: a `redirect` call of the mapper, or
+    /// another object, which Rails calls as a Rack application.
+    fn endpoint_kind(&self, target: Node<'_>) -> Endpoint {
+        let is_redirect = target.kind() == "call"
+            && target.child_by_field_name("receiver").is_none()
+            && target
+                .child_by_field_name("method")
+                .is_some_and(|method| self.text(method) == "redirect");
+        match target.kind() {
+            _ if is_redirect => Endpoint::Redirect,
+            "string" | "simple_symbol" | "identifier" => Endpoint::Unknown,
+            _ => Endpoint::Rack,
         }
     }
 
@@ -1393,15 +2527,35 @@ impl<'a> Context<'a> {
                 );
             }
         }
-        if self
-            .rails_shared()
-            .classes
-            .contains_key("ActiveSupport.Inflector")
-        {
+        if self.inflector_is_changed() {
             found.unreadable_acronym = true;
             found.changes_singulars = true;
         }
         found
+    }
+
+    /// Tells if a statement that opens `ActiveSupport::Inflector` again, or a class or a module
+    /// in it, can change a name that omen works out. See `reopen_changes_names`. An opening
+    /// with a syntax tree that omen cannot get counts as a change.
+    fn inflector_is_changed(&self) -> bool {
+        let shared = self.rails_shared();
+        let mut changed = false;
+        for (identity, openings) in &shared.classes {
+            if identity != "ActiveSupport.Inflector"
+                && !identity.starts_with("ActiveSupport.Inflector.")
+            {
+                continue;
+            }
+            for (position, index) in openings {
+                let mut read = false;
+                self.with_class_body(*position, *index, |reader, node| {
+                    read = true;
+                    changed |= reopen_changes_names(node, reader.source);
+                });
+                changed |= !read;
+            }
+        }
+        changed
     }
 
     /// The singular name that a nested route needs, or `None` when the inflections of the
@@ -1422,7 +2576,7 @@ impl<'a> Context<'a> {
     /// application. An assignment in the body of an engine class belongs to that engine. Any
     /// other assignment, a value that is not `true` or `false`, and an assignment in a branch that
     /// omen cannot evaluate make the value unknown.
-    fn rails_api_only(&self, receiver: &str) -> ApiOnly {
+    fn rails_api_only(&self, owner: &RoutesOwner) -> ApiOnly {
         let sets = self.rails_shared().api_only.get_or_init(|| {
             let mut sets = ApiOnlySets::default();
             for (position, file) in self.all.iter().enumerate() {
@@ -1446,14 +2600,9 @@ impl<'a> Context<'a> {
             }
             sets
         });
-        let Some(base) = receiver.trim().strip_suffix(".routes") else {
-            return ApiOnly::Unknown;
-        };
-        let constant = base.trim_start_matches("::");
-        if base == "Rails.application" || constant.ends_with("::Application") {
-            sets.for_application()
-        } else {
-            sets.for_engine(&constant.replace("::", "."))
+        match owner {
+            RoutesOwner::Application => sets.for_application(),
+            RoutesOwner::Engine(identity) => sets.for_engine(identity),
         }
     }
 
@@ -1658,48 +2807,6 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// Tells if the text names the routes of the application or of an engine, and the repository
-    /// defines the class: `Rails.application.routes`, `Name::Application.routes`, or
-    /// `Name::Engine.routes`. The class must have the superclass `Rails::Application` or
-    /// `Rails::Engine`.
-    fn routes_object_is_defined(&self, text: &str) -> bool {
-        let Some(base) = text.trim().strip_suffix(".routes") else {
-            return false;
-        };
-        if base == "Rails.application" {
-            return true;
-        }
-        let constant = base.trim_start_matches("::");
-        let superclass = if constant.ends_with("::Application") {
-            "Rails::Application"
-        } else if constant.ends_with("::Engine") {
-            "Rails::Engine"
-        } else {
-            return false;
-        };
-        let constant_path = constant.split("::").all(|part| {
-            part.chars()
-                .next()
-                .is_some_and(|first| first.is_ascii_uppercase())
-                && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        });
-        if !constant_path {
-            return false;
-        }
-        let shared = self.rails_shared();
-        shared
-            .classes
-            .get(&constant.replace("::", "."))
-            .into_iter()
-            .flatten()
-            .any(|(position, index)| {
-                self.all[*position].symbols[*index]
-                    .supertypes
-                    .first()
-                    .is_some_and(|parent| parent.trim_start_matches("::") == superclass)
-            })
-    }
-
     /// The result of `rails_handler` for a route. The file keeps the result for each chain of
     /// modules, controller, and action, so a route in a block with a long name does not work out the
     /// name again.
@@ -1719,7 +2826,7 @@ impl<'a> Context<'a> {
             known
         });
         if !known {
-            return (None, Vec::new());
+            return unresolved_handler();
         }
         let key = (modules.id(), controller.key(), action.to_string());
         if let Some(found) = self.rails_handled.borrow().get(&key) {
@@ -1738,7 +2845,7 @@ impl<'a> Context<'a> {
     /// have an acronym that omen cannot read, the controller is not known.
     fn rails_handler(&self, modules: &[String], controller: &str, action: &str) -> Handler {
         let Some(identity) = self.rails_identity(modules, controller) else {
-            return (None, Vec::new());
+            return unresolved_handler();
         };
         let shared = self.rails_shared();
         let key = (identity.clone(), action.to_string());
@@ -1791,14 +2898,20 @@ impl<'a> Context<'a> {
 
     fn rails_resolve(&self, shared: &RailsShared, identity: &str, action: &str) -> Handler {
         if !shared.classes.contains_key(identity) {
-            return (None, Vec::new());
+            return unresolved_handler();
         }
         let symbol = match self.rails_action(shared, identity, action) {
-            Action::Hidden => return (None, Vec::new()),
+            Action::Hidden => {
+                return (
+                    None,
+                    Vec::new(),
+                    Some(GuardsUnknownReason::UnreadableAction),
+                )
+            }
             Action::Public(symbol) => symbol,
         };
-        let guards = self.rails_program(shared, identity).guards_for(action);
-        (symbol, guards)
+        let (guards, unknown) = self.rails_program(shared, identity).guards_for(action);
+        (symbol, guards, unknown)
     }
 
     /// Finds the nearest class in the chain of superclasses that decides if the action runs. A class
@@ -1912,18 +3025,44 @@ impl<'a> Context<'a> {
             current = parent.clone();
         }
         let mut program =
-            program.unwrap_or_else(|| Arc::new(Program::layer(None, Vec::new(), false)));
+            program.unwrap_or_else(|| Arc::new(Program::layer(None, Vec::new(), None, None)));
         for class in chain.iter().rev() {
             let mut own: Vec<Callback> = Vec::new();
-            let mut opaque = false;
+            let mut gap = shared
+                .unresolved_parents
+                .contains(class)
+                .then_some(GuardsUnknownReason::UnresolvedSuperclass);
+            let defined = self.rails_class_macros(shared, class);
+            let mut macros = program.macros.clone();
+            for (name, body) in defined.iter() {
+                macros.insert(name.clone(), body.clone());
+            }
             for (position, index) in shared.classes.get(class).into_iter().flatten() {
                 let class_callbacks = self.rails_callbacks(shared, *position, *index);
-                own.extend(class_callbacks.list.iter().cloned());
-                opaque |= class_callbacks.opaque;
+                gap = first_reason(gap, class_callbacks.gap);
+                for statement in &class_callbacks.list {
+                    match statement {
+                        Statement::Callback(callback) => own.push(callback.clone()),
+                        Statement::Macro { name, conditional } => {
+                            let Some(Some(body)) = macros.get(name) else {
+                                gap = first_reason(gap, Some(GuardsUnknownReason::UnresolvedMacro));
+                                continue;
+                            };
+                            if body.gap.is_some() {
+                                gap = first_reason(gap, Some(GuardsUnknownReason::UnresolvedMacro));
+                            }
+                            own.extend(body.callbacks.iter().map(|callback| {
+                                let mut callback = callback.clone();
+                                callback.conditional |= conditional;
+                                callback
+                            }));
+                        }
+                    }
+                }
             }
-            opaque |= self.is_named_outside_the_class(class);
-            if !own.is_empty() || opaque {
-                program = Arc::new(Program::layer(Some(program), own, opaque));
+            gap = first_reason(gap, self.named_outside_the_class(class));
+            if !own.is_empty() || gap.is_some() || !defined.is_empty() {
+                program = Arc::new(Program::layer(Some(program), own, gap, Some(macros)));
             }
             shared
                 .programs
@@ -1937,9 +3076,9 @@ impl<'a> Context<'a> {
     /// callback call, `include`, `extend`, `prepend`, or `class_eval` with the constant of the class
     /// as its receiver. The constant may have fewer modules than the identity of the class, so omen
     /// compares each end of the identity.
-    fn is_named_outside_the_class(&self, identity: &str) -> bool {
+    fn named_outside_the_class(&self, identity: &str) -> Option<GuardsUnknownReason> {
         let named = self.rails_shared().external.get_or_init(|| {
-            let mut named = HashSet::new();
+            let mut named: HashMap<String, GuardsUnknownReason> = HashMap::new();
             for (position, file) in self.all.iter().enumerate() {
                 if file.language != Language::Ruby {
                     continue;
@@ -1960,9 +3099,14 @@ impl<'a> Context<'a> {
                             if is_callback_family(method) || CLASS_CHANGING_CALLS.contains(&method)
                             {
                                 let text = super::syntax::text(receiver, &parsed.source);
-                                named.insert(
-                                    text.trim().trim_start_matches("::").replace("::", "."),
-                                );
+                                let name = text.trim().trim_start_matches("::").replace("::", ".");
+                                let reason = if MODULE_CALLS.contains(&method) {
+                                    GuardsUnknownReason::IncludedModule
+                                } else {
+                                    GuardsUnknownReason::CallbackOutsideClass
+                                };
+                                let known = named.get(&name).copied();
+                                named.insert(name, known.map_or(reason, |known| known.min(reason)));
                             }
                         }
                     }
@@ -1973,18 +3117,120 @@ impl<'a> Context<'a> {
             named
         });
         if named.is_empty() {
-            return false;
+            return None;
         }
         let mut rest = identity;
+        let mut found = None;
         loop {
-            if named.contains(rest) {
-                return true;
-            }
+            found = first_reason(found, named.get(rest).copied());
             match rest.split_once('.') {
                 Some((_, tail)) => rest = tail,
-                None => return false,
+                None => return found,
             }
         }
+    }
+
+    /// The class methods that the openings of the class define, by name: `def self.name` in the
+    /// class body, and `def name` in `class << self`. A class method can register callbacks, as
+    /// `def self.requires_login` can call `before_action`. The value is what a call of the method
+    /// in a class body does. It is `None` for a name with two definitions in the class. The index
+    /// keeps the result.
+    fn rails_class_macros(&self, shared: &RailsShared, identity: &str) -> Arc<MacroTable> {
+        if let Some(found) = shared.macros.lock().get(identity) {
+            return Arc::clone(found);
+        }
+        let mut table = MacroTable::new();
+        for (position, index) in shared.classes.get(identity).into_iter().flatten() {
+            self.with_class_body(*position, *index, |reader, class| {
+                let body = class.child_by_field_name("body").unwrap_or(class);
+                let mut cursor = body.walk();
+                let mut definitions: Vec<Node<'_>> = Vec::new();
+                for statement in body.named_children(&mut cursor) {
+                    match statement.kind() {
+                        "singleton_method"
+                            if statement
+                                .child_by_field_name("object")
+                                .is_some_and(|object| reader.text(object) == "self") =>
+                        {
+                            definitions.push(statement)
+                        }
+                        "singleton_class"
+                            if statement
+                                .child_by_field_name("value")
+                                .is_some_and(|value| reader.text(value) == "self") =>
+                        {
+                            let inner = statement.child_by_field_name("body").unwrap_or(statement);
+                            let mut inner_cursor = inner.walk();
+                            definitions.extend(
+                                inner
+                                    .named_children(&mut inner_cursor)
+                                    .filter(|method| method.kind() == "method"),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                for definition in definitions {
+                    let Some(name) = definition.child_by_field_name("name") else {
+                        continue;
+                    };
+                    let name = reader.text(name).to_string();
+                    let body = match table.get(&name) {
+                        Some(_) => None,
+                        None => Some(Arc::new(reader.read_macro(definition, &name))),
+                    };
+                    table.insert(name, body);
+                }
+            });
+        }
+        let table = Arc::new(table);
+        shared
+            .macros
+            .lock()
+            .insert(identity.to_string(), Arc::clone(&table));
+        table
+    }
+
+    /// What a call of the class method does to the callbacks of the class that calls it. The
+    /// body is read as a class body is read. A `before_action` call with a block and no name gets
+    /// the name of the method, so the guard has a name. A `super` call, a call of another class
+    /// method, and a callback that omen cannot read make the body not readable.
+    fn read_macro(&self, definition: Node<'_>, name: &str) -> MacroBody {
+        let mut callbacks = ClassCallbacks {
+            macro_name: Some(name.to_string()),
+            ..ClassCallbacks::default()
+        };
+        if let Some(body) = definition.child_by_field_name("body") {
+            let mut stack = vec![body];
+            while let Some(node) = stack.pop() {
+                if node.kind() == "super" {
+                    callbacks.note(GuardsUnknownReason::UnresolvedMacro);
+                    break;
+                }
+                let mut cursor = node.walk();
+                stack.extend(node.named_children(&mut cursor));
+            }
+            self.collect_callbacks(body, false, 0, &mut callbacks);
+        }
+        let mut body = MacroBody {
+            callbacks: Vec::new(),
+            gap: callbacks.gap,
+        };
+        for statement in callbacks.list {
+            match statement {
+                Statement::Callback(callback) => {
+                    if callback.unreadable {
+                        body.gap =
+                            first_reason(body.gap, Some(GuardsUnknownReason::UnresolvedMacro));
+                    }
+                    body.callbacks.push(callback);
+                }
+                Statement::Macro { .. } => {
+                    body.gap = first_reason(body.gap, Some(GuardsUnknownReason::UnresolvedMacro));
+                }
+            }
+        }
+        body
     }
 
     /// The callback calls in the body of the class, in source order. A call in a method, or in a
@@ -2119,15 +3365,17 @@ impl<'a> Context<'a> {
                     for argument in arguments {
                         match argument.kind() {
                             "method" => define(argument, makes_public, out),
-                            "simple_symbol" | "string" => match self.rails_literal(argument) {
-                                Some(name) => out.ops.push(OpEvent {
-                                    name,
-                                    public: makes_public,
-                                    at: statement.start_byte(),
-                                }),
-                                None => out.unreadable = true,
-                            },
-                            "array" => match self.rails_names(argument) {
+                            "simple_symbol" | "string" => {
+                                match self.rails_literal(argument, &Bindings::default()) {
+                                    Some(name) => out.ops.push(OpEvent {
+                                        name,
+                                        public: makes_public,
+                                        at: statement.start_byte(),
+                                    }),
+                                    None => out.unreadable = true,
+                                }
+                            }
+                            "array" => match self.rails_names(argument, &Bindings::default()) {
                                 Some(names) => {
                                     for name in names {
                                         out.ops.push(OpEvent {
@@ -2183,7 +3431,7 @@ impl<'a> Context<'a> {
     /// Reads the callbacks in the children of the node. `conditional` tells that a branch that
     /// omen cannot evaluate holds the node. A callback in such a branch is conditional. A literal
     /// condition makes a branch dead or live, as it does for a route. A callback under any other
-    /// kind of node makes the callbacks of the class opaque: omen reports no guard for it.
+    /// kind of node makes the guards of the class not complete.
     fn collect_callbacks(
         &self,
         node: Node<'_>,
@@ -2206,7 +3454,7 @@ impl<'a> Context<'a> {
         out: &mut ClassCallbacks,
     ) {
         if depth > MAX_READ_DEPTH {
-            out.opaque = true;
+            out.note(GuardsUnknownReason::UnreadableCallback);
             return;
         }
         match node.kind() {
@@ -2220,7 +3468,7 @@ impl<'a> Context<'a> {
                 for part in parts {
                     if Some(part) == condition {
                         if subtree_has_callback(part, self.source, 0) {
-                            out.opaque = true;
+                            out.note(GuardsUnknownReason::UnreadableCallback);
                         }
                         continue;
                     }
@@ -2236,27 +3484,60 @@ impl<'a> Context<'a> {
                 }
             }
             "case" | "case_match" | "do_block" | "block" | "lambda" => {
-                self.collect_callbacks(node, true, depth, out)
+                out.blocks += 1;
+                self.collect_callbacks(node, true, depth, out);
+                out.blocks -= 1;
             }
-            "call" => match self.rails_callback(node) {
+            "identifier" => {
+                let name = self.text(node);
+                let forgery = matches!(name, "protect_from_forgery" | "skip_forgery_protection");
+                if forgery {
+                    out.list.push(Statement::Callback(Callback::named(
+                        "verify_authenticity_token",
+                        name == "skip_forgery_protection",
+                        conditional || out.blocks > 0,
+                    )));
+                } else if out.blocks == 0 && !CLASS_METHODS_WITHOUT_CALLBACKS.contains(&name) {
+                    out.list.push(Statement::Macro {
+                        name: name.to_string(),
+                        conditional,
+                    });
+                }
+            }
+            "call" => match self.rails_callback(node, out.macro_name.as_deref()) {
                 Some(mut callback) if node.child_by_field_name("receiver").is_none() => {
                     callback.conditional |= conditional;
-                    out.list.push(callback);
+                    out.list.push(Statement::Callback(callback));
                 }
                 _ => {
-                    if node.child_by_field_name("method").is_some_and(|method| {
-                        is_callback_family(self.text(method))
-                            || CLASS_CHANGING_CALLS.contains(&self.text(method))
-                    }) {
-                        out.opaque = true;
+                    let method = node
+                        .child_by_field_name("method")
+                        .map_or("", |method| self.text(method));
+                    if MODULE_CALLS.contains(&method) {
+                        out.note(GuardsUnknownReason::IncludedModule);
+                    } else if is_callback_family(method) || CLASS_CHANGING_CALLS.contains(&method) {
+                        out.note(GuardsUnknownReason::UnreadableCallback);
+                    } else if method.contains("around_action") || method.contains("around_filter") {
+                        out.note(GuardsUnknownReason::AroundCallback);
+                    } else if out.blocks == 0
+                        && node.child_by_field_name("receiver").is_none()
+                        && !CLASS_METHODS_WITHOUT_CALLBACKS.contains(&method)
+                    {
+                        // A call of a class method in the class body can register callbacks.
+                        out.list.push(Statement::Macro {
+                            name: method.to_string(),
+                            conditional,
+                        });
                     }
                     let mut cursor = node.walk();
                     let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
                     for child in children {
                         if matches!(child.kind(), "do_block" | "block") {
-                            self.collect_callback_node(child, conditional, depth + 1, out);
+                            out.blocks += 1;
+                            self.collect_callbacks(child, true, depth, out);
+                            out.blocks -= 1;
                         } else if subtree_has_callback(child, self.source, 0) {
-                            out.opaque = true;
+                            out.note(GuardsUnknownReason::UnreadableCallback);
                         }
                     }
                 }
@@ -2266,7 +3547,7 @@ impl<'a> Context<'a> {
             }
             _ => {
                 if subtree_has_callback(node, self.source, 0) {
-                    out.opaque = true;
+                    out.note(GuardsUnknownReason::UnreadableCallback);
                 }
             }
         }
@@ -2274,24 +3555,60 @@ impl<'a> Context<'a> {
 
     /// The names, the `only:` and `except:` lists, and the conditions of a callback call.
     /// A list that is not a literal makes the callback unreadable. See `Callback::applies_to`.
-    fn rails_callback(&self, call: Node<'_>) -> Option<Callback> {
-        let (skip, mut prepend) = match self.text(call.child_by_field_name("method")?) {
-            "before_action" | "before_filter" => (false, false),
+    ///
+    /// Three calls of Rails register one callback with a fixed name. `protect_from_forgery` is
+    /// `before_action :verify_authenticity_token`, and `skip_forgery_protection` is the skip of
+    /// it. `http_basic_authenticate_with` registers a block, and the guard has the name of the
+    /// call. `anonymous` is the name for a `before_action` call with a block and no name, when
+    /// the call is in a class method.
+    fn rails_callback(&self, call: Node<'_>, anonymous: Option<&str>) -> Option<Callback> {
+        let method = self.text(call.child_by_field_name("method")?);
+        let (skip, mut prepend) = match method {
+            "before_action" | "before_filter" | "append_before_action" | "append_before_filter" => {
+                (false, false)
+            }
             "prepend_before_action" | "prepend_before_filter" => (false, true),
-            "skip_before_action" | "skip_before_filter" => (true, false),
+            "skip_before_action" | "skip_before_filter" | "skip_forgery_protection" => {
+                (true, false)
+            }
+            "protect_from_forgery" | "http_basic_authenticate_with" => (false, false),
             _ => return None,
         };
+        let fixed = match method {
+            "protect_from_forgery" | "skip_forgery_protection" => Some("verify_authenticity_token"),
+            "http_basic_authenticate_with" => Some(method),
+            _ => None,
+        };
         let arguments = Self::arguments_of(call);
-        let options = self.rails_options(&arguments);
-        let names = Self::rails_positional(&arguments)
-            .into_iter()
-            .map(|argument| self.rails_literal(argument))
-            .collect::<Option<Vec<String>>>()?;
+        let bindings = &Bindings::default();
+        let options = self.rails_options(&arguments, bindings);
+        let positional = Self::rails_positional(&arguments);
+        let has_block = call.child_by_field_name("block").is_some()
+            || matches!(positional.as_slice(), [one] if one.kind() == "lambda");
+        let names = match (fixed, anonymous) {
+            (Some(fixed), _) if positional.is_empty() => vec![fixed.to_string()],
+            (Some(_), _) => return None,
+            // A callback with a block and no name is a guard. In a class method, it gets the
+            // name of the method. In a class body, omen cannot name it.
+            (None, Some(anonymous)) if !skip && has_block && positional.len() <= 1 => {
+                if positional.len() == 1 && positional[0].kind() != "lambda" {
+                    return None;
+                }
+                vec![anonymous.to_string()]
+            }
+            _ => positional
+                .into_iter()
+                .map(|argument| self.rails_literal(argument, bindings))
+                .collect::<Option<Vec<String>>>()?,
+        };
+        if !skip && names.is_empty() {
+            return None;
+        }
         let list = |key: &str| {
             options
                 .as_ref()
                 .and_then(|options| options.get(key))
-                .map(|value| self.rails_names(value))
+                .map(|value| self.rails_names(value, bindings))
         };
         let (only, except) = (list("only"), list("except"));
         let mut prepend_unreadable = false;
@@ -2347,6 +3664,32 @@ struct Callback {
 }
 
 impl Callback {
+    /// A callback call with one name and no option.
+    fn named(name: &str, skip: bool, conditional: bool) -> Self {
+        Self {
+            skip,
+            names: vec![name.to_string()],
+            places: HashMap::from([(name.to_string(), 0)]),
+            only: None,
+            except: None,
+            unreadable: false,
+            conditional,
+            prepend: false,
+        }
+    }
+
+    /// Why omen does not know if the callback runs: a list that omen cannot read, or a
+    /// condition.
+    fn uncertain(&self) -> Option<GuardsUnknownReason> {
+        if self.unreadable {
+            Some(GuardsUnknownReason::UnreadableCallback)
+        } else if self.conditional {
+            Some(GuardsUnknownReason::ConditionalCallback)
+        } else {
+            None
+        }
+    }
+
     /// A callback never claims a guard that may not apply. A `before_action` call with a list
     /// that omen cannot read, or with `if:` or `unless:`, adds no guard. A `skip_before_action`
     /// call with a list that omen cannot read removes the guard for each action. A
@@ -2401,12 +3744,108 @@ fn ordered_names(slots: &PersistentMap<String, Slot>) -> Vec<String> {
         .collect()
 }
 
-/// The callbacks of one class: the calls that omen reads, and a flag that tells that a callback
-/// call is in a place that omen cannot read. Then the class has no guard that omen can claim.
+/// The callbacks of one class: the calls that omen reads, and the reason when a statement of
+/// the class can change the callbacks in a way that omen cannot read. Then the guards of the
+/// class are not complete.
 #[derive(Default)]
 struct ClassCallbacks {
-    list: Vec<Callback>,
-    opaque: bool,
+    list: Vec<Statement>,
+    gap: Option<GuardsUnknownReason>,
+    /// The number of blocks around the statement that omen reads now. A call in a block is not
+    /// a call of a class method in the class body.
+    blocks: usize,
+    /// The name of the class method whose body omen reads, when it reads one.
+    macro_name: Option<String>,
+}
+
+/// A statement of a class body that can change the callbacks.
+enum Statement {
+    Callback(Callback),
+    /// A call of a class method that omen must resolve in the chain of the class.
+    Macro {
+        name: String,
+        conditional: bool,
+    },
+}
+
+/// What a call of a class method does to the callbacks of the class that calls it.
+struct MacroBody {
+    callbacks: Vec<Callback>,
+    /// The body has a statement that omen cannot read.
+    gap: Option<GuardsUnknownReason>,
+}
+
+/// The class methods of one class by name. `None` is a name with two definitions.
+type MacroTable = std::collections::BTreeMap<String, Option<Arc<MacroBody>>>;
+
+/// The class methods of Ruby and of Rails that a class body calls, and that register no
+/// `before_action` callback. A call of any other name must resolve to a class method of the
+/// chain, or the guards are not complete.
+const CLASS_METHODS_WITHOUT_CALLBACKS: [&str; 58] = [
+    "private",
+    "public",
+    "protected",
+    "private_constant",
+    "public_constant",
+    "private_class_method",
+    "public_class_method",
+    "module_function",
+    "attr_reader",
+    "attr_writer",
+    "attr_accessor",
+    "attr_internal",
+    "attr_internal_reader",
+    "attr_internal_writer",
+    "attr_internal_accessor",
+    "alias_method",
+    "alias_attribute",
+    "define_method",
+    "require",
+    "require_relative",
+    "require_dependency",
+    "load",
+    "puts",
+    "raise",
+    "freeze",
+    "using",
+    "delegate",
+    "delegate_missing_to",
+    "class_attribute",
+    "cattr_reader",
+    "cattr_writer",
+    "cattr_accessor",
+    "mattr_reader",
+    "mattr_writer",
+    "mattr_accessor",
+    "thread_mattr_accessor",
+    "layout",
+    "helper",
+    "helper_method",
+    "helper_attr",
+    "rescue_from",
+    "after_action",
+    "append_after_action",
+    "prepend_after_action",
+    "skip_after_action",
+    "wrap_parameters",
+    "respond_to",
+    "etag",
+    "default_form_builder",
+    "default_url_options",
+    "content_security_policy",
+    "content_security_policy_report_only",
+    "permissions_policy",
+    "skip_parameter_encoding",
+    "param_encoding",
+    "self",
+    "nil",
+    "__method__",
+];
+
+impl ClassCallbacks {
+    fn note(&mut self, reason: GuardsUnknownReason) {
+        self.gap = first_reason(self.gap, Some(reason));
+    }
 }
 
 /// A program works out the guards of an action from its default guards when the callbacks that list
@@ -2536,9 +3975,16 @@ struct Program {
     /// The skips with an `only:` list that apply to the action, newest first, in this layer and in
     /// the superclasses.
     only_skips: PersistentMap<String, Arc<Link>>,
-    /// A callback of this layer or of a superclass is in a place that omen cannot read. Then the
-    /// layer builds no index.
-    opaque: bool,
+    /// Why the guards of each action are not complete: a statement of this layer or of a
+    /// superclass can change the callbacks in a way that omen cannot read, or a callback for each
+    /// action has a condition.
+    gap: Option<GuardsUnknownReason>,
+    /// Why the guards of one action are not complete, by action: a callback with an `only:` list
+    /// has a condition.
+    action_gaps: PersistentMap<String, GuardsUnknownReason>,
+    /// The class methods of this layer and of the superclasses, by name. The method of the
+    /// nearest class hides the others.
+    macros: PersistentMap<String, Option<Arc<MacroBody>>>,
     default: std::sync::OnceLock<Arc<DefaultGuards>>,
     /// The guards of an action that a list names, as this layer has them, by action.
     resolved: Mutex<HashMap<String, PersistentMap<String, Slot>>>,
@@ -2557,68 +4003,95 @@ impl Drop for Program {
 }
 
 impl Program {
-    fn layer(parent: Option<Arc<Program>>, callbacks: Vec<Callback>, opaque: bool) -> Self {
+    fn layer(
+        parent: Option<Arc<Program>>,
+        callbacks: Vec<Callback>,
+        gap: Option<GuardsUnknownReason>,
+        macros: Option<PersistentMap<String, Option<Arc<MacroBody>>>>,
+    ) -> Self {
         let offset = parent
             .as_ref()
             .map_or(0, |parent| parent.offset + parent.callbacks.len());
         let callbacks: Vec<Arc<Callback>> = callbacks.into_iter().map(Arc::new).collect();
-        let opaque = opaque || parent.as_ref().is_some_and(|parent| parent.opaque);
+        let mut gap = first_reason(gap, parent.as_ref().and_then(|parent| parent.gap));
+        let mut action_gaps = PersistentMap::default();
         let mut names = PersistentMap::default();
         let mut listed = PersistentMap::default();
         let mut only_skips = PersistentMap::default();
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
-        if !opaque {
-            if let Some(parent) = &parent {
-                names = parent.names.clone();
-                listed = parent.listed.clone();
-                only_skips = parent.only_skips.clone();
-            }
-            for (index, callback) in callbacks.iter().enumerate() {
-                let global = offset + index;
-                let decides_always = !callback.skip
-                    || callback.unreadable
-                    || (callback.only.is_none() && callback.except.is_none());
-                let is_only_skip = callback.skip && !callback.unreadable && callback.only.is_some();
-                for name in &callback.names {
-                    by_name.entry(name.clone()).or_default().push(index);
-                    if is_only_skip {
-                        continue;
+        if let Some(parent) = &parent {
+            names = parent.names.clone();
+            listed = parent.listed.clone();
+            only_skips = parent.only_skips.clone();
+            action_gaps = parent.action_gaps.clone();
+        }
+        for (index, callback) in callbacks.iter().enumerate() {
+            let global = offset + index;
+            if let Some(reason) = callback.uncertain() {
+                match &callback.only {
+                    Some(only) if !callback.unreadable => {
+                        for action in only {
+                            if callback
+                                .except
+                                .as_ref()
+                                .is_some_and(|except| except.contains(action))
+                            {
+                                continue;
+                            }
+                            let known = action_gaps.get(action).copied();
+                            action_gaps.insert(
+                                action.clone(),
+                                known
+                                    .map_or(reason, |known: GuardsUnknownReason| known.min(reason)),
+                            );
+                        }
                     }
-                    let mut state: NameState = names.get(name).cloned().unwrap_or_default();
-                    if decides_always {
-                        state = NameState {
-                            always: Some(Link::new(callback, global, None)),
-                            others: None,
-                        };
-                    } else {
-                        state.others = Some(Link::new(callback, global, state.others.take()));
-                    }
-                    names.insert(name.clone(), state);
+                    _ => gap = first_reason(gap, Some(reason)),
                 }
-                if callback.unreadable {
+            }
+            let decides_always = !callback.skip
+                || callback.unreadable
+                || (callback.only.is_none() && callback.except.is_none());
+            let is_only_skip = callback.skip && !callback.unreadable && callback.only.is_some();
+            for name in &callback.names {
+                by_name.entry(name.clone()).or_default().push(index);
+                if is_only_skip {
                     continue;
                 }
-                let eligible = callback.only.iter().chain(&callback.except).flatten();
-                let mut seen: HashSet<&String> = HashSet::new();
-                for action in eligible {
-                    if !seen.insert(action) {
-                        continue;
-                    }
-                    let mut set: Listing = listed.get(action).cloned().unwrap_or_default();
-                    set.callbacks.insert(global, Arc::clone(callback));
-                    set.weight += callback.names.len() + 1;
-                    listed.insert(action.clone(), set);
+                let mut state: NameState = names.get(name).cloned().unwrap_or_default();
+                if decides_always {
+                    state = NameState {
+                        always: Some(Link::new(callback, global, None)),
+                        others: None,
+                    };
+                } else {
+                    state.others = Some(Link::new(callback, global, state.others.take()));
                 }
-                if is_only_skip {
-                    for action in callback.only.iter().flatten() {
-                        let excepted = callback
-                            .except
-                            .as_ref()
-                            .is_some_and(|except| except.contains(action));
-                        if !excepted {
-                            let older = only_skips.get(action).cloned();
-                            only_skips.insert(action.clone(), Link::new(callback, global, older));
-                        }
+                names.insert(name.clone(), state);
+            }
+            if callback.unreadable {
+                continue;
+            }
+            let eligible = callback.only.iter().chain(&callback.except).flatten();
+            let mut seen: HashSet<&String> = HashSet::new();
+            for action in eligible {
+                if !seen.insert(action) {
+                    continue;
+                }
+                let mut set: Listing = listed.get(action).cloned().unwrap_or_default();
+                set.callbacks.insert(global, Arc::clone(callback));
+                set.weight += callback.names.len() + 1;
+                listed.insert(action.clone(), set);
+            }
+            if is_only_skip {
+                for action in callback.only.iter().flatten() {
+                    let excepted = callback
+                        .except
+                        .as_ref()
+                        .is_some_and(|except| except.contains(action));
+                    if !excepted {
+                        let older = only_skips.get(action).cloned();
+                        only_skips.insert(action.clone(), Link::new(callback, global, older));
                     }
                 }
             }
@@ -2631,7 +4104,9 @@ impl Program {
             names,
             listed,
             only_skips,
-            opaque,
+            gap,
+            action_gaps,
+            macros: macros.unwrap_or_default(),
             default: std::sync::OnceLock::new(),
             resolved: Mutex::new(HashMap::new()),
         }
@@ -2718,14 +4193,13 @@ impl Program {
     /// costs one change for each class. A layer whose chain has few callbacks for the action works
     /// the guards out from the default guards instead, so a long chain with one listed callback
     /// costs only that callback.
-    fn guards_for(&self, action: &str) -> Vec<String> {
-        if self.opaque {
-            return Vec::new();
+    fn guards_for(&self, action: &str) -> (Vec<String>, Option<GuardsUnknownReason>) {
+        let key = action.to_string();
+        let gap = first_reason(self.gap, self.action_gaps.get(&key).copied());
+        if self.listed.get(&key).is_none() {
+            return (self.default_guards().names(), gap);
         }
-        if self.listed.get(&action.to_string()).is_none() {
-            return self.default_guards().names();
-        }
-        ordered_names(&self.resolved(action))
+        (ordered_names(&self.resolved(action)), gap)
     }
 
     fn resolved(&self, action: &str) -> PersistentMap<String, Slot> {
@@ -2832,8 +4306,17 @@ fn order_slots(slots: &mut [(&str, Slot)]) {
 /// A class identity and an action name.
 type ActionKey = (String, String);
 
-/// The symbol and the guards of an action.
-pub(super) type Handler = (Option<String>, Vec<String>);
+/// The symbol and the guards of an action, and the reason when the guards are not complete.
+pub(super) type Handler = (Option<String>, Vec<String>, Option<GuardsUnknownReason>);
+
+/// The handler of a route with a controller or an action that omen cannot find.
+fn unresolved_handler() -> Handler {
+    (
+        None,
+        Vec::new(),
+        Some(GuardsUnknownReason::UnresolvedController),
+    )
+}
 
 /// A symbol of the index: the position of the file, and the position in the symbols of the file.
 type Placed = (usize, usize);
@@ -3111,7 +4594,7 @@ fn inflections_locale(call: Node<'_>, source: &[u8]) -> Locale {
                         .trim_start_matches(':')
                         .to_string(),
                 ),
-                "string" => evaluate_string(*one, source),
+                "string" => evaluate_string(*one, source, None),
                 _ => None,
             };
             match name.as_deref() {
@@ -3158,6 +4641,9 @@ fn block_parameter_names(call: Node<'_>, source: &[u8]) -> Vec<String> {
 
 /// The calls that change the callbacks of a class without a callback name: they add the callbacks
 /// of a module, or run code in the class.
+/// The calls that add the methods and the callbacks of a module to a class.
+const MODULE_CALLS: [&str; 3] = ["include", "extend", "prepend"];
+
 const CLASS_CHANGING_CALLS: [&str; 7] = [
     "include",
     "extend",
@@ -3224,6 +4710,292 @@ fn subtree_assigns_api_only(node: Node<'_>, source: &[u8], depth: usize) -> bool
         .any(|child| subtree_assigns_api_only(child, source, depth + 1))
 }
 
+/// The methods of `ActiveSupport::Inflector` and of its `Inflections` class that give the names
+/// that omen works out, or that hold the rules for them.
+const NAME_METHODS: [&str; 29] = [
+    "camelize",
+    "underscore",
+    "singularize",
+    "pluralize",
+    "classify",
+    "constantize",
+    "safe_constantize",
+    "inflections",
+    "apply_inflections",
+    "acronym",
+    "plural",
+    "singular",
+    "irregular",
+    "uncountable",
+    "human",
+    "clear",
+    "acronyms",
+    "acronym_regex",
+    "acronyms_camelize_regex",
+    "acronyms_underscore_regex",
+    "define_acronym_regex_patterns",
+    "plurals",
+    "singulars",
+    "uncountables",
+    "humans",
+    "instance",
+    "instance_or_fallback",
+    "initialize",
+    "initialize_dup",
+];
+
+/// The calls in an opening of the inflector that can change a method in a way that omen cannot
+/// read.
+const OPAQUE_REOPEN_CALLS: [&str; 19] = [
+    "class_eval",
+    "module_eval",
+    "instance_eval",
+    "class_exec",
+    "module_exec",
+    "instance_exec",
+    "eval",
+    "include",
+    "prepend",
+    "extend",
+    "send",
+    "__send__",
+    "public_send",
+    "define_singleton_method",
+    "singleton_class",
+    "instance_variable_set",
+    "class_variable_set",
+    "const_set",
+    "refine",
+];
+
+/// The text of a symbol or of a string without interpolation.
+fn plain_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "simple_symbol" => Some(
+            super::syntax::text(node, source)
+                .trim_start_matches(':')
+                .to_string(),
+        ),
+        "string" => evaluate_string(node, source, None),
+        "identifier" | "constant" | "setter" | "operator" => {
+            Some(super::syntax::text(node, source).to_string())
+        }
+        _ => None,
+    }
+}
+
+fn call_arguments(call: Node<'_>) -> Vec<Node<'_>> {
+    let mut cursor = call.walk();
+    call.child_by_field_name("arguments")
+        .map(|list| list.named_children(&mut cursor).collect())
+        .unwrap_or_default()
+}
+
+/// Tells if the identifier `name` can only hold a text that is not a name of `NAME_METHODS`: the
+/// statements before `before` in its list assign it one time, from a string with an
+/// interpolation and with a literal part that is in no name of `NAME_METHODS`.
+fn is_derived_name(name: &str, before: Node<'_>, source: &[u8]) -> bool {
+    let Some(list) = before.parent() else {
+        return false;
+    };
+    let mut cursor = list.walk();
+    let mut derived = false;
+    for statement in list.named_children(&mut cursor) {
+        if statement.start_byte() >= before.start_byte() {
+            break;
+        }
+        if statement.kind() != "assignment"
+            || statement
+                .child_by_field_name("left")
+                .is_none_or(|left| super::syntax::text(left, source) != name)
+        {
+            continue;
+        }
+        if derived {
+            return false;
+        }
+        let Some(right) = statement
+            .child_by_field_name("right")
+            .filter(|right| right.kind() == "string")
+        else {
+            return false;
+        };
+        let mut parts = right.walk();
+        let safe = right.named_children(&mut parts).any(|part| {
+            part.kind() == "string_content" && {
+                let text = super::syntax::text(part, source);
+                !text.is_empty() && !NAME_METHODS.iter().any(|known| known.contains(text))
+            }
+        });
+        if !safe {
+            return false;
+        }
+        derived = true;
+    }
+    derived
+}
+
+/// Tells if a `define_method` call with the name `target` is a wrapper that calls the method that
+/// it replaces. The statements before it in its list must have `alias_method <old>, <target>`
+/// with a derived name `<old>`, and the block must call `public_send`, `send`, or `__send__` with
+/// `<old>` as the first argument. Omen takes such a wrapper as one that keeps the result of the
+/// method, as a cache does.
+fn is_delegating_wrapper(call: Node<'_>, target: &str, source: &[u8]) -> bool {
+    let statement = match call.parent() {
+        Some(parent) if parent.kind() == "assignment" => parent,
+        _ => call,
+    };
+    let Some(list) = statement.parent() else {
+        return false;
+    };
+    let mut cursor = list.walk();
+    let old = list
+        .named_children(&mut cursor)
+        .take_while(|earlier| earlier.start_byte() < statement.start_byte())
+        .filter(|earlier| {
+            earlier.kind() == "call"
+                && earlier.child_by_field_name("receiver").is_none()
+                && earlier
+                    .child_by_field_name("method")
+                    .is_some_and(|method| super::syntax::text(method, source) == "alias_method")
+        })
+        .find_map(|earlier| {
+            let arguments = call_arguments(earlier);
+            match arguments.as_slice() {
+                [old, original]
+                    if old.kind() == "identifier"
+                        && original.kind() == "identifier"
+                        && super::syntax::text(*original, source) == target
+                        && is_derived_name(super::syntax::text(*old, source), earlier, source) =>
+                {
+                    Some(super::syntax::text(*old, source))
+                }
+                _ => None,
+            }
+        });
+    let (Some(old), Some(block)) = (old, call.child_by_field_name("block")) else {
+        return false;
+    };
+    let mut stack = vec![block];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call"
+            && node.child_by_field_name("method").is_some_and(|method| {
+                matches!(
+                    super::syntax::text(method, source),
+                    "public_send" | "send" | "__send__"
+                )
+            })
+            && call_arguments(node).first().is_some_and(|first| {
+                first.kind() == "identifier" && super::syntax::text(*first, source) == old
+            })
+        {
+            return true;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+    }
+    false
+}
+
+/// Tells if an opening of `ActiveSupport::Inflector`, or of a class or a module in it, can change
+/// a name that omen works out. The search does not go into a class or a module in the opening:
+/// each has its own opening. These statements change a name:
+///
+/// - a definition of a method of `NAME_METHODS`, also a singleton method;
+/// - `alias`, `alias_method`, `undef`, `undef_method`, and `remove_method` with a name of
+///   `NAME_METHODS`, or with a name that omen cannot read;
+/// - `define_method` with a name of `NAME_METHODS`, or with a name that is not a literal, unless
+///   the call is a wrapper that calls the method that it replaces (see `is_delegating_wrapper`);
+/// - a call of `inflections`, or of a method that changes the rules, such as `acronym`;
+/// - a call that can change a method in a way that omen cannot read, such as `class_eval`,
+///   `include`, or `send`.
+///
+/// Any other statement, such as a constant or a helper method with another name, changes no name.
+fn reopen_changes_names(opening: Node<'_>, source: &[u8]) -> bool {
+    let text = |node: Node<'_>| super::syntax::text(node, source);
+    let names_method = |node: Node<'_>| {
+        plain_name(node, source).is_none_or(|name| NAME_METHODS.contains(&name.as_str()))
+    };
+    let mut stack: Vec<Node<'_>> = Vec::new();
+    let mut cursor = opening.walk();
+    let name = opening.child_by_field_name("name");
+    stack.extend(
+        opening
+            .named_children(&mut cursor)
+            .filter(|child| Some(*child) != name),
+    );
+    while let Some(node) = stack.pop() {
+        match node.kind() {
+            "class" | "module" => continue,
+            "method" | "singleton_method" => {
+                if node
+                    .child_by_field_name("name")
+                    .is_some_and(|name| NAME_METHODS.contains(&text(name)))
+                {
+                    return true;
+                }
+            }
+            "alias" => {
+                if node.child_by_field_name("name").is_none_or(names_method) {
+                    return true;
+                }
+            }
+            "undef" => {
+                let mut cursor = node.walk();
+                if node.named_children(&mut cursor).any(names_method) {
+                    return true;
+                }
+                continue;
+            }
+            "call" => {
+                let method = node.child_by_field_name("method").map_or("", text);
+                let arguments = call_arguments(node);
+                match method {
+                    "alias_method" => match arguments.first() {
+                        Some(new) if new.kind() == "identifier" => {
+                            if !is_derived_name(text(*new), node, source) {
+                                return true;
+                            }
+                        }
+                        Some(new) if !names_method(*new) => {}
+                        _ => return true,
+                    },
+                    "undef_method" | "remove_method" | "attr_accessor" | "attr_reader"
+                    | "attr_writer" | "delegate" => {
+                        if arguments.is_empty() || arguments.iter().any(|name| names_method(*name))
+                        {
+                            return true;
+                        }
+                    }
+                    "define_method" => match arguments.first() {
+                        Some(target) if target.kind() == "identifier" => {
+                            if !is_delegating_wrapper(node, text(*target), source) {
+                                return true;
+                            }
+                            // The block of a wrapper calls the old method with `public_send`.
+                            continue;
+                        }
+                        Some(target) if !names_method(*target) => {}
+                        _ => return true,
+                    },
+                    _ => {
+                        if OPAQUE_REOPEN_CALLS.contains(&method)
+                            || INFLECTION_METHODS.contains(&method)
+                            || method == "inflections"
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+    }
+    false
+}
+
 const INFLECTION_METHODS: [&str; 7] = [
     "acronym",
     "irregular",
@@ -3268,7 +5040,7 @@ fn modelled_inflection_call(node: Node<'_>, source: &[u8], params: &[String]) ->
             return false;
         }
         match node.kind() {
-            "string" => evaluate_string(node, source).is_some(),
+            "string" => evaluate_string(node, source, None).is_some(),
             "simple_symbol" => true,
             "regex" => {
                 let mut cursor = node.walk();
@@ -3422,8 +5194,13 @@ fn read_inflection_calls(
         }
         "program" | "body_statement" | "then" | "else" | "block_body" | "do_block" | "block"
         | "class" | "module" => {
+            // The name of `class Inflections` is not a use of the class. `reopen_changes_names`
+            // reads the body of such a class.
+            let name = node.child_by_field_name("name");
             for child in children {
-                read_inflection_calls(child, source, depth + 1, conditional, params, out);
+                if Some(child) != name {
+                    read_inflection_calls(child, source, depth + 1, conditional, params, out);
+                }
             }
         }
         "call" => {
@@ -3487,7 +5264,7 @@ fn read_inflection_calls(
                             .iter()
                             .filter_map(|argument| {
                                 (argument.kind() == "string")
-                                    .then(|| evaluate_string(*argument, source))
+                                    .then(|| evaluate_string(*argument, source, None))
                                     .flatten()
                             })
                             .collect();
@@ -3542,10 +5319,16 @@ pub(super) struct RailsShared {
     methods: HashMap<String, HashMap<String, Vec<Placed>>>,
     /// The superclass of each class identity. A class in a loop of superclasses has none.
     parents: HashMap<String, Option<String>>,
+    /// The classes with a superclass that omen cannot find, and that is not a base class of
+    /// Rails. Such a superclass can add callbacks.
+    unresolved_parents: HashSet<String>,
     inflections: std::sync::OnceLock<Inflections>,
     api_only: std::sync::OnceLock<ApiOnlySets>,
-    external: std::sync::OnceLock<HashSet<String>>,
+    external: std::sync::OnceLock<HashMap<String, GuardsUnknownReason>>,
+    mounts: std::sync::OnceLock<HashMap<String, MountState>>,
+    engine_modules: Mutex<HashMap<String, Option<Vec<String>>>>,
     callbacks: Mutex<HashMap<Placed, Arc<ClassCallbacks>>>,
+    macros: Mutex<HashMap<String, Arc<MacroTable>>>,
     visibility: Mutex<HashMap<String, Arc<Visibility>>>,
     programs: Mutex<HashMap<String, Arc<Program>>>,
     handled: Mutex<HashMap<ActionKey, Handler>>,
@@ -3555,7 +5338,7 @@ pub(super) struct RailsShared {
 impl RailsShared {
     pub(super) fn build(all: &[FileSymbols]) -> Self {
         let mut classes: HashMap<String, Vec<Placed>> = HashMap::new();
-        let mut superclasses: HashMap<&str, UniqueClass> = HashMap::new();
+        let mut suffixes: HashMap<String, UniqueClass> = HashMap::new();
         let mut methods: HashMap<String, HashMap<String, Vec<Placed>>> = HashMap::new();
         for (position, file) in all.iter().enumerate() {
             if file.language != Language::Ruby {
@@ -3564,14 +5347,14 @@ impl RailsShared {
             for (index, symbol) in file.symbols.iter().enumerate() {
                 if symbol.kind.is_type() {
                     let identity = qualified_name(file, symbol);
-                    let unique = match superclasses.get(symbol.name.as_str()) {
-                        None => UniqueClass::One(identity.clone()),
-                        Some(UniqueClass::One(existing)) if *existing == identity => {
-                            UniqueClass::One(identity.clone())
-                        }
-                        Some(_) => UniqueClass::Many,
-                    };
-                    superclasses.insert(symbol.name.as_str(), unique);
+                    for suffix in identity_suffixes(&identity) {
+                        let unique = match suffixes.get(suffix) {
+                            None => UniqueClass::One(identity.clone()),
+                            Some(UniqueClass::One(existing)) if *existing == identity => continue,
+                            Some(_) => UniqueClass::Many,
+                        };
+                        suffixes.insert(suffix.to_string(), unique);
+                    }
                     classes.entry(identity).or_default().push((position, index));
                 } else if symbol.is_callable() {
                     let qualified = qualified_name(file, symbol);
@@ -3591,15 +5374,19 @@ impl RailsShared {
                 (*position, all[*position].symbols[*index].range.start_byte)
             });
         }
-        let parents = resolve_parents(all, &classes, &superclasses);
+        let (parents, unresolved_parents) = resolve_parents(all, &classes, &suffixes);
         Self {
             classes,
             methods,
             parents,
+            unresolved_parents,
             inflections: std::sync::OnceLock::new(),
             api_only: std::sync::OnceLock::new(),
             external: std::sync::OnceLock::new(),
+            mounts: std::sync::OnceLock::new(),
+            engine_modules: Mutex::new(HashMap::new()),
             callbacks: Mutex::new(HashMap::new()),
+            macros: Mutex::new(HashMap::new()),
             visibility: Mutex::new(HashMap::new()),
             programs: Mutex::new(HashMap::new()),
             handled: Mutex::new(HashMap::new()),
@@ -3608,26 +5395,114 @@ impl RailsShared {
     }
 }
 
-/// The superclass identity of each class. A
-/// qualified superclass name, a name of two classes, and a class in a loop of superclasses give
-/// no superclass. A class that leads into a loop keeps its superclass. Omen visits each class one
+/// The superclass that the `class` statement of the symbol names. The supertypes of a class also
+/// have the modules that it includes, so the name must follow the `<` of the signature.
+fn superclass_text(symbol: &Symbol) -> Option<&String> {
+    let first = symbol.supertypes.first()?;
+    let (_, after) = symbol.signature.split_once('<')?;
+    after
+        .trim_start()
+        .starts_with(first.as_str())
+        .then_some(first)
+}
+
+/// The number of names that the `class` statement of the symbol writes for the class: one for
+/// `class Users`, and two for `class Admin::Users`.
+fn declared_parts(symbol: &Symbol) -> usize {
+    let name = symbol
+        .signature
+        .split_once('<')
+        .map_or(symbol.signature.as_str(), |(before, _)| before)
+        .trim()
+        .rsplit(char::is_whitespace)
+        .next()
+        .unwrap_or("");
+    name.trim_start_matches("::").split("::").count()
+}
+
+/// The longest tail of an identity that a superclass name can match without a leading `::`.
+const SUFFIX_PARTS: usize = 4;
+
+/// The tails of an identity with one to `SUFFIX_PARTS` parts: for `A.B.C`, the tails `C`, `B.C`,
+/// and `A.B.C`.
+fn identity_suffixes(identity: &str) -> Vec<&str> {
+    let mut suffixes = vec![identity];
+    let mut starts: Vec<usize> = identity
+        .match_indices('.')
+        .map(|(dot, _)| dot + 1)
+        .collect();
+    starts.reverse();
+    suffixes.extend(starts.into_iter().map(|start| &identity[start..]));
+    suffixes.sort_by_key(|suffix| suffix.len());
+    suffixes.dedup();
+    suffixes.truncate(SUFFIX_PARTS);
+    suffixes
+}
+
+/// The base classes of Rails for a controller. They are not in the repository, and omen lists no
+/// guard of Rails itself.
+const RAILS_BASES: [&str; 4] = [
+    "ActionController::Base",
+    "ActionController::API",
+    "ActionController::Metal",
+    "AbstractController::Base",
+];
+
+/// The superclass identity of each class, and the classes with a superclass that omen cannot
+/// find. A superclass name with a leading `::` must be the identity of a class. Omen searches
+/// any other name as Ruby does: in each module around the `class` statement from the inner one
+/// to the outer one, and then at the top level. A name that this search does not find, of at
+/// most `SUFFIX_PARTS` parts, as `Base` or `Admin::Base`, can be the tail of the identity of
+/// exactly one class: the autoloader of the application can find such a class. A name of two
+/// such classes, and a class in a loop of superclasses give no superclass. A class that leads into a loop keeps its superclass. Omen visits each class one
 /// time.
 fn resolve_parents(
     all: &[FileSymbols],
     classes: &HashMap<String, Vec<Placed>>,
-    superclasses: &HashMap<&str, UniqueClass>,
-) -> HashMap<String, Option<String>> {
+    suffixes: &HashMap<String, UniqueClass>,
+) -> (HashMap<String, Option<String>>, HashSet<String>) {
+    let mut unresolved: HashSet<String> = HashSet::new();
     let raw: HashMap<&str, Option<&str>> = classes
         .iter()
         .map(|(identity, group)| {
-            let parent = group
-                .iter()
-                .find_map(|(position, index)| all[*position].symbols[*index].supertypes.first())
-                .filter(|parent| !parent.contains("::"))
-                .and_then(|parent| match superclasses.get(parent.as_str()) {
+            let named = group.iter().find_map(|(position, index)| {
+                let symbol = &all[*position].symbols[*index];
+                superclass_text(symbol).map(|parent| (parent, declared_parts(symbol)))
+            });
+            let known = |identity: &str| {
+                classes
+                    .get_key_value(identity)
+                    .map(|(found, _)| found.as_str())
+            };
+            let parent = named.and_then(|(parent, declared)| {
+                let path = parent.trim().trim_start_matches("::");
+                let dotted = path.replace("::", ".");
+                if parent.trim().starts_with("::") {
+                    return known(&dotted);
+                }
+                // The modules around the `class` statement: the identity without the parts
+                // that the statement itself writes, as `Admin::Users` writes two.
+                let mut around = identity.as_str();
+                for _ in 0..declared {
+                    around = around.rsplit_once('.').map_or("", |(outer, _)| outer);
+                }
+                while !around.is_empty() {
+                    if let Some(found) = known(&format!("{around}.{dotted}")) {
+                        return Some(found);
+                    }
+                    around = around.rsplit_once('.').map_or("", |(outer, _)| outer);
+                }
+                known(&dotted).or_else(|| match suffixes.get(&dotted) {
                     Some(UniqueClass::One(found)) => Some(found.as_str()),
                     _ => None,
-                });
+                })
+            });
+            let named = named.map(|(parent, _)| parent);
+            if let (Some(named), None) = (named, parent) {
+                if !RAILS_BASES.contains(&named.trim().trim_start_matches("::")) {
+                    unresolved.insert(identity.clone());
+                }
+            }
             (identity.as_str(), parent)
         })
         .collect();
@@ -3659,10 +5534,13 @@ fn resolve_parents(
             } else {
                 raw.get(identity).copied().flatten().map(str::to_string)
             };
+            if in_cycle {
+                unresolved.insert((*identity).to_string());
+            }
             parents.insert((*identity).to_string(), parent);
         }
     }
-    parents
+    (parents, unresolved)
 }
 
 /// The chain of containers and the name of a class, joined with `.`. The key of the symbol has
@@ -3711,6 +5589,11 @@ impl Modules {
         Self(chain)
     }
 
+    /// The name of the last module of the chain.
+    fn last(&self) -> Option<&str> {
+        self.0.as_ref().map(|node| node.name.as_str())
+    }
+
     /// A number that stands for the chain in a key. The empty chain has 0.
     fn id(&self) -> usize {
         self.0.as_ref().map_or(0, |node| node.id)
@@ -3744,6 +5627,10 @@ struct ResourceDefinition {
     /// parameter.
     as_name: Option<String>,
     modules: Modules,
+    /// The `format:` option, when the call has it.
+    format: Option<Format>,
+    /// The guard text of the `constraints:` option, when it is an object.
+    constraint: Option<String>,
 }
 
 impl ResourceDefinition {
@@ -3794,3 +5681,6 @@ impl ResourceDefinition {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

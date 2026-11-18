@@ -47,6 +47,13 @@ pub struct Summary {
     pub sinks_by_category: BTreeMap<String, usize>,
     pub entry_points: usize,
     pub entry_points_by_kind: BTreeMap<String, usize>,
+    /// The entry points with a guard list that is not complete. An empty guard list of such an
+    /// entry point does not tell that it has no guard.
+    #[serde(default)]
+    pub entry_points_with_incomplete_guards: usize,
+    /// The entry points with a guard list that is not complete, by the reason.
+    #[serde(default)]
+    pub incomplete_guards_by_reason: BTreeMap<String, usize>,
     pub paths: usize,
     pub sinks_with_path: usize,
     pub sinks_with_no_known_entry: usize,
@@ -78,10 +85,19 @@ impl Report {
                 .or_insert(0) += 1;
         }
         let mut entry_points_by_kind = BTreeMap::new();
+        let mut incomplete_guards_by_reason = BTreeMap::new();
         for entry in &analysis.entry_points {
             *entry_points_by_kind
                 .entry(entry.kind.name().to_string())
                 .or_insert(0) += 1;
+            if !entry.guards_complete {
+                let reason = entry
+                    .guards_unknown_reason
+                    .map_or("not_known", |reason| reason.name());
+                *incomplete_guards_by_reason
+                    .entry(reason.to_string())
+                    .or_insert(0) += 1;
+            }
         }
         let reachability = analysis.reachability;
         let with_path: std::collections::BTreeSet<&str> = reachability
@@ -94,6 +110,8 @@ impl Report {
             sinks_by_category,
             entry_points: analysis.entry_points.len(),
             entry_points_by_kind,
+            entry_points_with_incomplete_guards: incomplete_guards_by_reason.values().sum(),
+            incomplete_guards_by_reason,
             paths: reachability.paths.len(),
             sinks_with_path: with_path.len(),
             sinks_with_no_known_entry: reachability.no_known_entry.len(),
@@ -432,6 +450,9 @@ pub fn sarif(report: &Report) -> Value {
                 "coverage": report.coverage,
                 "sinks_with_no_known_entry": report.summary.sinks_with_no_known_entry,
                 "entry_points": report.summary.entry_points,
+                "entry_points_with_incomplete_guards":
+                    report.summary.entry_points_with_incomplete_guards,
+                "incomplete_guards_by_reason": report.summary.incomplete_guards_by_reason,
                 "experimental_off": report.coverage.experimental_off,
             },
         }],
@@ -533,6 +554,24 @@ mod tests {
         assert_eq!(report.summary.sinks_with_path, 1);
         assert_eq!(report.summary.sinks_with_no_known_entry, 1);
         assert_eq!(report.summary.suppressed, 0);
+    }
+
+    #[test]
+    fn the_summary_and_the_sarif_count_the_guard_lists_that_are_not_complete() {
+        let report = report();
+        assert_eq!(report.summary.entry_points_with_incomplete_guards, 1);
+        assert_eq!(
+            report.summary.incomplete_guards_by_reason["layer_not_read"],
+            1
+        );
+        assert!(report.coverage.statement.contains("guards_complete"));
+        let value = sarif(&report);
+        let properties = &value["runs"][0]["properties"];
+        assert_eq!(properties["entry_points_with_incomplete_guards"], 1);
+        assert_eq!(
+            properties["incomplete_guards_by_reason"],
+            json!({"layer_not_read": 1})
+        );
     }
 
     #[test]

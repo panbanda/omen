@@ -262,6 +262,7 @@ pub(super) fn collect(context: &Context<'_>, _root: Node<'_>, out: &mut Vec<Draf
             guards: found.guards.clone(),
             basis: EntryBasis::Registered,
             variant: None,
+            unknown: None,
         });
     }
 }
