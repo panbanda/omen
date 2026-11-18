@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "language": "bash",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Bash. `main.sh` does not load `other.sh`. A Bash function in a function is a global function, and a Bash variable does not hide a function, thus the case has no nested function and no shadowed name. An entry point of Bash is the script and not a symbol, thus the case has no path. The harness does not run the code.",
+  "closed_world": false,
+  "references": [
+    {
+      "label": "trap_handler_by_name",
+      "user": "main.sh#start",
+      "line": 8,
+      "name": "audit",
+      "expected": ["main.sh#audit"]
+    },
+    {
+      "label": "trap_handler_in_quotation_marks",
+      "user": "main.sh#start",
+      "line": 9,
+      "name": "audit",
+      "expected": ["main.sh#audit"]
+    },
+    {
+      "label": "same_name_in_file_without_source",
+      "user": "main.sh#other_file",
+      "line": 18,
+      "name": "cleanup",
+      "expected": []
+    },
+    {
+      "label": "name_in_comment",
+      "user": "main.sh#text_only",
+      "line": 22,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "name_in_string",
+      "user": "main.sh#text_only",
+      "line": 23,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "name_as_argument_of_a_different_command",
+      "user": "main.sh#text_only",
+      "line": 24,
+      "name": "audit",
+      "expected": []
+    }
+  ]
+}

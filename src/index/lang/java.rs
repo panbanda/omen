@@ -165,6 +165,29 @@ fn collect_type_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<S
 }
 
 impl LanguageSpec for Java {
+    fn value_syntax(&self) -> crate::index::calls::ValueSyntax {
+        super::values::JAVA
+    }
+
+    fn value_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.value_syntax().position_kinds();
+        kinds.push(super::values::METHOD_REFERENCE);
+        kinds
+    }
+
+    fn value_hook_kinds(&self) -> Vec<&'static str> {
+        vec![super::values::METHOD_REFERENCE]
+    }
+
+    fn function_values<'tree>(
+        &self,
+        node: Node<'tree>,
+        context: &Context<'_, 'tree>,
+        out: &mut Vec<crate::index::calls::ValueUse<'tree>>,
+    ) {
+        super::values::java(&self.call_syntax(), node, context, out);
+    }
+
     fn block_kinds(&self) -> Vec<&'static str> {
         vec!["block"]
     }

@@ -293,7 +293,14 @@ pub enum ReferenceKind {
     Call,
     /// A call that makes an object of a type, as `new T()` does.
     Construct,
+    /// A use of a function as a value, as the argument `worker` in
+    /// `spawn(worker)` is. It is not a call: the function can run later.
+    FunctionReference,
 }
+
+/// The arity of a reference that is not a call and thus has no arguments. No
+/// definition has this number of parameters, thus the arity selects no overload.
+pub const NO_ARITY: usize = usize::MAX;
 
 /// The expression on which a call selects its callee.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
