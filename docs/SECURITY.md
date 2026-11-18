@@ -210,11 +210,11 @@ each form against the source of Rails 7.2.2.
 | A repeated option, as `to: "a#b", to: "c#d"`, or a repeated hash-rocket key | The last value wins, as in Ruby. |
 | A hash-rocket target together with `to:`, `controller:`, or `action:` | The route has no symbol and no guard. Rails lets the hash-rocket value win over `to:`, and it reads a rocket value without `#` as a controller. Omen does not model this. |
 | A target that is not a literal, as `to: TARGET`, `controller: NAME`, or `action: ACTION`, and a `to:` string with more than one `#` | The route has no symbol and no guard. The path stays. |
-| A `before_action` call with a name that is not a literal or with a block and no name, a `skip_before_action` call with a name that is not a literal, a callback call with a receiver other than `self`, `skip_callback`, `set_callback`, and `reset_callbacks` | The guards of the class, and of each class that inherits from it, are not complete, with the reason `unreadable_callback`. The guards that omen read stay in the list. |
+| A `before_action` call with a name that is not a literal, with a block and no name, or with a name and a block, a `skip_before_action` call with a name that is not a literal, a callback call with a receiver other than `self`, `skip_callback`, `set_callback`, and `reset_callbacks` | The guards of the class, and of each class that inherits from it, are not complete, with the reason `unreadable_callback`. The guards that omen read stay in the list. |
 | `around_action`, `prepend_around_action`, and `skip_around_action` | Not read. The guards of the class, and of each class that inherits from it, are not complete, with the reason `around_callback`. |
 | `append_before_action` | Read as `before_action`. |
 | `protect_from_forgery` and `skip_forgery_protection` | Read as `before_action :verify_authenticity_token` and as the skip of it, with the options `only:`, `except:`, `if:`, `unless:`, and `prepend:`. Rails 7.2.2 defines them in this way. A call of `protect_from_forgery`, `skip_forgery_protection`, or `http_basic_authenticate_with` with the constant of a class as the receiver, in any file, gives `callback_outside_class`. |
-| `http_basic_authenticate_with` | Read as a callback with the name `http_basic_authenticate_with`, with the options `only:`, `except:`, `if:`, and `unless:`. |
+| `http_basic_authenticate_with` | Read as a callback with the name `http_basic_authenticate_with`, with the options `only:`, `except:`, `if:`, and `unless:`. Rails registers a new block for each call. Thus a second call does not replace the first, and a skip by name does not remove it. |
 | A call of a class method in a class body, as `requires_plugin "chat"` | See "Class methods that register callbacks". |
 | A superclass that omen cannot find in the repository, other than `ActionController::Base`, `ActionController::API`, `ActionController::Metal`, and `AbstractController::Base` | The guards of the class, and of each class that inherits from it, are not complete, with the reason `unresolved_superclass`. |
 | A key with quotes and a colon, as `"only": :index`, `"if": :ok`, `"module": "admin"` | The key is a symbol, as in Ruby. Only a key with `=>` is a string key. |
@@ -393,7 +393,8 @@ the definition in the same file uses the definition of the superclass.
 - A body with `before_action :name` and literal options gives that callback.
 - A body with `before_action do ... end`, or with a lambda, gives a guard with the name of the
   class method. `requires_plugin` of an application with such a body gives the guard
-  `requires_plugin`.
+  `requires_plugin`. Each call of the class method registers new blocks, so two calls do not replace
+  each other. A body with `before_action(:name) { ... }` gives `name` and the block.
 - A call in a branch that omen cannot evaluate gives conditional callbacks.
 
 The guards are not complete, with the reason `unresolved_macro`, in these conditions:

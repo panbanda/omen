@@ -3114,8 +3114,9 @@ impl<'a> Context<'a> {
                             if body.gap.is_some() {
                                 gap = first_reason(gap, Some(GuardsUnknownReason::UnresolvedMacro));
                             }
+                            let site = format!("{}:{at}", self.all[*position].file);
                             own.extend(body.callbacks.iter().map(|callback| {
-                                let mut callback = callback.clone();
+                                let mut callback = callback.at_site(&site);
                                 callback.conditional |= conditional;
                                 callback
                             }));
@@ -3575,6 +3576,9 @@ impl<'a> Context<'a> {
             }
             "call" => match self.rails_callback(node, out.macro_name.as_deref()) {
                 Some(mut callback) if Self::is_own_call(node) => {
+                    if callback.unnamed_block {
+                        out.note(GuardsUnknownReason::UnreadableCallback);
+                    }
                     callback.conditional |= conditional;
                     out.list.push(Statement::Callback(callback));
                 }
@@ -3660,23 +3664,35 @@ impl<'a> Context<'a> {
         let bindings = &Bindings::default();
         let options = self.rails_options(&arguments, bindings);
         let positional = Self::rails_positional(&arguments);
-        let has_block = call.child_by_field_name("block").is_some()
-            || matches!(positional.as_slice(), [one] if one.kind() == "lambda");
+        let call_block = call.child_by_field_name("block").is_some();
+        let has_block =
+            call_block || matches!(positional.as_slice(), [one] if one.kind() == "lambda");
+        let block_key =
+            |name: &str| format!("{name}{BLOCK_MARK}{}:{}", self.file.file, call.start_byte());
+        let mut unnamed_block = false;
         let names = match (fixed, anonymous) {
+            (Some("http_basic_authenticate_with"), _) if positional.is_empty() => {
+                vec![block_key(method)]
+            }
             (Some(fixed), _) if positional.is_empty() => vec![fixed.to_string()],
             (Some(_), _) => return None,
-            // A callback with a block and no name is a guard. In a class method, it gets the
-            // name of the method. In a class body, omen cannot name it.
+            // A callback with a block is a guard. In a class method, the block gets the name of
+            // the method. In a class body, omen cannot name it.
             (None, Some(anonymous)) if !skip && has_block && positional.len() <= 1 => {
-                if positional.len() == 1 && positional[0].kind() != "lambda" {
-                    return None;
+                match positional.first() {
+                    Some(named) if named.kind() != "lambda" => {
+                        vec![self.rails_literal(*named, bindings)?, block_key(anonymous)]
+                    }
+                    _ => vec![block_key(anonymous)],
                 }
-                vec![anonymous.to_string()]
             }
-            _ => positional
-                .into_iter()
-                .map(|argument| self.rails_literal(argument, bindings))
-                .collect::<Option<Vec<String>>>()?,
+            _ => {
+                unnamed_block = !skip && call_block;
+                positional
+                    .into_iter()
+                    .map(|argument| self.rails_literal(argument, bindings))
+                    .collect::<Option<Vec<String>>>()?
+            }
         };
         if !skip && names.is_empty() {
             return None;
@@ -3719,9 +3735,15 @@ impl<'a> Context<'a> {
             unreadable,
             conditional,
             prepend,
+            unnamed_block,
         })
     }
 }
+
+/// Separates the name of a block callback from the place of the call that registers it. Rails
+/// registers a new callback for each block, so two blocks with one name do not replace each other.
+/// A guard text has only the part before the mark.
+const BLOCK_MARK: char = '\u{1f}';
 
 #[derive(Clone)]
 struct Callback {
@@ -3738,9 +3760,40 @@ struct Callback {
     conditional: bool,
     /// A `prepend: true` option, or a `prepend_before_action` call. The callback goes to the front.
     prepend: bool,
+    /// The call has a block next to its names. Rails registers the block too, and omen cannot name it.
+    unnamed_block: bool,
 }
 
 impl Callback {
+    /// The callback of a call of a class method at `site`. Each call registers new blocks, so the
+    /// key of a block name gets the place of the call.
+    fn at_site(&self, site: &str) -> Self {
+        if !self.names.iter().any(|name| name.contains(BLOCK_MARK)) {
+            return self.clone();
+        }
+        let names: Vec<String> = self
+            .names
+            .iter()
+            .map(|name| {
+                if name.contains(BLOCK_MARK) {
+                    format!("{name}@{site}")
+                } else {
+                    name.clone()
+                }
+            })
+            .collect();
+        let places = names
+            .iter()
+            .enumerate()
+            .map(|(place, name)| (name.clone(), place))
+            .collect();
+        Self {
+            names,
+            places,
+            ..self.clone()
+        }
+    }
+
     /// A callback call with one name and no option.
     fn named(name: &str, skip: bool, conditional: bool) -> Self {
         Self {
@@ -3752,6 +3805,7 @@ impl Callback {
             unreadable: false,
             conditional,
             prepend: false,
+            unnamed_block: false,
         }
     }
 
@@ -3817,7 +3871,11 @@ fn ordered_names(slots: &PersistentMap<String, Slot>) -> Vec<String> {
     order_slots(&mut ordered);
     ordered
         .iter()
-        .map(|(name, _)| (*name).to_string())
+        .map(|(name, _)| {
+            name.split_once(BLOCK_MARK)
+                .map_or(*name, |(text, _)| text)
+                .to_string()
+        })
         .collect()
 }
 

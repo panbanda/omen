@@ -1248,6 +1248,59 @@ fn a_class_method_call_uses_the_definition_that_exists_at_the_call() {
 }
 
 #[test]
+fn each_callback_block_is_a_separate_callback() {
+    for (body, index, show) in [
+        (
+            "http_basic_authenticate_with name: \"a\", password: \"b\", only: :index\n  http_basic_authenticate_with name: \"c\", password: \"d\", only: :show",
+            "[base, http_basic_authenticate_with] complete",
+            "[base, http_basic_authenticate_with] complete",
+        ),
+        (
+            "requires_plugin \"a\"\n  requires_plugin \"b\" if ENV[\"X\"]",
+            "[base, requires_plugin] conditional_callback",
+            "[base, requires_plugin] conditional_callback",
+        ),
+        (
+            "http_basic_authenticate_with name: \"a\", password: \"b\"\n  skip_before_action :http_basic_authenticate_with",
+            "[base, http_basic_authenticate_with] complete",
+            "[base, http_basic_authenticate_with] complete",
+        ),
+    ] {
+        assert_eq!(
+            macro_rows(MACRO_BASE, body),
+            [format!("/index {index}"), format!("/show {show}")],
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_callback_with_a_name_and_a_block_registers_both() {
+    assert_eq!(
+        macro_rows(MACRO_BASE, "before_action(:check) { check_region }"),
+        [
+            "/index [base, check] unreadable_callback",
+            "/show [base, check] unreadable_callback"
+        ]
+    );
+    let base = "class ApplicationController\n  before_action :base\n  def self.guarded\n    before_action(:check) { check_region }\n  end\nend\n";
+    assert_eq!(
+        macro_rows(base, "guarded"),
+        [
+            "/index [base, check, guarded] complete",
+            "/show [base, check, guarded] complete"
+        ]
+    );
+    assert_eq!(
+        macro_rows(MACRO_BASE, "before_action :check"),
+        [
+            "/index [base, check] complete",
+            "/show [base, check] complete"
+        ]
+    );
+}
+
+#[test]
 fn a_call_with_the_receiver_self_is_a_call_of_the_class() {
     for (body, index, show) in [
         (
