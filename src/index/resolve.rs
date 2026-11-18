@@ -3466,6 +3466,7 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod false_edge_tests {
     use super::testing::rows;
+    use crate::index::timing::assert_scales_linearly;
 
     /// The rows of the calls of `name`.
     fn rows_of(files: &[(&str, &str)], file: &str, name: &str) -> Vec<String> {
@@ -3782,7 +3783,7 @@ mod false_edge_tests {
         source.push_str(&"    a::f();\n".repeat(calls));
         source.push_str("}\n");
         let files = [("a.rs", source.as_str())];
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
@@ -3803,35 +3804,16 @@ mod false_edge_tests {
         calls_into_twin_modules_resolve_at(20, 20, 20);
     }
 
-    /// The best time of two runs at `size` and at `2 * size` of the parameter
-    /// that `run` grows.
-    fn assert_doubles_at_most(
-        label: &str,
-        size: usize,
-        run: impl Fn(usize) -> std::time::Duration,
-    ) {
-        let best = |size: usize| (0..2).map(|_| run(size)).min().expect("two runs");
-        let small = best(size);
-        let large = best(size * 2);
-        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
-        assert!(
-            large < allowed,
-            "{label}: {small:?} at {size}, {large:?} at {}",
-            size * 2
-        );
-        assert!(large.as_secs() < 60, "{label}: {large:?}");
-    }
-
     /// Each call has an edge to each module, thus the edges are
     /// `calls * modules`. The time must grow with the edges, also when the
     /// modules have many members.
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_calls_into_twin_modules_resolve_in_linear_time() {
-        assert_doubles_at_most("modules", 800, |size| {
+        assert_scales_linearly("modules", 800, |size| {
             calls_into_twin_modules_resolve_at(size, 10, 800)
         });
-        assert_doubles_at_most("members", 10_000, |size| {
+        assert_scales_linearly("members", 10_000, |size| {
             calls_into_twin_modules_resolve_at(20, size, 2_000)
         });
     }
@@ -3857,7 +3839,7 @@ mod false_edge_tests {
         }
         source.push_str("}\n");
         let files = [("a.rs", source.as_str())];
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
@@ -3884,7 +3866,7 @@ mod false_edge_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_calls_of_many_names_into_twin_modules_resolve_in_linear_time() {
-        assert_doubles_at_most("modules", 400, |size| {
+        assert_scales_linearly("modules", 400, |size| {
             calls_of_many_names_into_twin_modules_resolve_at(size, 400)
         });
     }
@@ -3907,7 +3889,7 @@ mod false_edge_tests {
             "}}\n\n#[cfg(not(any({features})))]\nimpl Engine {{\n    fn step(&self) {{}}\n}}\n"
         ));
         let files = [("a.rs", source.as_str())];
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
@@ -3933,22 +3915,7 @@ mod false_edge_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_methods_under_a_long_condition_resolve_in_linear_time() {
-        let size = 8_000;
-        let best = |size: usize| {
-            (0..2)
-                .map(|_| methods_under_a_long_condition_resolve_at(size))
-                .min()
-                .expect("two runs")
-        };
-        let small = best(size);
-        let large = best(size * 2);
-        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
-        assert!(
-            large < allowed,
-            "{small:?} at {size} methods, {large:?} at {} methods",
-            size * 2
-        );
-        assert!(large.as_secs() < 60, "{large:?}");
+        assert_scales_linearly("methods", 8_000, methods_under_a_long_condition_resolve_at);
     }
 
     #[test]
@@ -4218,7 +4185,7 @@ mod false_edge_tests {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
@@ -4240,22 +4207,7 @@ mod false_edge_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_calls_between_the_crates_of_a_workspace_resolve_in_linear_time() {
-        let size = 1_500;
-        let best = |size: usize| {
-            (0..2)
-                .map(|_| workspace_crates_resolve_at(size))
-                .min()
-                .expect("two runs")
-        };
-        let small = best(size);
-        let large = best(size * 2);
-        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
-        assert!(
-            large < allowed,
-            "{small:?} at {size} crates, {large:?} at {} crates",
-            size * 2
-        );
-        assert!(large.as_secs() < 60, "{large:?}");
+        assert_scales_linearly("crates", 1_500, workspace_crates_resolve_at);
     }
 
     /// Two modules of one file can import one type. The type is one type.

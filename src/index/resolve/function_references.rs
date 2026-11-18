@@ -2,6 +2,7 @@
 //! not in the call references.
 
 use super::testing::{function_reference_rows as rows, rows as call_rows};
+use crate::index::timing::assert_scales_linearly;
 
 #[test]
 fn test_python_callback_by_name_is_a_function_reference() {
@@ -252,7 +253,7 @@ fn one_parameter_name_in_many_functions_at(size: usize) -> std::time::Duration {
             "def step_{position}(pool):\n    pool.submit(1)\n\n\n"
         ));
     }
-    let started = std::time::Instant::now();
+    let started = crate::index::timing::Stopwatch::start();
     let found = call_rows(&[("a.py", &source)], "a.py");
     let elapsed = started.elapsed();
     assert_eq!(found.len(), size);
@@ -288,7 +289,7 @@ fn chain_of_import_names_at(size: usize) -> std::time::Duration {
     let other = format!("def name_{size}():\n    pass\n");
     let files = [("a.py", source.as_str()), ("b.py", other.as_str())];
     let mut facts = crate::index::imports::testing::index(&files);
-    let started = std::time::Instant::now();
+    let started = crate::index::timing::Stopwatch::start();
     super::drop_values_that_name_no_function(&mut facts);
     let elapsed = started.elapsed();
     assert_eq!(facts[0].value_sites.len(), 1);
@@ -306,23 +307,6 @@ fn timing_chain_of_import_names_scales_linearly() {
     assert_scales_linearly("chain of import names", 20_000, chain_of_import_names_at);
 }
 
-/// Runs a timing case at `size` and at twice that size, and checks that the
-/// time grows in proportion to the size. A quadratic search takes four times
-/// as long for twice the input. The check uses the best of two runs for each
-/// size, and a floor for a time that is too short to compare.
-fn assert_scales_linearly(label: &str, size: usize, run: impl Fn(usize) -> std::time::Duration) {
-    let best = |size: usize| (0..2).map(|_| run(size)).min().expect("two runs");
-    let small = best(size);
-    let large = best(size * 2);
-    let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
-    assert!(
-        large < allowed,
-        "{label}: {small:?} at {size}, {large:?} at {}",
-        size * 2
-    );
-    assert!(large.as_secs() < 60, "{label}: {large:?}");
-}
-
 /// One function uses `size` functions as values. With `one_name`, each use
 /// names the same function, and the function has `size` local names also.
 fn many_function_references_at(size: usize, one_name: bool) -> std::time::Duration {
@@ -337,7 +321,7 @@ fn many_function_references_at(size: usize, one_name: bool) -> std::time::Durati
             "    local_{position} = pool.submit(task_{name})\n"
         ));
     }
-    let started = std::time::Instant::now();
+    let started = crate::index::timing::Stopwatch::start();
     let found = rows(&[("a.py", &source)], "a.py");
     let elapsed = started.elapsed();
     assert_eq!(found.len(), size);
@@ -382,7 +366,7 @@ fn chain_of_callbacks_at(size: usize) -> std::time::Duration {
         ));
     }
     source.push_str(&format!("def step_{size}(pool):\n    eval(pool.code)\n"));
-    let started = std::time::Instant::now();
+    let started = crate::index::timing::Stopwatch::start();
     let analysis = crate::index::security::analysis::analyze_sources(
         &[("app.py", &source)],
         crate::index::view::DEFAULT_MIN_BASIS,

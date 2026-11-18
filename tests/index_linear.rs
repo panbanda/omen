@@ -8,6 +8,11 @@ use std::time::Duration;
 use omen::analyzers::cohesion::{Analysis, Analyzer};
 use omen::index::build::CodeIndex;
 
+/// The shared timing check of the unit tests.
+#[allow(dead_code)]
+#[path = "../src/index/timing.rs"]
+mod timing;
+
 fn build(file: &str, source: &str) -> CodeIndex {
     let read = |path: &Path| {
         if path == Path::new(file) {
@@ -342,28 +347,25 @@ fn test_same_name_definitions_get_distinct_keys() {
     }
 }
 
-/// The time to build the index of one file with `size` definitions of one name.
+/// The processor time to build the index of one file with `size` definitions
+/// of one name.
 fn same_name_build(file: &str, size: usize) -> Duration {
     let source = same_name_definitions(size)
         .into_iter()
         .find(|(name, _)| *name == file)
         .map(|(_, source)| source)
         .expect("a language");
-    timed_build(file, &source)
+    let started = timing::Stopwatch::start();
+    let index = build(file, &source);
+    let elapsed = started.elapsed();
+    drop(index);
+    elapsed
 }
 
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_same_name_definitions_are_linear() {
-    let floor = Duration::from_millis(100);
-    let mut slow = Vec::new();
     for (file, _) in same_name_definitions(0) {
-        let small = same_name_build(file, 10_000);
-        let large = same_name_build(file, 20_000);
-        eprintln!("{file}: 10000 {small:?}, 20000 {large:?}");
-        if large >= 3 * small.max(floor) {
-            slow.push(format!("{file}: {small:?}, then {large:?}"));
-        }
+        timing::assert_scales_linearly(file, 10_000, |size| same_name_build(file, size));
     }
-    assert!(slow.is_empty(), "{}", slow.join("\n"));
 }

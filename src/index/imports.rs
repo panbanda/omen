@@ -1388,7 +1388,7 @@ mod tests {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let facts = super::testing::index(&files);
         let elapsed = started.elapsed();
         let shared = facts
@@ -1413,21 +1413,8 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_imports_of_a_module_of_many_roots_resolve_in_linear_time() {
-        let size = 2_000;
-        let best = |size: usize| {
-            (0..2)
-                .map(|_| imports_of_a_module_of_many_roots_resolve_at(size, size))
-                .min()
-                .expect("two runs")
-        };
-        let small = best(size);
-        let large = best(size * 2);
-        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
-        assert!(
-            large < allowed,
-            "{small:?} at {size}, {large:?} at {}",
-            size * 2
-        );
-        assert!(large.as_secs() < 60, "{large:?}");
+        crate::index::timing::assert_scales_linearly("roots", 2_000, |size| {
+            imports_of_a_module_of_many_roots_resolve_at(size, size)
+        });
     }
 }
