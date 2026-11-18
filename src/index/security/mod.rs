@@ -1096,6 +1096,65 @@ mod tests {
     }
 
     #[test]
+    fn a_tls_property_in_any_object_literal_is_a_sink_ecma() {
+        let source = "import https from \"node:https\";\nimport { Pool } from \"pg\";\n\nexport function run(url: string, allow: boolean, options: { rejectUnauthorized?: boolean }) {\n  https.request(url, { rejectUnauthorized: false });\n  new Pool({ ssl: { rejectUnauthorized: false } });\n  const tls = { host: url, rejectUnauthorized: !allow };\n  const safe = { rejectUnauthorized: true };\n  const { rejectUnauthorized } = options;\n  const quoted = { \"rejectUnauthorized\": false };\n  const text = \"rejectUnauthorized: false\";\n  // rejectUnauthorized: false\n  const env = { NODE_TLS_REJECT_UNAUTHORIZED: \"0\" };\n  return [tls, safe, rejectUnauthorized, quoted, text, env];\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [
+                (5, "tls_verification_disabled", true),
+                (6, "tls_verification_disabled", true),
+                (7, "tls_verification_disabled", false),
+                (10, "tls_verification_disabled", true),
+                (13, "tls_verification_disabled", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_text_of_a_tls_property_has_only_names_ecma() {
+        let source = "export function run(options) {\n  return [\n    { rejectUnauthorized: options.verify },\n    { rejectUnauthorized: options.ssl as boolean },\n    { rejectUnauthorized: check(\"key\") },\n    { rejectUnauthorized: false },\n  ];\n}\n";
+        let texts: Vec<String> = sinks(Language::TypeScript, &[("a.ts", source)])
+            .into_iter()
+            .map(|sink| sink.callee_text)
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "rejectUnauthorized: options.verify",
+                "rejectUnauthorized: <expression>",
+                "rejectUnauthorized: <expression>",
+                "rejectUnauthorized: false",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tls_property_for_a_repository_function_is_not_a_sink_ecma() {
+        let helpers = "export function request(options) {\n  return options;\n}\n";
+        let main = "import { request } from \"./helpers\";\n\nexport function run() {\n  request({ rejectUnauthorized: false });\n}\n";
+        assert_eq!(
+            found(
+                Language::TypeScript,
+                &[("helpers.ts", helpers), ("main.ts", main)]
+            ),
+            []
+        );
+    }
+
+    #[test]
+    fn the_environment_variable_that_turns_off_tls_checks_is_a_sink_ecma() {
+        let source = "export function run(value: string) {\n  process.env.NODE_TLS_REJECT_UNAUTHORIZED = \"0\";\n  process.env[\"NODE_TLS_REJECT_UNAUTHORIZED\"] = \"0\";\n  process.env.NODE_TLS_REJECT_UNAUTHORIZED = value;\n  process.env.NODE_TLS_REJECT_UNAUTHORIZED = \"1\";\n  settings.NODE_TLS_REJECT_UNAUTHORIZED = \"0\";\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [
+                (2, "tls_verification_disabled", true),
+                (3, "tls_verification_disabled", true),
+                (4, "tls_verification_disabled", false),
+            ]
+        );
+    }
+
+    #[test]
     fn a_trusted_html_string_is_unsafe_html_output_csharp_and_rust() {
         let csharp = "using Microsoft.AspNetCore.Html;\n\npublic class A {\n    public object Run(string text) {\n        new HtmlString(text);\n        return new HtmlString(\"<br>\");\n    }\n}\n";
         assert_eq!(

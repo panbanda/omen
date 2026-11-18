@@ -123,6 +123,15 @@ pub enum Target {
     /// gets the assigned value as its only argument.
     MemberAssignment {
         names: &'static str,
+        /// The receiver, as the source writes it, such as `process.env`. Empty means any.
+        receiver: &'static str,
+    },
+    /// A property of an object literal with one of the keys. The callee that gets the object
+    /// is not known, thus only the key gives the evidence. The predicate gets the value of the
+    /// property as its only argument. An object that is an argument of a call that a row
+    /// names, or of a repository function, is not read again.
+    ObjectProperty {
+        keys: &'static str,
     },
     /// A JSX attribute with the name. The value is the property `key` of the object in the
     /// attribute, or the whole expression of the attribute when it has no such property.
@@ -461,11 +470,47 @@ pub const SPECS: &[SinkSpec] = &[
             disabled: &["false"],
         },
     ),
+    // The key is an option of the TLS client of Node. Libraries give it to that client.
+    SinkSpec {
+        category: TlsVerificationDisabled,
+        languages: ECMA,
+        target: Target::ObjectProperty {
+            keys: "rejectUnauthorized",
+        },
+        predicate: Predicate::ArgSetting {
+            index: 0,
+            disabled: &["false"],
+        },
+    },
+    SinkSpec {
+        category: TlsVerificationDisabled,
+        languages: ECMA,
+        target: Target::ObjectProperty {
+            keys: "NODE_TLS_REJECT_UNAUTHORIZED",
+        },
+        predicate: Predicate::ArgSetting {
+            index: 0,
+            disabled: &["0"],
+        },
+    },
+    SinkSpec {
+        category: TlsVerificationDisabled,
+        languages: ECMA,
+        target: Target::MemberAssignment {
+            names: "NODE_TLS_REJECT_UNAUTHORIZED",
+            receiver: "process.env",
+        },
+        predicate: Predicate::ArgSetting {
+            index: 0,
+            disabled: &["0"],
+        },
+    },
     SinkSpec {
         category: UnsafeHtmlOutput,
         languages: ECMA,
         target: Target::MemberAssignment {
             names: "innerHTML|outerHTML",
+            receiver: "",
         },
         predicate: Always,
     },
@@ -990,6 +1035,8 @@ pub struct LanguageSyntax {
     pub keyed_kinds: &'static [&'static str],
     /// The node kinds of an assignment to a member.
     pub assignment_kinds: &'static [&'static str],
+    /// The node kinds of a property of an object literal.
+    pub property_kinds: &'static [&'static str],
     /// The node kinds of an attribute of a markup element, such as a JSX attribute.
     pub attribute_kinds: &'static [&'static str],
     /// The node kind of a block that the language marks as unsafe.
@@ -1012,6 +1059,7 @@ pub fn syntax_of(language: Language) -> LanguageSyntax {
         keyed_kinds: &[],
         assignment_kinds: &[],
         attribute_kinds: &[],
+        property_kinds: &[],
         unsafe_kinds: &[],
         implicit_modules: &[],
         global_namespace: false,
@@ -1028,6 +1076,7 @@ pub fn syntax_of(language: Language) -> LanguageSyntax {
                 string_kinds: &["string", "template_string"],
                 assignment_kinds: &["assignment_expression", "augmented_assignment_expression"],
                 attribute_kinds: &["jsx_attribute"],
+                property_kinds: &["pair"],
                 ..base
             }
         }

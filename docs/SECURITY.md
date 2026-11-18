@@ -71,6 +71,22 @@ of PHP and C. A Java hostname verifier and a C# validation callback are not sett
 verifier or a callback that is not a constant is usually a real check, thus omen reports only
 a verifier or a callback that always accepts.
 
+In Node, the property `rejectUnauthorized` is a sink in each object literal, also when omen
+does not know the function that gets the object. The key is an option of the TLS client of
+Node, and libraries such as `pg`, `nodemailer`, and `ioredis` give it to that client. Omen
+limits the rule in these ways:
+
+- Only a property of an object literal counts. A type, a class field, a destructured name,
+  a string, and a comment are not properties of an object literal.
+- The key must be exactly `rejectUnauthorized`, with or without quotation marks.
+- An object that is an argument of a call of `https` or `tls` gives one sink, at the call.
+- An object that is an argument of a repository function gives no sink.
+
+The value `"0"` for `NODE_TLS_REJECT_UNAUTHORIZED` turns off the check for each TLS
+connection of the process. An assignment to `process.env.NODE_TLS_REJECT_UNAUTHORIZED` and a
+property with this key in an object literal are sinks. A value that is not a literal is a sink
+with `constant_argument: false`.
+
 A sink of the category `unsafe_html_output` marks a string as safe HTML. The template or the
 page then does not escape the string. These are the sinks:
 

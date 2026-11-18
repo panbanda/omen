@@ -281,8 +281,8 @@ pub(super) fn file_sinks(
         call_kinds: language_spec(language).call_syntax().call_kinds(),
     };
     let mut sinks = Vec::new();
-    context.reference_sinks(&mut sinks);
-    context.tree_sinks(parsed.root_node(), &mut sinks);
+    let covered = context.reference_sinks(&mut sinks);
+    context.tree_sinks(parsed.root_node(), &mut sinks, &covered);
     sinks.sort_by_key(|sink| (sink.range.start_byte, sink.category));
     sinks.dedup_by_key(|sink| (sink.range.start_byte, sink.category));
     sinks
@@ -604,7 +604,11 @@ impl FileContext<'_> {
         None
     }
 
-    fn reference_sinks(&self, sinks: &mut Vec<Sink>) {
+    /// Pushes the sinks of the calls. The result has the start bytes of the object literals
+    /// that are arguments of a call that a row names. The matcher does not read their
+    /// properties again.
+    fn reference_sinks(&self, sinks: &mut Vec<Sink>) -> HashSet<usize> {
+        let mut covered = HashSet::new();
         let root = self.parsed.root_node();
         let rows: Vec<&SinkSpec> = self
             .specs
@@ -674,6 +678,17 @@ impl FileContext<'_> {
                 .and_then(|(start, end)| root.descendant_for_byte_range(start, end))
                 .into_iter()
                 .collect();
+            let cover = |covered: &mut HashSet<usize>| {
+                covered.extend(
+                    call_arguments
+                        .iter()
+                        .filter(|argument| argument.kind() == "object")
+                        .map(|argument| argument.start_byte()),
+                );
+            };
+            if matches!(owner, Owner::Repository) || self.resolver_selected_repository(reference) {
+                cover(&mut covered);
+            }
             for spec in named {
                 let arguments = if spec.predicate == Predicate::Receiver {
                     &receiver
@@ -737,8 +752,10 @@ impl FileContext<'_> {
                 );
                 sink.target = target;
                 sinks.push(sink);
+                cover(&mut covered);
             }
         }
+        covered
     }
 
     /// The function that a bare name holds when a `const` declaration binds the name to
@@ -888,7 +905,7 @@ impl FileContext<'_> {
     }
 
     /// Walks the tree for the sinks that are not calls.
-    fn tree_sinks(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
+    fn tree_sinks(&self, node: Node<'_>, sinks: &mut Vec<Sink>, covered: &HashSet<usize>) {
         let kind = node.kind();
         if self.syntax.string_kinds.contains(&kind) {
             let literal = syntax::text(node, self.source);
@@ -933,9 +950,12 @@ impl FileContext<'_> {
         if self.syntax.attribute_kinds.contains(&kind) {
             self.attribute(node, sinks);
         }
+        if self.syntax.property_kinds.contains(&kind) {
+            self.object_property(node, sinks, covered);
+        }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.tree_sinks(child, sinks);
+            self.tree_sinks(child, sinks, covered);
         }
     }
 
@@ -1048,18 +1068,33 @@ impl FileContext<'_> {
         ) else {
             return;
         };
-        let Some(property) = left
-            .child_by_field_name("property")
-            .filter(|_| left.kind() == "member_expression")
-        else {
+        // `a.b = c` and `a["b"] = c`.
+        let (object, member) = match left.kind() {
+            "member_expression" => (
+                left.child_by_field_name("object"),
+                left.child_by_field_name("property")
+                    .map(|property| syntax::text(property, self.source)),
+            ),
+            "subscript_expression" => (
+                left.child_by_field_name("object"),
+                left.child_by_field_name("index")
+                    .filter(|index| index.kind() == "string" && syntax::is_literal(*index))
+                    .map(|index| syntax::unquote(syntax::text(index, self.source))),
+            ),
+            _ => return,
+        };
+        let (Some(object), Some(member)) = (object, member) else {
             return;
         };
-        let member = syntax::text(property, self.source);
+        let object_text: String = syntax::text(object, self.source)
+            .split_whitespace()
+            .collect();
         for spec in &self.specs {
-            let Target::MemberAssignment { names } = spec.target else {
+            let Target::MemberAssignment { names, receiver } = spec.target else {
                 continue;
             };
             if !names.split('|').any(|name| name == member)
+                || (!receiver.is_empty() && object_text != receiver)
                 || !syntax::holds(&spec.predicate, &[right], self.source, &self.syntax)
             {
                 continue;
@@ -1079,6 +1114,59 @@ impl FileContext<'_> {
                 &callee_text,
                 SinkBasis::NameOnly,
                 self.is_constant(&spec.predicate, &[right]),
+            ));
+        }
+    }
+
+    /// Reports a property of an object literal that a row names, unless the object is an
+    /// argument of a call that the call rows read.
+    fn object_property(&self, node: Node<'_>, sinks: &mut Vec<Sink>, covered: &HashSet<usize>) {
+        let Some(object) = node.parent().filter(|parent| parent.kind() == "object") else {
+            return;
+        };
+        if covered.contains(&object.start_byte()) {
+            return;
+        }
+        let (Some(key), Some(value)) = (
+            node.child_by_field_name("key"),
+            node.child_by_field_name("value"),
+        ) else {
+            return;
+        };
+        let written = match key.kind() {
+            "property_identifier" => syntax::text(key, self.source),
+            "string" if syntax::is_literal(key) => syntax::unquote(syntax::text(key, self.source)),
+            _ => return,
+        };
+        for spec in &self.specs {
+            let Target::ObjectProperty { keys } = spec.target else {
+                continue;
+            };
+            if !keys.split('|').any(|wanted| wanted == written)
+                || !syntax::holds(&spec.predicate, &[value], self.source, &self.syntax)
+            {
+                continue;
+            }
+            // A value can hold a literal, and a literal can be a secret.
+            let value_text: String = syntax::text(value, self.source)
+                .split_whitespace()
+                .collect();
+            let is_name = matches!(
+                value.kind(),
+                "identifier" | "member_expression" | "true" | "false"
+            );
+            let shown = if is_name && chain_segments(&value_text).is_some() {
+                value_text
+            } else {
+                "<expression>".to_string()
+            };
+            sinks.push(self.sink(
+                spec.category,
+                Span::of(&node),
+                self.enclosing_key(node.start_byte()),
+                &format!("{written}: {shown}"),
+                SinkBasis::NameOnly,
+                self.is_constant(&spec.predicate, &[value]),
             ));
         }
     }

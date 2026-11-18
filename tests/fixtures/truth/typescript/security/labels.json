@@ -83,6 +83,11 @@
     {"label": "command_execution.safe_variant.spawn_without_shell", "category": "command_execution", "scenario": "safe_variant", "file": "shell.ts", "line": 10, "flagged": false},
     {"label": "code_evaluation.real_call.vm_script", "category": "code_evaluation", "scenario": "real_call", "file": "vm.ts", "line": 5, "basis": "imported_symbol", "constant_argument": false},
     {"label": "code_evaluation.real_call.vm_namespace_script", "category": "code_evaluation", "scenario": "real_call", "file": "vm.ts", "line": 6, "basis": "imported_symbol"},
-    {"label": "code_evaluation.safe_variant.create_context", "category": "code_evaluation", "scenario": "safe_variant", "file": "vm.ts", "line": 7, "flagged": false}
+    {"label": "code_evaluation.safe_variant.create_context", "category": "code_evaluation", "scenario": "safe_variant", "file": "vm.ts", "line": 7, "flagged": false},
+    {"label": "tls_verification_disabled.real_call.nested_property", "category": "tls_verification_disabled", "scenario": "real_call", "file": "tls_property.ts", "line": 4, "basis": "name_only", "constant_argument": true},
+    {"label": "tls_verification_disabled.real_call.setting_property", "category": "tls_verification_disabled", "scenario": "real_call", "file": "tls_property.ts", "line": 5, "basis": "name_only", "constant_argument": false},
+    {"label": "tls_verification_disabled.safe_variant.true_property", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_property.ts", "line": 6, "flagged": false},
+    {"label": "tls_verification_disabled.safe_variant.destructured", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_property.ts", "line": 7, "flagged": false},
+    {"label": "tls_verification_disabled.real_call.environment", "category": "tls_verification_disabled", "scenario": "real_call", "file": "tls_property.ts", "line": 8, "basis": "name_only", "constant_argument": true}
   ]
 }
