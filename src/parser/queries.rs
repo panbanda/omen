@@ -171,7 +171,16 @@ fn named_children_of_kind<'tree>(
 /// Get nesting node types for cognitive complexity.
 pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
-        Language::Ruby => &["if", "unless", "while", "until", "for", "case", "rescue"],
+        Language::Ruby => &[
+            "if",
+            "unless",
+            "while",
+            "until",
+            "for",
+            "case",
+            "case_match",
+            "rescue",
+        ],
         Language::Go => &[
             "if_statement",
             "for_statement",
@@ -185,6 +194,7 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
             "while_statement",
             "with_statement",
             "except_clause",
+            "match_statement",
         ],
         Language::Rust => &[
             "if_expression",
@@ -202,12 +212,22 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
             "switch_statement",
             "catch_clause",
         ],
-        Language::Java | Language::CSharp => &[
+        Language::Java => &[
             "if_statement",
             "for_statement",
             "enhanced_for_statement",
             "while_statement",
             "do_statement",
+            "switch_expression",
+            "catch_clause",
+        ],
+        Language::CSharp => &[
+            "if_statement",
+            "for_statement",
+            "enhanced_for_statement",
+            "while_statement",
+            "do_statement",
+            "switch_statement",
             "switch_expression",
             "catch_clause",
         ],
@@ -233,6 +253,7 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
             "while_statement",
             "do_statement",
             "switch_statement",
+            "match_expression",
             "catch_clause",
         ],
         Language::Bash => &[
@@ -255,7 +276,7 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
 pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
         // Ruby, Python, C#, C, and C++ have no `break` or `continue` to a label.
-        Language::Ruby => &["elsif", "else", "when"],
+        Language::Ruby => &["elsif", "else"],
         Language::Python => &["else_clause", "elif_clause"],
         // Go keeps the `else` body in the `alternative` field of `if_statement`.
         Language::Go => &["break_statement", "continue_statement", "goto_statement"],
@@ -265,15 +286,12 @@ pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
             "break_expression",
             "continue_expression",
         ],
-        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => &[
-            "else_clause",
-            "switch_case",
-            "break_statement",
-            "continue_statement",
-        ],
+        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
+            &["else_clause", "break_statement", "continue_statement"]
+        }
         Language::Java => &["break_statement", "continue_statement"],
         Language::CSharp => &["goto_statement"],
-        Language::C | Language::Cpp => &["else_clause", "case_statement", "goto_statement"],
+        Language::C | Language::Cpp => &["else_clause", "goto_statement"],
         Language::Php => &[
             "else_clause",
             "else_if_clause",

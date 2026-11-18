@@ -592,6 +592,15 @@ fn chain_branch(
     }
 }
 
+/// Whether the node is the `else` of a Ruby `case`. The `case` adds 1 for
+/// all of its branches, and Ruby uses one `else` kind for `if` and `case`.
+fn is_else_of_case(node: &tree_sitter::Node<'_>) -> bool {
+    node.kind() == "else"
+        && node
+            .parent()
+            .is_some_and(|parent| matches!(parent.kind(), "case" | "case_match"))
+}
+
 /// Whether the node is a `break` or `continue` that does not go to a label.
 /// SonarSource counts only a jump to a label. PHP `break 2` leaves two loops,
 /// as a jump to a label does. A Rust `break value` is not a label.
@@ -690,7 +699,7 @@ fn calculate_cognitive_complexity(
             }
         } else if current.is_named() && flat_types.contains(&kind) {
             // Flat constructs: +1 only, NO nesting penalty per SonarSource spec
-            if !is_jump_without_label(&current, source, lang) {
+            if !is_jump_without_label(&current, source, lang) && !is_else_of_case(&current) {
                 complexity += 1;
             }
             // Children stay at same depth
@@ -2000,6 +2009,48 @@ fn drain(v: &mut Vec<i32>) {
     /// McCabe gives one decision point for each case that is not the
     /// default, and none for the `switch` node, so the cyclomatic
     /// complexity is 1 + 2 = 3.
+    /// SonarSource adds 1 and the nesting for the whole `switch`, `match`, or
+    /// `case`, and nothing for each case. Each probe has a switch of three
+    /// branches in an `if`: 1 for the `if` and 1 + 1 for the switch.
+    #[test]
+    fn test_cognitive_switch_counts_once() {
+        let cases: &[(Language, &str, &str)] = &[
+            (Language::TypeScript, "a.ts", "function f(c, x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } }"),
+            (Language::JavaScript, "a.js", "function f(c, x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } }"),
+            (Language::Tsx, "a.tsx", "function f(c, x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } }"),
+            (Language::Java, "A.java", "class A { void f(boolean c, int x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } } }"),
+            (Language::Java, "A.java", "class A { void f(boolean c, int x) { if (c) { switch (x) { case 0 -> g(); case 1 -> g(); default -> g(); } } } }"),
+            (Language::Java, "A.java", "class A { int f(boolean c, int x) { if (c) { return switch (x) { case 0 -> 1; case 1 -> 2; default -> 3; }; } return 0; } }"),
+            (Language::CSharp, "A.cs", "class A { void F(bool c, int x) { if (c) { switch (x) { case 0: G(); break; case 1: G(); break; default: G(); break; } } } }"),
+            (Language::CSharp, "A.cs", "class A { int F(bool c, int x) { if (c) { return x switch { 0 => 1, 1 => 2, _ => 3 }; } return 0; } }"),
+            (Language::C, "a.c", "void f(int c, int x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } }"),
+            (Language::Cpp, "a.cpp", "void f(int c, int x) { if (c) { switch (x) { case 0: g(); break; case 1: g(); break; default: g(); } } }"),
+            (Language::Go, "a.go", "package p\nfunc f(c bool, x int) { if c { switch x { case 0: g() ; case 1: g() ; default: g() } } }\n"),
+            (Language::Go, "a.go", "package p\nfunc f(c bool, v any) { if c { switch v.(type) { case int: g() ; case string: g() ; default: g() } } }\n"),
+            (Language::Go, "a.go", "package p\nfunc f(c bool, a, b chan int) { if c { select { case <-a: g() ; case <-b: g() ; default: g() } } }\n"),
+            (Language::Rust, "a.rs", "fn f(c: bool, x: i32) { if c { match x { 0 => a(), 1 => b(), _ => d() } } }"),
+            (Language::Python, "a.py", "def f(c, x):\n    if c:\n        match x:\n            case 0:\n                g()\n            case 1:\n                g()\n            case _:\n                g()\n"),
+            (Language::Ruby, "a.rb", "def f(c, x)\n  if c\n    case x\n    when 0 then g\n    when 1 then g\n    else g\n    end\n  end\nend\n"),
+            (Language::Ruby, "a.rb", "def f(c, x)\n  if c\n    case x\n    in 0 then g\n    in 1 then g\n    else g\n    end\n  end\nend\n"),
+            (Language::Php, "a.php", "<?php\nfunction f($c, $x) { if ($c) { switch ($x) { case 0: g(); break; case 1: g(); break; default: g(); } } }\n"),
+            (Language::Php, "a.php", "<?php\nfunction f($c, $x) { if ($c) { return match ($x) { 0 => 1, 1 => 2, default => 3 }; } return 0; }\n"),
+            (Language::Bash, "a.sh", "f() {\n  if [ \"$c\" ]; then\n    case \"$x\" in\n      a) g ;;\n      b) g ;;\n      *) g ;;\n    esac\n  fi\n}\n"),
+        ];
+        let mut failures = Vec::new();
+        for (lang, filename, code) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            let cognitive: Vec<u32> = result
+                .functions
+                .iter()
+                .map(|f| f.metrics.cognitive)
+                .collect();
+            if cognitive != [3] {
+                failures.push(format!("{lang:?} {cognitive:?}: {code}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     fn assert_two_case_switch(code: &str, lang: Language, filename: &str) {
         let result = parse_and_analyze(code.as_bytes(), lang, filename);
         assert_eq!(result.functions.len(), 1, "{filename}: {code}");
