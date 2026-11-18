@@ -129,6 +129,19 @@ pub struct Draft<'tree> {
     pub bases: Vec<String>,
     /// The function has the name of the variable or the field that holds it.
     pub named_by_binding: bool,
+    /// The `cfg` attributes that control the definition.
+    pub condition: Option<Condition>,
+}
+
+/// The `cfg` attributes that control a Rust definition. Two definitions of
+/// one name in one scope are legal only when no build has the two.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Condition {
+    /// The text of each `cfg` attribute of the definition and of the items
+    /// that contain it, from the outer item, without white space.
+    pub attributes: String,
+    /// The text of the nearest `impl` block before its body, or an empty text.
+    pub implementation: String,
 }
 
 /// Facts that only `link_files` and the resolver use. They are not a part of
@@ -152,6 +165,7 @@ pub struct LinkFacts {
     pub prepends: Vec<String>,
     pub bases: Vec<String>,
     pub named_by_binding: bool,
+    pub condition: Option<Condition>,
     /// The names, different from its own, under which the module exports
     /// this top-level symbol, as `export { a as b }` gives `b` to `a`.
     pub export_aliases: Vec<String>,
@@ -286,6 +300,10 @@ pub struct Local {
     /// The bytes of the block that contains the declaration, when the name
     /// is visible in that block only.
     pub block: Option<std::ops::Range<usize>>,
+    /// The first value is the object of the method in a wrapper, as Rust
+    /// `Arc::new(self)` is. The text is the name of the wrapper type. It is
+    /// empty for `self.clone()`.
+    pub self_wrapper: Option<String>,
 }
 
 /// One symbol and its link facts.
@@ -787,6 +805,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 && rule.kind != SymbolKind::Field
                 && (name_node.start_byte() < node.start_byte()
                     || name_node.end_byte() > node.end_byte()),
+            condition: None,
         };
         if draft.kind == SymbolKind::Module {
             draft.role = ScopeRole::Module;
@@ -1043,6 +1062,35 @@ pub struct FileSymbols {
 }
 
 impl FileSymbols {
+    /// Tells if the symbols at `positions` are the definitions of one Rust
+    /// item under different `cfg` conditions.
+    ///
+    /// The definitions have one name, one kind, one container path, and one
+    /// `impl` block text. Each definition has a `cfg` attribute, and no two
+    /// have the same attributes. Rust does not permit two definitions of one
+    /// name in one scope, thus each build has a maximum of one of them.
+    pub fn are_condition_twins(&self, positions: &[usize]) -> bool {
+        let [first, _, ..] = positions else {
+            return false;
+        };
+        let (lead, lead_facts) = (&self.symbols[*first], &self.link_facts[*first]);
+        let mut seen = BTreeSet::new();
+        positions.iter().all(|position| {
+            let (symbol, facts) = (&self.symbols[*position], &self.link_facts[*position]);
+            let same_item = symbol.name == lead.name
+                && symbol.kind == lead.kind
+                && facts.container_path == lead_facts.container_path;
+            match (&facts.condition, &lead_facts.condition) {
+                (Some(condition), Some(lead_condition)) => {
+                    same_item
+                        && condition.implementation == lead_condition.implementation
+                        && seen.insert(condition.attributes.as_str())
+                }
+                _ => false,
+            }
+        })
+    }
+
     /// The bytes are the bytes that gave these facts.
     pub fn is_content_of_facts(&self, content: &[u8]) -> bool {
         *blake3::hash(content).as_bytes() == self.content_hash
@@ -1462,6 +1510,10 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             value_path: name
                 .value_start
                 .and_then(|start| value_path(&parsed.source, start)),
+            self_wrapper: name
+                .value_start
+                .filter(|_| parsed.language == Language::Rust)
+                .and_then(|start| lang::rust::self_wrapper(&parsed.source, start)),
             name,
             owner: position_of(owner),
             block,
@@ -1552,6 +1604,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             prepends: draft.prepends,
             bases: draft.bases,
             named_by_binding: draft.named_by_binding,
+            condition: draft.condition,
             export_aliases,
         });
     }

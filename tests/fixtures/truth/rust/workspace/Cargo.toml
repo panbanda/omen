@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+exclude = ["vendor"]
+
+[workspace.dependencies]
+tools = { path = "crates/tools" }
+num_cpus = "1"

@@ -314,7 +314,8 @@ pub enum Receiver {
 pub enum ResolutionStatus {
     /// An external index gave the definition. The tree-sitter index does not use this status.
     Resolved,
-    /// The rules found one definition.
+    /// The rules found one definition, or the definitions of one Rust item
+    /// under different `cfg` conditions.
     UniqueCandidate,
     /// The rules found more than one definition, or the receiver has no known type.
     Ambiguous,
@@ -394,7 +395,8 @@ pub struct Resolution {
     /// `None` when no rule applied.
     pub basis: Option<ResolutionBasis>,
     /// The keys of the candidate symbols, in key order. An edge exists only
-    /// for the status `Resolved` or `UniqueCandidate`.
+    /// for the status `Resolved` or `UniqueCandidate`. With one of these
+    /// statuses, each candidate has an edge.
     pub candidates: Vec<SharedStr>,
     /// The keys of the definitions that a later definition with the same
     /// name replaces, in key order. They are not targets of an edge. Only a
