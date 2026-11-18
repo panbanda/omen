@@ -831,6 +831,31 @@ mod tests {
     }
 
     #[test]
+    fn test_module_declaration_with_the_name_of_a_crate_of_the_repository_is_a_child_module() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            ("app/Cargo.toml", "[package]\nname = \"app\"\n"),
+            ("app/src/lib.rs", "mod metrics;\nmod routes;\n"),
+            ("app/src/metrics.rs", "pub fn collect() {}\n"),
+            ("app/src/routes/mod.rs", "mod metrics;\n"),
+            ("app/src/routes/metrics.rs", "pub fn get_metrics() {}\n"),
+            ("metrics/Cargo.toml", "[package]\nname = \"metrics\"\n"),
+            ("metrics/src/lib.rs", "pub fn counter() {}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "app/src/lib.rs"),
+            [
+                "1 ModuleDeclaration metrics -->metrics app/src/metrics.rs",
+                "2 ModuleDeclaration routes -->routes app/src/routes/mod.rs",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "app/src/routes/mod.rs"),
+            ["1 ModuleDeclaration metrics -->metrics app/src/routes/metrics.rs"]
+        );
+    }
+
+    #[test]
     fn test_renamed_import_in_a_function_body_is_not_a_binding_of_the_file() {
         use crate::index::imports::testing::rows;
         let files = [
