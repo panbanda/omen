@@ -257,8 +257,10 @@ lists `verify_key`. Omen does not know what a dependency does. The other framewo
 same rule: omen lists each `before_action` callback of Rails and each middleware of Express,
 chi, echo, and gin.
 
-Omen gives the guards in the order in which FastAPI runs the dependencies. This order follows
-`APIRouter.add_api_route` and `APIRouter.include_router`:
+Omen gives the guards in the order in which FastAPI adds the declared dependencies to the route.
+`APIRouter.add_api_route` and `APIRouter.include_router` give this order. It is an order of
+declarations. It is not the order in which the functions run: FastAPI runs a dependency of a
+dependency first, and omen does not read the dependencies of a dependency. The order is:
 
 1. The dependencies of the routers around the router, from the outer router to the inner one.
    For each `include_router` call, the dependencies of the router that gets the routes come
@@ -278,6 +280,7 @@ A name occurs one time in the list, at its first place.
 | `APIRouter(dependencies=[...])` and `FastAPI(dependencies=[...])` | Read for each route of the router. The receiver of the route decorator must be a name with one binding in its scope, and the binding must be an assignment of the call. |
 | A router name with two bindings in its scope, a name in a `global` statement or a `nonlocal` statement, a router that an import gives, and a receiver that is not a name | No guard from the router. The guards of the route decorator and of the parameters stay. |
 | `parent.include_router(router, dependencies=[...])` | Read for the routes of `router` in three conditions. The file has one `include_router` call for the router. The call is a statement of the body of the module or of the function that has the route decorator. The call comes after the route decorator. The route also gets the dependencies of `parent`, and the guards that the same rule gives to `parent`. |
+| An `include_router` call on a receiver that is not a `FastAPI` value or an `APIRouter` value of the file, as a value of a different class or a router that an import gives | No guard from the call. |
 | A route decorator after the `include_router` call | No guard from the call. FastAPI copies the routes of the router at the time of the call. |
 | Two `include_router` calls for one router, a call in a condition, a loop, a class, or a different function, and routers that include each other | No guard from an `include_router` call. |
 | An `include_router` call in a different file | Not read. The route has only the guards that its own file declares. A call in a different file can also serve the route without the dependencies of the call in this file. |
@@ -311,6 +314,7 @@ time. Omen gives the names only. It does not give the type or the source of a pa
 | A parameter with the type `Request`, `Response`, `BackgroundTasks`, `WebSocket`, `HTTPConnection`, or `SecurityScopes`, or a response class such as `JSONResponse`, when an import from `fastapi` or `starlette` gives the name | Not a request parameter. FastAPI gives the object to the handler. |
 | The same type name from a different module, or from a class of the file | A request parameter. |
 | A string annotation that is one name, as `"Request"` | Omen resolves the name as it resolves an annotation without quotation marks. |
+| `Annotated[Request, "text"]`, with no annotation of FastAPI in the metadata | Omen reads the base type. A framework type is not a request parameter. |
 | A type around a framework type, as `Optional[Request]` | A request parameter. |
 | `*args` and `**kwargs` | Not listed. |
 
@@ -321,6 +325,7 @@ time. Omen gives the names only. It does not give the type or the source of a pa
 | A known decorator below the route decorator of Flask or FastAPI | A guard. The route gets the function with the decorator. |
 | A known decorator above the route decorator | No guard. The framework registers the function before the decorator wraps it. |
 | A known decorator on the view function of a Django route, in any file of the repository | A guard. Each decorator wraps the function before `path` gets it. |
+| A qualified view, as `views.detail` | The view is the one function with the name in the module that the import of `views` gives. A function with the same name in the file of the route is not the view. If the index did not resolve the import, the view is the one function with the name in the repository. With two such functions, the route gives no entry. |
 | `path("x/", login_required(view))`, a class-based view with `as_view()`, and `include(...)` | No entry. |
 | `before_request` of Flask, a middleware of Django, and a mixin such as `LoginRequiredMixin` | Not read. |
 | A handler of Flask | The handler gets only the parameters of the path. Omen lists no other parameter. |

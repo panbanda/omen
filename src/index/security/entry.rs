@@ -1250,29 +1250,72 @@ impl<'a> Context<'a> {
 
     /// The known guards in the decorators of the view function of a Django route. The function
     /// can be in a different file. Each decorator wraps the function before the route gets it.
-    fn python_view_guards(&self, view: Node<'_>) -> Vec<String> {
-        let name = match view.kind() {
-            "identifier" => self.text(view),
-            "attribute" => self.text(view).rsplit('.').next().unwrap_or(""),
-            _ => return Vec::new(),
-        };
-        match self.callable_named(name, None) {
-            Some((None, position)) => python_function_guards(
+    fn python_view_guards(&self, view: (Option<usize>, usize)) -> Vec<String> {
+        match view {
+            (None, position) => python_function_guards(
                 self.parsed.root_node(),
                 self.source,
                 &self.file.symbols[position].range,
             ),
-            Some((Some(file), position)) => {
-                self.all_parsed.tree(file).map_or_else(Vec::new, |parsed| {
-                    python_function_guards(
-                        parsed.root_node(),
-                        &parsed.source,
-                        &self.all[file].symbols[position].range,
-                    )
-                })
-            }
-            None => Vec::new(),
+            (Some(file), position) => self.all_parsed.tree(file).map_or_else(Vec::new, |parsed| {
+                python_function_guards(
+                    parsed.root_node(),
+                    &parsed.source,
+                    &self.all[file].symbols[position].range,
+                )
+            }),
         }
+    }
+
+    /// The file and the position of the view function of a Django route. The file `None` is
+    /// this file. A name is the function of this file, or the one function with the name. A
+    /// qualified name, as `views.detail`, is never a function of this file: it is the one
+    /// function with the name in the module that the import of the qualifier gives. If the
+    /// index did not resolve the import, it is the one function with the name in the
+    /// repository.
+    fn python_view(&self, view: Node<'_>) -> Option<(Option<usize>, usize)> {
+        use crate::index::model::ImportTarget;
+        if view.kind() == "identifier" {
+            return self.callable_named(self.text(view), None);
+        }
+        if view.kind() != "attribute" {
+            return None;
+        }
+        let qualifier = view.child_by_field_name("object")?;
+        let name = self.text(view.child_by_field_name("attribute")?);
+        let targets: Vec<&str> = self
+            .file
+            .imports
+            .iter()
+            .filter(|binding| {
+                qualifier.kind() == "identifier"
+                    && binding.local_name.as_deref() == Some(self.text(qualifier))
+            })
+            .flat_map(|binding| match &binding.target_file {
+                ImportTarget::Resolved(file) => std::slice::from_ref(file),
+                ImportTarget::Package(files) => files.as_slice(),
+                _ => &[],
+            })
+            .map(String::as_str)
+            .collect();
+        let candidates: Vec<(usize, usize)> = self
+            .all_parsed
+            .shared()
+            .callables
+            .get_or_init(|| callables_by_name(self.all))
+            .get(name)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|(file, position)| {
+                self.all[*file].symbols[*position].container.is_none()
+                    && (targets.is_empty() || targets.contains(&self.all[*file].file.as_str()))
+            })
+            .collect();
+        let [(file, position)] = candidates.as_slice() else {
+            return None;
+        };
+        Some((Some(*file), *position))
     }
 
     fn python_django(&self, node: Node<'_>, out: &mut Vec<Draft>) {
@@ -1292,16 +1335,18 @@ impl<'a> Context<'a> {
         if !self.is_string(*first) {
             return;
         }
-        let Some(symbol) = self.handler_symbol(*view) else {
+        let Some(target) = self.python_view(*view) else {
             return;
         };
+        let (file, position) = target;
+        let symbol = &file.map_or(self.file, |file| &self.all[file]).symbols[position];
         out.push(Draft {
             range: Span::of(&node),
             kind: EntryKind::HttpHandler,
-            symbol: Some(symbol),
+            symbol: Some(symbol.key.to_string()),
             framework: "django",
             route: Some(route("ANY", join_path("", &self.string_of(*first)))),
-            guards: self.python_view_guards(*view),
+            guards: self.python_view_guards(target),
             basis: EntryBasis::Registered,
             variant: None,
         });

@@ -106,8 +106,8 @@ impl Drop for Outer {
     }
 }
 
-/// The bindings of a Python file, by scope. A scope is the module, a function, a lambda, or a
-/// class. The id of a scope is the id of its node.
+/// The bindings of a Python file, by scope. A scope is the module, a function, a lambda, a
+/// class, or a comprehension. The id of a scope is the id of its node.
 #[derive(Default)]
 pub(super) struct Scopes<'a> {
     /// The nearest scope around a scope that is not a class. Python does not look for a name
@@ -121,8 +121,11 @@ pub(super) struct Scopes<'a> {
     rebound: HashSet<&'a str>,
     /// The scope that binds a name for a use in a scope.
     found: RefCell<HashMap<BindingKey<'a>, Option<usize>>>,
-    /// The import of each local name. The value is `None` when two imports of the name differ.
-    imports: OnceCell<HashMap<&'a str, Option<&'a ImportBinding>>>,
+    /// The start, the end, and the scope of each import statement, in source order.
+    import_statements: Vec<(usize, usize, usize)>,
+    /// The import of each local name of a scope. The value is `None` when two imports of the
+    /// name in the scope differ.
+    imports: OnceCell<HashMap<BindingKey<'a>, Option<&'a ImportBinding>>>,
     /// The positions of the `include_router` calls that include a router, by its binding.
     includes_of: OnceCell<HashMap<BindingKey<'a>, Vec<usize>>>,
     outer: RefCell<HashMap<BindingKey<'a>, Option<Rc<Outer>>>>,
@@ -162,6 +165,9 @@ impl<'a> Context<'a> {
         let mut scopes = Scopes::default();
         scopes.outward.insert(root.id(), None);
         let mut classes: HashSet<usize> = HashSet::new();
+        // The scope around a comprehension that is not a comprehension. A target of a
+        // comprehension binds in the comprehension. A `:=` in it binds in the scope around.
+        let mut hosts: HashMap<usize, usize> = HashMap::new();
         let mut stack: Vec<(Node<'a>, usize, bool)> = vec![(root, root.id(), true)];
         while let Some((node, scope, plain)) = stack.pop() {
             let kind = node.kind();
@@ -170,11 +176,21 @@ impl<'a> Context<'a> {
                 "decorated_definition" => {
                     scopes.sites.insert(node.id(), scope);
                 }
-                "function_definition" | "class_definition" | "lambda" => {
+                "function_definition"
+                | "class_definition"
+                | "lambda"
+                | "list_comprehension"
+                | "set_comprehension"
+                | "dictionary_comprehension"
+                | "generator_expression" => {
                     if let Some(name) = node.child_by_field_name("name") {
                         self.bind(&mut scopes, scope, name, None, false);
                     }
                     inner = node.id();
+                    if kind.ends_with("comprehension") || kind == "generator_expression" {
+                        let host = hosts.get(&scope).copied().unwrap_or(scope);
+                        hosts.insert(inner, host);
+                    }
                     let outward = if classes.contains(&scope) {
                         scopes.outward[&scope]
                     } else {
@@ -220,7 +236,8 @@ impl<'a> Context<'a> {
                 }
                 "named_expression" => {
                     if let Some(name) = node.child_by_field_name("name") {
-                        self.bind(&mut scopes, scope, name, None, false);
+                        let host = hosts.get(&scope).copied().unwrap_or(scope);
+                        self.bind(&mut scopes, host, name, None, false);
                     }
                 }
                 "for_statement" | "for_in_clause" => {
@@ -230,6 +247,9 @@ impl<'a> Context<'a> {
                 }
                 "as_pattern_target" | "case_pattern" => self.bind_each(&mut scopes, scope, node),
                 "import_statement" | "import_from_statement" | "future_import_statement" => {
+                    scopes
+                        .import_statements
+                        .push((node.start_byte(), node.end_byte(), scope));
                     let mut cursor = node.walk();
                     let names: Vec<Node<'a>> =
                         node.children_by_field_name("name", &mut cursor).collect();
@@ -279,6 +299,7 @@ impl<'a> Context<'a> {
                 let child_scope =
                     if matches!(child.kind(), "parameters" | "lambda_parameters" | "block")
                         || kind == "lambda"
+                        || hosts.contains_key(&inner)
                     {
                         inner
                     } else {
@@ -361,18 +382,32 @@ impl<'a> Context<'a> {
     /// Two imports of the same name of the same module, as the branches of a condition have,
     /// are one import.
     fn import_of(&self, scope: usize, name: &'a str) -> Option<&'a ImportBinding> {
-        let (_, binding) = self.bindings_of(scope, name)?;
+        let (owner, binding) = self.bindings_of(scope, name)?;
         if !binding.imported {
             return None;
         }
-        let imports = self.scopes().imports.get_or_init(|| {
-            let mut by_name: HashMap<&'a str, Option<&'a ImportBinding>> = HashMap::new();
+        let scopes = self.scopes();
+        let imports = scopes.imports.get_or_init(|| {
+            let mut by_name: HashMap<BindingKey<'a>, Option<&'a ImportBinding>> = HashMap::new();
             for import in &self.file.imports {
                 let Some(local) = import.local_name.as_deref() else {
                     continue;
                 };
+                // The statements are in source order, and no import statement is in another.
+                let start = import.range.start_byte;
+                let position = scopes
+                    .import_statements
+                    .partition_point(|(statement, _, _)| *statement <= start);
+                let Some((_, end, statement_scope)) = position
+                    .checked_sub(1)
+                    .map(|position| scopes.import_statements[position])
+                    .filter(|(_, end, _)| start < *end)
+                else {
+                    continue;
+                };
+                debug_assert!(import.range.end_byte <= end);
                 by_name
-                    .entry(local)
+                    .entry((statement_scope, local))
                     .and_modify(|known| {
                         *known = known.filter(|known| {
                             known.kind == import.kind
@@ -384,7 +419,7 @@ impl<'a> Context<'a> {
             }
             by_name
         });
-        imports.get(name).copied().flatten()
+        imports.get(&(owner, name)).copied().flatten()
     }
 
     /// The name that an identifier or `module.name` has in one of the modules.
@@ -568,36 +603,36 @@ impl<'a> Context<'a> {
         }
         for (key, parent) in chain.into_iter().rev() {
             let include = self.sole_include(key).filter(|_| !cyclic);
-            let outer = include.map(|(include, parent_name)| {
+            let outer = include.and_then(|(include, parent_name)| {
+                // A receiver that is not a router of FastAPI can have a method with the same
+                // name. Its call adds no guard.
+                let (owner, call) = self.router_of(include.scope, parent_name)?;
                 let start = include.call.start_byte();
-                let mut guards = Vec::new();
                 let above = parent
                     .and_then(|parent| scopes.outer.borrow().get(&parent).cloned())
                     .flatten()
                     .filter(|above| above.start > start && above.scope == include.scope);
-                if let Some((owner, call)) = self.router_of(include.scope, parent_name) {
-                    guards.extend(self.dependencies_of(owner.0, call));
-                }
+                let mut guards = self.dependencies_of(owner.0, call);
                 guards.extend(self.dependencies_of(include.scope, include.call));
-                Rc::new(Outer {
+                Some(Rc::new(Outer {
                     start,
                     scope: include.scope,
                     guards,
                     above,
-                })
+                }))
             });
             scopes.outer.borrow_mut().insert(key, outer);
         }
         scopes.outer.borrow().get(&router).cloned().flatten()
     }
 
-    /// The metadata of an `Annotated` type, and the scope of the names in it. The type can be
-    /// `Annotated[...]`, `typing.Annotated[...]`, or a name that the file binds to one of them.
+    /// The scope of the names in an `Annotated` type, its base type, and its metadata. The type
+    /// can be `Annotated[...]` or `typing.Annotated[...]`.
     fn annotated_metadata<'t>(
         &self,
         scope: usize,
         annotation: Node<'t>,
-    ) -> Option<(usize, Vec<Node<'t>>)> {
+    ) -> Option<(usize, Node<'t>, Vec<Node<'t>>)> {
         let annotation = if annotation.kind() == "type" {
             annotation.named_child(0)?
         } else {
@@ -632,7 +667,9 @@ impl<'a> Context<'a> {
         if self.imported_as(scope, head, &ANNOTATED_MODULES) != Some("Annotated") {
             return None;
         }
-        Some((scope, arguments.into_iter().skip(1).collect()))
+        let mut arguments = arguments.into_iter();
+        let base = arguments.next()?;
+        Some((scope, base, arguments.collect()))
     }
 
     /// What FastAPI does with a parameter that has the annotation and the default.
@@ -668,20 +705,27 @@ impl<'a> Context<'a> {
             };
             self.annotated_metadata(owner, value)
         });
-        if let Some((metadata_scope, metadata)) = metadata {
-            // FastAPI uses the last of its own annotations.
-            let last = metadata.iter().rev().find_map(|item| {
-                let marker = self.marker_of(metadata_scope, *item)?;
-                (DEPENDENCY_MARKERS.contains(&marker) || PARAMETER_MARKERS.contains(&marker))
-                    .then_some((*item, marker))
-            });
-            return match last {
-                Some((item, marker)) if DEPENDENCY_MARKERS.contains(&marker) => {
-                    Parameter::Dependency(self.dependency_of(metadata_scope, item).flatten())
+        let (scope, inner) = match metadata {
+            Some((metadata_scope, base, metadata)) => {
+                // FastAPI uses the last of its own annotations.
+                let last = metadata.iter().rev().find_map(|item| {
+                    let marker = self.marker_of(metadata_scope, *item)?;
+                    (DEPENDENCY_MARKERS.contains(&marker) || PARAMETER_MARKERS.contains(&marker))
+                        .then_some((*item, marker))
+                });
+                match last {
+                    Some((item, marker)) if DEPENDENCY_MARKERS.contains(&marker) => {
+                        return Parameter::Dependency(
+                            self.dependency_of(metadata_scope, item).flatten(),
+                        );
+                    }
+                    Some(_) => return Parameter::Request,
+                    // Without an annotation of FastAPI, the base type tells what FastAPI does.
+                    None => (metadata_scope, base),
                 }
-                _ => Parameter::Request,
-            };
-        }
+            }
+            None => (scope, inner),
+        };
         let framework_name = match inner.kind() {
             "string" => {
                 let name = self.text(inner).trim_matches(['"', '\'']);
@@ -696,8 +740,8 @@ impl<'a> Context<'a> {
     }
 
     /// The guards and the request parameters that FastAPI reads for a route: the dependencies
-    /// in the order in which FastAPI runs them, and the parameters of the handler in the order
-    /// of the signature.
+    /// in the order in which FastAPI adds them to the route, and the parameters of the handler
+    /// in the order of the signature.
     pub(super) fn fastapi_declared(
         &self,
         definition: Node<'_>,
@@ -1072,6 +1116,65 @@ mod tests {
     #[test]
     fn a_chain_of_included_routers_gives_each_guard() {
         a_chain_of_included_routers_at(20);
+    }
+
+    #[test]
+    fn a_qualified_django_view_is_the_function_of_the_imported_module() {
+        let urls = "from django.contrib.auth.decorators import login_required\nfrom django.urls import path\nfrom . import views\n\n@login_required\ndef detail(request):\n    return 1\n\nurlpatterns = [\n    path(\"public/\", views.detail),\n    path(\"local/\", detail),\n]\n";
+        let views = "def detail(request):\n    return 2\n";
+        let found = entries(Language::Python, &[("urls.py", urls), ("views.py", views)]);
+        let rows: Vec<(String, Option<String>, Vec<String>)> = found
+            .into_iter()
+            .map(|entry| (entry.route.unwrap().path, entry.symbol, entry.guards))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "/public/".to_string(),
+                    Some("views.py#detail".to_string()),
+                    vec![]
+                ),
+                (
+                    "/local/".to_string(),
+                    Some("urls.py#detail".to_string()),
+                    vec!["login_required".to_string()]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_comprehension_target_does_not_bind_a_name_of_the_module() {
+        let source = "from fastapi import APIRouter, Depends\n\nrouter = APIRouter(dependencies=[Depends(verify_key)])\nrouters = [router for router in (router,)]\nnames = {Depends: 1 for Depends in ()}\n\n@router.get(\"/a\", dependencies=[Depends(verify_admin)])\nasync def a():\n    return 1\n";
+        assert_eq!(
+            guards(source),
+            expected(&[("/a", &["verify_key", "verify_admin"])])
+        );
+        let walrus = "from fastapi import APIRouter, Depends\n\nrouter = APIRouter(dependencies=[Depends(verify_key)])\nrouters = [(router := other) for other in ()]\n\n@router.get(\"/a\")\nasync def a():\n    return 1\n";
+        assert_eq!(guards(walrus), expected(&[("/a", &[])]));
+    }
+
+    #[test]
+    fn an_import_in_another_scope_does_not_hide_the_import_of_the_module() {
+        let source = "from fastapi import APIRouter, Depends\n\nrouter = APIRouter()\n\ndef helper():\n    from mylib import Depends\n    return Depends\n\n@router.get(\"/a\", dependencies=[Depends(verify_key)])\nasync def a(user: User = Depends(verify_scope)):\n    return 1\n\ndef make():\n    from mylib import Depends\n\n    @router.get(\"/b\", dependencies=[Depends(verify_key)])\n    async def b():\n        return 2\n";
+        assert_eq!(
+            guards(source),
+            expected(&[("/a", &["verify_key", "verify_scope"]), ("/b", &[])])
+        );
+        assert_eq!(parameters(source), expected(&[("/a", &[]), ("/b", &[])]));
+    }
+
+    #[test]
+    fn an_include_router_call_needs_a_receiver_that_is_a_router() {
+        let source = "from fastapi import APIRouter, Depends\n\nrouter = APIRouter()\nregistry = Registry()\n\n@router.get(\"/a\")\nasync def a():\n    return 1\n\nregistry.include_router(router, dependencies=[Depends(verify_key)])\n";
+        assert_eq!(guards(source), expected(&[("/a", &[])]));
+    }
+
+    #[test]
+    fn an_annotated_framework_object_is_not_a_request_parameter() {
+        let source = "from typing import Annotated\nfrom fastapi import APIRouter, Query, Request\n\nrouter = APIRouter()\nRawRequest = Annotated[Request, \"metadata\"]\n\n@router.get(\"/a\")\nasync def a(\n    request: Annotated[Request, \"metadata\"],\n    raw: RawRequest,\n    item: Annotated[Item, \"metadata\"],\n    limit: Annotated[int, Query()],\n):\n    return 1\n";
+        assert_eq!(parameters(source), expected(&[("/a", &["item", "limit"])]));
     }
 
     /// A chain of routers, each with one dependency and each included in the next one. With
