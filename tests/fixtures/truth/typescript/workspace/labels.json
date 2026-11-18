@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "language": "typescript",
+  "split": "development",
+  "oracle": "Author-reviewed. The case is a workspace without build output: `my-lib` and `@acme/util` name only files in `dist`. `tsc` did not run. The harness does not run the code.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "main", "category": "free_function", "file": "packages/app/src/main.ts", "name": "main", "kind": "function", "container": null, "start_line": 5, "end_line": 7, "exported": true},
+    {"label": "app_svc", "category": "type", "file": "packages/app/src/svc/svc.ts", "name": "Svc", "kind": "class", "container": null, "start_line": 1, "end_line": 5, "exported": true},
+    {"label": "web_svc", "category": "type", "file": "packages/web/lib/svc/svc.ts", "name": "Svc", "kind": "class", "container": null, "start_line": 1, "end_line": 5, "exported": true},
+    {"label": "page", "category": "free_function", "file": "packages/web/src/page.ts", "name": "page", "kind": "function", "container": null, "start_line": 3, "end_line": 5, "exported": true},
+    {"label": "lib_fn", "category": "free_function", "file": "packages/lib/src/index.ts", "name": "libFn", "kind": "function", "container": null, "start_line": 1, "end_line": 3, "exported": true},
+    {"label": "util_fn", "category": "free_function", "file": "packages/util/src/strings.ts", "name": "utilFn", "kind": "function", "container": null, "start_line": 1, "end_line": 3, "exported": true}
+  ],
+  "calls": [
+    {"label": "package_main_in_dist", "category": "cross_file_import", "caller": "main", "line": 6, "callee_text": "libFn", "expected": ["lib_fn"]},
+    {"label": "package_export_pattern_in_dist", "category": "cross_file_import", "caller": "main", "line": 6, "callee_text": "utilFn", "expected": ["util_fn"]},
+    {"label": "path_alias_of_the_nearest_config", "category": "constructor", "caller": "main", "line": 6, "callee_text": "Svc", "expected": ["app_svc"]},
+    {"label": "same_alias_in_a_different_package", "category": "constructor", "caller": "page", "line": 4, "callee_text": "Svc", "expected": ["web_svc"]}
+  ],
+  "imports": [
+    {"label": "workspace_main_in_dist", "category": "package", "file": "packages/app/src/main.ts", "line": 1, "path": "my-lib", "names": [{"name": "libFn", "alias": null}], "required_file": "packages/lib/src/index.ts"},
+    {"label": "workspace_export_pattern", "category": "package", "file": "packages/app/src/main.ts", "line": 2, "path": "@acme/util/strings", "names": [{"name": "utilFn", "alias": null}], "required_file": "packages/util/src/strings.ts"},
+    {"label": "tsconfig_path_alias", "category": "named", "file": "packages/app/src/main.ts", "line": 3, "path": "@/svc/svc", "names": [{"name": "Svc", "alias": null}], "required_file": "packages/app/src/svc/svc.ts"},
+    {"label": "tsconfig_path_alias_of_a_different_package", "category": "named", "file": "packages/web/src/page.ts", "line": 1, "path": "@/svc/svc", "names": [{"name": "Svc", "alias": null}], "required_file": "packages/web/lib/svc/svc.ts"}
+  ]
+}

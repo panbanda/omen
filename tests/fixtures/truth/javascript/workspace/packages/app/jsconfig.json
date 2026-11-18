@@ -1,0 +1,4 @@
+{
+  // The source directory has an alias.
+  "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["./src/*"], }, },
+}

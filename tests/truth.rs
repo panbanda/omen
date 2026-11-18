@@ -169,10 +169,9 @@ fn observed_symbol(file: &str, symbol: Symbol) -> Option<ObservedSymbol> {
 /// Reads each `go.mod` file and each `.gemspec` file below `dir`.
 fn read_manifests(root: &Path, dir: &Path, manifests: &mut Manifests) {
     for path in sorted_entries(dir) {
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
         if path.is_dir() {
             read_manifests(root, &path, manifests);
-        } else if name == "go.mod" || name == "Cargo.toml" || name.ends_with(".gemspec") {
+        } else if omen::index::build::is_manifest(&path) {
             let text = std::fs::read_to_string(&path).unwrap();
             manifests.add(&relative(root, &path), &text);
         }

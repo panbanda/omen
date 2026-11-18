@@ -6,6 +6,7 @@
 //! package give [`ImportTarget::Package`], which is a certain target.
 
 pub mod cargo;
+pub mod typescript;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -49,6 +50,8 @@ struct Repository<'a> {
     /// The results of `rust_parent`. Each import with `super` or `crate`
     /// asks for the parent of its file.
     rust_parents: RwLock<HashMap<String, Option<String>>>,
+    /// The options of each TypeScript project file after `extends`.
+    project_options: RwLock<HashMap<String, std::sync::Arc<typescript::ProjectOptions>>>,
 }
 
 /// The module tree of the Rust files of an index: which file is the root of a crate, the
@@ -147,6 +150,7 @@ impl<'a> Repository<'a> {
             rust_inline_modules,
             rust_module_declarations,
             rust_parents: RwLock::new(HashMap::new()),
+            project_options: RwLock::new(HashMap::new()),
         };
         repository.read_rust_packages();
         repository
@@ -248,6 +252,8 @@ pub struct Manifests {
     pub rust_library_directories: BTreeMap<String, BTreeSet<String>>,
     /// The packages that the `package.json` files of the repository name.
     pub node_packages: Vec<NodePackage>,
+    /// The project files of TypeScript and JavaScript.
+    pub projects: typescript::ProjectConfigs,
 }
 
 /// The facts of one `package.json` file.
@@ -261,6 +267,9 @@ pub struct NodePackage {
     /// condition. Without `exports`, `.` has the files of `main`, `module`,
     /// and `types`.
     pub exports: BTreeMap<String, BTreeSet<String>>,
+    /// The `package.json` file has `exports`. Then a subpath that no entry
+    /// names is not a file of the package.
+    pub has_exports: bool,
 }
 
 /// Adds each string in an `exports` value to `out`. A value is a path or an
@@ -310,7 +319,30 @@ pub fn node_package(directory: &str, package_json: &str) -> Option<NodePackage> 
         name,
         directory: directory.to_string(),
         exports,
+        has_exports: package.get("exports").is_some(),
     })
+}
+
+/// The entries of the `exports` key with `*` that matches `subpath`, with the
+/// matched text for each `*`. Of the keys that match, the key with the
+/// longest text before `*` applies, as in Node.js.
+fn export_pattern(package: &NodePackage, subpath: &str) -> Vec<String> {
+    let best = package
+        .exports
+        .iter()
+        .filter_map(|(key, entries)| {
+            let (prefix, suffix) = key.split_once('*')?;
+            let matched = subpath.strip_prefix(prefix)?.strip_suffix(suffix)?;
+            Some((prefix.len(), key.len(), entries, matched))
+        })
+        .max_by_key(|(prefix, key, _, _)| (*prefix, *key));
+    let Some((_, _, entries, matched)) = best else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .map(|entry| entry.replace('*', matched))
+        .collect()
 }
 
 impl Default for Manifests {
@@ -322,17 +354,22 @@ impl Default for Manifests {
             rust_packages: BTreeMap::new(),
             rust_library_directories: BTreeMap::new(),
             node_packages: Vec::new(),
+            projects: typescript::ProjectConfigs::default(),
         }
     }
 }
 
 impl Manifests {
-    /// Reads a `go.mod`, `.gemspec`, `Cargo.toml`, or `package.json` file.
+    /// Reads a `go.mod`, `.gemspec`, `Cargo.toml`, `package.json`, or TypeScript project file.
     /// `path` is relative to the root of the repository. A different file has
     /// no effect.
     pub fn add(&mut self, path: &str, text: &str) {
         let here = directory(path);
-        if file_name(path) == "package.json" {
+        if typescript::is_project_file(file_name(path)) {
+            if let Some(config) = typescript::project_config(text) {
+                self.projects.configs.insert(path.to_string(), config);
+            }
+        } else if file_name(path) == "package.json" {
             self.node_packages.extend(node_package(here, text));
             self.node_packages.sort_by(|left, right| {
                 (&left.directory, &left.name).cmp(&(&right.directory, &right.name))
@@ -658,44 +695,75 @@ impl Repository<'_> {
     }
 
     fn ecma(&self, binding: &ImportBinding) -> ImportTarget {
-        const EXTENSIONS: &[&str] = &["ts", "tsx", "d.ts", "js", "jsx", "mjs", "cjs"];
         let path = binding.module_path.as_str();
-        if !path.starts_with('.') {
-            // A package of the repository is not external. The `exports` of
-            // its `package.json` name the file. An entry can name a source
-            // file and its build outputs. The files that are in the
-            // repository are the candidates.
-            let mut own_package = false;
-            let mut found = BTreeSet::new();
-            for package in &self.manifests.node_packages {
-                let subpath = match path.strip_prefix(package.name.as_str()) {
-                    Some("") => ".".to_string(),
-                    Some(rest) if rest.starts_with('/') => format!(".{rest}"),
-                    _ => continue,
-                };
-                own_package = true;
-                for file in package.exports.get(&subpath).into_iter().flatten() {
-                    found.extend(self.existing(join(&package.directory, file)));
-                }
-            }
-            return if own_package {
-                target_of(found, ImportTarget::Unresolved)
-            } else {
-                ImportTarget::External
+        if path.starts_with('.') {
+            return match join(directory(&binding.file), path) {
+                Some(base) => target_of(self.ecma_files(&base), ImportTarget::Unresolved),
+                None => ImportTarget::Unresolved,
             };
         }
-        let Some(base) = join(directory(&binding.file), path) else {
-            return ImportTarget::Unresolved;
-        };
-        if let Some(exact) = self.existing(Some(base.clone())) {
-            return ImportTarget::Resolved(exact);
+        // TypeScript reads `paths` and then `baseUrl` of the project file
+        // of the importing file before it looks for a package.
+        let mut mapped_in_repository = false;
+        if let Some(options) = self.project_options_of(&binding.file) {
+            let (paths, catch_all) = options.mapped(path);
+            mapped_in_repository = !paths.is_empty() && !catch_all;
+            for mapped in paths {
+                let found = self.ecma_files(&mapped);
+                if !found.is_empty() {
+                    return target_of(found, ImportTarget::Unresolved);
+                }
+            }
+            if let Some(base) = options
+                .base_url
+                .as_deref()
+                .and_then(|base| join(base, path))
+            {
+                let found = self.ecma_files(&base);
+                if !found.is_empty() {
+                    return target_of(found, ImportTarget::Unresolved);
+                }
+            }
+        }
+        // A package of the repository is not external. The `exports` of
+        // its `package.json` name the file. An entry can name a source
+        // file and its build outputs. The files that are in the
+        // repository are the candidates.
+        let mut own_package = false;
+        let mut found = BTreeSet::new();
+        for package in &self.manifests.node_packages {
+            let subpath = match path.strip_prefix(package.name.as_str()) {
+                Some("") => ".".to_string(),
+                Some(rest) if rest.starts_with('/') => format!(".{rest}"),
+                _ => continue,
+            };
+            own_package = true;
+            found.extend(self.package_files(package, &subpath));
+        }
+        // A module that `paths` maps into the repository is not external,
+        // also when the index does not have the file.
+        if own_package {
+            target_of(found, ImportTarget::Unresolved)
+        } else if mapped_in_repository {
+            ImportTarget::Unresolved
+        } else {
+            ImportTarget::External
+        }
+    }
+
+    /// The files that a module path names, as a relative import does: the
+    /// file itself, the file with an extension, or the index file of the
+    /// directory. TypeScript source can name the output file `./a.js` of
+    /// the source file `./a.ts`.
+    fn ecma_files(&self, base: &str) -> BTreeSet<String> {
+        if let Some(exact) = self.existing(Some(base.to_string())) {
+            return BTreeSet::from([exact]);
         }
         let mut found = BTreeSet::new();
-        for extension in EXTENSIONS {
+        for extension in typescript::SOURCE_EXTENSIONS {
             found.extend(self.existing(Some(format!("{base}.{extension}"))));
             found.extend(self.existing(Some(format!("{base}/index.{extension}"))));
         }
-        // TypeScript source can name the output file `./a.js` of the source file `./a.ts`.
         for (output, sources) in [
             ("js", ["ts", "tsx"]),
             ("mjs", ["mts", "mts"]),
@@ -707,7 +775,130 @@ impl Repository<'_> {
                 }
             }
         }
-        target_of(found, ImportTarget::Unresolved)
+        found
+    }
+
+    /// The options of the project file that applies to `file`.
+    fn project_options_of(&self, file: &str) -> Option<std::sync::Arc<typescript::ProjectOptions>> {
+        let projects = &self.manifests.projects;
+        let config = projects.nearest(file)?;
+        Some(self.project_options(config))
+    }
+
+    fn project_options(&self, config: &str) -> std::sync::Arc<typescript::ProjectOptions> {
+        if let Some(found) = self.project_options.read().get(config) {
+            return std::sync::Arc::clone(found);
+        }
+        let options = std::sync::Arc::new(
+            self.manifests
+                .projects
+                .options(config, &self.manifests.node_packages),
+        );
+        self.project_options
+            .write()
+            .insert(config.to_string(), std::sync::Arc::clone(&options));
+        options
+    }
+
+    /// The files of `package` that the subpath names. An entry of `exports`
+    /// with `*` names each subpath that matches it. A package without
+    /// `exports` gives each file of its directory, as a relative import does.
+    ///
+    /// A clone of a repository does not have the build output, thus an entry
+    /// can name a file that is not in the repository. Then the source file
+    /// of the output is the target. These rules give the source file, and
+    /// the first rule that gives a file applies:
+    ///
+    /// 1. A project file in the directory of the package has `outDir` and
+    ///    `rootDir`. The output `outDir/a.js` has the source `rootDir/a.ts`.
+    /// 2. The output `dist/a.js` of the package has the source `src/a.ts`.
+    fn package_files(&self, package: &NodePackage, subpath: &str) -> BTreeSet<String> {
+        let mut entries: Vec<String> = package
+            .exports
+            .get(subpath)
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect();
+        if entries.is_empty() {
+            entries = export_pattern(package, subpath);
+        }
+        let legacy = entries.is_empty() && !package.has_exports && subpath != ".";
+        let outputs: Vec<String> = if legacy {
+            join(&package.directory, subpath).into_iter().collect()
+        } else {
+            entries
+                .iter()
+                .filter_map(|entry| join(&package.directory, entry))
+                .collect()
+        };
+        let found: BTreeSet<String> = if legacy {
+            outputs
+                .iter()
+                .flat_map(|base| self.ecma_files(base))
+                .collect()
+        } else {
+            outputs
+                .iter()
+                .filter_map(|output| self.existing(Some(output.clone())))
+                .collect()
+        };
+        if !found.is_empty() {
+            return found;
+        }
+        let configured: BTreeSet<String> = outputs
+            .iter()
+            .flat_map(|output| self.source_by_project(package, output))
+            .collect();
+        if !configured.is_empty() {
+            return configured;
+        }
+        outputs
+            .iter()
+            .flat_map(|output| self.source_by_location(package, output))
+            .collect()
+    }
+
+    /// The source files of a build output by rule 1 of `package_files`.
+    fn source_by_project(&self, package: &NodePackage, output: &str) -> BTreeSet<String> {
+        let mut found = BTreeSet::new();
+        for config in self.manifests.projects.in_directory(&package.directory) {
+            let options = self.project_options(config);
+            let (Some(out_dir), Some(root_dir)) = (&options.out_dir, &options.root_dir) else {
+                continue;
+            };
+            let Some(rest) = output
+                .strip_prefix(out_dir.as_str())
+                .and_then(|rest| rest.strip_prefix('/'))
+            else {
+                continue;
+            };
+            found.extend(self.sources_of(&format!("{root_dir}/{rest}")));
+        }
+        found
+    }
+
+    /// The source files of a build output by rule 2 of `package_files`.
+    fn source_by_location(&self, package: &NodePackage, output: &str) -> BTreeSet<String> {
+        let Some(rest) = output
+            .strip_prefix(package.directory.as_str())
+            .map(|rest| rest.trim_start_matches('/'))
+            .and_then(|rest| rest.strip_prefix("dist/"))
+        else {
+            return BTreeSet::new();
+        };
+        join(&package.directory, &format!("src/{rest}"))
+            .map(|source| self.sources_of(&source))
+            .unwrap_or_default()
+    }
+
+    /// The source files that can give the build output at `output`.
+    fn sources_of(&self, output: &str) -> BTreeSet<String> {
+        let (stem, had_extension) = typescript::output_stem(output);
+        typescript::source_candidates(stem, had_extension)
+            .into_iter()
+            .filter_map(|candidate| self.existing(Some(candidate)))
+            .collect()
     }
 
     /// The file of the Rust module `name` whose parent has its children in `children`.
@@ -1295,6 +1486,7 @@ pub(crate) mod testing {
         for (file, source) in files {
             if ["go.mod", "Cargo.toml", "package.json"].contains(&file_name(file))
                 || file.ends_with(".gemspec")
+                || typescript::is_project_file(file_name(file))
             {
                 manifests.add(file, source);
                 continue;
@@ -1429,5 +1621,205 @@ mod tests {
             size * 2
         );
         assert!(large.as_secs() < 60, "{large:?}");
+    }
+}
+
+#[cfg(test)]
+mod typescript_tests {
+    use super::testing::rows;
+
+    /// The target of the import of `module` in `file`.
+    fn target(files: &[(&str, &str)], file: &str, module: &str) -> String {
+        let found: Vec<String> = rows(files, file)
+            .into_iter()
+            .filter(|row| row.split(' ').nth(2) == Some(module))
+            .map(|row| row.split(' ').nth(4).unwrap_or_default().to_string())
+            .collect();
+        assert!(!found.is_empty(), "no import of {module} in {file}");
+        found[0].clone()
+    }
+
+    #[test]
+    fn test_tsconfig_paths_of_the_nearest_config_with_comments_and_trailing_commas() {
+        let app_config = "{\n  // The alias of the source directory.\n  \"compilerOptions\": {\n    /* A base. */ \"baseUrl\": \".\",\n    \"paths\": { \"@/*\": [\"./src/*\"], },\n  },\n}\n";
+        let other_config = "{ \"compilerOptions\": { \"paths\": { \"@/*\": [\"./lib/*\"] } } }";
+        for (extension, source) in [("ts", "ts"), ("js", "js"), ("tsx", "tsx"), ("jsx", "jsx")] {
+            let main = format!("packages/app/src/main.{extension}");
+            let svc = format!("packages/app/src/svc/svc.{source}");
+            let other_main = format!("packages/other/src/main.{extension}");
+            let other_svc = format!("packages/other/lib/svc/svc.{source}");
+            let files = [
+                ("packages/app/tsconfig.json", app_config),
+                ("packages/other/tsconfig.json", other_config),
+                (
+                    main.as_str(),
+                    "import { Svc } from '@/svc/svc';\nimport { gone } from '@/gone';\n",
+                ),
+                (svc.as_str(), "export class Svc {}\n"),
+                (other_main.as_str(), "import { Svc } from '@/svc/svc';\n"),
+                (other_svc.as_str(), "export class Svc {}\n"),
+            ];
+            assert_eq!(target(&files, &main, "@/svc/svc"), svc, "{extension}");
+            assert_eq!(
+                target(&files, &other_main, "@/svc/svc"),
+                other_svc,
+                "{extension}"
+            );
+            // A pattern that names no file of the repository does not give a file.
+            assert_eq!(target(&files, &main, "@/gone"), "unresolved", "{extension}");
+        }
+    }
+
+    #[test]
+    fn test_tsconfig_paths_through_an_extends_chain() {
+        let files = [
+            (
+                "packages/config/package.json",
+                "{\"name\": \"@acme/config\", \"version\": \"1.0.0\"}",
+            ),
+            // `paths` of a base config is relative to the base config.
+            (
+                "packages/config/tsconfig.shared.json",
+                "{\"compilerOptions\": {\"paths\": {\"@shared/*\": [\"../shared/src/*\"]}}}",
+            ),
+            // `${configDir}` is the directory of the config that the tool reads first.
+            (
+                "packages/config/tsconfig.local.json",
+                "{\"compilerOptions\": {\"paths\": {\"~/*\": [\"${configDir}/src/*\"]}}}",
+            ),
+            (
+                "packages/web/tsconfig.json",
+                "{\"extends\": [\"@acme/config/tsconfig.shared.json\"]}",
+            ),
+            (
+                "packages/api/tsconfig.json",
+                "{\"extends\": [\"@acme/config/tsconfig.shared.json\", \"./tsconfig.base\"]}",
+            ),
+            (
+                "packages/api/tsconfig.base.json",
+                "{\"extends\": \"@acme/config/tsconfig.local.json\"}",
+            ),
+            ("packages/shared/src/text.ts", "export function trim() {}\n"),
+            (
+                "packages/web/src/main.ts",
+                "import { trim } from '@shared/text';\n",
+            ),
+            (
+                "packages/api/src/main.ts",
+                "import { trim } from '@shared/text';\nimport { run } from '~/run';\n",
+            ),
+            ("packages/api/src/run.ts", "export function run() {}\n"),
+        ];
+        assert_eq!(
+            target(&files, "packages/web/src/main.ts", "@shared/text"),
+            "packages/shared/src/text.ts"
+        );
+        // A later config of `extends` replaces `paths` of an earlier config.
+        assert_eq!(
+            target(&files, "packages/api/src/main.ts", "~/run"),
+            "packages/api/src/run.ts"
+        );
+        assert_eq!(
+            target(&files, "packages/api/src/main.ts", "@shared/text"),
+            "external"
+        );
+    }
+
+    #[test]
+    fn test_tsconfig_base_url_and_the_longest_pattern() {
+        let config = "{\"compilerOptions\": {\"baseUrl\": \"src\", \"paths\": {\"*\": [\"vendor/*\", \"*\"], \"app/*\": [\"modules/*\"], \"app/exact\": [\"modules/one.ts\"]}}}";
+        let files = [
+            ("tsconfig.json", config),
+            ("src/modules/one.ts", "export const one = 1;\n"),
+            ("src/modules/two.ts", "export const two = 2;\n"),
+            ("src/utils/math.ts", "export const sum = 3;\n"),
+            (
+                "src/main.ts",
+                "import { one } from 'app/exact';\nimport { two } from 'app/two';\nimport { sum } from 'utils/math';\nimport { x } from 'lodash';\n",
+            ),
+        ];
+        assert_eq!(
+            target(&files, "src/main.ts", "app/exact"),
+            "src/modules/one.ts"
+        );
+        assert_eq!(
+            target(&files, "src/main.ts", "app/two"),
+            "src/modules/two.ts"
+        );
+        assert_eq!(
+            target(&files, "src/main.ts", "utils/math"),
+            "src/utils/math.ts"
+        );
+        assert_eq!(target(&files, "src/main.ts", "lodash"), "external");
+    }
+
+    #[test]
+    fn test_workspace_package_that_points_at_dist_maps_to_the_source() {
+        let files = [
+            // The `outDir` and `rootDir` of a config in the package give the rule.
+            (
+                "packages/lib/package.json",
+                "{\"name\": \"my-lib\", \"main\": \"dist/index\", \"types\": \"dist/index.d.ts\"}",
+            ),
+            (
+                "packages/lib/tsconfig.build.json",
+                "{\"compilerOptions\": {\"rootDir\": \"src\", \"outDir\": \"dist\"}}",
+            ),
+            ("packages/lib/src/index.ts", "export function libFn() {}\n"),
+            ("packages/lib/src/util/a.ts", "export function a() {}\n"),
+            // Two configs give two output directories of one source directory.
+            (
+                "packages/flow/package.json",
+                "{\"name\": \"@acme/flow\", \"exports\": {\".\": {\"import\": \"./dist/esm/index.js\", \"require\": \"./dist/cjs/index.js\"}, \"./*\": \"./dist/esm/*.js\"}}",
+            ),
+            ("packages/flow/tsconfig.json", "{\"compilerOptions\": {\"strict\": true}}"),
+            (
+                "packages/flow/tsconfig.build.esm.json",
+                "{\"extends\": [\"./tsconfig.json\"], \"compilerOptions\": {\"rootDir\": \"src\", \"outDir\": \"dist/esm\"}}",
+            ),
+            (
+                "packages/flow/tsconfig.build.cjs.json",
+                "{\"extends\": [\"./tsconfig.json\"], \"compilerOptions\": {\"rootDir\": \"src\", \"outDir\": \"dist/cjs\"}}",
+            ),
+            ("packages/flow/src/index.ts", "export function flow() {}\n"),
+            ("packages/flow/src/util/text.ts", "export function text() {}\n"),
+            // Without `rootDir`, `dist` has the same relative paths as `src`.
+            (
+                "packages/utils/package.json",
+                "{\"name\": \"@acme/utils\", \"exports\": {\"./*\": {\"types\": \"./dist/*.d.mts\", \"import\": \"./dist/*.mjs\"}}}",
+            ),
+            ("packages/utils/tsconfig.json", "{\"compilerOptions\": {\"outDir\": \"dist\"}}"),
+            ("packages/utils/src/is-record.ts", "export function isRecord() {}\n"),
+            ("packages/utils/src/pair.ts", "export function pair() {}\n"),
+            ("packages/utils/src/pair.tsx", "export function pair() {}\n"),
+            (
+                "packages/app/src/main.ts",
+                "import { libFn } from 'my-lib';\nimport { flow } from '@acme/flow';\nimport { text } from '@acme/flow/util/text';\nimport { isRecord } from '@acme/utils/is-record';\nimport { missing } from '@acme/utils/missing';\nimport { pair } from '@acme/utils/pair';\nimport { a } from 'my-lib/dist/util/a';\n",
+            ),
+        ];
+        let main = "packages/app/src/main.ts";
+        assert_eq!(target(&files, main, "my-lib"), "packages/lib/src/index.ts");
+        // A package without `exports` gives each file of its directory.
+        assert_eq!(
+            target(&files, main, "my-lib/dist/util/a"),
+            "packages/lib/src/util/a.ts"
+        );
+        assert_eq!(
+            target(&files, main, "@acme/flow"),
+            "packages/flow/src/index.ts"
+        );
+        assert_eq!(
+            target(&files, main, "@acme/flow/util/text"),
+            "packages/flow/src/util/text.ts"
+        );
+        assert_eq!(
+            target(&files, main, "@acme/utils/is-record"),
+            "packages/utils/src/is-record.ts"
+        );
+        assert_eq!(target(&files, main, "@acme/utils/missing"), "unresolved");
+        assert_eq!(
+            target(&files, main, "@acme/utils/pair"),
+            "ambiguous(packages/utils/src/pair.ts,packages/utils/src/pair.tsx)"
+        );
     }
 }

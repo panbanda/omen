@@ -31,10 +31,13 @@ pub type ReadFile<'a> = &'a (dyn Fn(&Path) -> Result<Vec<u8>> + Sync);
 /// directories in it.
 pub type ListDirectory<'a> = &'a (dyn Fn(&Path) -> Vec<PathBuf> + Sync);
 
-fn is_manifest(path: &Path) -> bool {
+/// Tells if the file is a manifest that the index reads.
+pub fn is_manifest(path: &Path) -> bool {
     let name = path.file_name().and_then(|name| name.to_str());
     name.is_some_and(|name| {
-        ["go.mod", "Cargo.toml", "package.json"].contains(&name) || name.ends_with(".gemspec")
+        ["go.mod", "Cargo.toml", "package.json"].contains(&name)
+            || name.ends_with(".gemspec")
+            || super::imports::typescript::is_project_file(name)
     })
 }
 
@@ -66,7 +69,94 @@ pub fn manifest_paths(root: &Path, files: &[PathBuf], list: ListDirectory<'_>) -
     paths
 }
 
-/// Reads the manifest files that `manifest_paths` gives.
+/// The maximum number of rounds that follow `extends` of TypeScript configs.
+/// Each round reads one more level of the chain.
+const EXTENDS_ROUNDS: usize = 8;
+
+/// The manifest files that `manifest_paths` gives, and the TypeScript
+/// configs that their `extends` chains name. A config of a package can be in
+/// a directory without a source file. The content of each file is `None`
+/// when `read` cannot give it.
+pub fn manifest_files(
+    root: &Path,
+    files: &[PathBuf],
+    read: ReadFile<'_>,
+    list: ListDirectory<'_>,
+) -> Vec<(PathBuf, Option<Vec<u8>>)> {
+    // A path of the repository in the form that `files` has.
+    let absolute = files.first().is_some_and(|file| file.is_absolute());
+    let in_form = |relative_path: &str| {
+        if absolute {
+            root.join(relative_path)
+        } else {
+            PathBuf::from(relative_path)
+        }
+    };
+    let mut found: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
+    let mut manifests = Manifests::default();
+    let mut tried: BTreeSet<String> = BTreeSet::new();
+    let add =
+        |path: PathBuf, manifests: &mut Manifests, found: &mut Vec<(PathBuf, Option<Vec<u8>>)>| {
+            let content = read(&path).ok();
+            if let Some(content) = &content {
+                manifests.add(&relative(root, &path), &String::from_utf8_lossy(content));
+            }
+            found.push((path, content));
+        };
+    for path in manifest_paths(root, files, list) {
+        tried.insert(relative(root, &path));
+        add(path, &mut manifests, &mut found);
+    }
+    for _ in 0..EXTENDS_ROUNDS {
+        let packages = &manifests.node_packages;
+        let mut wanted = manifests.projects.unread(packages);
+        // A workspace package is often next to the other packages. Its
+        // `package.json` gives the directory of the package.
+        let parents: BTreeSet<&str> = packages
+            .iter()
+            .map(|package| {
+                package
+                    .directory
+                    .rsplit_once('/')
+                    .map_or("", |(parent, _)| parent)
+            })
+            .collect();
+        for name in manifests.projects.unknown_packages(packages) {
+            let last = name.rsplit('/').next().unwrap_or(&name).to_string();
+            for parent in &parents {
+                for directory in [&name, &last] {
+                    let path = if parent.is_empty() {
+                        format!("{directory}/package.json")
+                    } else {
+                        format!("{parent}/{directory}/package.json")
+                    };
+                    wanted.push(path);
+                }
+            }
+        }
+        wanted.retain(|path| tried.insert(path.clone()));
+        let listed = |path: &Path| {
+            path.parent()
+                .is_some_and(|directory| list(directory).iter().any(|entry| entry == path))
+        };
+        let mut added = false;
+        for path in wanted {
+            let path = in_form(&path);
+            // Only a file that the listing of its directory has is read.
+            if !listed(&path) {
+                continue;
+            }
+            add(path, &mut manifests, &mut found);
+            added = true;
+        }
+        if !added {
+            break;
+        }
+    }
+    found
+}
+
+/// Reads the manifest files that `manifest_files` gives.
 fn read_manifests(
     root: &Path,
     files: &[PathBuf],
@@ -74,8 +164,8 @@ fn read_manifests(
     list: ListDirectory<'_>,
 ) -> Manifests {
     let mut manifests = Manifests::default();
-    for path in manifest_paths(root, files, list) {
-        if let Ok(content) = read(&path) {
+    for (path, content) in manifest_files(root, files, read, list) {
+        if let Some(content) = content {
             manifests.add(&relative(root, &path), &String::from_utf8_lossy(&content));
         }
     }
@@ -272,6 +362,63 @@ mod tests {
                 &ImportTarget::Resolved("gem/src/shop/util.rb".to_string()),
                 &ImportTarget::Unresolved,
             ]
+        );
+    }
+
+    #[test]
+    fn test_index_reads_the_typescript_configs_that_extends_names() {
+        // The config package has no source file, thus no source file is in its directory.
+        let sources = [
+            (
+                "packages/app/tsconfig.json",
+                "{ \"extends\": \"@acme/config/tsconfig.shared\" }",
+            ),
+            (
+                "packages/config/package.json",
+                "{ \"name\": \"@acme/config\" }",
+            ),
+            (
+                "packages/config/tsconfig.shared.json",
+                "{ \"extends\": \"./tsconfig.base.json\" }",
+            ),
+            (
+                "packages/config/tsconfig.base.json",
+                "{ \"compilerOptions\": { \"paths\": { \"@shared/*\": [\"../shared/src/*\"] } } }",
+            ),
+            (
+                "packages/shared/package.json",
+                "{ \"name\": \"@acme/shared\" }",
+            ),
+            ("packages/shared/src/text.ts", "export function trim() {}\n"),
+            (
+                "packages/app/src/main.ts",
+                "import { trim } from \"@shared/text\";\n",
+            ),
+        ];
+        let read = |path: &Path| {
+            sources
+                .iter()
+                .find(|(name, _)| Path::new(name) == path)
+                .map(|(_, text)| text.as_bytes().to_vec())
+                .ok_or_else(|| crate::core::Error::git("no such file".to_string()))
+        };
+        let list = |directory: &Path| -> Vec<PathBuf> {
+            sources
+                .iter()
+                .map(|(name, _)| PathBuf::from(name))
+                .filter(|path| path.parent() == Some(directory))
+                .collect()
+        };
+        let files: Vec<PathBuf> = ["packages/app/src/main.ts", "packages/shared/src/text.ts"]
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+
+        let index = CodeIndex::build(Path::new("."), &files, &read, &list);
+
+        assert_eq!(
+            index.files[0].imports[0].target_file,
+            ImportTarget::Resolved("packages/shared/src/text.ts".to_string())
         );
     }
 
