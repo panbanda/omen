@@ -1044,10 +1044,18 @@ impl<'a> Context<'a> {
         } else {
             "main"
         };
+        // The first `main` of each container path. A later `main` that is the
+        // same item under a different `cfg` condition is not a second entry point.
+        let mut first_mains: std::collections::HashMap<&[String], usize> = Default::default();
         for (position, symbol) in self.file.symbols.iter().enumerate() {
             if symbol.name != main_name
                 || !matches!(symbol.kind, SymbolKind::Function | SymbolKind::Method)
             {
+                continue;
+            }
+            let path = self.file.link_facts[position].container_path.as_slice();
+            let first = *first_mains.entry(path).or_insert(position);
+            if self.file.are_condition_twins(&[first, position]) {
                 continue;
             }
             let parent = self.file.link_facts[position]
@@ -6349,6 +6357,19 @@ func routes() {
             &[("app.js", app), ("users.js", users), ("posts.js", posts)],
         );
         assert_eq!(found[0].symbol.as_deref(), Some("users.js#list"));
+    }
+
+    #[test]
+    fn rust_main_under_two_cfg_conditions_is_one_entry_point() {
+        let twins = "#[cfg(unix)]\nfn main() {\n    run();\n}\n\n#[cfg(not(unix))]\nfn main() {}\n\nfn run() {}\n";
+        let found = entries(Language::Rust, &[("main.rs", twins)]);
+        let symbols: Vec<Option<&str>> = found.iter().map(|e| e.symbol.as_deref()).collect();
+        assert_eq!(symbols, [Some("main.rs#main")]);
+        // Two definitions with one condition are not one item.
+        let same = "#[cfg(unix)]\nfn main() {}\n\n#[cfg(unix)]\nfn main() {}\n";
+        assert_eq!(entries(Language::Rust, &[("main.rs", same)]).len(), 2);
+        let plain = "fn main() {}\n\n#[cfg(unix)]\nfn main() {}\n";
+        assert_eq!(entries(Language::Rust, &[("main.rs", plain)]).len(), 2);
     }
 
     #[test]

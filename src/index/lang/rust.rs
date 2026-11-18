@@ -2,8 +2,13 @@
 
 use tree_sitter::Node;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use crate::index::extract::{
-    find_descendant, Context, DefinitionRule, Draft, LanguageSpec, NameRule, Scope, ScopeRole,
+    find_descendant, Condition, Context, DefinitionRule, Draft, LanguageSpec, NameRule, Scope,
+    ScopeRole,
 };
 use crate::index::model::{Exported, Span, SymbolKind};
 
@@ -56,10 +61,29 @@ const GENERIC_TYPE: &str = "generic_type";
 const SCOPED_TYPE_IDENTIFIER: &str = "scoped_type_identifier";
 const REFERENCE_TYPE: &str = "reference_type";
 const VISIBILITY_MODIFIER: &str = "visibility_modifier";
+const ATTRIBUTE_ITEM: &str = "attribute_item";
+const FUNCTION_ITEM: &str = "function_item";
+const FUNCTION_SIGNATURE_ITEM: &str = "function_signature_item";
+
+/// The number of the `cfg` attributes in the memo of the extraction.
+const CONDITION_MEMO: u8 = 0;
+
+/// The number of the table of text IDs in the memo of the extraction.
+const TEXT_ID_MEMO: u8 = 1;
+
+/// The number of the text ID of an `impl` block header in the memo of the
+/// extraction.
+const IMPLEMENTATION_MEMO: u8 = 2;
+
+/// The types that hold the object of a method and give its methods.
+const SELF_WRAPPERS: [&str; 2] = ["Arc", "Rc"];
+
+/// The longest text of a first value that `self_wrapper` reads.
+const SELF_WRAPPER_LIMIT: usize = 48;
 
 const DEFINITIONS: &[DefinitionRule] = &[
-    DefinitionRule::function("function_item", NameRule::Field("name")),
-    DefinitionRule::function("function_signature_item", NameRule::Field("name")),
+    DefinitionRule::function(FUNCTION_ITEM, NameRule::Field("name")),
+    DefinitionRule::function(FUNCTION_SIGNATURE_ITEM, NameRule::Field("name")),
     DefinitionRule::new("struct_item", SymbolKind::Struct, NameRule::Field("name")),
     DefinitionRule::new("union_item", SymbolKind::Struct, NameRule::Field("name")),
     DefinitionRule::new("enum_item", SymbolKind::Enum, NameRule::Field("name")),
@@ -109,6 +133,160 @@ fn type_modules(mut node: Node<'_>, context: &Context<'_, '_>) -> Vec<String> {
             _ => return Vec::new(),
         };
     }
+}
+
+/// The ID of `text` in the file. Two texts have one ID only when they are
+/// equal. A definition keeps the ID and not the text, because many
+/// definitions can have the text of one long attribute.
+fn text_id(text: String, context: &Context<'_, '_>) -> usize {
+    let key = (0, TEXT_ID_MEMO);
+    let table = context.memo.borrow().get(&key).cloned();
+    let table =
+        match table.and_then(|found| found.downcast::<RefCell<HashMap<String, usize>>>().ok()) {
+            Some(table) => table,
+            None => {
+                let table = Rc::new(RefCell::new(HashMap::new()));
+                context.memo.borrow_mut().insert(key, table.clone());
+                table
+            }
+        };
+    let mut table = table.borrow_mut();
+    let next = table.len();
+    *table.entry(text).or_insert(next)
+}
+
+/// The text ID of the `cfg` attributes of each child of `parent` that has
+/// one, by the ID of the child. The function reads the children of a parent
+/// one time, because a search for the attributes before each child costs the
+/// number of the children.
+fn child_conditions(parent: Node<'_>, context: &Context<'_, '_>) -> Rc<HashMap<usize, usize>> {
+    let key = (parent.id(), CONDITION_MEMO);
+    if let Some(found) = context.memo.borrow().get(&key) {
+        if let Ok(found) = Rc::clone(found).downcast::<HashMap<usize, usize>>() {
+            return found;
+        }
+    }
+    let mut found = HashMap::new();
+    let mut pending = String::new();
+    let mut cursor = parent.walk();
+    for child in parent.children(&mut cursor) {
+        let kind = child.kind();
+        if kind == ATTRIBUTE_ITEM {
+            let text: String = context.text(child).split_whitespace().collect();
+            if text.starts_with("#[cfg(") {
+                pending.push_str(&text);
+            }
+        } else if !kind.contains("comment") && !pending.is_empty() {
+            found.insert(child.id(), text_id(std::mem::take(&mut pending), context));
+        }
+    }
+    let found = Rc::new(found);
+    context.memo.borrow_mut().insert(key, found.clone());
+    found
+}
+
+/// The text ID of the header of an `impl` block, which is the text before its
+/// body with one space between the words.
+fn implementation_id(block: Node<'_>, context: &Context<'_, '_>) -> usize {
+    let key = (block.id(), IMPLEMENTATION_MEMO);
+    if let Some(found) = context.memo.borrow().get(&key) {
+        if let Ok(found) = Rc::clone(found).downcast::<usize>() {
+            return *found;
+        }
+    }
+    let end = block
+        .child_by_field_name("body")
+        .map_or(block.end_byte(), |body| body.start_byte());
+    let header = context.source.get(block.start_byte()..end);
+    let header = String::from_utf8_lossy(header.unwrap_or_default());
+    let id = text_id(
+        header.split_whitespace().collect::<Vec<&str>>().join(" "),
+        context,
+    );
+    context.memo.borrow_mut().insert(key, Rc::new(id));
+    id
+}
+
+/// The `cfg` attributes of a function and of the items that contain it.
+fn condition(node: Node<'_>, context: &Context<'_, '_>) -> Option<Condition> {
+    let mut attributes = Vec::new();
+    let mut implementation = None;
+    let scopes = context.scopes.iter().map(|scope| scope.node);
+    for item in scopes.chain([node]) {
+        if let Some(parent) = context.parent(item) {
+            if let Some(id) = child_conditions(parent, context).get(&item.id()) {
+                attributes.push(*id);
+            }
+        }
+        if item.kind() == IMPL_ITEM {
+            implementation = Some(item);
+        }
+    }
+    if attributes.is_empty() {
+        return None;
+    }
+    Some(Condition {
+        attributes,
+        implementation: implementation.map(|block| implementation_id(block, context)),
+    })
+}
+
+/// The name of the wrapper type when the value that starts at the byte
+/// `start` is the object of the method in a wrapper, and the value is the full
+/// value of a `let` statement. The forms are `Arc::new(self)`,
+/// `Arc::clone(self)`, `Arc::clone(&self)`, the same forms of `Rc`, and
+/// `self.clone()`, which gives an empty name. A different text gives `None`.
+pub fn self_wrapper(source: &[u8], start: usize) -> Option<String> {
+    let rest = source.get(start..)?;
+    let end = rest
+        .iter()
+        .take(SELF_WRAPPER_LIMIT)
+        .position(|byte| *byte == b';')?;
+    let text: String = std::str::from_utf8(&rest[..end])
+        .ok()?
+        .split_whitespace()
+        .collect();
+    if text == "self.clone()" {
+        return Some(String::new());
+    }
+    SELF_WRAPPERS.into_iter().find_map(|wrapper| {
+        let call = text.strip_prefix(wrapper)?.strip_prefix("::")?;
+        ["new(self)", "clone(self)", "clone(&self)"]
+            .contains(&call)
+            .then(|| wrapper.to_string())
+    })
+}
+
+/// The wrapper type of the `self` parameter of a method, as `Arc` for
+/// `self: &'a mut Arc<Self>`. The type argument is `Self` or the name of the
+/// type of the `impl` block.
+fn self_parameter_wrapper(function: Node<'_>, context: &Context<'_, '_>) -> Option<&'static str> {
+    let parameters = function.child_by_field_name("parameters")?;
+    let mut cursor = parameters.walk();
+    let first = parameters.named_children(&mut cursor).next()?;
+    let pattern = first.child_by_field_name("pattern")?;
+    if first.kind() != "parameter" || !context.text(pattern).ends_with("self") {
+        return None;
+    }
+    let mut declared = first.child_by_field_name("type")?;
+    if declared.kind() == REFERENCE_TYPE {
+        declared = declared.child_by_field_name("type")?;
+    }
+    if declared.kind() != GENERIC_TYPE {
+        return None;
+    }
+    let wrapper = declared.child_by_field_name("type")?;
+    let wrapper = match wrapper.kind() {
+        SCOPED_TYPE_IDENTIFIER => wrapper.child_by_field_name("name")?,
+        _ => wrapper,
+    };
+    let wrapper = context.text(wrapper);
+    let wrapper = SELF_WRAPPERS.into_iter().find(|known| *known == wrapper)?;
+    let arguments = declared.child_by_field_name("type_arguments")?;
+    let argument: String = context.text(arguments).split_whitespace().collect();
+    let owner = context.scopes.last().map(|scope| scope.name.as_str());
+    let content = argument.strip_prefix('<')?.strip_suffix('>')?;
+    (content == "Self" || Some(content) == owner).then_some(wrapper)
 }
 
 /// `pub` exports an item. `pub(crate)` and the other restricted forms do not.
@@ -380,6 +558,7 @@ impl LanguageSpec for Rust {
     fn hook_kinds(&self) -> Vec<&'static str> {
         vec![
             IMPL_ITEM,
+            ATTRIBUTE_ITEM,
             LET_DECLARATION,
             IDENTIFIER,
             TYPE_IDENTIFIER,
@@ -416,6 +595,10 @@ impl LanguageSpec for Rust {
             // `mod name;` refers to a different file. It does not define a module here.
             MOD_ITEM => return draft.body.is_some(),
             CLOSURE_EXPRESSION => draft.span = Span::between(&draft.name_node, &draft.node),
+            FUNCTION_ITEM | FUNCTION_SIGNATURE_ITEM => {
+                draft.condition = condition(draft.node, context);
+                draft.self_wrapper = self_parameter_wrapper(draft.node, context);
+            }
             _ => {}
         }
         if let Some(scope) = context.scopes.last() {
