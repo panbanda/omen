@@ -273,6 +273,10 @@ pub struct NodePackage {
     /// The `package.json` file has `exports`. Then a subpath that no entry
     /// names is not a file of the package.
     pub has_exports: bool,
+    /// The config that `extends` with the name of the package names: the
+    /// `tsconfig` field, else `tsconfig.json`. The path is relative to the
+    /// directory of the package.
+    pub tsconfig: String,
 }
 
 /// Adds each string in an `exports` value to `out`. A value is a path or an
@@ -323,6 +327,11 @@ pub fn node_package(directory: &str, package_json: &str) -> Option<NodePackage> 
         directory: directory.to_string(),
         exports,
         has_exports: package.get("exports").is_some(),
+        tsconfig: package
+            .get("tsconfig")
+            .and_then(|value| value.as_str())
+            .unwrap_or("tsconfig.json")
+            .to_string(),
     })
 }
 
@@ -1503,6 +1512,11 @@ pub(crate) mod testing {
                 manifests.add(file, source);
                 continue;
             }
+            // A different JSON file is a config that `extends` names.
+            if file.ends_with(".json") {
+                manifests.add_project(file, source);
+                continue;
+            }
             let language = Language::detect(Path::new(file)).unwrap();
             let parsed = Parser::new()
                 .parse(source.as_bytes(), language, Path::new(file))
@@ -1782,6 +1796,37 @@ mod typescript_tests {
     /// An exact entry of `exports` with `null` hides the subpath from a
     /// pattern. A config at the root of the repository with `rootDir: "."`
     /// maps the output to a source at the root.
+    /// `extends` with the name of a package reads the config that the
+    /// `tsconfig` field of the package names, else its `tsconfig.json`.
+    #[test]
+    fn test_extends_reads_the_tsconfig_field_of_a_package() {
+        let files = [
+            (
+                "packages/config/package.json",
+                "{\"name\": \"@acme/config\", \"tsconfig\": \"./configs/base.json\"}",
+            ),
+            (
+                "packages/config/tsconfig.json",
+                "{\"compilerOptions\": {\"paths\": {\"~/*\": [\"../wrong/*\"]}}}",
+            ),
+            (
+                "packages/config/configs/base.json",
+                "{\"compilerOptions\": {\"paths\": {\"~/*\": [\"../../right/*\"]}}}",
+            ),
+            (
+                "packages/app/tsconfig.json",
+                "{\"extends\": \"@acme/config\"}",
+            ),
+            ("packages/right/a.ts", "export function a() {}\n"),
+            ("packages/wrong/a.ts", "export function a() {}\n"),
+            ("packages/app/src/main.ts", "import { a } from '~/a';\n"),
+        ];
+        assert_eq!(
+            target(&files, "packages/app/src/main.ts", "~/a"),
+            "packages/right/a.ts"
+        );
+    }
+
     /// A substitution with `${configDir}` is a path from the directory of
     /// the config, not from `baseUrl`.
     #[test]

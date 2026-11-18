@@ -384,7 +384,7 @@ impl ProjectConfigs {
         } else {
             packages_of(packages, name)
                 .filter_map(|(package, rest)| match rest {
-                    "" => join(&package.directory, "tsconfig.json"),
+                    "" => join(&package.directory, &package.tsconfig),
                     rest => join(&package.directory, rest.strip_prefix('/')?),
                 })
                 .collect()
@@ -423,7 +423,7 @@ impl ProjectConfigs {
                 }
                 for (package, rest) in packages_of(packages, name) {
                     let target = match rest {
-                        "" => join(&package.directory, "tsconfig.json"),
+                        "" => join(&package.directory, &package.tsconfig),
                         rest => rest
                             .strip_prefix('/')
                             .and_then(|rest| join(&package.directory, rest)),
