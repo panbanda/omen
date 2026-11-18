@@ -17,9 +17,9 @@
 //!   guards of each route inside the function.
 //! - A combo method returns a value that keeps the pattern. Each method of the value sends the
 //!   pattern to a route method of the type.
-//! - A middleware method keeps its variadic argument in a field, or gives it to the framework
-//!   router. The walk does not read its middleware, so the guards of the routes of the router
-//!   are not complete.
+//! - A layer method keeps its variadic argument in a field that a route method reads, or gives
+//!   it to the framework router. Its arguments are guards of the later routes of the router,
+//!   or of each route when the framework wraps each route, as `Use` of chi.
 //!
 //! The walk reads each function of the repository one time. A router is a value that a literal of
 //! the type makes, a parameter of the type, or the result of a function that returns the type.
@@ -128,6 +128,19 @@ impl Inner {
         }
     }
 
+    /// When the middleware of a method of the router runs. `Use` of chi and of gorilla/mux, and
+    /// `Pre` of echo, wrap each route of the router. `Use` of gin adds to the routes that the
+    /// router registers later. `Use` of echo depends on the type, an `Echo` or a `Group`, which
+    /// the field does not tell.
+    fn layer(self, method: &str) -> Option<Layer> {
+        match (self, method) {
+            (Self::Framework(Framework::Chi | Framework::Mux), "Use")
+            | (Self::Framework(Framework::Echo), "Pre") => Some(Layer::Global),
+            (Self::Framework(Framework::Gin), "Use") => Some(Layer::Ordered),
+            _ => None,
+        }
+    }
+
     /// The path of a route from the prefixes of its mounts and its own path.
     fn compose(self, mounts: &[String], path: &str) -> Option<String> {
         match self {
@@ -175,8 +188,20 @@ enum Shape {
         combo: usize,
     },
     /// A method that keeps its variadic argument in a field, or gives it to the framework
-    /// router, as `Use`. The walk does not read when such a middleware runs.
-    Middleware,
+    /// router, as `Use`.
+    Middleware(Layer),
+}
+
+/// When the middleware of a layer method runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Layer {
+    /// For each route that the router registers after the call, and for each router that it
+    /// mounts after the call.
+    Ordered,
+    /// For each route of the router, as `Use` of chi.
+    Global,
+    /// The walk cannot tell.
+    Unknown,
 }
 
 /// A guard of a route: a name, or the arguments that each call of a function gives to its
@@ -184,7 +209,12 @@ enum Shape {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Guard {
     Name(String),
-    Spread { function: String, position: usize },
+    Spread {
+        function: String,
+        position: usize,
+    },
+    /// The guards before it come from a layer that a condition adds.
+    Conditional,
 }
 
 impl Guard {
@@ -301,6 +331,11 @@ struct MethodFact {
     called_functions: BTreeSet<usize>,
     /// The parameters that an assignment to a field of the receiver mentions.
     stored: BTreeSet<usize>,
+    /// Each field of the receiver that an assignment changes, with the parameters that the value
+    /// mentions.
+    stored_fields: Vec<(String, BTreeSet<usize>)>,
+    /// The fields of the receiver that the body reads, other than by an assignment.
+    read_fields: BTreeSet<String>,
     /// The literals that a return statement gives: the type and the elements.
     returned_literals: Vec<(String, Vec<Element>)>,
 }
@@ -658,6 +693,8 @@ fn method_fact(context: &Context<'_>, node: Node<'_>, directory: &str) -> Option
         calls: Vec::new(),
         called_functions: BTreeSet::new(),
         stored: BTreeSet::new(),
+        stored_fields: Vec::new(),
+        read_fields: BTreeSet::new(),
         returned_literals: Vec::new(),
     };
     let mut derived: HashMap<String, BTreeSet<usize>> = HashMap::new();
@@ -707,6 +744,10 @@ fn method_fact(context: &Context<'_>, node: Node<'_>, directory: &str) -> Option
                                             && context.text(operand) == receiver
                                     });
                             if on_receiver {
+                                if let Some(field) = target.child_by_field_name("field") {
+                                    fact.stored_fields
+                                        .push((context.text(field).to_string(), value.clone()));
+                                }
                                 fact.stored.extend(value);
                             }
                         }
@@ -800,6 +841,30 @@ fn method_fact(context: &Context<'_>, node: Node<'_>, directory: &str) -> Option
                         .push((context.text(kind).to_string(), elements));
                 }
             }
+            "selector_expression" => {
+                let on_receiver = current
+                    .child_by_field_name("operand")
+                    .is_some_and(|operand| {
+                        operand.kind() == "identifier" && context.text(operand) == receiver
+                    });
+                let parent = current.parent();
+                let is_called = parent.is_some_and(|parent| {
+                    parent.kind() == "call_expression"
+                        && parent.child_by_field_name("function") == Some(current)
+                });
+                let is_assigned = parent
+                    .filter(|parent| parent.kind() == "expression_list")
+                    .and_then(|list| {
+                        let statement = list.parent()?;
+                        Some(statement.child_by_field_name("left") == Some(list))
+                    })
+                    .unwrap_or(false);
+                if on_receiver && !is_called && !is_assigned {
+                    if let Some(field) = current.child_by_field_name("field") {
+                        fact.read_fields.insert(context.text(field).to_string());
+                    }
+                }
+            }
             "func_literal" => continue,
             _ => {}
         }
@@ -868,11 +933,26 @@ fn classify(
                 );
             }
         }
+        let route_methods: Vec<&MethodFact> = by_type[key]
+            .iter()
+            .copied()
+            .filter(|method| {
+                matches!(
+                    shapes.get(&method.name),
+                    Some(Shape::Route { .. } | Shape::Mount { .. })
+                )
+            })
+            .collect();
+        let mut layers = Vec::new();
         for method in &by_type[key] {
-            if !shapes.contains_key(&method.name) && is_middleware(method, fields) {
-                shapes.insert(method.name.clone(), Shape::Middleware);
+            if shapes.contains_key(&method.name) {
+                continue;
+            }
+            if let Some(layer) = layer_of(method, fields, &route_methods) {
+                layers.push((method.name.clone(), Shape::Middleware(layer)));
             }
         }
+        shapes.extend(layers);
         router_types.insert(
             key.clone(),
             RouterType {
@@ -884,30 +964,57 @@ fn classify(
     (router_types, combos, combo_types)
 }
 
-/// Tells if a method keeps its variadic argument in a field of the receiver, or gives it to a
-/// framework router that a field holds.
-fn is_middleware(method: &MethodFact, fields: &[(String, FieldKind)]) -> bool {
-    let Some(variadic) = method
+/// The layer of a method that keeps its variadic argument in a field of the receiver, or gives
+/// it to a framework router that a field holds. None for another method.
+fn layer_of(
+    method: &MethodFact,
+    fields: &[(String, FieldKind)],
+    route_methods: &[&MethodFact],
+) -> Option<Layer> {
+    let variadic = method
         .parameters
         .iter()
-        .position(|kind| kind.starts_with("..."))
-    else {
-        return false;
-    };
-    method.stored.contains(&variadic)
-        || method.calls.iter().any(|call| {
-            let CallTarget::Field { field, .. } = &call.target else {
-                return false;
-            };
-            let to_router = fields
-                .iter()
-                .any(|(known, kind)| known == field && matches!(kind, FieldKind::Router(_)));
-            to_router
-                && call
-                    .arguments
-                    .iter()
-                    .any(|argument| argument.parameters.contains(&variadic))
-        })
+        .position(|kind| kind.starts_with("..."))?;
+    let mut found: Vec<Layer> = Vec::new();
+    for (field, parameters) in &method.stored_fields {
+        if !parameters.contains(&variadic) {
+            continue;
+        }
+        // A route method that reads the field when it registers a route gets the middleware
+        // that the field has at that time.
+        let read = route_methods
+            .iter()
+            .any(|route| route.read_fields.contains(field));
+        found.push(if read { Layer::Ordered } else { Layer::Unknown });
+    }
+    for call in &method.calls {
+        let CallTarget::Field {
+            field,
+            method: name,
+        } = &call.target
+        else {
+            continue;
+        };
+        let Some(inner) = fields.iter().find_map(|(known, kind)| match kind {
+            FieldKind::Router(inner) if known == field => Some(*inner),
+            _ => None,
+        }) else {
+            continue;
+        };
+        if call
+            .arguments
+            .iter()
+            .any(|argument| argument.parameters.contains(&variadic))
+        {
+            found.push(inner.layer(name).unwrap_or(Layer::Unknown));
+        }
+    }
+    let first = *found.first()?;
+    Some(if found.iter().all(|layer| *layer == first) {
+        first
+    } else {
+        Layer::Unknown
+    })
 }
 
 /// Tells if a parameter type is a string.
@@ -1251,6 +1358,12 @@ struct Graph {
     returns: HashMap<String, Option<usize>>,
     /// The routers that a middleware method gets.
     layered: HashSet<usize>,
+    /// The global layers of each router.
+    global_layers: HashMap<usize, Vec<Guard>>,
+    /// The ordered layers of each router that a function returns, at the return.
+    return_layers: HashMap<usize, Vec<Guard>>,
+    /// The parameters that get a layer in their function.
+    shared_layers: HashSet<usize>,
     /// The functions whose variadic parameter gives guards to a route or to a link.
     spread_functions: HashSet<String>,
 }
@@ -1341,6 +1454,10 @@ struct Walker<'w, 'c, 'a> {
     frames: Vec<Frame>,
     /// The prefixes and the guards of the open groups of each router, from the outside.
     groups: HashMap<usize, Vec<OpenGroup>>,
+    /// The guards of the ordered layers of each router, in source order.
+    layers: HashMap<usize, Vec<Guard>>,
+    /// The depth of the scopes where each router is made.
+    depths: HashMap<usize, usize>,
     deferred: Vec<Step<'a>>,
     depth: usize,
 }
@@ -1420,7 +1537,10 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                             resolve_type(self.context.file, &kind)
                                 .and_then(|key| self.tables.by_type.get(&key).copied())
                                 .map(|router_type| {
-                                    Value::Router(self.graph.parameter(&key, position, router_type))
+                                    let router = self.graph.parameter(&key, position, router_type);
+                                    // The body of the function is one scope below.
+                                    self.depths.insert(router, self.scopes.len() + 1);
+                                    Value::Router(router)
                                 })
                         };
                         self.bind(&name, value, true);
@@ -1523,6 +1643,9 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                             _ => None,
                         };
                     }
+                }
+                if let Some(router) = first {
+                    self.note_return(router);
                 }
                 if let Some(frame) = self.frames.last_mut() {
                     frame.returns.push(first);
@@ -1693,7 +1816,7 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                 }
                 let key = resolve_type(self.context.file, self.text(kind))?;
                 let router_type = *self.tables.by_type.get(&key)?;
-                Some(Value::Router(self.graph.add(Origin::Literal, router_type)))
+                Some(Value::Router(self.made(Origin::Literal, router_type)))
             }
             "call_expression" => self.eval_call(node),
             "func_literal" => {
@@ -1808,7 +1931,7 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
             }
         }
         let router_type = result?;
-        let router = self.graph.add(Origin::Result, router_type);
+        let router = self.made(Origin::Result, router_type);
         self.graph.calls.push((key, router));
         Some(Value::Router(router))
     }
@@ -1853,12 +1976,33 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
     /// The prefix and the guards of the open groups of a router.
     fn group_of(&self, router: usize) -> (Prefix, Vec<Guard>) {
         let mut prefix = Prefix::default();
-        let mut guards = Vec::new();
+        let mut guards = self.layers.get(&router).cloned().unwrap_or_default();
         for (part, names) in self.groups.get(&router).into_iter().flatten() {
             prefix = prefix.join(part.as_deref());
             guards.extend(names.iter().cloned());
         }
         (prefix, guards)
+    }
+
+    fn made(&mut self, origin: Origin, router_type: usize) -> usize {
+        let router = self.graph.add(origin, router_type);
+        self.depths.insert(router, self.scopes.len());
+        router
+    }
+
+    /// Keeps the ordered layers of a router that a function returns. Returns with different
+    /// layers make the layers conditional for the caller.
+    fn note_return(&mut self, router: usize) {
+        let layers = self.layers.get(&router).cloned().unwrap_or_default();
+        match self.graph.return_layers.get_mut(&router) {
+            None => {
+                self.graph.return_layers.insert(router, layers);
+            }
+            Some(known) if *known != layers && !known.contains(&Guard::Conditional) => {
+                known.push(Guard::Conditional);
+            }
+            Some(_) => {}
+        }
     }
 
     fn link(
@@ -2105,11 +2249,33 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                     guards,
                 })))
             }
-            Shape::Middleware => {
-                for argument in arguments {
-                    self.eval(*argument);
+            Shape::Middleware(layer) => {
+                let mut guards = self.guard_names(arguments.to_vec());
+                let made = self.depths.get(&router).copied().unwrap_or_default();
+                if self.scopes.len() > made {
+                    guards.push(Guard::Conditional);
                 }
-                self.graph.layered.insert(router);
+                self.graph.note_spreads(&guards);
+                match layer {
+                    Layer::Ordered => self.layers.entry(router).or_default().extend(guards),
+                    Layer::Global => {
+                        self.graph
+                            .global_layers
+                            .entry(router)
+                            .or_default()
+                            .extend(guards);
+                    }
+                    Layer::Unknown => {
+                        self.graph.layered.insert(router);
+                    }
+                }
+                // A layer on a parameter changes the router of each caller after the call, and
+                // the walk of the caller does not see it.
+                if *layer != Layer::Unknown
+                    && self.graph.routers[router].origin == Origin::Parameter
+                {
+                    self.graph.shared_layers.insert(router);
+                }
                 None
             }
         }
@@ -2329,6 +2495,8 @@ impl WrapperRoutes {
                 scopes: Vec::new(),
                 frames: Vec::new(),
                 groups: HashMap::new(),
+                layers: HashMap::new(),
+                depths: HashMap::new(),
                 deferred: Vec::new(),
                 depth: 0,
             };
@@ -2340,6 +2508,7 @@ impl WrapperRoutes {
     fn finish(tables: &Tables<'_>, mut graph: Graph) -> Self {
         // The router that a function returns is the router of each call of the function.
         let mut returned_as: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut returned_by: HashMap<usize, usize> = HashMap::new();
         for (key, call) in std::mem::take(&mut graph.calls) {
             if let Some(Some(returned)) = graph.returns.get(&key) {
                 graph.links.push(Link {
@@ -2350,8 +2519,10 @@ impl WrapperRoutes {
                     guards: Vec::new(),
                 });
                 returned_as.entry(*returned).or_default().push(call);
+                returned_by.insert(call, *returned);
             }
         }
+        let inherited = Self::inherited(&graph, &returned_by);
         // A literal is a root when no link attaches it. So is the result of a call that returns a
         // literal, and the result of a call that returns such a result.
         let count = graph.routers.len();
@@ -2380,6 +2551,16 @@ impl WrapperRoutes {
         let mut pending: Vec<usize> = graph.layered.iter().copied().collect();
         for router in &pending {
             layered[*router] = true;
+        }
+        // A layer that a function adds to its parameter is not read for the caller.
+        for router in &graph.shared_layers {
+            for index in &parents[*router] {
+                let link = &graph.links[*index];
+                if matches!(link.kind, LinkKind::Alias(_)) && !layered[link.parent] {
+                    layered[link.parent] = true;
+                    pending.push(link.parent);
+                }
+            }
         }
         while let Some(router) = pending.pop() {
             for index in &parents[router] {
@@ -2420,6 +2601,8 @@ impl WrapperRoutes {
                         &graph,
                         &parents[router],
                         &placements,
+                        &inherited,
+                        router,
                         can_be_root[router],
                         layered[router],
                     )
@@ -2445,16 +2628,21 @@ impl WrapperRoutes {
                     continue;
                 };
                 let mut guards = placement.guards.clone();
+                guards.extend(inherited[record.router].iter().cloned());
                 guards.extend(substitute(&record.guards, placement.arguments.as_deref()));
+                let conditional = guards.contains(&Guard::Conditional);
                 let guards: Vec<String> = guards
                     .into_iter()
-                    .map(|guard| match guard {
-                        Guard::Name(name) => name,
-                        Guard::Spread { .. } => UNREAD_GUARD.to_string(),
+                    .filter_map(|guard| match guard {
+                        Guard::Name(name) => Some(name),
+                        Guard::Spread { .. } => Some(UNREAD_GUARD.to_string()),
+                        Guard::Conditional => None,
                     })
                     .collect();
                 let unknown = if unresolved {
                     Some(GuardsUnknownReason::UnresolvedRouter)
+                } else if conditional {
+                    Some(GuardsUnknownReason::ConditionalMiddleware)
                 } else {
                     placement
                         .layered
@@ -2509,17 +2697,31 @@ impl WrapperRoutes {
 
     /// The chains of a router, from the chains of its parents. A router with too many chains
     /// gets one chain whose path is not known.
+    #[allow(clippy::too_many_arguments)]
     fn place(
         graph: &Graph,
         links: &[usize],
         placements: &[Option<Rc<Vec<Placement>>>],
+        inherited: &[Rc<Vec<Guard>>],
+        router: usize,
         can_be_root: bool,
         layered: bool,
     ) -> Rc<Vec<Placement>> {
+        let global = graph
+            .global_layers
+            .get(&router)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let refused = || {
+            let mut placement = Placement::unresolved(layered);
+            placement.guards.extend(global.iter().cloned());
+            Rc::new(vec![placement])
+        };
         if links.is_empty() {
             return Rc::new(if can_be_root {
                 vec![Placement {
                     layered,
+                    guards: global.to_vec(),
                     ..Placement::default()
                 }]
             } else {
@@ -2530,12 +2732,18 @@ impl WrapperRoutes {
         for index in links {
             let link = &graph.links[*index];
             let Some(above) = &placements[link.parent] else {
-                return Rc::new(vec![Placement::unresolved(layered)]);
+                return refused();
             };
             for placement in above.iter() {
                 let outer = placement.arguments.as_deref();
                 let mut guards = placement.guards.clone();
+                // The layers that a function adds to the router that it returns are not layers of
+                // the routes inside the function.
+                if !matches!(link.kind, LinkKind::Return) {
+                    guards.extend(inherited[link.parent].iter().cloned());
+                }
                 guards.extend(substitute(&link.guards, outer));
+                guards.extend(global.iter().cloned());
                 let arguments = match &link.kind {
                     LinkKind::Alias(call) if graph.spread_functions.contains(&call.function) => {
                         Some(Rc::new(Arguments {
@@ -2573,11 +2781,56 @@ impl WrapperRoutes {
                     arguments,
                 });
                 if found.len() > PLACEMENT_LIMIT {
-                    return Rc::new(vec![Placement::unresolved(layered)]);
+                    return refused();
                 }
             }
         }
         Rc::new(found.into_iter().collect())
+    }
+
+    /// The layers that each router gets from the router that a function returns to it: the
+    /// layers of that router, of the router that it gets in the same way, and so on.
+    fn inherited(graph: &Graph, returned_by: &HashMap<usize, usize>) -> Vec<Rc<Vec<Guard>>> {
+        let count = graph.routers.len();
+        let mut known: Vec<Option<Rc<Vec<Guard>>>> = vec![None; count];
+        let empty: Rc<Vec<Guard>> = Rc::default();
+        for start in 0..count {
+            let mut chain = Vec::new();
+            let mut seen = HashSet::new();
+            let mut current = start;
+            // The chain ends at a router that no function returns to, or at a known router.
+            let mut base = loop {
+                if let Some(found) = &known[current] {
+                    break Rc::clone(found);
+                }
+                let Some(returned) = returned_by.get(&current).copied() else {
+                    break Rc::clone(&empty);
+                };
+                if !seen.insert(current) {
+                    break Rc::new(vec![Guard::unread()]);
+                }
+                chain.push((current, returned));
+                current = returned;
+            };
+            if chain.is_empty() && known[current].is_none() {
+                known[current] = Some(Rc::clone(&base));
+            }
+            for (router, returned) in chain.into_iter().rev() {
+                let mut guards = base.to_vec();
+                if let Some(global) = graph.global_layers.get(&returned) {
+                    guards.extend(global.iter().cloned());
+                }
+                if let Some(layers) = graph.return_layers.get(&returned) {
+                    guards.extend(layers.iter().cloned());
+                }
+                base = Rc::new(guards);
+                known[router] = Some(Rc::clone(&base));
+            }
+        }
+        known
+            .into_iter()
+            .map(|guards| guards.unwrap_or_default())
+            .collect()
     }
 }
 
@@ -3346,5 +3599,230 @@ func main() {
                 "GET /loop [reqToken,<expression>] unread_middleware",
             ]
         );
+    }
+
+    /// A router type with the layer methods of Gitea: `BeforeRouting` gives its middleware to
+    /// `Use` of chi, and `AfterRouting` keeps it in a field that each route method reads.
+    const LAYER_ROUTER: &str = r#"package web
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+)
+
+type Router struct {
+	chiRouter      *chi.Mux
+	curGroupPrefix string
+	curMiddlewares []any
+	afterRouting   []any
+}
+
+func NewRouter() *Router {
+	return &Router{chiRouter: chi.NewRouter()}
+}
+
+func wrap(after, current, h []any) ([]func(http.Handler) http.Handler, http.HandlerFunc) {
+	return nil, nil
+}
+
+func (r *Router) BeforeRouting(middlewares ...any) {
+	for _, m := range middlewares {
+		r.chiRouter.Use(toProvider(m))
+	}
+}
+
+func toProvider(m any) func(http.Handler) http.Handler { return nil }
+
+func (r *Router) AfterRouting(middlewares ...any) {
+	r.afterRouting = append(r.afterRouting, middlewares...)
+}
+
+func (r *Router) Group(pattern string, fn func(), middlewares ...any) {
+	previousGroupPrefix := r.curGroupPrefix
+	previousMiddlewares := r.curMiddlewares
+	r.curGroupPrefix += pattern
+	r.curMiddlewares = append(r.curMiddlewares, middlewares...)
+	fn()
+	r.curGroupPrefix = previousGroupPrefix
+	r.curMiddlewares = previousMiddlewares
+}
+
+func (r *Router) Methods(methods, pattern string, h ...any) {
+	middlewares, handler := wrap(r.afterRouting, r.curMiddlewares, h)
+	r.chiRouter.With(middlewares...).Method(methods, r.curGroupPrefix+pattern, handler)
+}
+
+func (r *Router) Get(pattern string, h ...any) { r.Methods("GET", pattern, h...) }
+
+func (r *Router) Mount(pattern string, subRouter *Router) {
+	middlewares, _ := wrap(r.afterRouting, r.curMiddlewares, nil)
+	r.chiRouter.With(middlewares...).Mount(r.curGroupPrefix+pattern, subRouter.chiRouter)
+}
+"#;
+
+    const LAYER_HEADER: &str = r#"package main
+
+import (
+	"net/http"
+
+	"example.com/app/web"
+)
+
+var verbose bool
+
+func Home(w http.ResponseWriter, r *http.Request) {}
+
+func head(next http.Handler) http.Handler { return next }
+
+func auth(w http.ResponseWriter, r *http.Request) {}
+
+func extra(w http.ResponseWriter, r *http.Request) {}
+
+func reqSignIn(w http.ResponseWriter, r *http.Request) {}
+"#;
+
+    fn layer_states(body: &str) -> Vec<String> {
+        let main = format!("{LAYER_HEADER}\n{body}");
+        states(&[("main.go", &main), ("web/router.go", LAYER_ROUTER)])
+    }
+
+    #[test]
+    fn an_ordered_layer_guards_the_later_routes_and_a_framework_layer_guards_each_route() {
+        let body = r#"
+func sub() *web.Router {
+	s := web.NewRouter()
+	s.Get("/s", Home)
+	return s
+}
+
+func main() {
+	m := web.NewRouter()
+	m.Get("/early", Home)
+	m.BeforeRouting(head)
+	m.AfterRouting(auth)
+	m.Get("/late", Home)
+	m.Group("/g", func() {
+		m.Get("/in", Home)
+	}, reqSignIn)
+	m.Mount("/m", sub())
+	if verbose {
+		m.AfterRouting(extra)
+	}
+	m.Get("/cond", Home)
+}
+"#;
+        assert_eq!(
+            layer_states(body),
+            [
+                "GET /cond [head,auth,extra] conditional_middleware",
+                "GET /early [head] complete",
+                "GET /g/in [head,auth,reqSignIn] complete",
+                "GET /late [head,auth] complete",
+                "GET /m/s [head,auth] complete",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_layer_of_a_returned_router_guards_the_routes_of_the_caller() {
+        let body = r#"
+func api() *web.Router {
+	a := web.NewRouter()
+	a.Get("/before", Home)
+	a.AfterRouting(auth)
+	a.Get("/inside", Home)
+	return a
+}
+
+func main() {
+	r := api()
+	r.Get("/caller", Home)
+	list := []any{extra}
+	if verbose {
+		list = append(list, auth)
+	}
+	r.AfterRouting(list...)
+	r.Get("/unread", Home)
+}
+"#;
+        assert_eq!(
+            layer_states(body),
+            [
+                "GET /before [] complete",
+                "GET /caller [auth] complete",
+                "GET /inside [auth] complete",
+                "GET /unread [auth,extra,<expression>] unread_middleware",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_layer_that_a_function_adds_to_its_parameter_makes_the_guards_of_the_caller_not_complete() {
+        let body = r#"
+func setup(m *web.Router) {
+	m.AfterRouting(auth)
+	m.Get("/helper", Home)
+}
+
+func main() {
+	n := web.NewRouter()
+	setup(n)
+	n.Get("/after", Home)
+	o := web.NewRouter()
+	o.Get("/other", Home)
+}
+"#;
+        assert_eq!(
+            layer_states(body),
+            [
+                "GET /after [] layer_not_read",
+                "GET /helper [auth] layer_not_read",
+                "GET /other [] complete",
+            ]
+        );
+    }
+
+    fn layered_routers(count: usize, layers_per_router: usize) -> (usize, std::time::Duration) {
+        let mut main = format!("{LAYER_HEADER}\nfunc main() {{\n");
+        for number in 0..count {
+            main.push_str(&format!("\tm{number} := web.NewRouter()\n"));
+            for layer in 0..layers_per_router {
+                main.push_str(&format!(
+                    "\tm{number}.BeforeRouting(head{layer})\n\tm{number}.AfterRouting(auth{layer})\n"
+                ));
+            }
+            main.push_str(&format!("\tm{number}.Get(\"/x\", Home)\n"));
+        }
+        main.push_str("}\n");
+        let (found, took) = entries_timed(
+            Language::Go,
+            &[("main.go", &main), ("web/router.go", LAYER_ROUTER)],
+            true,
+        );
+        let routes = found
+            .iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .count();
+        (routes, took)
+    }
+
+    #[test]
+    fn layered_routers_give_each_route() {
+        assert_eq!(layered_routers(3, 2).0, 3);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_routers_with_layers_cost_linear_time() {
+        assert_scales_linearly("layered routers", 10_000, |count| {
+            layered_routers(count, 1).1
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_layers_of_one_router_cost_linear_time() {
+        assert_scales_linearly("layers", 10_000, |count| layered_routers(1, count).1);
     }
 }

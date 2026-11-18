@@ -125,6 +125,9 @@ pub enum GuardsUnknownReason {
     UnreadableDependency,
     /// The file has a wildcard import, which can bind a name again.
     WildcardImport,
+    /// A middleware layer of a router is added in a condition, a loop, or a function literal, so
+    /// omen does not know if it runs.
+    ConditionalMiddleware,
     /// A middleware argument is not a name that omen can read.
     UnreadMiddleware,
     /// The framework has a place for guards that omen does not read, such as the middleware of
@@ -151,6 +154,7 @@ impl GuardsUnknownReason {
             Self::UnreadableInclude => "unreadable_include",
             Self::UnreadableDependency => "unreadable_dependency",
             Self::WildcardImport => "wildcard_import",
+            Self::ConditionalMiddleware => "conditional_middleware",
             Self::UnreadMiddleware => "unread_middleware",
             Self::LayerNotRead => "layer_not_read",
         }
