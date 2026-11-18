@@ -41,10 +41,18 @@ pub enum CloneType {
 }
 
 impl CloneType {
-    fn from_similarity(similarity: f64) -> Self {
-        if similarity >= 0.95 {
+    /// The type of the fragments: `Type1` when their text without whitespace
+    /// and comments is equal, `Type2` when it is equal after the
+    /// normalization of identifiers and literals, and `Type3` for the rest.
+    fn of(fragments: &[&CodeFragment]) -> Self {
+        let all_equal = |key: fn(&CodeFragment) -> u64| {
+            fragments
+                .windows(2)
+                .all(|pair| key(pair[0]) == key(pair[1]))
+        };
+        if all_equal(|fragment| fragment.exact_hash) {
             CloneType::Type1
-        } else if similarity >= 0.85 {
+        } else if all_equal(|fragment| fragment.normalized_hash) {
             CloneType::Type2
         } else {
             CloneType::Type3
@@ -331,9 +339,11 @@ impl Analyzer {
             file: path.to_string(),
             start_line: (start_line + 1) as u32,
             end_line: (end_line + 1) as u32,
+            shingles: generate_k_shingles(&normalized_tokens, self.config.shingle_size),
+            exact_hash: hash_tokens(&tokens),
+            normalized_hash: hash_tokens(&normalized_tokens),
             tokens: normalized_tokens,
-            normalized_hash: 0, // Set later
-            signature: None,    // Set later
+            signature: None, // Set later
         })
     }
 
@@ -358,13 +368,11 @@ impl Analyzer {
         result
     }
 
-    /// Compute MinHash signature for a token sequence.
-    fn compute_minhash(&self, tokens: &[String]) -> MinHashSignature {
-        let shingles = generate_k_shingles(tokens, self.config.shingle_size);
-
+    /// Compute the MinHash signature of the shingles of a fragment.
+    fn compute_minhash(&self, shingles: &[u64]) -> MinHashSignature {
         let mut values = vec![u64::MAX; self.config.num_hash_functions];
 
-        for shingle_hash in &shingles {
+        for shingle_hash in shingles {
             for (i, value) in values.iter_mut().enumerate() {
                 let h = hash_u64_with_seed(*shingle_hash, i as u64);
                 if h < *value {
@@ -374,12 +382,6 @@ impl Analyzer {
         }
 
         MinHashSignature { values }
-    }
-
-    /// Compute normalized hash for a token sequence.
-    fn compute_normalized_hash(&self, tokens: &[String]) -> u64 {
-        let content = tokens.join(" ");
-        xxhash_rust::xxh3::xxh3_64(content.as_bytes())
     }
 
     /// Find clone pairs using LSH for O(n) average-case candidate filtering.
@@ -432,7 +434,7 @@ impl Analyzer {
             }
         }
 
-        // Verify candidate pairs with actual Jaccard similarity
+        // LSH gives the candidates. The exact Jaccard similarity decides.
         let mut pairs = Vec::new();
         for (idx_a, idx_b) in candidate_pairs {
             let frag_a = &fragments[idx_a];
@@ -446,24 +448,22 @@ impl Analyzer {
                 continue;
             }
 
-            // Calculate actual similarity
-            if let (Some(sig_a), Some(sig_b)) = (&frag_a.signature, &frag_b.signature) {
-                let similarity = sig_a.jaccard_similarity(sig_b);
-                if similarity >= self.config.similarity_threshold {
-                    pairs.push(ClonePair {
-                        idx_a,
-                        idx_b,
-                        similarity,
-                    });
-                }
+            let similarity = exact_jaccard(&frag_a.shingles, &frag_b.shingles);
+            if similarity >= self.config.similarity_threshold {
+                pairs.push(ClonePair { idx_a, idx_b });
             }
         }
 
         pairs
     }
 
-    /// Group clone pairs using Union-Find algorithm.
-    fn group_clones(&self, fragments: &[CodeFragment], pairs: &[ClonePair]) -> Vec<CloneGroup> {
+    /// Group clone pairs using Union-Find algorithm. Each group comes with
+    /// the indices of its fragments.
+    fn group_clones(
+        &self,
+        fragments: &[CodeFragment],
+        pairs: &[ClonePair],
+    ) -> Vec<(CloneGroup, Vec<usize>)> {
         if pairs.is_empty() {
             return Vec::new();
         }
@@ -505,17 +505,6 @@ impl Analyzer {
             group_map.entry(root).or_default().push(i);
         }
 
-        // Build similarity map
-        let mut similarity_map: HashMap<(usize, usize), f64> = HashMap::new();
-        for pair in pairs {
-            let key = if pair.idx_a < pair.idx_b {
-                (pair.idx_a, pair.idx_b)
-            } else {
-                (pair.idx_b, pair.idx_a)
-            };
-            similarity_map.insert(key, pair.similarity);
-        }
-
         // Convert to CloneGroup
         let mut groups = Vec::new();
         let mut group_id = 0u64;
@@ -535,8 +524,6 @@ impl Analyzer {
             let mut instances = Vec::new();
             let mut total_lines = 0;
             let mut total_tokens = 0;
-            let mut similarity_sum = 0.0;
-            let mut similarity_count = 0;
 
             for &idx in member_indices {
                 let frag = &fragments[idx];
@@ -553,35 +540,33 @@ impl Analyzer {
                 total_tokens += frag.tokens.len();
             }
 
-            // Calculate average similarity
-            for i in 0..member_indices.len() {
-                for j in (i + 1)..member_indices.len() {
-                    let key = if member_indices[i] < member_indices[j] {
-                        (member_indices[i], member_indices[j])
-                    } else {
-                        (member_indices[j], member_indices[i])
-                    };
-                    if let Some(&sim) = similarity_map.get(&key) {
-                        similarity_sum += sim;
-                        similarity_count += 1;
-                    }
+            // The mean of the exact similarity of each pair of members.
+            let mut similarity_sum = 0.0;
+            let mut similarity_count = 0usize;
+            for (position, &left) in member_indices.iter().enumerate() {
+                for &right in &member_indices[position + 1..] {
+                    similarity_sum +=
+                        exact_jaccard(&fragments[left].shingles, &fragments[right].shingles);
+                    similarity_count += 1;
                 }
             }
 
-            let avg_similarity = if similarity_count > 0 {
-                similarity_sum / similarity_count as f64
-            } else {
-                1.0
-            };
-
-            groups.push(CloneGroup {
-                id: group_id,
-                clone_type: CloneType::from_similarity(avg_similarity),
-                instances,
-                total_lines,
-                total_tokens,
-                average_similarity: avg_similarity,
-            });
+            groups.push((
+                CloneGroup {
+                    id: group_id,
+                    clone_type: CloneType::of(
+                        &member_indices
+                            .iter()
+                            .map(|&index| &fragments[index])
+                            .collect::<Vec<_>>(),
+                    ),
+                    instances,
+                    total_lines,
+                    total_tokens,
+                    average_similarity: similarity_sum / similarity_count as f64,
+                },
+                member_indices.clone(),
+            ));
         }
 
         groups
@@ -683,19 +668,18 @@ impl AnalyzerTrait for Analyzer {
 
         // Compute MinHash signatures in parallel
         all_fragments.par_iter_mut().for_each(|frag| {
-            frag.signature = Some(self.compute_minhash(&frag.tokens));
-            frag.normalized_hash = self.compute_normalized_hash(&frag.tokens);
+            frag.signature = Some(self.compute_minhash(&frag.shingles));
         });
 
         // Find clone pairs using LSH
         let clone_pairs = self.find_clone_pairs_lsh(&all_fragments);
 
         // Group clones using Union-Find
-        let groups = self.group_clones(&all_fragments, &clone_pairs);
+        let grouped = self.group_clones(&all_fragments, &clone_pairs);
 
         // Build summary
         let mut summary = AnalysisSummary {
-            total_groups: groups.len(),
+            total_groups: grouped.len(),
             ..Default::default()
         };
 
@@ -703,7 +687,7 @@ impl AnalyzerTrait for Analyzer {
         // Each instance represents duplicated code - count each once
         use std::collections::HashSet;
         let mut seen_ranges: HashSet<(String, u32, u32)> = HashSet::new();
-        for group in &groups {
+        for (group, _) in &grouped {
             for inst in &group.instances {
                 let key = (inst.file.clone(), inst.start_line, inst.end_line);
                 if seen_ranges.insert(key) {
@@ -712,17 +696,23 @@ impl AnalyzerTrait for Analyzer {
             }
         }
 
-        // Convert groups to pairwise clones for backward compatibility
+        // Each pair of a group is a clone if its own similarity is at the
+        // threshold. A group can join two fragments through a third one.
         let mut clones = Vec::new();
-        for group in &groups {
+        for (group, members) in &grouped {
             for i in 0..group.instances.len() {
                 for j in (i + 1)..group.instances.len() {
                     let inst_a = &group.instances[i];
                     let inst_b = &group.instances[j];
+                    let (frag_a, frag_b) = (&all_fragments[members[i]], &all_fragments[members[j]]);
+                    let similarity = exact_jaccard(&frag_a.shingles, &frag_b.shingles);
+                    if similarity < self.config.similarity_threshold {
+                        continue;
+                    }
 
                     let clone = Clone {
-                        clone_type: group.clone_type,
-                        similarity: group.average_similarity,
+                        clone_type: CloneType::of(&[frag_a, frag_b]),
+                        similarity,
                         file_a: inst_a.file.clone(),
                         file_b: inst_b.file.clone(),
                         start_line_a: inst_a.start_line,
@@ -757,7 +747,7 @@ impl AnalyzerTrait for Analyzer {
             summary.duplication_ratio = ratio.min(1.0);
         }
 
-        // Compute hotspots
+        let groups: Vec<CloneGroup> = grouped.into_iter().map(|(group, _)| group).collect();
         summary.hotspots = self.compute_hotspots(&groups);
 
         Ok(Analysis {
@@ -778,6 +768,11 @@ struct CodeFragment {
     start_line: u32,
     end_line: u32,
     tokens: Vec<String>,
+    /// The sorted multiset of shingles. See `generate_k_shingles`.
+    shingles: Vec<u64>,
+    /// The hash of the tokens before the normalization of identifiers and
+    /// literals.
+    exact_hash: u64,
     normalized_hash: u64,
     signature: Option<MinHashSignature>,
 }
@@ -786,30 +781,12 @@ struct CodeFragment {
 struct ClonePair {
     idx_a: usize,
     idx_b: usize,
-    similarity: f64,
 }
 
 /// MinHash signature for similarity estimation.
 #[derive(Clone)]
 struct MinHashSignature {
     values: Vec<u64>,
-}
-
-impl MinHashSignature {
-    fn jaccard_similarity(&self, other: &MinHashSignature) -> f64 {
-        if self.values.len() != other.values.len() || self.values.is_empty() {
-            return 0.0;
-        }
-
-        let matches = self
-            .values
-            .iter()
-            .zip(other.values.iter())
-            .filter(|(a, b)| a == b)
-            .count();
-
-        matches as f64 / self.values.len() as f64
-    }
 }
 
 // Output types
@@ -1329,41 +1306,72 @@ fn tokenize(content: &str) -> Vec<String> {
     tokens
 }
 
-/// Generate k-shingles from tokens using BLAKE3 hashing.
+/// Generate the k-shingles of the tokens as a sorted multiset.
+///
+/// Each shingle hash includes the occurrence number of its token window, so
+/// the n-th copy of a window is a different element. The Jaccard similarity
+/// of two such sets is the multiset Jaccard similarity, and MinHash estimates
+/// it. With a plain set, a function with many copies of one block has the
+/// same shingles as a function with few copies.
 fn generate_k_shingles(tokens: &[String], k: usize) -> Vec<u64> {
-    if tokens.len() < k {
-        if !tokens.is_empty() {
-            let mut bytes = Vec::new();
-            for t in tokens {
-                bytes.extend_from_slice(t.as_bytes());
-            }
-            let hash = blake3::hash(&bytes);
-            return vec![u64::from_le_bytes(
-                hash.as_bytes()[..8]
-                    .try_into()
-                    .expect("blake3 hash is always 32 bytes"),
-            )];
-        }
+    if tokens.is_empty() {
         return Vec::new();
     }
-
-    let mut shingle_set: HashSet<u64> = HashSet::new();
+    let window_size = k.clamp(1, tokens.len());
+    let mut occurrences: HashMap<u64, u64> = HashMap::new();
+    let mut shingles = Vec::with_capacity(tokens.len() + 1 - window_size);
     let mut bytes = Vec::new();
 
-    for window in tokens.windows(k) {
+    for window in tokens.windows(window_size) {
         bytes.clear();
         for token in window {
             bytes.extend_from_slice(token.as_bytes());
+            bytes.push(0);
         }
-        let hash = blake3::hash(&bytes);
-        shingle_set.insert(u64::from_le_bytes(
-            hash.as_bytes()[..8]
-                .try_into()
-                .expect("blake3 hash is always 32 bytes"),
-        ));
+        let window_hash = first_u64(blake3::hash(&bytes));
+        let occurrence = occurrences.entry(window_hash).or_insert(0);
+        *occurrence += 1;
+        let mut keyed = [0u8; 16];
+        keyed[..8].copy_from_slice(&window_hash.to_le_bytes());
+        keyed[8..].copy_from_slice(&occurrence.to_le_bytes());
+        shingles.push(first_u64(blake3::hash(&keyed)));
     }
 
-    shingle_set.into_iter().collect()
+    shingles.sort_unstable();
+    shingles.dedup();
+    shingles
+}
+
+fn first_u64(hash: blake3::Hash) -> u64 {
+    u64::from_le_bytes(
+        hash.as_bytes()[..8]
+            .try_into()
+            .expect("blake3 hash is always 32 bytes"),
+    )
+}
+
+/// The exact Jaccard similarity of two sorted shingle sets.
+fn exact_jaccard(left: &[u64], right: &[u64]) -> f64 {
+    if left.is_empty() && right.is_empty() {
+        return 1.0;
+    }
+    let (mut i, mut j, mut shared) = (0, 0, 0usize);
+    while i < left.len() && j < right.len() {
+        match left[i].cmp(&right[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                shared += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    shared as f64 / (left.len() + right.len() - shared) as f64
+}
+
+fn hash_tokens(tokens: &[String]) -> u64 {
+    xxhash_rust::xxh3::xxh3_64(tokens.join(" ").as_bytes())
 }
 
 /// Hash a u64 value with a seed using murmur-style mixing.
@@ -1397,6 +1405,76 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    fn analyze_sources(sources: &[(&str, &str)]) -> Analysis {
+        let tmp_dir = TempDir::new().unwrap();
+        for (name, code) in sources {
+            fs::write(tmp_dir.path().join(name), code).unwrap();
+        }
+        let config = CoreConfig::default();
+        let file_set = FileSet::from_path(tmp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(tmp_dir.path()));
+        Analyzer::new()
+            .with_min_tokens(20)
+            .with_similarity_threshold(0.6)
+            .analyze(&ctx)
+            .unwrap()
+    }
+
+    const BASE_FUNCTION: &str = "package main\n\nfunc total(items []int) int {\n\tsum := 0\n\tfor _, item := range items {\n\t\tif item > 10 {\n\t\t\tsum += item * 2\n\t\t} else {\n\t\t\tsum += item\n\t\t}\n\t}\n\treturn sum\n}\n";
+
+    fn only_clone(analysis: &Analysis) -> &Clone {
+        assert_eq!(analysis.clones.len(), 1, "{:?}", analysis.clones);
+        &analysis.clones[0]
+    }
+
+    #[test]
+    fn test_clone_type1_differs_only_in_whitespace_and_comments() {
+        let copy = "package main\n\n// total adds the items.\nfunc total(items []int) int {\n    sum := 0\n\n    for _, item := range items {\n        if item > 10 {\n            sum += item * 2\n        } else {\n            sum += item\n        }\n    }\n    return sum\n}\n";
+        let analysis = analyze_sources(&[("a.go", BASE_FUNCTION), ("b.go", copy)]);
+        let clone = only_clone(&analysis);
+        assert_eq!(clone.clone_type, CloneType::Type1);
+        assert_eq!(clone.similarity, 1.0);
+        assert_eq!(analysis.groups[0].clone_type, CloneType::Type1);
+    }
+
+    #[test]
+    fn test_clone_type2_differs_in_identifiers_and_literals() {
+        let renamed = "package main\n\nfunc weight(values []int) int {\n\tacc := 0\n\tfor _, value := range values {\n\t\tif value > 99 {\n\t\t\tacc += value * 3\n\t\t} else {\n\t\t\tacc += value\n\t\t}\n\t}\n\treturn acc\n}\n";
+        let analysis = analyze_sources(&[("a.go", BASE_FUNCTION), ("b.go", renamed)]);
+        let clone = only_clone(&analysis);
+        assert_eq!(clone.clone_type, CloneType::Type2);
+        assert_eq!(clone.similarity, 1.0);
+        assert_eq!(analysis.groups[0].clone_type, CloneType::Type2);
+    }
+
+    #[test]
+    fn test_clone_type3_has_a_changed_statement() {
+        let changed = "package main\n\nfunc total(items []int) int {\n\tsum := 0\n\tfor _, item := range items {\n\t\tif item > 10 {\n\t\t\tsum += item * 2\n\t\t} else {\n\t\t\tsum -= item\n\t\t}\n\t}\n\treturn sum\n}\n";
+        let analysis = analyze_sources(&[("a.go", BASE_FUNCTION), ("b.go", changed)]);
+        let clone = only_clone(&analysis);
+        assert_eq!(clone.clone_type, CloneType::Type3);
+        assert!(clone.similarity < 1.0, "{}", clone.similarity);
+        assert_eq!(analysis.groups[0].clone_type, CloneType::Type3);
+    }
+
+    /// The similarity counts each repeated shingle. A function with three
+    /// times the blocks of another function is not its clone.
+    #[test]
+    fn test_clone_repeated_blocks_are_counted() {
+        let block = "\t\t&cli.StringFlag{\n\t\t\tName:    \"type\",\n\t\t\tAliases: []string{\"t\"},\n\t\t\tUsage:   \"the type\",\n\t\t},\n";
+        let function = |name: &str, blocks: usize| {
+            format!(
+                "package main\n\nfunc {name}() []cli.Flag {{\n\treturn []cli.Flag{{\n{}\t}}\n}}\n",
+                block.repeat(blocks)
+            )
+        };
+        let analysis = analyze_sources(&[
+            ("a.go", &function("short", 3)),
+            ("b.go", &function("long", 9)),
+        ]);
+        assert!(analysis.clones.is_empty(), "{:?}", analysis.clones);
+    }
+
     #[test]
     fn test_analyzer_creation() {
         let analyzer = Analyzer::new();
@@ -1412,15 +1490,6 @@ mod tests {
             .with_similarity_threshold(0.8);
         assert_eq!(analyzer.config.min_tokens, 100);
         assert!((analyzer.config.similarity_threshold - 0.8).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_clone_type_from_similarity() {
-        assert_eq!(CloneType::from_similarity(0.99), CloneType::Type1);
-        assert_eq!(CloneType::from_similarity(0.95), CloneType::Type1);
-        assert_eq!(CloneType::from_similarity(0.90), CloneType::Type2);
-        assert_eq!(CloneType::from_similarity(0.85), CloneType::Type2);
-        assert_eq!(CloneType::from_similarity(0.70), CloneType::Type3);
     }
 
     #[test]
@@ -1503,10 +1572,8 @@ mod tests {
 
         // Identical tokens should have perfect similarity
         let tokens1: Vec<String> = (0..60).map(|i| format!("token{}", i)).collect();
-        let sig1 = analyzer.compute_minhash(&tokens1);
-        let sig2 = analyzer.compute_minhash(&tokens1);
-
-        let similarity = sig1.jaccard_similarity(&sig2);
+        let shingles = generate_k_shingles(&tokens1, analyzer.config.shingle_size);
+        let similarity = exact_jaccard(&shingles, &shingles);
         assert!((similarity - 1.0).abs() < 0.001);
     }
 
@@ -1517,10 +1584,10 @@ mod tests {
         // Completely different tokens should have similarity 0
         let tokens1: Vec<String> = (0..60).map(|i| format!("alpha{}", i)).collect();
         let tokens2: Vec<String> = (0..60).map(|i| format!("beta{}", i)).collect();
-        let sig1 = analyzer.compute_minhash(&tokens1);
-        let sig2 = analyzer.compute_minhash(&tokens2);
-
-        let similarity = sig1.jaccard_similarity(&sig2);
+        let similarity = exact_jaccard(
+            &generate_k_shingles(&tokens1, analyzer.config.shingle_size),
+            &generate_k_shingles(&tokens2, analyzer.config.shingle_size),
+        );
         assert!(similarity < 0.1); // Should be very low
     }
 
@@ -1669,9 +1736,7 @@ end
             "Structurally identical Ruby methods should produce identical normalized tokens"
         );
 
-        let sig1 = analyzer.compute_minhash(&frags1[0].tokens);
-        let sig2 = analyzer.compute_minhash(&frags2[0].tokens);
-        let similarity = sig1.jaccard_similarity(&sig2);
+        let similarity = exact_jaccard(&frags1[0].shingles, &frags2[0].shingles);
 
         // Identical tokens should produce perfect similarity
         assert!(
