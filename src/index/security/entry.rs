@@ -6506,6 +6506,37 @@ func routes() {
         );
     }
 
+    /// The walks of the Rails routes, callbacks, and configuration stop at a depth of 1,000.
+    /// Deeper nesting in each of these files does not overflow a small stack.
+    #[test]
+    fn rails_files_with_deep_nesting() {
+        use crate::parser::deep::{nest, on_small_stack};
+        let ifs = nest("if a\n", "x\n", "end\n");
+        let parentheses = nest("(", "1", ")");
+        let routes = format!(
+            "Rails.application.routes.draw do\n{ifs}  resources :users\n  get {parentheses}, to: \"users#show\"\nend\n"
+        );
+        let controller = format!(
+            "class UsersController < ApplicationController\n{ifs}  before_action :auth, only: {parentheses}\n  def show; end\nend\n"
+        );
+        let application = format!(
+            "module App\n  class Application < Rails::Application\n{ifs}    config.api_only = {parentheses}\n  end\nend\n"
+        );
+        let inflections = format!(
+            "ActiveSupport::Inflector.inflections(:en) do |inflect|\n{ifs}  inflect.irregular {parentheses}, \"x\"\nend\n"
+        );
+        on_small_stack(move || {
+            rails_routes(
+                &routes,
+                &[
+                    ("controllers/users_controller.rb", controller.as_str()),
+                    ("config/application.rb", application.as_str()),
+                    ("config/initializers/inflections.rb", inflections.as_str()),
+                ],
+            );
+        });
+    }
+
     fn rails_routes(routes: &str, controllers: &[(&str, &str)]) -> Vec<EntryPoint> {
         let mut files = vec![("config/routes.rb", routes)];
         files.extend_from_slice(controllers);
