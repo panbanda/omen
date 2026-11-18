@@ -9,6 +9,8 @@ pub mod cargo;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use parking_lot::RwLock;
+
 use super::extract::FileSymbols;
 use super::model::{ImportBinding, ImportKind, ImportTarget, SymbolKind};
 use crate::core::Language;
@@ -41,6 +43,12 @@ struct Repository<'a> {
     /// The modules that a Rust file defines itself, outside each other
     /// module: the file and the name of the module.
     rust_inline_modules: HashSet<(&'a str, &'a str)>,
+    /// The Rust files and the names of the child modules that they declare
+    /// with `mod name;`.
+    rust_module_declarations: HashSet<(&'a str, &'a str)>,
+    /// The results of `rust_parent`. Each import with `super` or `crate`
+    /// asks for the parent of its file.
+    rust_parents: RwLock<HashMap<String, Option<String>>>,
 }
 
 /// The module tree of the Rust files of an index: which file is the root of a crate, the
@@ -91,6 +99,7 @@ impl<'a> Repository<'a> {
         let mut by_directory_suffix: HashMap<&str, Vec<usize>> = HashMap::new();
         let mut by_module: HashMap<&str, Vec<usize>> = HashMap::new();
         let mut rust_inline_modules = HashSet::new();
+        let mut rust_module_declarations = HashSet::new();
         for (position, file) in files.iter().enumerate() {
             by_path.insert(file.file.as_str(), position);
             for suffix in suffixes(&file.file) {
@@ -114,6 +123,13 @@ impl<'a> Repository<'a> {
                         })
                         .map(|symbol| (file.file.as_str(), symbol.name.as_str())),
                 );
+                rust_module_declarations.extend(
+                    file.imports
+                        .iter()
+                        .filter(|binding| binding.kind == ImportKind::ModuleDeclaration)
+                        .filter_map(|binding| binding.local_name.as_deref())
+                        .map(|child| (file.file.as_str(), child)),
+                );
             }
         }
         let mut repository = Self {
@@ -129,6 +145,8 @@ impl<'a> Repository<'a> {
             rust_libraries: HashMap::new(),
             rust_library_names: HashMap::new(),
             rust_inline_modules,
+            rust_module_declarations,
+            rust_parents: RwLock::new(HashMap::new()),
         };
         repository.read_rust_packages();
         repository
@@ -742,6 +760,17 @@ impl Repository<'_> {
 
     /// The file of the module that declares the module in `file`.
     fn rust_parent(&self, file: &str) -> Option<String> {
+        if let Some(found) = self.rust_parents.read().get(file) {
+            return found.clone();
+        }
+        let found = self.find_rust_parent(file);
+        self.rust_parents
+            .write()
+            .insert(file.to_string(), found.clone());
+        found
+    }
+
+    fn find_rust_parent(&self, file: &str) -> Option<String> {
         if self.rust_roots.contains(file) {
             return None;
         }
@@ -749,18 +778,14 @@ impl Repository<'_> {
         let stem = file_name(file).trim_end_matches(".rs");
         // The module that declares the child module `child` in `children`.
         let owner = |children: &str, child: &str| -> Option<String> {
-            let mut found: Vec<String> = ["main.rs", "lib.rs", "mod.rs"]
+            let mut found: BTreeSet<String> = ["main.rs", "lib.rs", "mod.rs"]
                 .iter()
                 .filter_map(|root| self.existing(join(children, root)))
                 .collect();
             let named_roots = self
                 .rust_roots_by_child
                 .get(&(children.to_string(), child.to_string()));
-            for root in named_roots.into_iter().flatten() {
-                if !found.contains(root) {
-                    found.push(root.clone());
-                }
-            }
+            found.extend(named_roots.into_iter().flatten().cloned());
             if let Some((above, name)) = children.rsplit_once('/') {
                 found.extend(self.existing(join(above, &format!("{name}.rs"))));
             } else if !children.is_empty() {
@@ -770,16 +795,15 @@ impl Repository<'_> {
             // `mod child;` is the parent.
             if found.len() > 1 {
                 found.retain(|candidate| {
-                    let facts = self.by_path.get(candidate.as_str());
-                    facts.is_some_and(|position| {
-                        self.files[*position].imports.iter().any(|binding| {
-                            binding.kind == ImportKind::ModuleDeclaration
-                                && binding.local_name.as_deref() == Some(child)
-                        })
-                    })
+                    self.rust_module_declarations
+                        .contains(&(candidate.as_str(), child))
                 });
             }
-            (found.len() == 1).then(|| found.remove(0))
+            let mut found = found.into_iter();
+            match (found.next(), found.next()) {
+                (Some(only), None) => Some(only),
+                _ => None,
+            }
         };
         match stem {
             "main" | "lib" => None,
@@ -1353,5 +1377,71 @@ mod tests {
         assert_eq!(join("a/b", "../c/./d").as_deref(), Some("a/c/d"));
         assert_eq!(join("", "x").as_deref(), Some("x"));
         assert_eq!(join("a", "../../x"), None);
+    }
+
+    /// `roots` integration tests declare `mod common;`, and the shared module
+    /// has `imports` imports with `crate::`. The parent of the shared module
+    /// is one of many roots, thus it has no one parent.
+    fn imports_of_a_module_of_many_roots_resolve_at(
+        roots: usize,
+        imports: usize,
+    ) -> std::time::Duration {
+        let manifest = "[package]\nname = \"kit\"\n";
+        let mut owned = vec![
+            ("Cargo.toml".to_string(), manifest.to_string()),
+            ("src/lib.rs".to_string(), "pub fn run() {}\n".to_string()),
+        ];
+        for root in 0..roots {
+            owned.push((format!("tests/t{root}.rs"), "mod common;\n".to_string()));
+        }
+        let shared: String = (0..imports)
+            .map(|import| format!("use crate::helper{import};\n"))
+            .collect();
+        owned.push(("tests/common/mod.rs".to_string(), shared));
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let facts = super::testing::index(&files);
+        let elapsed = started.elapsed();
+        let shared = facts
+            .iter()
+            .find(|file| file.file == "tests/common/mod.rs")
+            .expect("the shared module");
+        assert_eq!(shared.imports.len(), imports);
+        assert!(shared
+            .imports
+            .iter()
+            .all(|binding| binding.target_file == ImportTarget::Unresolved));
+        elapsed
+    }
+
+    #[test]
+    fn test_imports_of_a_module_of_many_roots_are_unresolved() {
+        imports_of_a_module_of_many_roots_resolve_at(20, 20);
+    }
+
+    /// The search for the parent of the shared module must not occur again
+    /// for each import.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_imports_of_a_module_of_many_roots_resolve_in_linear_time() {
+        let size = 2_000;
+        let best = |size: usize| {
+            (0..2)
+                .map(|_| imports_of_a_module_of_many_roots_resolve_at(size, size))
+                .min()
+                .expect("two runs")
+        };
+        let small = best(size);
+        let large = best(size * 2);
+        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
+        assert!(
+            large < allowed,
+            "{small:?} at {size}, {large:?} at {}",
+            size * 2
+        );
+        assert!(large.as_secs() < 60, "{large:?}");
     }
 }
