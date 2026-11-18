@@ -603,38 +603,23 @@ fn count_defect_nodes(
     is_go_test_file: bool,
     count: &mut i32,
 ) {
-    // Skip nodes inside #[cfg(test)] modules
-    let start = node.start_byte();
-    if test_ranges
-        .iter()
-        .any(|r| start >= r.start && start < r.end)
-    {
-        return;
-    }
-
-    if match_defect_node(node, source, language, is_go_test_file) {
-        *count += 1;
-        // Don't recurse into children of a matched node to avoid double-counting
-        return;
-    }
-
-    // Recurse into children
-    let mut cursor = node.walk();
-    if cursor.goto_first_child() {
-        loop {
-            count_defect_nodes(
-                &cursor.node(),
-                source,
-                language,
-                test_ranges,
-                is_go_test_file,
-                count,
-            );
-            if !cursor.goto_next_sibling() {
-                break;
-            }
+    crate::parser::walk_preorder(*node, |node| {
+        // Skip nodes inside #[cfg(test)] modules
+        let start = node.start_byte();
+        if test_ranges
+            .iter()
+            .any(|r| start >= r.start && start < r.end)
+        {
+            return crate::parser::Walk::SkipChildren;
         }
-    }
+
+        if match_defect_node(&node, source, language, is_go_test_file) {
+            *count += 1;
+            // Don't go into children of a matched node to avoid double-counting
+            return crate::parser::Walk::SkipChildren;
+        }
+        crate::parser::Walk::Children
+    });
 }
 
 /// Check if a single AST node matches a critical defect pattern for the given language.
@@ -1019,6 +1004,48 @@ fn aggregate_project_score(scores: Vec<Score>) -> Analysis {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_count_defect_nodes_in_deeply_nested_source() {
+        use crate::parser::deep;
+        let counts = deep::on_small_stack(|| {
+            for (source, parsed) in deep::parsed_deep_sources() {
+                let language = Language::from_extension(Path::new(&source.file));
+                let mut count = 0;
+                count_defect_nodes(
+                    &parsed.root_node(),
+                    &parsed.source,
+                    language,
+                    &[],
+                    false,
+                    &mut count,
+                );
+            }
+            let code = format!(
+                "fn f() {{ {}x.unwrap(){}; }}\n",
+                "(".repeat(deep::DEPTH),
+                ")".repeat(deep::DEPTH)
+            );
+            let parsed = crate::parser::Parser::new()
+                .parse(
+                    code.as_bytes(),
+                    crate::core::Language::Rust,
+                    Path::new("a.rs"),
+                )
+                .unwrap();
+            let mut count = 0;
+            count_defect_nodes(
+                &parsed.root_node(),
+                &parsed.source,
+                Language::Rust,
+                &[],
+                false,
+                &mut count,
+            );
+            count
+        });
+        assert_eq!(counts, 1);
+    }
 
     #[test]
     fn test_default_weights() {
