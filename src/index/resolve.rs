@@ -908,6 +908,21 @@ impl<'a> Resolver<'a> {
                     self.symbol(*other).body_range.is_some() && self.same_parameters(*id, *other)
                 })
         });
+        // A TypeScript overload signature has no body. The implementation with
+        // the same name in the same container runs for each signature.
+        let implemented = found.clone();
+        found.retain(|id| {
+            let symbol = self.symbol(*id);
+            symbol.body_range.is_some()
+                || self.family(id.0) != Family::Ecma
+                || !implemented.iter().any(|other| {
+                    let implementation = self.symbol(*other);
+                    other.0 == id.0
+                        && implementation.body_range.is_some()
+                        && implementation.name == symbol.name
+                        && self.facts(*other).container_path == self.facts(*id).container_path
+                })
+        });
         // Only a language with overloads selects by the number of arguments.
         let overloads = found.first().is_some_and(|id| {
             matches!(
@@ -4554,6 +4569,49 @@ mod ecma_tests {
                     "5 run>Date UniqueCandidate QualifiedPath [{declares_file}#Date.constructor]"
                 )],
                 "{extension}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod ecma_overload_tests {
+    use super::testing::rows;
+
+    #[test]
+    fn test_overload_signatures_merge_with_the_implementation_typescript() {
+        let repo = "export class Repo {\n  find(id: string): string;\n  find(id: number, all: boolean): string;\n  find(id: unknown, all?: boolean): string {\n    return String(id);\n  }\n  run(): string {\n    return this.find('a');\n  }\n}\n";
+        let util = "export function format(value: number): string;\nexport function format(value: string): string;\nexport function format(value: unknown): string {\n  return String(value);\n}\n";
+        let main = "import { Repo } from './repo';\nimport { format } from './util';\n\nexport function run(repo: Repo): string {\n  return repo.find(1, true) + format(2) + new Repo().find('b');\n}\n";
+        for extension in ["ts", "tsx"] {
+            let repo_file = format!("repo.{extension}");
+            let util_file = format!("util.{extension}");
+            let main_file = format!("main.{extension}");
+            let files = [
+                (repo_file.as_str(), repo),
+                (util_file.as_str(), util),
+                (main_file.as_str(), main),
+            ];
+            let implementation = format!("[repo.{extension}#Repo.find~3]");
+            let found = rows(&files, &main_file);
+            assert!(
+                found.contains(&format!(
+                    "5 run>repo.find UniqueCandidate ReceiverDeclaredType {implementation}"
+                )),
+                "{found:?}"
+            );
+            assert!(
+                found.contains(&format!(
+                    "5 run>format UniqueCandidate ImportedName [util.{extension}#format~3]"
+                )),
+                "{found:?}"
+            );
+            let found = rows(&files, &repo_file);
+            assert!(
+                found.contains(&format!(
+                    "8 Repo.run>self.find UniqueCandidate EnclosingType {implementation}"
+                )),
+                "{found:?}"
             );
         }
     }
