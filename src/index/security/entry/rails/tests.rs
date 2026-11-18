@@ -1530,3 +1530,71 @@ fn a_wrapper_that_can_change_the_result_of_the_old_method_makes_the_names_unread
         );
     }
 }
+
+/// `depth` nested modules, and `classes` controllers in the inner module with a superclass that
+/// only the top level has. A `relative` name makes omen search each module around each
+/// controller before the top level, and an absolute name `::BaseController` does not.
+fn deep_modules_at(depth: usize, classes: usize, relative: bool) -> std::time::Duration {
+    let parent = if relative {
+        "BaseController"
+    } else {
+        "::BaseController"
+    };
+    let mut source =
+        String::from("class BaseController < ActionController::Base\n  before_action :base\nend\n");
+    for level in 0..depth {
+        source.push_str(&format!("module M{level}\n"));
+    }
+    for number in 0..classes {
+        source.push_str(&format!(
+            "class C{number}Controller < {parent}\n  def show; end\nend\n"
+        ));
+    }
+    for _ in 0..depth {
+        source.push_str("end\n");
+    }
+    let namespace: Vec<String> = (0..depth).map(|level| format!("m{level}")).collect();
+    let routes = format!(
+        "Rails.application.routes.draw do\n  get \"/a\", to: \"{}/c0#show\"\nend\n",
+        namespace.join("/")
+    );
+    let (found, elapsed) = entries_lean(
+        Language::Ruby,
+        &[
+            ("config/routes.rb", routes.as_str()),
+            ("app/controllers/deep.rb", source.as_str()),
+        ],
+    );
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].guards, ["base"]);
+    assert!(found[0].guards_complete);
+    elapsed
+}
+
+#[test]
+fn a_class_in_deep_modules_finds_the_superclass_of_the_top_level() {
+    deep_modules_at(30, 30, true);
+    deep_modules_at(30, 30, false);
+}
+
+/// The identities of the classes have the text of each module around them, so the time of this
+/// input grows with the depth times the number of classes for an absolute name too. The search
+/// of each module around a class must not add a factor of the depth to that: a relative name
+/// must take about the time of an absolute name. The runs of the two names alternate, so a
+/// change in the speed of the machine changes both.
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_a_relative_superclass_in_deep_modules_takes_the_time_of_an_absolute_one() {
+    let size = 1_500;
+    let mut absolute = std::time::Duration::MAX;
+    let mut relative = std::time::Duration::MAX;
+    for _ in 0..3 {
+        absolute = absolute.min(deep_modules_at(size, size, false));
+        relative = relative.min(deep_modules_at(size, size, true));
+    }
+    let allowed = absolute.max(std::time::Duration::from_millis(100)) * 2;
+    assert!(
+        relative < allowed,
+        "absolute {absolute:?}, relative {relative:?} at {size}"
+    );
+}

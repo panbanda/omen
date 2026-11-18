@@ -5700,6 +5700,59 @@ const RAILS_BASES: [&str; 4] = [
     "AbstractController::Base",
 ];
 
+/// The modules and the classes of the class identities, as a tree of the parts of each identity.
+/// A node is one prefix of an identity. A search below a node walks the parts of the name and
+/// does not build the text of the prefix again for each module around a class.
+struct ModuleTree<'a> {
+    children: HashMap<(usize, &'a str), usize>,
+    classes: Vec<Option<&'a str>>,
+}
+
+impl<'a> ModuleTree<'a> {
+    const ROOT: usize = 0;
+
+    fn new(identities: impl Iterator<Item = &'a str>) -> Self {
+        let mut tree = Self {
+            children: HashMap::new(),
+            classes: vec![None],
+        };
+        for identity in identities {
+            let mut node = Self::ROOT;
+            for part in identity.split('.') {
+                let next = tree.classes.len();
+                node = *tree.children.entry((node, part)).or_insert(next);
+                if node == next {
+                    tree.classes.push(None);
+                }
+            }
+            tree.classes[node] = Some(identity);
+        }
+        tree
+    }
+
+    /// The node of each prefix of the identity: the root first, and the identity itself last.
+    fn chain(&self, identity: &str) -> Vec<usize> {
+        let mut chain = vec![Self::ROOT];
+        for part in identity.split('.') {
+            let node = chain[chain.len() - 1];
+            match self.children.get(&(node, part)) {
+                Some(next) => chain.push(*next),
+                None => break,
+            }
+        }
+        chain
+    }
+
+    /// The class with the dotted name below the module of the node.
+    fn class_below(&self, node: usize, dotted: &str) -> Option<&'a str> {
+        let mut node = node;
+        for part in dotted.split('.') {
+            node = *self.children.get(&(node, part))?;
+        }
+        self.classes[node]
+    }
+}
+
 /// The superclass identity of each class, and the classes with a superclass that omen cannot
 /// find. A superclass name with a leading `::` must be the identity of a class. Omen searches
 /// any other name as Ruby does: in each module around the `class` statement from the inner one
@@ -5714,6 +5767,7 @@ fn resolve_parents(
     suffixes: &HashMap<String, UniqueClass>,
 ) -> (HashMap<String, Option<String>>, HashSet<String>) {
     let mut unresolved: HashSet<String> = HashSet::new();
+    let modules = ModuleTree::new(classes.keys().map(String::as_str));
     let raw: HashMap<&str, Option<&str>> = classes
         .iter()
         .map(|(identity, group)| {
@@ -5734,20 +5788,18 @@ fn resolve_parents(
                 }
                 // The modules around the `class` statement: the identity without the parts
                 // that the statement itself writes, as `Admin::Users` writes two.
-                let mut around = identity.as_str();
-                for _ in 0..declared {
-                    around = around.rsplit_once('.').map_or("", |(outer, _)| outer);
-                }
-                while !around.is_empty() {
-                    if let Some(found) = known(&format!("{around}.{dotted}")) {
-                        return Some(found);
-                    }
-                    around = around.rsplit_once('.').map_or("", |(outer, _)| outer);
-                }
-                known(&dotted).or_else(|| match suffixes.get(&dotted) {
-                    Some(UniqueClass::One(found)) => Some(found.as_str()),
-                    _ => None,
-                })
+                let chain = modules.chain(identity);
+                let around = chain.len().saturating_sub(declared + 1);
+                let lexical = chain[1..=around]
+                    .iter()
+                    .rev()
+                    .find_map(|module| modules.class_below(*module, &dotted));
+                lexical
+                    .or_else(|| known(&dotted))
+                    .or_else(|| match suffixes.get(&dotted) {
+                        Some(UniqueClass::One(found)) => Some(found.as_str()),
+                        _ => None,
+                    })
             });
             let named = named.map(|(parent, _)| parent);
             if let (Some(named), None) = (named, parent) {
