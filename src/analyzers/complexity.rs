@@ -369,6 +369,29 @@ pub fn analyze_symbol_complexity(symbol: &Symbol, result: &ParseResult) -> Metri
     )
 }
 
+/// The maximum nesting depth of a file: the code outside the functions, and
+/// each function from its own body, as `Metrics::max_nesting` measures it.
+pub fn max_nesting_of_file(result: &ParseResult) -> u32 {
+    let root = result.root_node();
+    let outside = calculate_max_nesting(&root, result.language, 0);
+    parser::extract_functions(result)
+        .iter()
+        .filter_map(|func| {
+            find_function_node(
+                &root,
+                func.start_line,
+                func.body_byte_range,
+                result.language,
+            )
+        })
+        .filter(|node| !body_is_a_nested_function(node, result.language))
+        .map(|node| {
+            let body = node.child_by_field_name("body").unwrap_or(node);
+            calculate_max_nesting(&body, result.language, 0)
+        })
+        .fold(outside, u32::max)
+}
+
 fn measure_function(
     start_line: u32,
     end_line: u32,
