@@ -1,5 +1,7 @@
 //! Composite health score analyzer.
 
+#[cfg(test)]
+mod configuration_tests;
 mod debt;
 #[cfg(test)]
 mod determinism_tests;
@@ -19,6 +21,9 @@ pub struct Analyzer {
     /// Churn window handed to the defect analyzer, so scoring honours the
     /// configured window rather than always using the default.
     defect_churn_days: u32,
+    /// The `[duplicates]` table, for the duplication component and for the
+    /// duplication factor of the defect component.
+    duplicates: crate::analyzers::duplicates::Config,
 }
 
 impl Default for Analyzer {
@@ -26,6 +31,7 @@ impl Default for Analyzer {
         Self {
             weights: ScoreWeights::default(),
             defect_churn_days: crate::config::DefectConfig::default().since.days(),
+            duplicates: crate::analyzers::duplicates::Config::default(),
         }
     }
 }
@@ -46,12 +52,26 @@ impl Analyzer {
     /// churn window wherever it runs -- the subcommand, the gate, MCP, and
     /// each trend sample.
     pub fn from_config(config: &crate::config::Config) -> Self {
-        Self::default().with_defect_churn_days(config.defect.since.days())
+        let mut analyzer = Self::default().with_defect_churn_days(config.defect.since.days());
+        analyzer.duplicates = crate::analyzers::duplicates::Analyzer::from_config(config)
+            .config()
+            .clone();
+        analyzer
     }
 
     pub fn with_defect_churn_days(mut self, days: u32) -> Self {
         self.defect_churn_days = days;
         self
+    }
+
+    fn duplicates_analyzer(&self) -> crate::analyzers::duplicates::Analyzer {
+        crate::analyzers::duplicates::Analyzer::new().with_config(self.duplicates.clone())
+    }
+
+    fn defect_analyzer(&self) -> crate::analyzers::defect::Analyzer {
+        crate::analyzers::defect::Analyzer::new()
+            .with_churn_days(self.defect_churn_days)
+            .with_duplicates(self.duplicates_analyzer())
     }
 }
 
@@ -161,7 +181,7 @@ impl AnalyzerTrait for Analyzer {
         run_analyzer!(
             "duplication",
             self.weights.duplicates,
-            crate::analyzers::duplicates::Analyzer::new(),
+            self.duplicates_analyzer(),
             calculate_duplicates_score,
             |r: &crate::analyzers::duplicates::Analysis| format!(
                 "Found {} clones, {:.1}% duplication",
@@ -195,7 +215,7 @@ impl AnalyzerTrait for Analyzer {
         run_analyzer!(
             "defect",
             self.weights.defect,
-            crate::analyzers::defect::Analyzer::new().with_churn_days(self.defect_churn_days),
+            self.defect_analyzer(),
             calculate_defect_score,
             |r: &crate::analyzers::defect::Analysis| format!(
                 "{} high-risk files, avg probability: {:.1}%",
@@ -1772,18 +1792,5 @@ mod tests {
         };
         let score = calculate_defect_score(&result);
         assert!(score < 40.0);
-    }
-
-    #[test]
-    fn test_score_forwards_the_configured_defect_window() {
-        // The window used to reach only the score gate; ordinary `omen
-        // score`, MCP and each trend sample built the analyzer with defaults.
-        let mut config = crate::config::Config::default();
-        config.defect.since = crate::config::HistoryWindow::parse("365d").unwrap();
-        assert_eq!(Analyzer::from_config(&config).defect_churn_days, 365);
-        assert_eq!(
-            Analyzer::default().defect_churn_days,
-            crate::config::DefectConfig::default().since.days()
-        );
     }
 }

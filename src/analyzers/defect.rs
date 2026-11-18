@@ -155,6 +155,12 @@ impl Analyzer {
         self
     }
 
+    /// The clone analyzer that gives the duplication factor.
+    pub fn with_duplicates(mut self, duplicates: duplicates::Analyzer) -> Self {
+        self.duplicates = duplicates;
+        self
+    }
+
     pub fn with_weights(mut self, weights: Weights) -> Self {
         self.config.weights = weights;
         self
