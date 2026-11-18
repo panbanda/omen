@@ -39,6 +39,8 @@ new behaviour, and the necessary change in a client.
 | `--start-line` of `symbol` and `impact`, `start_line` of the MCP tool `impact` | Not available. | Selects the definition that starts on that line. | None. |
 | Choices of the MCP `ambiguous` error | `name`, `start_line`, and, for `get_symbol`, `signature`. | Also `kind`, `container`, `file`, and `arguments`. `task_context` choices also have `signature`. | None, unless the client rejects unknown keys. |
 | `message` of the `not_found` error for a symbol | No near names. | The near names after `Near names:`. | None. |
+| A start line that no definition of the name has, in `symbol`, `impact`, `get_symbol`, `impact`, and `task_context` | The `not_found` error with `param` `name` and the near names. | The `not_found` error with `param` `start_line`. The suggestions are the definitions of the name: CLI choices have a `command` without `--start-line`, and MCP choices have `arguments` with the correct `start_line`. | Read `error.param`. |
+| A `static` C or C++ function and a declaration in a different file | One function. | Different functions. A bare name that agrees with both is ambiguous. | Send the key of one choice. |
 
 ## Removed in 5.0
 

@@ -14,17 +14,27 @@ holds one object for each choice, with these keys:
 
 - `name`: the key of the definition. As a name, it selects only this definition.
 - `kind`, `container`, `file`, `start_line`, and `signature`.
-- `arguments`: the arguments that select this choice in the same tool.
+- `arguments`: the arguments that select this choice in the same tool. Send
+  the same call again, and use these arguments in place of the arguments with
+  the same names. Keep the other arguments, such as `path`.
 
 A callable declaration without a body, such as a C prototype or a C++ member
 declaration, and one definition with the same name and container are one
-function. The tools select the definition and give the declarations in
-`declarations`. Two definitions, or two declarations without a definition, give
-the `ambiguous` error.
+function. The tools select the definition. `get_symbol` and `impact` give the
+declarations in `declarations`. `task_context` does not give them, but its
+callers include the callers of each declaration. A declaration is a part of the
+function also when the name has a file, a key, or a start line that excludes the
+declaration. A `static` C or C++ function and a declaration in a different file
+are different functions. Two definitions, or two declarations without a
+definition, give the `ambiguous` error.
 
 `start_line` is an integer from 1 to 4294967295. It must be
-equal to the line on which the definition starts. When no definition starts on
-that line, the tool gives an error with the code `not_found`. When two
+equal to the line on which the definition starts. When the name agrees with a
+definition but no definition starts on that line, the tool gives an error with
+the code `not_found` and the `param` `start_line`. Its suggestions are the
+definitions of the name, and their `arguments` have the correct `start_line`.
+When the name agrees with no definition and the call has a `start_line`, `next`
+tells the client to also correct or remove `start_line`. When two
 definitions start on that line, the tool gives the `ambiguous` error again. The
 file and the line identify a definition in the current checkout, not after an
 edit.
@@ -32,7 +42,13 @@ edit.
 The CLI commands `symbol` and `impact` obey the same rules. They write the same
 error object to stdout and exit with the status 1. Each choice has a `command`
 in place of `arguments`. The `command` is the command line with the key in place
-of the name. `--start-line` is the flag for `start_line`.
+of the name, with shell quotes. It keeps the program path and the other
+arguments. It does not keep the user information of a URL, such as a token in
+`https://user:token@host/owner/repo`. A key that starts with `-` comes after
+`--`. For a start line that no definition has, the `command` has no
+`--start-line`. When an argument is not UTF-8, the choices have no `command`.
+In Markdown, each command is in a code block. `--start-line` is the flag for
+`start_line`.
 
 ## Arguments, errors, and the envelope
 
