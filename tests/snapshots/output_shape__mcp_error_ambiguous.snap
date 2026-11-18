@@ -7,7 +7,7 @@ expression: body
     "code": "ambiguous",
     "expected": "a name, or a name and a start line, that select one definition",
     "message": "3 definitions agree with the symbol `helper`. Select one with its key or its start line.",
-    "next": "Call `get_symbol` again with the `arguments` of one suggestion.",
+    "next": "Call `get_symbol` again with the arguments of this call. Use the `arguments` of one suggestion in place of the arguments with the same names.",
     "param": "name",
     "received": "helper",
     "suggestions": [

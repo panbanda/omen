@@ -39,17 +39,6 @@ fn scope_of(cli: &Cli, args: &omen::cli::AnalyzerArgs) -> Scope {
     Scope::from(args).with_ref(commands::repository::local_ref(cli))
 }
 
-/// The command line that each choice of an ambiguous symbol name repeats.
-fn symbol_command_line(command: &str, name: &str) -> CommandLine {
-    let arguments: Vec<String> = std::env::args_os()
-        .map(|argument| argument.to_string_lossy().into_owned())
-        .collect();
-    match omen::cli::symbol_name_position(&arguments) {
-        Some(position) => CommandLine::from_process(arguments, position),
-        None => CommandLine::plain(command, name),
-    }
-}
-
 fn logging_filter(verbose: bool, rust_log: Option<&str>) -> EnvFilter {
     let directive = rust_log.unwrap_or(if verbose { "debug" } else { "off" });
     EnvFilter::new(directive)
@@ -364,7 +353,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 scope: scope_of(cli, &args.common),
                 git_ref: commands::repository::local_ref(cli).map(str::to_string),
                 start_line: args.start_line,
-                command_line: symbol_command_line("impact", &args.symbol),
+                command_line: CommandLine::from_process(std::env::args_os().collect()),
             };
             commands::impact::run(path, &config, &request, format, &mut stdout())?;
         }
@@ -377,7 +366,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 scope: scope_of(cli, &args.common),
                 git_ref: commands::repository::local_ref(cli).map(str::to_string),
                 start_line: args.start_line,
-                command_line: symbol_command_line("symbol", &args.name),
+                command_line: CommandLine::from_process(std::env::args_os().collect()),
             };
             commands::symbol::run(path, &config, &request, format, &mut stdout())?;
         }

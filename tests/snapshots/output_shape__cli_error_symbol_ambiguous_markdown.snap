@@ -7,8 +7,14 @@ expression: text
 Run one of these commands:
 
 - `main.rs#shadow.helper` (Function in `shadow`) at main.rs:38
+  ```sh
   omen -p <root> symbol 'main.rs#shadow.helper'
+  ```
 - `other.rs#helper` (Function) at other.rs:1
+  ```sh
   omen -p <root> symbol 'other.rs#helper'
+  ```
 - `util.rs#helper` (Function) at util.rs:1
+  ```sh
   omen -p <root> symbol 'util.rs#helper'
+  ```

@@ -13,7 +13,7 @@ use crate::git::GitRepo;
 use crate::mcp::envelope::{Hint, IndexInfo, Truncation};
 use crate::mcp::error::{ErrorCode, ToolError};
 use crate::mcp::McpServer;
-use crate::symbol::LookupFailure;
+use crate::symbol::{LookupFailure, SymbolChoice};
 
 const START_LINE: Param = Param::integer(
     "start_line",
@@ -309,40 +309,71 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
 }
 
 /// The error for a symbol name that does not select one definition. Each
-/// choice of an ambiguous name has the `arguments` that select only it.
+/// choice has the `arguments` that select only it.
 fn lookup_error(tool: &ToolSpec, param: &'static str, failure: &LookupFailure) -> ToolError {
-    let (name, choices) = match failure {
-        LookupFailure::NotFound { name, suggestions } => {
-            let next = if suggestions.is_empty() {
-                "Find the symbol with `outline` or `search`."
+    let with_arguments = |choices: &[SymbolChoice], with_line: bool| -> Vec<Value> {
+        choices
+            .iter()
+            .map(|choice| {
+                let mut value = json!(choice);
+                value["arguments"] = if with_line {
+                    json!({ (param): choice.name, "start_line": choice.start_line })
+                } else {
+                    json!({ (param): choice.name })
+                };
+                value
+            })
+            .collect()
+    };
+    let same_call = format!(
+        "Call `{}` again with the arguments of this call.",
+        tool.name
+    );
+    match failure {
+        LookupFailure::NotFound {
+            name,
+            start_line,
+            suggestions,
+        } => {
+            let mut next = if suggestions.is_empty() {
+                "Find the symbol with `outline` or `search`.".to_string()
             } else {
-                "Use a name from `suggestions`."
+                "Use a name from `suggestions`.".to_string()
             };
-            return ToolError::new(ErrorCode::NotFound, failure.to_string())
+            if start_line.is_some() {
+                next.push_str(" Also correct `start_line` or remove it.");
+            }
+            ToolError::new(ErrorCode::NotFound, failure.to_string())
                 .with_param(param)
                 .with_received(&json!(name))
                 .with_suggestions(suggestions.clone())
-                .with_next(next);
+                .with_next(next)
         }
-        LookupFailure::Ambiguous { name, choices } => (name, choices),
-    };
-    let choices: Vec<Value> = choices
-        .iter()
-        .map(|choice| {
-            let mut value = json!(choice);
-            value["arguments"] = json!({ (param): choice.name });
-            value
-        })
-        .collect();
-    ToolError::new(ErrorCode::Ambiguous, failure.to_string())
-        .with_param(param)
-        .with_expected("a name, or a name and a start line, that select one definition")
-        .with_received(&json!(name))
-        .with_suggestions(choices)
-        .with_next(format!(
-            "Call `{}` again with the `arguments` of one suggestion.",
-            tool.name
-        ))
+        LookupFailure::NotAtLine {
+            start_line,
+            choices,
+            ..
+        } => ToolError::new(ErrorCode::NotFound, failure.to_string())
+            .with_param("start_line")
+            .with_expected("the start line of a definition of the name")
+            .with_received(&json!(start_line))
+            .with_suggestions(with_arguments(choices, true))
+            .with_next(format!(
+                "{same_call} Correct `start_line` or remove it, or use the `arguments` of one \
+                 suggestion in place of the arguments with the same names."
+            )),
+        LookupFailure::Ambiguous { name, choices } => {
+            ToolError::new(ErrorCode::Ambiguous, failure.to_string())
+                .with_param(param)
+                .with_expected("a name, or a name and a start line, that select one definition")
+                .with_received(&json!(name))
+                .with_suggestions(with_arguments(choices, false))
+                .with_next(format!(
+                    "{same_call} Use the `arguments` of one suggestion in place of the \
+                     arguments with the same names."
+                ))
+        }
+    }
 }
 
 pub(super) static TASK_CONTEXT: ToolSpec = ToolSpec {

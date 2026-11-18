@@ -70,6 +70,42 @@ pub fn symbol_name_position(arguments: &[String]) -> Option<usize> {
         })
 }
 
+/// The positions of the `--start-line` flag and its value in the command
+/// line of `symbol` or `impact`. The command line without them parses with
+/// no start line. Empty when the command line has no start line.
+pub fn start_line_positions(arguments: &[String]) -> Vec<usize> {
+    let start_line = |arguments: &[String]| match Cli::try_parse_from(arguments) {
+        Ok(Cli {
+            command: Command::Symbol(args),
+            ..
+        }) => Ok(args.start_line),
+        Ok(Cli {
+            command: Command::Impact(args),
+            ..
+        }) => Ok(args.start_line),
+        _ => Err(()),
+    };
+    if matches!(start_line(arguments), Ok(Some(_))) {
+        for position in 1..arguments.len() {
+            let positions = match arguments[position].as_str() {
+                "--start-line" => vec![position, position + 1],
+                argument if argument.starts_with("--start-line=") => vec![position],
+                _ => continue,
+            };
+            let rest: Vec<String> = arguments
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| !positions.contains(other))
+                .map(|(_, argument)| argument.clone())
+                .collect();
+            if start_line(&rest) == Ok(None) {
+                return positions;
+            }
+        }
+    }
+    Vec::new()
+}
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Analyze code complexity (cyclomatic and cognitive)
@@ -2312,6 +2348,30 @@ mod tests {
             symbol_name_position(&arguments(&["omen", "complexity", "foo"])),
             None
         );
+    }
+
+    #[test]
+    fn test_start_line_positions_of_each_form() {
+        let arguments = |text: &[&str]| -> Vec<String> {
+            text.iter().map(|argument| argument.to_string()).collect()
+        };
+        assert_eq!(
+            start_line_positions(&arguments(&[
+                "omen",
+                "-p",
+                "9",
+                "symbol",
+                "foo",
+                "--start-line",
+                "9"
+            ])),
+            [5, 6]
+        );
+        assert_eq!(
+            start_line_positions(&arguments(&["omen", "impact", "--start-line=9", "foo"])),
+            [2]
+        );
+        assert!(start_line_positions(&arguments(&["omen", "symbol", "foo"])).is_empty());
     }
 
     // -----------------------------------------------------------------

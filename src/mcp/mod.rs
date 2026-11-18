@@ -41,7 +41,7 @@ When `has_more` is true, send the same call with `offset` set to `next_offset`. 
 Errors: a result with `isError` true holds `error.code`, `error.param`, `error.expected`, \
 and `error.suggestions`. Do what `error.next` tells you. \
 The server does not replace an incorrect argument with a default. \
-When the code is `ambiguous`, send the call again with the `name` and the `start_line` of one suggestion.
+When a suggestion has `arguments`, send the same call again and use those `arguments` in place of the arguments with the same names.
 
 The call graph comes from names. A compiler does not prove it.";
 
@@ -528,8 +528,30 @@ mod tests {
         assert_eq!(selected["result"]["start_line"], 7);
         assert!(selected["result"]["source"].as_str().unwrap().contains('2'));
         assert_eq!(
-            call(json!({"start_line": 99}))["error"]["code"],
-            "not_found"
+            ambiguous["error"]["next"],
+            "Call `get_symbol` again with the arguments of this call. \
+             Use the `arguments` of one suggestion in place of the arguments with the same names."
+        );
+        let not_at_line = call(json!({"start_line": 99}));
+        assert_eq!(not_at_line["error"]["code"], "not_found");
+        assert_eq!(not_at_line["error"]["param"], "start_line");
+        assert_eq!(not_at_line["error"]["received"], 99);
+        assert_eq!(
+            not_at_line["error"]["suggestions"][1]["arguments"],
+            json!({"name": "same.rb#B.helper", "start_line": 7})
+        );
+        assert_eq!(
+            not_at_line["error"]["next"],
+            "Call `get_symbol` again with the arguments of this call. \
+             Correct `start_line` or remove it, or use the `arguments` of one suggestion \
+             in place of the arguments with the same names."
+        );
+        let misspelled = call(json!({"name": "same.rb:helpr", "start_line": 99}));
+        assert_eq!(misspelled["error"]["code"], "not_found");
+        assert_eq!(misspelled["error"]["param"], "name");
+        assert_eq!(
+            misspelled["error"]["next"],
+            "Use a name from `suggestions`. Also correct `start_line` or remove it."
         );
     }
 

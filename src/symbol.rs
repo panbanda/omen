@@ -218,7 +218,15 @@ pub enum LookupFailure {
     /// No definition agrees with the name. `suggestions` holds near names.
     NotFound {
         name: String,
+        start_line: Option<u32>,
         suggestions: Vec<String>,
+    },
+    /// Definitions agree with the name, but none of them starts at
+    /// `start_line`. `choices` holds the definitions of the name.
+    NotAtLine {
+        name: String,
+        start_line: u32,
+        choices: Vec<SymbolChoice>,
     },
     /// More than one definition agrees with the name.
     Ambiguous {
@@ -230,13 +238,28 @@ pub enum LookupFailure {
 impl std::fmt::Display for LookupFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotFound { name, suggestions } if suggestions.is_empty() => {
-                write!(formatter, "No definition agrees with the symbol `{name}`.")
+            Self::NotFound {
+                name,
+                start_line,
+                suggestions,
+            } => {
+                write!(formatter, "No definition agrees with the symbol `{name}`.")?;
+                if !suggestions.is_empty() {
+                    write!(formatter, " Near names: {}.", suggestions.join(", "))?;
+                }
+                if let Some(line) = start_line {
+                    write!(
+                        formatter,
+                        " Also make sure that the start line {line} is correct, or remove it."
+                    )?;
+                }
+                Ok(())
             }
-            Self::NotFound { name, suggestions } => write!(
+            Self::NotAtLine {
+                name, start_line, ..
+            } => write!(
                 formatter,
-                "No definition agrees with the symbol `{name}`. Near names: {}.",
-                suggestions.join(", ")
+                "No definition of the symbol `{name}` starts at line {start_line}. Correct the start line or remove it."
             ),
             Self::Ambiguous { name, choices } => write!(
                 formatter,
@@ -294,47 +317,84 @@ pub fn select(
     name: &str,
     start_line: Option<u32>,
 ) -> std::result::Result<Selection, Box<LookupFailure>> {
-    let matches: Vec<usize> = index
-        .resolve(name)
-        .into_iter()
+    let resolved = index.resolve(name);
+    let matches: Vec<usize> = resolved
+        .iter()
+        .copied()
         .filter(|&position| start_line.is_none_or(|line| index.symbols[position].line == line))
         .collect();
     if matches.is_empty() {
-        return Err(Box::new(LookupFailure::NotFound {
-            name: name.to_string(),
-            suggestions: suggestions(&index.by_name, name),
+        return Err(Box::new(match start_line {
+            Some(line) if !resolved.is_empty() => LookupFailure::NotAtLine {
+                name: name.to_string(),
+                start_line: line,
+                choices: resolved
+                    .iter()
+                    .map(|&position| SymbolChoice::of(&index.symbols[position]))
+                    .collect(),
+            },
+            _ => LookupFailure::NotFound {
+                name: name.to_string(),
+                start_line,
+                suggestions: suggestions(&index.by_name, name),
+            },
         }));
     }
     let (declarations, definitions): (Vec<usize>, Vec<usize>) = matches
         .iter()
         .partition(|&&position| is_declaration(&index.symbols[position]));
     let selected = match (definitions.as_slice(), declarations.as_slice()) {
-        ([definition], _) => {
-            let container = container_of(&index.symbols[*definition]);
-            let same_function = callable(&index.symbols[*definition])
-                && declarations
-                    .iter()
-                    .all(|&position| container_of(&index.symbols[position]) == container);
-            same_function.then_some(Selection {
-                definition: *definition,
-                declarations,
-            })
+        ([definition], declarations)
+            if declarations.iter().all(|&declaration| {
+                declares(&index.symbols[declaration], &index.symbols[*definition])
+            }) =>
+        {
+            Some(*definition)
         }
-        ([], [declaration]) => Some(Selection {
-            definition: *declaration,
-            declarations: Vec::new(),
-        }),
+        ([], [declaration]) => Some(*declaration),
         _ => None,
     };
-    selected.ok_or_else(|| {
-        Box::new(LookupFailure::Ambiguous {
+    let Some(definition) = selected else {
+        return Err(Box::new(LookupFailure::Ambiguous {
             name: name.to_string(),
             choices: matches
                 .iter()
                 .map(|&position| SymbolChoice::of(&index.symbols[position]))
                 .collect(),
+        }));
+    };
+    // A key, a file or a start line can exclude a declaration from the
+    // matches, thus the declarations come from all symbols of the name.
+    let symbol = &index.symbols[definition];
+    let declarations = index
+        .by_name
+        .get(&symbol.name)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|&position| {
+            let candidate = &index.symbols[position];
+            is_declaration(candidate) && declares(candidate, symbol)
         })
+        .collect();
+    Ok(Selection {
+        definition,
+        declarations,
     })
+}
+
+/// `declaration` declares the function that `definition` defines: the
+/// definition has a body, and the two have the same container path and a
+/// linkage that agrees.
+fn declares(
+    declaration: &crate::index::view::ViewSymbol,
+    definition: &crate::index::view::ViewSymbol,
+) -> bool {
+    callable(definition)
+        && definition.has_body
+        && container_of(declaration) == container_of(definition)
+        && (declaration.file == definition.file
+            || !(declaration.file_local || definition.file_local))
 }
 
 fn callable(symbol: &crate::index::view::ViewSymbol) -> bool {
@@ -688,6 +748,7 @@ mod tests {
             failure,
             LookupFailure::NotFound {
                 name: "helpr".to_string(),
+                start_line: None,
                 suggestions: vec!["helper".to_string()],
             }
         );
@@ -813,11 +874,167 @@ mod tests {
     }
 
     #[test]
+    fn test_one_type_is_selected() {
+        let (dir, files) = repository(&[("shop.py", "class Shop:\n    pass\n")]);
+        let report = get_symbol(dir.path(), &files, "Shop", &SymbolOptions::default()).unwrap();
+        assert_eq!(report.qualified_name, "shop.py#Shop");
+    }
+
+    fn out_of_line_method() -> (TempDir, Vec<PathBuf>) {
+        repository(&[
+            ("shape.hpp", "class Shape {\npublic:\n    int area();\n};\n"),
+            (
+                "shape.cpp",
+                "#include \"shape.hpp\"\nint Shape::area() {\n    return 1;\n}\n",
+            ),
+        ])
+    }
+
+    #[test]
+    fn test_a_key_keeps_the_declarations_of_the_definition() {
+        let (dir, files) = out_of_line_method();
+        let report = get_symbol(
+            dir.path(),
+            &files,
+            "shape.cpp#Shape.area",
+            &SymbolOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            located(&report.declarations),
+            ["shape.hpp#Shape.area shape.hpp:3"]
+        );
+    }
+
+    #[test]
+    fn test_a_start_line_keeps_the_declarations_of_the_definition() {
+        let (dir, files) = out_of_line_method();
+        let report = get_symbol_at_line(
+            dir.path(),
+            &files,
+            "area",
+            &SymbolOptions::default(),
+            Some(2),
+        )
+        .unwrap();
+        assert_eq!(report.qualified_name, "shape.cpp#Shape.area");
+        assert_eq!(
+            located(&report.declarations),
+            ["shape.hpp#Shape.area shape.hpp:3"]
+        );
+    }
+
+    #[test]
+    fn test_a_file_qualified_name_keeps_a_declaration_in_a_different_file() {
+        let (dir, files) = repository(&[
+            ("a.cpp", "void b();\nvoid a() { b(); }\n"),
+            ("b.cpp", "void b() {}\n"),
+        ]);
+        let report = get_symbol(dir.path(), &files, "b.cpp:b", &SymbolOptions::default()).unwrap();
+        assert_eq!(report.qualified_name, "b.cpp#b");
+        assert_eq!(located(&report.declarations), ["a.cpp#b a.cpp:1"]);
+        assert_eq!(located(&report.callers), ["a.cpp#a a.cpp:2"]);
+    }
+
+    #[test]
+    fn test_a_static_definition_is_not_the_external_function_of_a_header() {
+        let (dir, files) = repository(&[
+            ("api.h", "int tick(void);\n"),
+            ("local.c", "static int tick(void) { return 1; }\n"),
+        ]);
+        assert_eq!(
+            choice_keys(get_symbol(
+                dir.path(),
+                &files,
+                "tick",
+                &SymbolOptions::default()
+            )),
+            ["api.h#tick", "local.c#tick"]
+        );
+        let report = get_symbol(
+            dir.path(),
+            &files,
+            "local.c#tick",
+            &SymbolOptions::default(),
+        )
+        .unwrap();
+        assert!(report.declarations.is_empty(), "{:?}", report.declarations);
+    }
+
+    #[test]
+    fn test_a_static_prototype_and_its_definition_in_one_file_are_one_function() {
+        let (dir, files) = repository(&[(
+            "local.c",
+            "static int tick(void);\nint run(void) { return tick(); }\nstatic int tick(void) { return 1; }\n",
+        )]);
+        let report = get_symbol(dir.path(), &files, "tick", &SymbolOptions::default()).unwrap();
+        assert_eq!(report.qualified_name, "local.c#tick~2");
+        assert_eq!(located(&report.declarations), ["local.c#tick local.c:1"]);
+    }
+
+    #[test]
+    fn test_a_start_line_that_no_definition_has_is_the_problem() {
+        let (dir, files) = two_helpers();
+        let failure = lookup_failure(get_symbol_at_line(
+            dir.path(),
+            &files,
+            "x.py:helper",
+            &SymbolOptions::default(),
+            Some(9),
+        ));
+        let LookupFailure::NotAtLine {
+            name,
+            start_line,
+            choices,
+        } = &failure
+        else {
+            panic!("expected a start line failure: {failure:?}");
+        };
+        assert_eq!((name.as_str(), *start_line), ("x.py:helper", 9));
+        assert_eq!(
+            choices
+                .iter()
+                .map(|choice| (choice.name.as_str(), choice.start_line))
+                .collect::<Vec<_>>(),
+            [("x.py#Shop.helper", 2)]
+        );
+        assert_eq!(
+            failure.to_string(),
+            "No definition of the symbol `x.py:helper` starts at line 9. Correct the start line or remove it."
+        );
+    }
+
+    #[test]
+    fn test_a_misspelled_name_with_a_start_line_names_the_start_line_too() {
+        let (dir, files) = two_helpers();
+        let failure = lookup_failure(get_symbol_at_line(
+            dir.path(),
+            &files,
+            "helpr",
+            &SymbolOptions::default(),
+            Some(9),
+        ));
+        assert_eq!(
+            failure,
+            LookupFailure::NotFound {
+                name: "helpr".to_string(),
+                start_line: Some(9),
+                suggestions: vec!["helper".to_string()],
+            }
+        );
+        assert_eq!(
+            failure.to_string(),
+            "No definition agrees with the symbol `helpr`. Near names: helper. Also make sure that the start line 9 is correct, or remove it."
+        );
+    }
+
+    #[test]
     fn test_the_container_of_a_key_with_an_ordinal() {
         let symbol = |key: &str, name: &str| crate::index::view::ViewSymbol {
             name: name.to_string(),
             body_start: 0,
             has_body: true,
+            file_local: false,
             qualified_name: key.to_string(),
             kind: SymbolKind::Method,
             file: "a.cpp".to_string(),

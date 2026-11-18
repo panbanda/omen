@@ -22,8 +22,9 @@ pub struct SymbolRequest {
     pub git_ref: Option<String>,
     /// The line on which the definition starts. It selects one of two definitions with one name.
     pub start_line: Option<u32>,
-    /// The command line that each choice of an ambiguous name repeats.
-    pub command_line: CommandLine,
+    /// The command line that each choice repeats. `None` when the command
+    /// line cannot be repeated as text.
+    pub command_line: Option<CommandLine>,
 }
 
 pub fn run(
@@ -49,7 +50,7 @@ pub fn run(
     let selected = report_with_reader(&view, &request.name, &options, request.start_line, &read);
     let mut report = match selected {
         Err(crate::core::Error::SymbolLookup(failure)) => {
-            write_failure(&failure, "name", &request.command_line, format, out)?;
+            write_failure(&failure, "name", request.command_line.as_ref(), format, out)?;
             return Err(crate::core::Error::SymbolLookup(failure));
         }
         other => other?,
@@ -88,7 +89,7 @@ mod tests {
             scope: Scope::default(),
             git_ref: None,
             start_line: None,
-            command_line: CommandLine::plain("symbol", name),
+            command_line: Some(CommandLine::plain("symbol", name)),
         }
     }
 

@@ -1207,6 +1207,11 @@ const LOOKUP_FAILURES: &[(&str, &[&str], &str)] = &[
         &["impact", "helper", "--start-line", "1"],
         r#"{"symbol": "helper", "start_line": 1}"#,
     ),
+    (
+        "get_symbol",
+        &["symbol", "helpr", "--start-line", "1"],
+        r#"{"name": "helpr", "start_line": 1}"#,
+    ),
 ];
 
 #[test]
