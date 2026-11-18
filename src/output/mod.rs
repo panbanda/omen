@@ -197,15 +197,17 @@ pub fn page_ranked_children(
     let total = rows.len();
     let limit = if top == 0 { usize::MAX } else { top };
     let mut kept: Vec<(usize, Vec<Value>)> = Vec::new();
+    // The index in `kept` of each parent that has a child on the page.
+    let mut kept_index: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
     let mut returned = 0;
     for row in rows.into_iter().skip(offset).take(limit) {
         returned += 1;
-        match kept
-            .iter_mut()
-            .find(|(position, _)| *position == row.parent)
-        {
-            Some((_, children)) => children.push(row.child),
-            None => kept.push((row.parent, vec![row.child])),
+        match kept_index.get(&row.parent) {
+            Some(&index) => kept[index].1.push(row.child),
+            None => {
+                kept_index.insert(row.parent, kept.len());
+                kept.push((row.parent, vec![row.child]));
+            }
         }
     }
     let parent_count = parents.len();
@@ -827,6 +829,27 @@ mod tests {
                 ("c.rs", &["c1"])
             ])
         );
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_page_of_the_functions_of_many_files_is_made_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("files", 40_000, |size| {
+            let files: Vec<Value> = (0..size)
+                .map(|position| {
+                    json!({"file": format!("f{position}.rs"),
+                           "functions": [function("f", 1, position as u64 % 7, 0)]})
+                })
+                .collect();
+            let mut report = json!({ "files": files });
+            let started = std::time::Instant::now();
+            let page =
+                page_ranked_children(&mut report, "files", "functions", &COMPLEXITY_RANK, 0, 0)
+                    .unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(page.returned, size);
+            elapsed
+        });
     }
 
     #[test]
