@@ -176,7 +176,10 @@ impl LanguageSpec for Java {
     }
 
     fn value_hook_kinds(&self) -> Vec<&'static str> {
-        vec![super::values::METHOD_REFERENCE]
+        vec![
+            super::values::METHOD_REFERENCE,
+            super::values::TYPE_ARGUMENTS,
+        ]
     }
 
     fn function_values<'tree>(

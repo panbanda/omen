@@ -212,6 +212,7 @@ pub const CPP: ValueSyntax = ValueSyntax {
 };
 
 pub const METHOD_REFERENCE: &str = "method_reference";
+pub const TYPE_ARGUMENTS: &str = "type_arguments";
 
 /// A name in Java is a variable, and it is never a method. A variable can
 /// hold a lambda.
@@ -227,8 +228,9 @@ pub const JAVA: ValueSyntax = ValueSyntax {
     variables: true,
 };
 
-/// `Type::name`, `this::name`, `super::name`, and `value::name`. `Type::new`
-/// is a constructor, and it gives no record.
+/// `Type::name`, `this::name`, `super::name`, and `value::name`. Type
+/// arguments can be before the name, as in `Type::<T>name`. `Type::new` is a
+/// constructor, and it gives no record: its last named child is not a name.
 pub fn java<'tree>(
     calls: &CallSyntax,
     node: Node<'tree>,
@@ -239,14 +241,19 @@ pub fn java<'tree>(
         JAVA.values(calls, node, context, out);
         return;
     }
-    let (Some(target), Some(name), 2) = (
-        node.named_child(0),
-        node.named_child(1),
-        node.named_child_count(),
-    ) else {
+    let count = node.named_child_count() as u32;
+    let (Some(target), Some(name)) = (node.named_child(0), node.named_child(count.wrapping_sub(1)))
+    else {
         return;
     };
-    if name.kind() != "identifier" {
+    let between_is_type_arguments = match count {
+        2 => true,
+        3 => node
+            .named_child(1)
+            .is_some_and(|between| between.kind() == TYPE_ARGUMENTS),
+        _ => false,
+    };
+    if !between_is_type_arguments || name.kind() != "identifier" {
         return;
     }
     let (receiver, qualifier) = calls.before_name(target, context);

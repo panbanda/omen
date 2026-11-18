@@ -682,13 +682,15 @@ type RawCall<'tree> = (
     Option<(usize, usize)>,
 );
 
-/// What the local names of one definition tell about one name.
+/// What one declaration of a local name tells about the name.
 #[derive(Clone, Copy)]
-struct BoundName {
-    /// The first byte of the first value of the name. It is 0 for a name
-    /// that has no value, as a parameter is.
+struct BoundName<'a> {
+    /// The first byte of the value of the name. It is 0 for a name that has
+    /// no value, as a parameter is.
     first_value: usize,
-    /// A declaration of the name has a type or a value.
+    /// The bytes of the block in which the name is visible. See `Local::block`.
+    block: Option<&'a std::ops::Range<usize>>,
+    /// The declaration has a type or a value.
     has_type_or_value: bool,
 }
 
@@ -1826,19 +1828,16 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     // them. A use that the facts of this file show to name no function gets
     // no record. The rules agree with the rules of the resolver, which gives
     // a function reference no candidate that has only the name as evidence.
-    let mut bound: HashMap<(usize, &str), BoundName> = HashMap::new();
+    let mut bound: HashMap<(usize, &str), Vec<BoundName<'_>>> = HashMap::new();
     for local in &locals {
         if let Some(owner) = local.owner {
-            let start = local.name.value_start.unwrap_or(0);
-            let known = bound
-                .entry((owner, local.name.name.as_str()))
-                .or_insert(BoundName {
-                    first_value: start,
-                    has_type_or_value: false,
-                });
-            known.first_value = start.min(known.first_value);
-            known.has_type_or_value |=
-                local.name.type_name.is_some() || local.name.value_start.is_some();
+            let names = bound.entry((owner, local.name.name.as_str())).or_default();
+            names.push(BoundName {
+                first_value: local.name.value_start.unwrap_or(0),
+                block: local.block.as_ref(),
+                has_type_or_value: local.name.type_name.is_some()
+                    || local.name.value_start.is_some(),
+            });
         }
     }
     let defined: std::collections::HashSet<&str> = symbols
@@ -1869,15 +1868,9 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 | Language::Rust
                 | Language::Bash
         );
-    // The local names `name` of the definitions that contain `owner`, the nearest first.
-    let bound_in_chain = |owner: Option<usize>, name: &str| -> Vec<BoundName> {
-        let mut found = Vec::new();
-        let mut current = owner;
-        while let Some(position) = current {
-            found.extend(bound.get(&(position, name)).copied());
-            current = link_facts[position].parent;
-        }
-        found
+    // The owner and each definition that contains it, the nearest first.
+    let chain_of = |owner: Option<usize>| {
+        std::iter::successors(owner, |position| link_facts[*position].parent)
     };
     let mut values = extractor.values;
     values.sort_by_key(|(used, _, _)| used.node.start_byte());
@@ -1894,18 +1887,27 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         // A PHP variable has `$` before the name of the function value that it holds.
         let is_defined = defined.contains(name.trim_start_matches('$'));
         let names_no_function = match &used.callee.receiver {
-            // A local name hides a function of a different file.
+            // A local name hides a function of a different file. The name
+            // is not in scope before its first value, and a name of a block
+            // is not in scope after the block.
             None if bare && !is_defined => {
-                let hidden = bound_in_chain(owner_position, name)
-                    .iter()
-                    .any(|local| local.first_value < start || local.first_value == 0);
+                let hidden = chain_of(owner_position)
+                    .filter_map(|position| bound.get(&(position, name)))
+                    .flatten()
+                    .any(|local| {
+                        (local.first_value < start || local.first_value == 0)
+                            && local.block.is_none_or(|block| block.contains(&start))
+                    });
                 hidden || (names_are_in_file && !imported.contains(name))
             }
             // A parameter without a type gives no type to its member.
             Some(Receiver::Name(receiver)) if !is_defined => {
-                let locals = bound_in_chain(owner_position, receiver);
-                !locals.is_empty()
-                    && locals.iter().all(|local| !local.has_type_or_value)
+                let mut locals = chain_of(owner_position)
+                    .filter_map(|position| bound.get(&(position, receiver.as_str())))
+                    .flatten()
+                    .peekable();
+                locals.peek().is_some()
+                    && locals.all(|local| !local.has_type_or_value)
                     && !defined.contains(receiver.as_str())
                     && !imported.contains(receiver.as_str())
             }

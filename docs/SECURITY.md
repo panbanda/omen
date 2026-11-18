@@ -137,7 +137,7 @@ name is a function reference to it.
 | JavaScript, TypeScript, JSX, TSX | `name`, `this.name`, `object.name` at a value position. `{ name }`. The value of a JSX attribute, as `onClick={name}`. | `name as Type`, `name!`. A JSX expression that is a child of an element. |
 | Go | `name`, `value.Method`, `package.Name` at a value position | The key of a composite literal. |
 | Rust | `name`, `module::name`, `Type::name`, `name::<T>` at a value position, and as the last expression of a block | A name in the tokens of a macro. A tuple struct or an enum variant as a function. |
-| Java | `Type::name`, `this::name`, `super::name`, `value::name`. A local name that holds a lambda. | `Type::new`. A method with more than one overload. |
+| Java | `Type::name`, `Type::<T>name`, `this::name`, `super::name`, `value::name`. A local name that holds a lambda. | `Type::new`. A method with more than one overload. |
 | C# | A method group: `Name`, `this.Name`, `Type.Name` at a value position. A local function. | A method with more than one overload. |
 | C | `name` and `&name` at a value position, and in an initializer | A member `value.name`. A name that a macro makes. |
 | C++ | The forms of C, and `&Type::name`, `scope::name` | `std::thread worker(name);`, which the grammar reads as a declaration of a function. |

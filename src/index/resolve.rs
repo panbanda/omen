@@ -210,6 +210,10 @@ struct Resolver<'a> {
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
     locals_by_name: Vec<HashMap<&'a str, Vec<usize>>>,
+    /// For each file, the positions of the local names by owner and name, in
+    /// source order. Many functions of a file can bind one name, and a lookup
+    /// reads only the names of one function.
+    locals_by_owner: Vec<HashMap<&'a str, PositionsByOwner>>,
     /// For each file, the positions of the references by start byte, in source order.
     references_by_start: Vec<HashMap<usize, Vec<usize>>>,
     /// For each Ruby type, the types that have it as a direct parent type.
@@ -224,6 +228,9 @@ struct Resolver<'a> {
 /// The file, the name, and the qualifier of one type lookup.
 type TypeQuery = (usize, String, Option<String>);
 
+/// The positions of the local names of one name, by the definition that binds them.
+type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
+
 impl<'a> Resolver<'a> {
     fn new(files: &'a [FileSymbols], manifests: &'a Manifests) -> Self {
         let mut by_name: HashMap<&str, Vec<Id>> = HashMap::new();
@@ -237,6 +244,21 @@ impl<'a> Resolver<'a> {
                     .push((file, position));
             }
         }
+        let locals_by_owner = files
+            .iter()
+            .map(|facts| {
+                let mut positions: HashMap<&str, PositionsByOwner> = HashMap::new();
+                for (position, local) in facts.locals.iter().enumerate() {
+                    positions
+                        .entry(local.name.name.as_str())
+                        .or_default()
+                        .entry(local.owner)
+                        .or_default()
+                        .push(position);
+                }
+                positions
+            })
+            .collect();
         let locals_by_name = files
             .iter()
             .map(|facts| {
@@ -308,6 +330,7 @@ impl<'a> Resolver<'a> {
             by_name,
             by_file,
             locals_by_name,
+            locals_by_owner,
             references_by_start,
             ruby_children: OnceLock::new(),
             types_cache: RwLock::new(HashMap::new()),
@@ -931,12 +954,9 @@ impl<'a> Resolver<'a> {
         let owners = chain.iter().map(|id| Some(id.1)).chain([None]);
         for owner in owners {
             let found = self
-                .locals_named(file, name)
+                .locals_of(file, owner, name)
                 .filter(|local| {
-                    local.owner == owner
-                        && at.is_none_or(|at| {
-                            local.block.as_ref().is_none_or(|block| block.contains(&at))
-                        })
+                    at.is_none_or(|at| local.block.as_ref().is_none_or(|block| block.contains(&at)))
                 })
                 .min_by_key(|local| local.block.as_ref().map_or(usize::MAX, |block| block.len()));
             if found.is_some() {
@@ -944,6 +964,38 @@ impl<'a> Resolver<'a> {
             }
         }
         None
+    }
+
+    /// The local names `name` that the definition `owner` of `file` binds, in source order.
+    fn locals_of(
+        &self,
+        file: usize,
+        owner: Option<usize>,
+        name: &str,
+    ) -> impl Iterator<Item = &'a Local> + '_ {
+        let locals = &self.files[file].locals;
+        self.locals_by_owner[file]
+            .get(name)
+            .and_then(|owners| owners.get(&owner))
+            .into_iter()
+            .flatten()
+            .map(move |position| &locals[*position])
+    }
+
+    /// Tells if a definition of `chain` binds the local name `name` so that a
+    /// bare name at the byte `start` is that local name. The name is not in
+    /// scope in its own first value or before it, and a name of a block is
+    /// not in scope after the block.
+    fn is_local_value(&self, chain: &[Id], file: usize, name: &str, start: usize) -> bool {
+        chain.iter().any(|id| {
+            self.locals_of(file, Some(id.1), name).any(|local| {
+                local.name.value_start.is_none_or(|value| value < start)
+                    && local
+                        .block
+                        .as_ref()
+                        .is_none_or(|block| block.contains(&start))
+            })
+        })
     }
 
     /// The methods with this name in the language family. The rules offer
@@ -1587,8 +1639,6 @@ impl<'a> Resolver<'a> {
     /// Resolves a call of a bare name. `start` is the start byte of the call.
     fn bare(&self, file: usize, reference: &Reference, chain: &[Id], start: usize) -> Outcome {
         let name = reference.name.as_str();
-        // A local name is not in scope in its own first value or before it.
-        let in_scope = |local: &Local| local.name.value_start.is_none_or(|value| value < start);
         let arity = reference.arity;
         let family = self.family(file);
         let callable = |id: &Id| {
@@ -1617,12 +1667,7 @@ impl<'a> Resolver<'a> {
         if family == Family::Ruby {
             // A Ruby name without parentheses is a value when the method
             // binds the name. A function value needs `.call`.
-            let bound = self.locals_named(file, name).any(|local| {
-                in_scope(local)
-                    && local
-                        .owner
-                        .is_some_and(|owner| chain.contains(&(file, owner)))
-            });
+            let bound = self.is_local_value(chain, file, name, start);
             // The name in `method(:name)` is not a variable, and a variable
             // can hold a function value. The lexical rule tells them apart.
             if bound && reference.kind != ReferenceKind::FunctionReference {
@@ -1666,13 +1711,7 @@ impl<'a> Resolver<'a> {
             if let Some(outcome) = Outcome::of(Basis::LexicalScope, lexical) {
                 return outcome;
             }
-            let value = self.locals_named(file, name).any(|local| {
-                in_scope(local)
-                    && local
-                        .owner
-                        .is_some_and(|owner| chain.contains(&(file, owner)))
-            });
-            if value {
+            if self.is_local_value(chain, file, name, start) {
                 return Outcome::none(Status::Unresolved);
             }
         }
@@ -2296,22 +2335,34 @@ fn drop_values_that_name_no_function(files: &mut [FileSymbols]) {
             }
         }
         // An import can give a new name to a name that a different import
-        // gave. Each pass adds the names of one more import in such a chain.
-        loop {
-            let known = functions.len();
-            for binding in files.iter().flat_map(|facts| &facts.imports) {
-                let names = (
-                    binding.imported_name.as_deref(),
-                    binding.local_name.as_deref(),
-                );
-                if let (Some(source), Some(local)) = names {
-                    if functions.contains(source) {
-                        functions.insert(local);
-                    }
+        // gave. The search goes from each name to the local names that the
+        // imports give it, and it reads each name one time, thus a long chain
+        // of such imports costs linear time. The default export of a module
+        // has no name of its own, thus an import or an export that gives it a
+        // name starts a chain.
+        let mut renames: HashMap<&str, Vec<&str>> = HashMap::new();
+        let mut pending: Vec<&str> = functions.iter().copied().collect();
+        for binding in files.iter().flat_map(|facts| &facts.imports) {
+            let names = (
+                binding.imported_name.as_deref(),
+                binding.local_name.as_deref(),
+            );
+            let (Some(source), Some(local)) = names else {
+                continue;
+            };
+            if source == "default" {
+                if functions.insert(local) {
+                    pending.push(local);
                 }
+            } else if source != local {
+                renames.entry(source).or_default().push(local);
             }
-            if functions.len() == known {
-                break;
+        }
+        while let Some(name) = pending.pop() {
+            for local in renames.get(name).into_iter().flatten() {
+                if functions.insert(local) {
+                    pending.push(local);
+                }
             }
         }
         files

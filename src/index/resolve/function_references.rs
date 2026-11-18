@@ -164,6 +164,148 @@ fn test_function_with_a_new_name_from_a_chain_of_imports() {
     assert_eq!(candidates(call).as_deref(), Some("pkg/mod.py#worker]"));
 }
 
+/// The candidates in the row of `name`, for the calls or the values of a file.
+fn candidates_of(found: &[String], name: &str) -> Vec<String> {
+    found
+        .iter()
+        .filter(|row| row.contains(&format!(">{name} ")))
+        .filter_map(|row| row.split_once('['))
+        .map(|(_, keys)| keys.trim_end_matches(']').to_string())
+        .collect()
+}
+
+/// A local name hides a function only in the block that declares the name.
+#[test]
+fn test_local_name_of_a_block_that_ended_does_not_hide_the_function() {
+    let files = [
+        (
+            "a.go",
+            "package a\n\nfunc entry() {\n\t{\n\t\tcleanup := 1\n\t\t_ = cleanup\n\t\tregister(cleanup)\n\t}\n\tregister(cleanup)\n\tcleanup()\n}\n",
+        ),
+        ("b.go", "package a\n\nfunc cleanup() {}\n"),
+    ];
+    assert_eq!(
+        rows(&files, "a.go"),
+        ["9 entry>cleanup UniqueCandidate SamePackage [b.go#cleanup]"]
+    );
+    assert_eq!(
+        candidates_of(&call_rows(&files, "a.go"), "cleanup"),
+        ["b.go#cleanup"]
+    );
+}
+
+/// `Type::<T>name` has type arguments before the name of the method.
+#[test]
+fn test_java_method_reference_with_type_arguments() {
+    let source = "class A {\n    static <T> void step(T item) {}\n\n    void run(java.util.List<String> list) {\n        list.forEach(A::<String>step);\n        Runnable make = A::<String>new;\n    }\n}\n";
+    assert_eq!(
+        one("A.java", source),
+        ["5 A.run>A.step UniqueCandidate QualifiedPath [A.java#A.step]"]
+    );
+}
+
+/// A module can export the default export of a different module with a name.
+/// The use of that name as a value has the function that a call of it has.
+#[test]
+fn test_default_export_that_a_module_exports_again_with_a_name() {
+    let files = [
+        (
+            "a.js",
+            "import { work } from './index.js';\n\nexport function run(pool) {\n  pool.submit(work);\n  work();\n}\n",
+        ),
+        ("index.js", "export { default as work } from './task.js';\n"),
+        ("task.js", "export default function task() {}\n"),
+    ];
+    let calls = candidates_of(&call_rows(&files, "a.js"), "work");
+    assert_eq!(calls, ["task.js#task"]);
+    assert_eq!(candidates_of(&rows(&files, "a.js"), "work"), calls);
+}
+
+/// A CommonJS `require` in a function binds a local name. The index gives a
+/// call of that name no definition, thus the use of the name as a value has
+/// none. The two agree also for a `require` at the top level of the file.
+#[test]
+fn test_required_module_as_a_value_agrees_with_a_call_of_it() {
+    for source in [
+        "function run(pool) {\n  const handler = require('./handler');\n  pool.submit(handler);\n  handler();\n}\n",
+        "const handler = require('./handler');\n\nfunction run(pool) {\n  pool.submit(handler);\n  handler();\n}\n",
+    ] {
+        let files = [
+            ("a.js", source),
+            ("handler.js", "module.exports = function handler() {};\n"),
+        ];
+        let calls = candidates_of(&call_rows(&files, "a.js"), "handler");
+        let values = candidates_of(&rows(&files, "a.js"), "handler");
+        let edges = |found: &[String]| -> Vec<String> {
+            found.iter().filter(|keys| !keys.is_empty()).cloned().collect()
+        };
+        assert_eq!(edges(&values), edges(&calls), "{source}");
+    }
+}
+
+/// Each function has a parameter with the same name. The search for the
+/// local name of a call must not read the parameters of the other functions.
+fn one_parameter_name_in_many_functions_at(size: usize) -> std::time::Duration {
+    let mut source = String::new();
+    for position in 0..size {
+        source.push_str(&format!(
+            "def step_{position}(pool):\n    pool.submit(1)\n\n\n"
+        ));
+    }
+    let started = std::time::Instant::now();
+    let found = call_rows(&[("a.py", &source)], "a.py");
+    let elapsed = started.elapsed();
+    assert_eq!(found.len(), size);
+    elapsed
+}
+
+#[test]
+fn test_one_parameter_name_in_many_functions() {
+    one_parameter_name_in_many_functions_at(200);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_one_parameter_name_in_many_functions_scales_linearly() {
+    assert_scales_linearly(
+        "one parameter name",
+        20_000,
+        one_parameter_name_in_many_functions_at,
+    );
+}
+
+/// One file has a chain of imports: each import gives a new name to the name
+/// of the import after it, and the last import names a function.
+fn chain_of_import_names_at(size: usize) -> std::time::Duration {
+    let mut source = String::new();
+    for position in 0..size {
+        source.push_str(&format!(
+            "from b import name_{} as name_{position}\n",
+            position + 1
+        ));
+    }
+    source.push_str("\n\ndef run(pool):\n    pool.submit(name_0)\n");
+    let other = format!("def name_{size}():\n    pass\n");
+    let files = [("a.py", source.as_str()), ("b.py", other.as_str())];
+    let mut facts = crate::index::imports::testing::index(&files);
+    let started = std::time::Instant::now();
+    super::drop_values_that_name_no_function(&mut facts);
+    let elapsed = started.elapsed();
+    assert_eq!(facts[0].value_sites.len(), 1);
+    elapsed
+}
+
+#[test]
+fn test_chain_of_import_names_keeps_the_last_name() {
+    chain_of_import_names_at(200);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_chain_of_import_names_scales_linearly() {
+    assert_scales_linearly("chain of import names", 20_000, chain_of_import_names_at);
+}
+
 /// Runs a timing case at `size` and at twice that size, and checks that the
 /// time grows in proportion to the size. A quadratic search takes four times
 /// as long for twice the input. The check uses the best of two runs for each
