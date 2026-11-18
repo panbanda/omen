@@ -875,12 +875,23 @@ impl ValueSites {
     }
 }
 
+/// A decorator of an `export` statement that declares a class.
+struct Decorated {
+    depth: usize,
+    /// The node ID of the class.
+    class: Option<usize>,
+    /// The owner of the decorator itself, outside the class.
+    owner: Option<usize>,
+}
+
 /// A run of decorators in the body of a class, and the lengths of the
 /// collected facts when the run began.
 struct PendingDecorators {
     /// The node ID of the body of the class.
     body: usize,
     body_depth: usize,
+    /// The owner of the calls of the run before the walk enters the method.
+    owner: Option<usize>,
     calls: usize,
     values: usize,
     locals: usize,
@@ -902,9 +913,8 @@ struct Extractor<'a, 'tree> {
     scope_owners: Vec<Option<usize>>,
     /// The depths of the function values that have no name and contain the current node.
     closure_depths: Vec<usize>,
-    /// For each decorator of an `export` statement that contains the current
-    /// node, its depth and the node ID of the class that it decorates.
-    decorators: Vec<(usize, Option<usize>)>,
+    /// The decorators of `export` statements that contain the current node.
+    decorators: Vec<Decorated>,
     /// The runs of decorators in the body of a class whose method the walk
     /// has not entered.
     pending_decorators: Vec<PendingDecorators>,
@@ -1001,18 +1011,27 @@ impl<'tree> Extractor<'_, 'tree> {
         let parent = self.ancestors.last().copied();
         let in_parent =
             |run: &PendingDecorators| parent.is_some_and(|parent| parent.id() == run.body);
-        if node.kind() != "decorator" && self.pending_decorators.last().is_some_and(in_parent) {
+        let consumes = !["decorator", "comment"].contains(&node.kind());
+        if consumes && self.pending_decorators.last().is_some_and(in_parent) {
             let run = self.pending_decorators.pop().expect("a pending run");
             if node.kind() == "method_definition" {
+                // A definition in a decorator argument stays the caller of
+                // the calls in its body.
                 let method = Some(node.id());
                 for call in &mut self.calls[run.calls..] {
-                    call.2 = method;
+                    if call.2 == run.owner {
+                        call.2 = method;
+                    }
                 }
                 for value in &mut self.values[run.values..] {
-                    value.1 = method;
+                    if value.1 == run.owner {
+                        value.1 = method;
+                    }
                 }
                 for local in &mut self.locals[run.locals..] {
-                    local.1 = method;
+                    if local.1 == run.owner {
+                        local.1 = method;
+                    }
                 }
             }
         }
@@ -1028,12 +1047,17 @@ impl<'tree> Extractor<'_, 'tree> {
                     .child_by_field_name("declaration")
                     .filter(|declaration| declaration.kind().ends_with("class_declaration"))
                     .map(|declaration| declaration.id());
-                self.decorators.push((depth, class));
+                self.decorators.push(Decorated {
+                    depth,
+                    class,
+                    owner: self.owner(),
+                });
             }
             "class_body" if !self.pending_decorators.last().is_some_and(in_parent) => {
                 self.pending_decorators.push(PendingDecorators {
                     body: parent.id(),
                     body_depth: depth - 1,
+                    owner: self.owner(),
                     calls: self.calls.len(),
                     values: self.values.len(),
                     locals: self.locals.len(),
@@ -1193,11 +1217,14 @@ impl<'tree> Extractor<'_, 'tree> {
                 current: Some((node.id(), self.ancestors.last().copied())),
                 memo: &self.memo,
             };
+            let owner = self.owner();
+            // A definition in the decorator argument stays the owner.
             let owner = self
                 .decorators
                 .last()
-                .and_then(|(_, decorated)| *decorated)
-                .or_else(|| self.owner());
+                .filter(|decorated| decorated.owner == owner)
+                .and_then(|decorated| decorated.class)
+                .or(owner);
             if let Some(call) = call.then(|| self.spec.call(node, &context)).flatten() {
                 let via_closure = !self.closure_depths.is_empty();
                 let receiver = self.spec.call_syntax().receiver_range(node);
@@ -1309,7 +1336,11 @@ impl<'tree> Extractor<'_, 'tree> {
         if self.closure_depths.last() == Some(&depth) {
             self.closure_depths.pop();
         }
-        if self.decorators.last().is_some_and(|(at, _)| *at == depth) {
+        if self
+            .decorators
+            .last()
+            .is_some_and(|decorated| decorated.depth == depth)
+        {
             self.decorators.pop();
         }
         if self

@@ -4914,6 +4914,35 @@ mod ecma_decorator_tests {
 }
 
 #[cfg(test)]
+mod ecma_decorator_owner_tests {
+    use super::testing::rows;
+
+    /// A comment between a decorator and its method, and a function that a
+    /// decorator argument defines, do not change the caller of a call.
+    #[test]
+    fn test_decorator_caller_keeps_comments_and_nested_functions_typescript() {
+        let source = "function helper(): number {\n  return 1;\n}\n\nfunction Wrap(value: unknown) {\n  return (target: unknown) => target;\n}\n\n@Wrap(() => { function inner() { helper(); } })\nexport class Service {\n  @Wrap(1) /* note */\n  list(): void {}\n\n  @Wrap(() => { function deep() { helper(); } })\n  show(): void {}\n}\n";
+        for extension in ["ts", "tsx"] {
+            let file = format!("service.{extension}");
+            let found = rows(&[(file.as_str(), source)], &file);
+            let wrap = format!("[service.{extension}#Wrap]");
+            let helper = format!("[service.{extension}#helper]");
+            assert_eq!(
+                found,
+                [
+                    format!("9 Service>Wrap UniqueCandidate SameFile {wrap}"),
+                    format!("9 inner>helper UniqueCandidate SameFile {helper}"),
+                    format!("11 Service.list>Wrap UniqueCandidate SameFile {wrap}"),
+                    format!("14 Service.show>Wrap UniqueCandidate SameFile {wrap}"),
+                    format!("14 Service.deep>helper UniqueCandidate SameFile {helper}"),
+                ],
+                "{extension}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod ecma_timing_tests {
     use super::testing::rows;
     use crate::index::timing::assert_scales_linearly;
