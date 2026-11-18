@@ -4,7 +4,7 @@
 //! An edge of the view exists only for a call with the status `Resolved` or
 //! `UniqueCandidate`. A call with a different status is evidence, not an edge.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,7 +14,9 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use super::build::CodeIndex;
-use super::model::{Exported, Receiver, ResolutionBasis, ResolutionStatus, SharedStr, SymbolKind};
+use super::model::{
+    Exported, Receiver, Reference, ResolutionBasis, ResolutionStatus, SharedStr, Span, SymbolKind,
+};
 use crate::core::{Error, Language, Result};
 
 /// The weakest basis that gives an edge when the caller does not select
@@ -113,7 +115,7 @@ impl ResolutionSummary {
 /// The candidates of a reference that are in the view, and the basis of the
 /// edge to them. Without a basis, the reference gives no edge.
 fn edge_of(
-    reference: &super::model::Reference,
+    reference: &Reference,
     by_key: &HashMap<SharedStr, usize>,
 ) -> (Vec<usize>, Option<ResolutionBasis>) {
     let resolution = &reference.resolution;
@@ -137,6 +139,54 @@ fn edge_of(
         (false, false) => None,
     };
     (candidates, basis)
+}
+
+/// The evidence of one reference of `caller`, and the basis of its edges. A reference without
+/// an edge has no basis.
+fn stored_call(
+    reference: &Reference,
+    caller: usize,
+    by_key: &HashMap<SharedStr, usize>,
+) -> (StoredCall, Option<ResolutionBasis>) {
+    let (candidates, basis) = edge_of(reference, by_key);
+    let resolution = &reference.resolution;
+    let call = match (&reference.receiver, &reference.qualifier) {
+        (Some(Receiver::SelfValue), _) => format!("self.{}", reference.name),
+        (Some(Receiver::Super), _) => format!("super.{}", reference.name),
+        (Some(Receiver::Name(name)), _) => format!("{name}.{}", reference.name),
+        (Some(Receiver::Expression), _) => format!("(..).{}", reference.name),
+        (None, Some(qualifier)) => format!("{qualifier}::{}", reference.name),
+        (None, None) => reference.name.clone(),
+    };
+    let stored = StoredCall {
+        caller: caller as u32,
+        call: call.into_boxed_str(),
+        line: reference.name_range.start_line,
+        status: resolution.status,
+        basis: resolution.basis,
+        candidates: candidates.iter().map(|position| *position as u32).collect(),
+    };
+    (stored, basis)
+}
+
+/// A function value without a name that the security analysis adds to the view as a
+/// definition, as the arrow function that a route registers.
+pub struct FunctionValue<'r> {
+    /// The key of the new definition. It is not a key of the index.
+    pub key: String,
+    pub file: String,
+    pub range: Span,
+    /// The key of the definition that contains the function value.
+    pub enclosing: Option<String>,
+    /// The key of the function value that contains this one, when one does. It must come
+    /// before this one in the list.
+    pub parent: Option<String>,
+    /// The calls in the function value. The index gives them to `enclosing`.
+    pub references: Vec<&'r Reference>,
+    /// The function references in the function value. The index gives them to `enclosing`.
+    pub function_references: Vec<&'r Reference>,
+    /// The function value is test code.
+    pub is_test: bool,
 }
 
 pub struct CallView {
@@ -174,6 +224,33 @@ impl CallView {
     /// The view of the files for which `keep` is true. A call from a file that
     /// `keep` rejects is not in the view.
     pub fn from_index_where(index: &CodeIndex, keep: impl Fn(&str) -> bool) -> Self {
+        Self::build(index, keep, &HashSet::new())
+    }
+
+    /// The view of all files with the function values as definitions of their own. A reference
+    /// in a function value is an edge of the function value, not of the definition that the
+    /// index gives it to.
+    pub fn from_index_with_function_values(
+        index: &CodeIndex,
+        values: &[FunctionValue<'_>],
+    ) -> Self {
+        // A reference is known by its address: the function values borrow the references of
+        // `index`, and two references can have the same name, range, and enclosing symbol.
+        let moved: HashSet<*const Reference> = values
+            .iter()
+            .flat_map(|value| value.references.iter().chain(&value.function_references))
+            .map(|reference| *reference as *const Reference)
+            .collect();
+        let mut view = Self::build(index, |_| true, &moved);
+        view.add_function_values(values);
+        view
+    }
+
+    fn build(
+        index: &CodeIndex,
+        keep: impl Fn(&str) -> bool,
+        moved: &HashSet<*const Reference>,
+    ) -> Self {
         let mut symbols = Vec::new();
         let mut by_key = HashMap::new();
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
@@ -223,6 +300,9 @@ impl CallView {
             .flat_map(|file| &file.references)
         {
             summary.count(reference.resolution.status);
+            if moved.contains(&(reference as *const Reference)) {
+                continue;
+            }
             let caller = reference
                 .enclosing
                 .as_deref()
@@ -230,30 +310,14 @@ impl CallView {
             let Some(caller) = caller else {
                 continue;
             };
-            let (candidates, basis) = edge_of(reference, &by_key);
-            let resolution = &reference.resolution;
+            let (call, basis) = stored_call(reference, caller, &by_key);
             if let Some(basis) = basis {
-                for candidate in &candidates {
-                    callees[caller].insert((*candidate, basis));
-                    callers[*candidate].insert((caller, basis));
+                for candidate in call.candidates.iter() {
+                    callees[caller].insert((*candidate as usize, basis));
+                    callers[*candidate as usize].insert((caller, basis));
                 }
             }
-            let call = match (&reference.receiver, &reference.qualifier) {
-                (Some(Receiver::SelfValue), _) => format!("self.{}", reference.name),
-                (Some(Receiver::Super), _) => format!("super.{}", reference.name),
-                (Some(Receiver::Name(name)), _) => format!("{name}.{}", reference.name),
-                (Some(Receiver::Expression), _) => format!("(..).{}", reference.name),
-                (None, Some(qualifier)) => format!("{qualifier}::{}", reference.name),
-                (None, None) => reference.name.clone(),
-            };
-            evidence[caller].push(StoredCall {
-                caller: caller as u32,
-                call: call.into_boxed_str(),
-                line: reference.name_range.start_line,
-                status: resolution.status,
-                basis: resolution.basis,
-                candidates: candidates.iter().map(|position| *position as u32).collect(),
-            });
+            evidence[caller].push(call);
         }
         let mut function_references: Vec<BTreeSet<(usize, ResolutionBasis)>> =
             vec![BTreeSet::new(); symbols.len()];
@@ -263,6 +327,9 @@ impl CallView {
             .filter(|file| keep(&file.file))
             .flat_map(|file| &file.function_references)
         {
+            if moved.contains(&(reference as *const Reference)) {
+                continue;
+            }
             let user = reference
                 .enclosing
                 .as_deref()
@@ -300,6 +367,87 @@ impl CallView {
             summary,
             sources: index.files.len(),
             fingerprint: None,
+        }
+    }
+
+    /// Adds each function value as a definition, once for each key. The edges of a function
+    /// value are the edges of its references. The function value that contains it, or else the
+    /// definition that contains it, makes it. That maker has a function reference to it with the
+    /// basis `LexicalScope`, because the maker gives the function value as a value and does not
+    /// call it.
+    fn add_function_values(&mut self, values: &[FunctionValue<'_>]) {
+        let mut touched: BTreeSet<usize> = BTreeSet::new();
+        let mut makers: BTreeSet<usize> = BTreeSet::new();
+        for value in values {
+            if self.by_key.contains_key(value.key.as_str()) {
+                continue;
+            }
+            let position = self.symbols.len();
+            self.by_key
+                .insert(SharedStr::from(value.key.as_str()), position);
+            self.symbols.push(ViewSymbol {
+                name: value
+                    .key
+                    .rsplit(['.', '#'])
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+                body_start: value.range.start_byte,
+                has_body: true,
+                file_local: false,
+                is_test: value.is_test,
+                qualified_name: value.key.clone(),
+                kind: SymbolKind::Function,
+                file: value.file.clone(),
+                line: value.range.start_line,
+                end_line: value.range.end_line,
+                signature: String::new(),
+            });
+            let mut callees: BTreeSet<(usize, ResolutionBasis)> = BTreeSet::new();
+            let start = self.stored_calls.len();
+            for reference in &value.references {
+                let (call, basis) = stored_call(reference, position, &self.by_key);
+                if let Some(basis) = basis {
+                    callees.extend(
+                        call.candidates
+                            .iter()
+                            .map(|target| (*target as usize, basis)),
+                    );
+                }
+                self.stored_calls.push(call);
+            }
+            self.call_resolution_ranges
+                .push(start..self.stored_calls.len());
+            for (target, basis) in &callees {
+                self.callers[*target].push((position, *basis));
+                touched.insert(*target);
+            }
+            self.callees.push(callees.into_iter().collect());
+            self.callers.push(Vec::new());
+            let mut functions: BTreeSet<(usize, ResolutionBasis)> = BTreeSet::new();
+            for reference in &value.function_references {
+                if let (candidates, Some(basis)) = edge_of(reference, &self.by_key) {
+                    functions.extend(candidates.into_iter().map(|function| (function, basis)));
+                }
+            }
+            self.function_references
+                .push(functions.into_iter().collect());
+            if let Some(maker) = value
+                .parent
+                .as_deref()
+                .or(value.enclosing.as_deref())
+                .and_then(|key| self.by_key.get(key).copied())
+            {
+                self.function_references[maker].push((position, ResolutionBasis::LexicalScope));
+                makers.insert(maker);
+            }
+        }
+        for target in touched {
+            self.callers[target].sort_unstable();
+            self.callers[target].dedup();
+        }
+        for maker in makers {
+            self.function_references[maker].sort_unstable();
         }
     }
 
