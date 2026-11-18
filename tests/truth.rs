@@ -308,6 +308,11 @@ fn observed_entry_points(
                 .map(|route| route.parameters)
                 .unwrap_or_default(),
             guards: entry.guards,
+            symbol: entry.symbol,
+            guards_complete: entry.guards_complete,
+            guards_unknown_reason: entry
+                .guards_unknown_reason
+                .map(|reason| reason.name().to_string()),
         })
         .collect()
 }

@@ -6,8 +6,8 @@
   "closed_world": false,
   "entry_points_closed_world": true,
   "entry_points": [
-    {"label": "flask_update", "file": "app.py", "line": 7, "kind": "http_handler", "framework": "flask", "method": "POST", "path": "/users/<int:user_id>", "parameters": ["user_id"], "guards": ["login_required"]},
-    {"label": "script_main", "file": "app.py", "line": 13, "kind": "cli_main", "framework": "python"},
-    {"label": "fastapi_read", "file": "api.py", "line": 6, "kind": "http_handler", "framework": "fastapi", "method": "GET", "path": "/items/{item_id}", "parameters": ["item_id"]}
+    {"label": "flask_update", "file": "app.py", "line": 7, "kind": "http_handler", "framework": "flask", "method": "POST", "path": "/users/<int:user_id>", "parameters": ["user_id"], "guards": ["login_required"], "guards_complete": false, "guards_unknown_reason": "layer_not_read"},
+    {"label": "script_main", "file": "app.py", "line": 13, "kind": "cli_main", "framework": "python", "guards_complete": true, "guards_unknown_reason": null},
+    {"label": "fastapi_read", "file": "api.py", "line": 6, "kind": "http_handler", "framework": "fastapi", "method": "GET", "path": "/items/{item_id}", "parameters": ["item_id"], "guards_complete": true, "guards_unknown_reason": null}
   ]
 }
