@@ -317,7 +317,9 @@ a second time, omen gives the routes of the first mount only.
 Rails sets the default scope to `underscore` of the name of the constant. An engine without the
 call has no module. Omen reads one call with a constant of the repository, as a statement of the
 class body. A second call, a call in another place, a `default_scope` in the class, and a name
-that an acronym of the application can change give no route for the engine.
+that an acronym of the application can change give no route for the engine. An `endpoint` call in
+the class gives no route for the engine too: Rails then sends the requests of the mount to that
+Rack application, not to the routes of the engine.
 
 ### The inflector, opened again
 

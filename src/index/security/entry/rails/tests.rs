@@ -677,6 +677,9 @@ fn an_engine_namespace_that_omen_cannot_read_gives_no_route() {
         "isolate_namespace Blog if ENV[\"X\"]",
         "routes.default_scope = { module: \"other\" }",
         "initializer \"x\" do\n      isolate_namespace Blog\n    end",
+        "isolate_namespace Blog\n    endpoint CustomRackApp",
+        "isolate_namespace Blog\n    endpoint(-> (env) { [200, {}, []] })",
+        "isolate_namespace Blog\n    self.endpoint = CustomRackApp",
     ] {
         let engine =
             format!("module Blog\n  class Engine < ::Rails::Engine\n    {body}\n  end\nend\n");

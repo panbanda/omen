@@ -1993,8 +1993,8 @@ impl<'a> Context<'a> {
     /// Omen reads one `isolate_namespace` call with a constant, as a statement of the body of the
     /// engine class. Rails gives the routes the module `underscore` of the name of the constant.
     /// A second call, a call in another place, an argument that is not a constant of the
-    /// repository, a name that an acronym of the application can change, and a `default_scope`
-    /// in the class give `None`.
+    /// repository, a name that an acronym of the application can change, a `default_scope`, and an
+    /// `endpoint` in the class give `None`.
     fn rails_engine_module(&self, identity: &str) -> Option<Vec<String>> {
         let shared = self.rails_shared();
         if let Some(found) = shared.engine_modules.lock().get(identity) {
@@ -2017,6 +2017,10 @@ impl<'a> Context<'a> {
                     };
                     match text {
                         Some("default_scope" | "default_scope=") => unreadable = true,
+                        // A custom endpoint answers the requests of the mount in place of the routes.
+                        Some("endpoint" | "endpoint=") if node.kind() == "call" => {
+                            unreadable = true
+                        }
                         Some("isolate_namespace") if node.kind() == "call" => {
                             total += 1;
                             let arguments = Self::arguments_of(node);
