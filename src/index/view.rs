@@ -39,6 +39,8 @@ pub struct ViewSymbol {
     pub line: u32,
     pub end_line: u32,
     pub signature: String,
+    /// The definition is test code. See `crate::index::test_code`.
+    pub is_test: bool,
 }
 
 /// The place of a definition.
@@ -202,6 +204,7 @@ impl CallView {
                     line: symbol.range.start_line,
                     end_line: symbol.range.end_line,
                     signature: symbol.signature.clone(),
+                    is_test: symbol.is_test(),
                 });
             }
         }

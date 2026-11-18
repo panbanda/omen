@@ -86,6 +86,14 @@ pub(super) enum Pagination {
         parents: &'static [&'static str],
         child: &'static str,
     },
+    /// The `child` arrays in the elements of the `parent` array, as one list
+    /// in rank order. `rank` has JSON pointers into a child: a higher number
+    /// is first. A parent without a child on the page is not in the result.
+    Ranked {
+        parent: &'static str,
+        child: &'static str,
+        rank: &'static [&'static str],
+    },
     /// The arrays that are the elements of one array, as one sequence.
     Children(&'static str),
     /// The entries of one object at the top level of the result, in the
@@ -157,6 +165,13 @@ pub(super) const PATH: Param = Param::string(
     "path",
     "The file or directory to analyze. The default is the repository root.",
 );
+
+pub(super) const EXCLUDE_TESTS: Param = Param::boolean(
+    "exclude_tests",
+    "If true, the result does not list the rows that are test code, and `tests_excluded` \
+     gives their number. Each row has `is_test`. The summary is for all the code.",
+)
+.with_default(ParamDefault::Boolean(false));
 
 pub(super) const COMPACT: Param = Param::boolean(
     "compact",
@@ -286,6 +301,13 @@ impl<'a> Arguments<'a> {
 
     fn value(&self, name: &str) -> Option<&'a Value> {
         self.values.and_then(|values| values.get(name))
+    }
+
+    /// The call asks for the result without the rows that are test code. A
+    /// tool without the parameter `exclude_tests` gives `false`.
+    pub(super) fn excludes_tests(&self) -> bool {
+        self.spec.parameter(EXCLUDE_TESTS.name).is_some()
+            && self.boolean(EXCLUDE_TESTS.name) == Some(true)
     }
 
     pub(super) fn string(&self, name: &str) -> Option<&'a str> {
@@ -508,6 +530,7 @@ mod tests {
                 ("clones", "min_tokens", "duplicates.min_tokens"),
                 ("clones", "similarity", "duplicates.min_similarity"),
                 ("defect", "since", "defect.since"),
+                ("changes", "since", "changes.since"),
                 ("hotspot", "since", "hotspot.since"),
                 ("flags", "provider", "feature_flags.providers"),
                 ("flags", "stale_days", "feature_flags.stale_days"),

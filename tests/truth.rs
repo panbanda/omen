@@ -22,14 +22,15 @@ use omen::benchmark::truth::{
     bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth,
     render_sink_table, render_table, summarize, summarize_sinks, Assertion, ImportedName, Kind,
     Labels, LedgerEntry, Location, Observed, ObservedCall, ObservedEntryPoint, ObservedImport,
-    ObservedPath, ObservedReference, ObservedSink, ObservedSymbol,
+    ObservedPath, ObservedReference, ObservedSink, ObservedSymbol, ObservedTestLines,
+    ObservedTestSymbol,
 };
 use omen::core::Language;
 use omen::index::extract::{extract_file, link_files, FileSymbols};
 use omen::index::imports::{resolve_imports, Manifests};
 use omen::index::model::{
     Exported, ImportBinding, ImportKind as IndexImportKind, ImportTarget, ResolutionStatus, Symbol,
-    SymbolKind,
+    SymbolKind, TestRole,
 };
 use omen::index::resolve::resolve_references_with;
 use omen::index::security::analysis::analyze_files;
@@ -332,6 +333,7 @@ fn index_case(dir: &Path) -> (Vec<omen::parser::ParseResult>, Vec<FileSymbols>) 
     let mut manifests = Manifests::default();
     read_manifests(dir, dir, &mut manifests);
     resolve_imports(&mut index_files, &manifests);
+    omen::index::test_code::link_files(&mut index_files);
     resolve_references_with(&mut index_files, &manifests);
     (trees, index_files)
 }
@@ -432,8 +434,46 @@ fn observe(dir: &Path, with_paths: bool) -> Observed {
     let sinks = observed_sinks(&trees, &index_files);
     let entry_points = observed_entry_points(&trees, &index_files);
     let mut symbols = Vec::new();
-    for index_file in index_files {
+    let mut test_symbols = Vec::new();
+    let mut test_lines = Vec::new();
+    for (index_file, tree) in index_files.into_iter().zip(&trees) {
         imports.extend(observed_imports(&index_file.imports));
+        test_symbols.extend(index_file.symbols.iter().map(|symbol| {
+            ObservedTestSymbol {
+                location: Location {
+                    file: index_file.file.clone(),
+                    name: symbol.name.clone(),
+                    start_line: symbol.range.start_line,
+                },
+                role: match symbol.test_role {
+                    TestRole::Entry => "entry",
+                    TestRole::Support => "support",
+                    TestRole::None => "none",
+                }
+                .to_string(),
+            }
+        }));
+        let line_of = |byte: usize| {
+            let before = &tree.source[..byte.min(tree.source.len())];
+            before.iter().filter(|byte| **byte == b'\n').count() as u32 + 1
+        };
+        if index_file.test_file {
+            test_lines.push(ObservedTestLines {
+                file: index_file.file.clone(),
+                start_line: 1,
+                end_line: u32::MAX,
+            });
+        }
+        test_lines.extend(
+            index_file
+                .test_ranges
+                .iter()
+                .map(|range| ObservedTestLines {
+                    file: index_file.file.clone(),
+                    start_line: line_of(range.start),
+                    end_line: line_of(range.end.saturating_sub(1)),
+                }),
+        );
         let file = index_file.file;
         symbols.extend(
             index_file
@@ -450,6 +490,8 @@ fn observe(dir: &Path, with_paths: bool) -> Observed {
         sinks,
         entry_points,
         paths,
+        test_symbols,
+        test_lines,
         references,
     }
 }
@@ -710,4 +752,26 @@ fn accepted_regressions_file_is_valid() {
         check_accepted_facts(&ids, &accepted, &[]).problems,
         Vec::<String>::new()
     );
+}
+
+/// The oracle of each `test_code` case states that tree-sitter gives no error
+/// node. The C grammar has no macro expansion, thus the use of a test macro
+/// in C is the one exception.
+#[test]
+fn test_code_cases_have_valid_syntax() {
+    let mut with_errors = Vec::new();
+    for case in load_cases(&truth_root()) {
+        if !case.id.ends_with("/test_code") {
+            continue;
+        }
+        let mut files = Vec::new();
+        source_files(&case.dir, &mut files);
+        for path in files {
+            let parsed = Parser::new().parse_file(&path).expect("parse");
+            if parsed.root_node().has_error() {
+                with_errors.push(format!("{}/{}", case.id, relative(&case.dir, &path)));
+            }
+        }
+    }
+    assert_eq!(with_errors, ["c/test_code/src/checks.c"]);
 }

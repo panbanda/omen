@@ -1,6 +1,6 @@
 //! Git blame operations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use gix::Repository;
@@ -15,8 +15,13 @@ pub struct BlameInfo {
     pub path: String,
     /// Total number of blamed lines.
     pub total_lines: u32,
-    /// Aggregated author statistics.
+    /// Aggregated author statistics. A line of a boundary commit has no author here.
     pub authors: HashMap<String, AuthorStats>,
+    /// The lines that git gives to a boundary commit of a shallow clone. Git
+    /// does not have the history before that commit, thus the author of such
+    /// a line is not known. The percentages do not include these lines.
+    #[serde(default)]
+    pub boundary_lines: u32,
 }
 
 /// Statistics for an author.
@@ -36,7 +41,12 @@ pub struct AuthorStats {
 ///
 /// Uses `git blame --line-porcelain` which is much faster than gix's pure-Rust
 /// blame implementation, especially on large repositories with deep history.
-pub fn get_blame(_repo: &Repository, root: &Path, path: &Path) -> Result<BlameInfo> {
+pub fn get_blame(
+    _repo: &Repository,
+    root: &Path,
+    path: &Path,
+    shallow_boundary: &HashSet<String>,
+) -> Result<BlameInfo> {
     let relative_path = path
         .strip_prefix(root)
         .unwrap_or(path)
@@ -54,23 +64,43 @@ pub fn get_blame(_repo: &Repository, root: &Path, path: &Path) -> Result<BlameIn
         return Err(Error::git(format!("git blame failed: {}", stderr)));
     }
 
-    parse_line_porcelain(&output.stdout, path)
+    parse_line_porcelain(&output.stdout, path, shallow_boundary)
+}
+
+/// The commit hash at the start of the header of a blame entry.
+fn entry_commit(line: &str) -> Option<&str> {
+    let hash = line.split(' ').next()?;
+    let is_hash =
+        matches!(hash.len(), 40 | 64) && hash.bytes().all(|byte| byte.is_ascii_hexdigit());
+    is_hash.then_some(hash)
 }
 
 /// Parse `git blame --line-porcelain` output into BlameInfo.
-fn parse_line_porcelain(output: &[u8], path: &Path) -> Result<BlameInfo> {
+///
+/// `shallow_boundary` has the hashes of the commits at which a shallow clone
+/// stops. Git gives each line that is older than such a commit to that
+/// commit, thus its author is not the author of the line.
+fn parse_line_porcelain(
+    output: &[u8],
+    path: &Path,
+    shallow_boundary: &HashSet<String>,
+) -> Result<BlameInfo> {
     let text = String::from_utf8_lossy(output);
 
     let mut total_lines = 0u32;
+    let mut boundary_lines = 0u32;
     let mut authors: HashMap<String, AuthorStats> = HashMap::new();
     let mut current_author = "";
     let mut current_timestamp: i64 = 0;
+    let mut current_is_boundary = false;
 
     for line in text.lines() {
         if line.starts_with('\t') {
             // Content line - marks end of a blame entry
             total_lines += 1;
-            if let Some(stats) = authors.get_mut(current_author) {
+            if current_is_boundary {
+                boundary_lines += 1;
+            } else if let Some(stats) = authors.get_mut(current_author) {
                 stats.lines += 1;
                 stats.first_commit = stats.first_commit.min(current_timestamp);
                 stats.last_commit = stats.last_commit.max(current_timestamp);
@@ -89,12 +119,15 @@ fn parse_line_porcelain(output: &[u8], path: &Path) -> Result<BlameInfo> {
             current_author = rest;
         } else if let Some(rest) = line.strip_prefix("author-time ") {
             current_timestamp = rest.parse().unwrap_or(0);
+        } else if let Some(commit) = entry_commit(line) {
+            current_is_boundary = shallow_boundary.contains(commit);
         }
     }
 
+    let attributed_lines = total_lines - boundary_lines;
     for stats in authors.values_mut() {
-        stats.percentage = if total_lines > 0 {
-            (f64::from(stats.lines) / f64::from(total_lines)) * 100.0
+        stats.percentage = if attributed_lines > 0 {
+            (f64::from(stats.lines) / f64::from(attributed_lines)) * 100.0
         } else {
             0.0
         };
@@ -104,6 +137,7 @@ fn parse_line_porcelain(output: &[u8], path: &Path) -> Result<BlameInfo> {
         path: path.to_string_lossy().to_string(),
         total_lines,
         authors,
+        boundary_lines,
     })
 }
 
@@ -137,12 +171,46 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    const PORCELAIN: &str = "1111111111111111111111111111111111111111 1 1 2\nauthor Ada\nauthor-time 100\nsummary first\nfilename a.rs\n\tline one\n1111111111111111111111111111111111111111 2 2\nauthor Ada\nauthor-time 100\nsummary first\nfilename a.rs\n\tline two\n2222222222222222222222222222222222222222 3 3 1\nauthor Grace\nauthor-time 200\nsummary second\nfilename a.rs\n\tline three\n";
+
+    #[test]
+    fn test_porcelain_without_a_boundary_gives_each_line_to_its_author() {
+        let info =
+            parse_line_porcelain(PORCELAIN.as_bytes(), Path::new("a.rs"), &HashSet::new()).unwrap();
+        assert_eq!(info.total_lines, 3);
+        assert_eq!(info.boundary_lines, 0);
+        assert_eq!(info.authors["Ada"].lines, 2);
+        assert_eq!(info.authors["Grace"].lines, 1);
+    }
+
+    #[test]
+    fn test_lines_of_a_shallow_boundary_commit_have_no_author() {
+        let boundary = HashSet::from(["1111111111111111111111111111111111111111".to_string()]);
+        let info =
+            parse_line_porcelain(PORCELAIN.as_bytes(), Path::new("a.rs"), &boundary).unwrap();
+        assert_eq!(info.total_lines, 3);
+        assert_eq!(info.boundary_lines, 2);
+        assert!(!info.authors.contains_key("Ada"));
+        assert_eq!(info.authors["Grace"].lines, 1);
+        assert!((info.authors["Grace"].percentage - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_a_content_line_that_looks_like_a_hash_is_not_a_header() {
+        let text = "2222222222222222222222222222222222222222 1 1 1\nauthor Grace\nauthor-time 200\nfilename a.rs\n\t1111111111111111111111111111111111111111 is a hash in the source\n";
+        let boundary = HashSet::from(["1111111111111111111111111111111111111111".to_string()]);
+        let info = parse_line_porcelain(text.as_bytes(), Path::new("a.rs"), &boundary).unwrap();
+        assert_eq!(info.boundary_lines, 0);
+        assert_eq!(info.authors["Grace"].lines, 1);
+    }
+
     #[test]
     fn test_bus_factor_empty() {
         let info = BlameInfo {
             path: "test.rs".to_string(),
             total_lines: 0,
             authors: HashMap::new(),
+            boundary_lines: 0,
         };
         assert_eq!(info.bus_factor(), 0);
     }
@@ -182,6 +250,7 @@ mod tests {
             path: "test.rs".to_string(),
             total_lines: 100,
             authors,
+            boundary_lines: 0,
         };
 
         assert_eq!(info.bus_factor(), 2); // Alice and Bob have >5%
@@ -213,6 +282,7 @@ mod tests {
             path: "test.rs".to_string(),
             total_lines: 100,
             authors,
+            boundary_lines: 0,
         };
 
         let (owner, pct) = info.primary_owner().unwrap();
@@ -237,6 +307,7 @@ mod tests {
             path: "test.rs".to_string(),
             total_lines: 80,
             authors,
+            boundary_lines: 0,
         };
 
         assert!((info.ownership_ratio() - 0.8).abs() < 0.001);
@@ -248,6 +319,7 @@ mod tests {
             path: "test.rs".to_string(),
             total_lines: 0,
             authors: HashMap::new(),
+            boundary_lines: 0,
         };
 
         assert!((info.ownership_ratio()).abs() < 0.001);
@@ -301,7 +373,7 @@ mod tests {
 
         // Open repo and get blame
         let repo = gix::open(temp.path()).unwrap();
-        let result = get_blame(&repo, temp.path(), &file_path);
+        let result = get_blame(&repo, temp.path(), &file_path, &HashSet::new());
 
         assert!(result.is_ok());
         let blame = result.unwrap();
@@ -359,7 +431,7 @@ mod tests {
 
         // Open repo and get blame
         let repo = gix::open(temp.path()).unwrap();
-        let result = get_blame(&repo, temp.path(), &file_path);
+        let result = get_blame(&repo, temp.path(), &file_path, &HashSet::new());
 
         assert!(result.is_ok());
         let blame = result.unwrap();
@@ -386,6 +458,7 @@ mod tests {
             path: "test.rs".to_string(),
             total_lines: 50,
             authors,
+            boundary_lines: 0,
         };
 
         let json = serde_json::to_string(&info).unwrap();

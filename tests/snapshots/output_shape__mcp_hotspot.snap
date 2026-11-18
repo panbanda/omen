@@ -25,11 +25,14 @@ expression: "shape(&response, &dynamic_key_objects)"
               {
                 "avg_complexity": "number",
                 "churn_percentile": "number",
+                "churn_score": "number",
                 "commits": "number",
                 "complexity_percentile": "number",
                 "file": "string",
+                "is_test": "bool",
                 "score": "number",
-                "severity": "string"
+                "severity": "string",
+                "total_complexity": "number"
               }
             ],
             "summary": {

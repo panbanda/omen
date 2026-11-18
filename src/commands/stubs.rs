@@ -34,7 +34,8 @@ pub fn run(
     let analyzer = crate::analyzers::stubs::Analyzer::new();
     let result = analyzer.analyze(&ctx)?;
 
-    let value = serde_json::to_value(&result)?;
+    let mut value = serde_json::to_value(&result)?;
+    super::test_rows::mark(&mut value, "stubs", &ctx, request.scope.exclude_tests);
     let mut out = out;
     format_with_limits(
         value,

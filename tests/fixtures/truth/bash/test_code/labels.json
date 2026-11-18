@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "language": "bash",
+  "split": "development",
+  "oracle": "Author-reviewed. `bash -n` (GNU bash 5.3) accepts each script. shUnit2 is not in the case, thus the test did not run. The harness does not run the code.",
+  "closed_world": false,
+  "sinks_closed_world": false,
+  "not_applicable": [
+    {"dimension":"tests","category":"entry_by_syntax","reason":"A Bats file has the extension `.bats`, and its `@test` blocks are not Bash syntax. Omen does not read a Bats file. No Bash syntax marks a test."}
+  ],
+  "tests": [
+    {"label":"shunit2_test","category":"entry_by_name","file":"test/run_test.sh","line":7,"name":"test_production","role":"entry"},
+    {"label":"helper_in_test_directory","category":"support","file":"test/run_test.sh","line":3,"name":"helper","role":"support"},
+    {"label":"production","category":"not_test","file":"bin/run.sh","line":3,"name":"production","role":"none"},
+    {"label":"test_like_name","category":"not_test","file":"bin/run.sh","line":7,"name":"test_run","role":"none"}
+  ]
+}

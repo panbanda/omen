@@ -136,7 +136,7 @@ pub enum Command {
 
     /// Analyze recent changes (JIT risk)
     #[command(alias = "jit")]
-    Changes(AnalyzerArgs),
+    Changes(ChangesArgs),
 
     /// Give the risk and the change set of a branch (PR review)
     #[command(
@@ -330,6 +330,11 @@ pub struct AnalyzerArgs {
     #[arg(long)]
     pub changed_since: Option<String>,
 
+    /// Do not list the rows that are test code. The report then has
+    /// `tests_excluded`, and its summary is for all the code.
+    #[arg(long)]
+    pub exclude_tests: bool,
+
     #[command(flatten)]
     pub pagination: PaginationArgs,
 }
@@ -503,6 +508,18 @@ pub struct TemporalArgs {
     pub common: AnalyzerArgs,
 
     /// Time period to analyze (e.g., 30d, 3m, 1y, all). The default is 30d.
+    #[arg(long, value_parser = parse_window)]
+    pub since: Option<String>,
+}
+
+#[derive(Args)]
+pub struct ChangesArgs {
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+
+    /// Time period to analyze (e.g., 30d, 3m, 1y). The default is
+    /// `changes.since` in the configuration, or 30d. The value `all` is not
+    /// a window of this command.
     #[arg(long, value_parser = parse_window)]
     pub since: Option<String>,
 }
