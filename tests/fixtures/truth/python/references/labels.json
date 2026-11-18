@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "language": "python",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Python 3. The imports need packages that the case does not include, and `cleanup` has no import on purpose. The harness does not run the code.",
+  "closed_world": false,
+  "references": [
+    {
+      "label": "callback_by_name",
+      "user": "app.py#create_job",
+      "line": 17,
+      "name": "audit",
+      "expected": ["app.py#audit"]
+    },
+    {
+      "label": "nested_function_as_callback",
+      "user": "app.py#create_job",
+      "line": 16,
+      "name": "load_module",
+      "expected": ["app.py#create_job.load_module"]
+    },
+    {
+      "label": "shadowed_name",
+      "user": "app.py#shadowed",
+      "line": 23,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "same_name_in_file_without_import",
+      "user": "app.py#other_file",
+      "line": 29,
+      "name": "cleanup",
+      "expected": []
+    },
+    {
+      "label": "name_in_comment",
+      "user": "app.py#text_only",
+      "line": 35,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "name_in_string",
+      "user": "app.py#text_only",
+      "line": 36,
+      "name": "audit",
+      "expected": []
+    }
+  ],
+  "paths": [
+    {
+      "label": "handler_to_nested_callback",
+      "entry_file": "app.py",
+      "entry_line": 11,
+      "sink_file": "app.py",
+      "sink_line": 14,
+      "steps": ["app.py#create_job", "app.py#create_job.load_module"],
+      "weakest_basis": "lexical_scope",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "handler_to_callback",
+      "entry_file": "app.py",
+      "entry_line": 11,
+      "sink_file": "app.py",
+      "sink_line": 8,
+      "steps": ["app.py#create_job", "app.py#audit"],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "shadowed_name_has_no_path",
+      "entry_file": "app.py",
+      "entry_line": 21,
+      "sink_file": "app.py",
+      "sink_line": 8,
+      "flagged": false
+    },
+    {
+      "label": "file_without_import_has_no_path",
+      "entry_file": "app.py",
+      "entry_line": 27,
+      "sink_file": "other.py",
+      "sink_line": 5,
+      "flagged": false
+    },
+    {
+      "label": "text_has_no_path",
+      "entry_file": "app.py",
+      "entry_line": 33,
+      "sink_file": "app.py",
+      "sink_line": 8,
+      "flagged": false
+    }
+  ]
+}

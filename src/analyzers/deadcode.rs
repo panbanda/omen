@@ -214,7 +214,13 @@ impl AnalyzerTrait for Analyzer {
         let mut roots: Vec<SharedStr> = Vec::new();
         let mut candidate_keys: HashSet<SharedStr> = HashSet::new();
         let mut unresolved_names: HashSet<String> = HashSet::new();
-        for reference in index.files.iter().flat_map(|facts| &facts.references) {
+        // A function that a definition uses as a value can run. The use is an
+        // edge here in the same way as a call.
+        let references = index.files.iter().flat_map(|facts| {
+            let calls = facts.references.iter();
+            calls.chain(&facts.function_references)
+        });
+        for reference in references {
             let resolution = &reference.resolution;
             let weak = matches!(
                 resolution.status,
@@ -3600,6 +3606,75 @@ mod index_tests {
             // A function of Ruby, PHP, or Bash is visible from each file, thus the
             // index marks it as exported and the analysis never reports it.
             if !name.ends_with(".rb") && !name.ends_with(".php") && !name.ends_with(".sh") {
+                assert!(
+                    dead.iter()
+                        .any(|found| found.to_lowercase().replace('_', "") == "unusedone"),
+                    "{name}: the unused function is not dead: {dead:?}"
+                );
+            }
+        }
+    }
+
+    /// A function that a definition uses as a value can run. It is not dead.
+    #[test]
+    fn test_a_function_that_is_only_a_value_is_alive_in_each_language() {
+        let sources: [(&str, &str); 14] = [
+            ("m.rs", "fn main() { spawn(helper); }\nfn helper() {}\nfn unused_one() {}\n"),
+            (
+                "m.go",
+                "package main\nfunc main() { submit(helper) }\nfunc helper() {}\nfunc unusedOne() {}\n",
+            ),
+            (
+                "m.py",
+                "def main(pool):\n    pool.submit(_helper)\n\ndef _helper():\n    pass\n\ndef _unused_one():\n    pass\n",
+            ),
+            (
+                "m.ts",
+                "function main(pool: Pool) { pool.submit(helper); }\nfunction helper() {}\nfunction unusedOne() {}\n",
+            ),
+            (
+                "m.tsx",
+                "function main() { return <Button onClick={helper} />; }\nfunction helper() {}\nfunction unusedOne() {}\n",
+            ),
+            (
+                "m.js",
+                "function main(pool) { pool.submit(helper); }\nfunction helper() {}\nfunction unusedOne() {}\n",
+            ),
+            (
+                "m.jsx",
+                "function main() { return <Button onClick={helper} />; }\nfunction helper() {}\nfunction unusedOne() {}\n",
+            ),
+            (
+                "M.java",
+                "class M {\n  static void main(String[] a) { run(M::helper); }\n  private static void helper() {}\n  private static void unusedOne() {}\n}\n",
+            ),
+            (
+                "M.cs",
+                "class M {\n  static void Main() { Run(Helper); }\n  static void Helper() {}\n  static void UnusedOne() {}\n}\n",
+            ),
+            ("m.c", "static void helper(void) {}\nstatic void unused_one(void) {}\nint main(void) { atexit(helper); return 0; }\n"),
+            (
+                "m.cpp",
+                "static void helper() {}\nstatic void unused_one() {}\nint main() { atexit(&helper); return 0; }\n",
+            ),
+            (
+                "m.rb",
+                "class M\n  def main(list)\n    list.each(&method(:helper))\n  end\n\n  private\n\n  def helper(item)\n  end\n\n  def unused_one\n  end\nend\n",
+            ),
+            (
+                "m.php",
+                "<?php\nclass M {\n    public function main($list) {\n        $held = function () {};\n        dispatch($held);\n        array_map([$this, 'helper'], $list);\n    }\n    private function helper($item) {}\n    private function unused_one() {}\n}\n",
+            ),
+            ("m.sh", "main() {\n  trap helper EXIT\n}\nhelper() {\n  :\n}\nunused_one() {\n  :\n}\n"),
+        ];
+        for (name, text) in sources {
+            let dead = dead_names(&[(name, text)]);
+            let alive = ["helper", "_helper", "Helper", "held"];
+            assert!(
+                !dead.iter().any(|found| alive.contains(&found.as_str())),
+                "{name}: a function that is a value is dead: {dead:?}"
+            );
+            if !name.ends_with(".rb") && !name.ends_with(".sh") {
                 assert!(
                     dead.iter()
                         .any(|found| found.to_lowercase().replace('_', "") == "unusedone"),

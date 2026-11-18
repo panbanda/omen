@@ -74,6 +74,10 @@ const DEFINITIONS: &[DefinitionRule] = &[
 ];
 
 impl LanguageSpec for Go {
+    fn value_syntax(&self) -> crate::index::calls::ValueSyntax {
+        super::values::GO
+    }
+
     fn call_hook_kinds(&self) -> Vec<&'static str> {
         vec![COMPOSITE_LITERAL, UNARY_EXPRESSION, RANGE_CLAUSE]
     }

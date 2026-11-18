@@ -4,10 +4,10 @@ The command `omen security` finds three things: the sinks (the calls and the
 constructs that can cause harm), the entry points (the places where outside input
 enters the code), and the paths from an entry point to a sink.
 
-Omen does not follow data. A path says that a call chain exists. It does not say
-that input reaches the sink. A sink with no known entry point is not safe: it means
-that no entry point that omen knows reaches it through a call that the index
-resolves. Each result carries a coverage statement that says what omen recognises.
+Omen does not follow data. A path says that a chain of calls and function references
+exists. It does not say that input reaches the sink. A sink with no known entry point
+is not safe: it means that no entry point that omen knows reaches it through a call
+or a function reference that the index resolves. Each result carries a coverage statement that says what omen recognises.
 An empty result does not mean that the code is safe.
 
 ## Commands
@@ -83,6 +83,80 @@ The gate (`--gate`) compares the branch with its base and counts the sinks that 
 change adds. You can add sinks and entry points for your own wrappers and
 frameworks with `[[security.sinks]]` and `[[security.entry_points]]`. See
 `omen.example.toml`.
+
+## Function references
+
+A function can run although no call names it. A handler can give a function to
+a scheduler, a thread, or a framework, and that code calls the function later:
+
+```python
+@router.post("/test")
+async def test_code(request):
+    def load_module():
+        exec(request.code)
+
+    await call_off_loop(load_module, 5)
+```
+
+No call of `load_module` is in the source. Thus the index also records a function
+reference: a use of a function as a value. A function reference is not a call. It
+says that the symbol with the use can cause the function to run. It does not say
+that the symbol calls the function, and it does not say when the function runs.
+
+The value positions are an argument, the value of a named argument, the right
+side of an assignment, a returned value, and an element of a collection. The
+resolution rules of a call give the function: the lexical scope first, and then
+the other bases. A local value that has the name hides the function. An
+ambiguous name gives no edge. A class, a constructor, and a name in a string or
+in a comment are not function references.
+
+A name at a value position is a variable or a field much more frequently than it
+is a function. Thus a function reference needs more evidence than a call. The
+name alone is no evidence: a function reference never has the basis `name_only`,
+also with `--min-basis name_only`. A member `value.name` is a function reference
+only when the type of `value` is known.
+
+A path follows calls and function references. In the JSON output, a step that
+comes from a function reference has `"edge": "function_reference"`. A step that
+comes from a call has no field `edge`. `basis` is the basis of the resolution of
+the name for the two kinds, and `--min-basis` applies to the two kinds. A path
+has the field `function_references` when one or more of its steps are function
+references. The value is the number of such steps. When a call and a function
+reference go to a symbol in the same number of steps, the path shows the call.
+The Mermaid diagram has a dotted arrow for a function reference. The diagram of a
+pull request comment has the same arrow for the two kinds.
+
+A function that registers a handler has a function reference to the handler. Thus
+a `main` function that registers routes has a path to each sink that a handler
+reaches, in addition to the path from the route.
+
+An anonymous function is a part of the function that contains it. A sink in a
+lambda, a closure, or a block has the enclosing function as its symbol. A function
+value that a local name holds is a symbol of its own, and the use of the local
+name is a function reference to it.
+
+| Language | Forms that give a function reference | Forms that give none |
+| --- | --- | --- |
+| Python | `name`, `self.name`, `module.name` at a value position | A class. A name in `getattr`. |
+| JavaScript, TypeScript, JSX, TSX | `name`, `this.name`, `object.name` at a value position. `{ name }`. The value of a JSX attribute, as `onClick={name}`. | `name as Type`, `name!`. A JSX expression that is a child of an element. |
+| Go | `name`, `value.Method`, `package.Name` at a value position | The key of a composite literal. |
+| Rust | `name`, `module::name`, `Type::name`, `name::<T>` at a value position, and as the last expression of a block | A name in the tokens of a macro. A tuple struct or an enum variant as a function. |
+| Java | `Type::name`, `Type::<T>name`, `this::name`, `super::name`, `value::name`. A local name that holds a lambda. | `Type::new`. A method with more than one overload. |
+| C# | A method group: `Name`, `this.Name`, `Type.Name` at a value position. A local function. | A method with more than one overload. |
+| C | `name` and `&name` at a value position, and in an initializer | A member `value.name`. A name that a macro makes. |
+| C++ | The forms of C, and `&Type::name`, `scope::name` | `std::thread worker(name);`, which the grammar reads as a declaration of a function. |
+| Ruby | `method(:name)`, `value.method(:name)`. A local name that holds a lambda or a proc. | `&:name`, which calls `name` on an element of an unknown type. A symbol that a framework reads, as `before_action :name`. |
+| PHP | `[$this, 'name']`, `[Type::class, 'name']`. A variable that holds a function value. | A string alone, as `'name'`. |
+| Bash | The first operand of `trap`, when it is one name, with or without quotation marks | A name that a different command gets as an argument, as `xargs name`. |
+
+The PHP syntax `name(...)` makes a function value from a function. The index
+reads it as a call of `name`, as it did before the function references. Thus a
+path through it has a call edge.
+
+The commands `symbol`, `impact`, and `repomap` use only calls. Their lists of
+callers and callees do not have the function references. The command `deadcode`
+uses a function reference as it uses a call: a function that a live definition
+uses as a value is not dead.
 
 ## Pull requests and reports
 
@@ -534,7 +608,20 @@ time. Omen gives the names only. It does not give the type or the source of a pa
 
 ## Limits
 
-- Omen does not follow data. A path is a chain of calls that the index resolves.
+- Omen does not follow data. A path is a chain of calls and function references that
+  the index resolves.
+- A function reference does not tell that the function runs. Code that keeps a
+  function and does not call it also gives a path. See "Function references".
+- The index does not know each construct that binds a local name. Examples are a
+  pattern of a Rust `match` arm, a Python comprehension, and a `with` statement.
+  When such a name is also the name of a function that the file can see, the use
+  of the name has a false function reference. A call of the name has the same
+  false edge.
+- The read of a property, as `value.name` for a Python `@property`, is a function
+  reference to the method of the property. The read runs the method.
+- A function that goes through a variable of a different function, a field, or a
+  parameter has no function reference. A decorator that registers a function, and a
+  name that reflection reads, have none.
 - A script and a Python `__main__` block are not symbols. An entry point of this kind
   starts no path.
 - A route is an entry point only when its receiver is a framework object. The receiver

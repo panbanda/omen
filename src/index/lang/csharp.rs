@@ -216,6 +216,10 @@ fn implicit_construction<'tree>(
 }
 
 impl LanguageSpec for CSharp {
+    fn value_syntax(&self) -> crate::index::calls::ValueSyntax {
+        super::values::CSHARP
+    }
+
     fn return_owner<'tree>(&self, owner: Node<'tree>, source: &[u8]) -> ReturnOwner<'tree> {
         let mut cursor = owner.walk();
         let is_asynchronous = owner
