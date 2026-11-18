@@ -223,7 +223,9 @@ struct Resolver<'a> {
     types_cache: RwLock<HashMap<TypeQuery, Vec<Id>>>,
     /// The results of `exported`, by the file and the name.
     exported_cache: RwLock<HashMap<ExportQuery, Arc<Vec<Id>>>>,
-    package_cache: RwLock<HashMap<usize, Arc<Vec<usize>>>>,
+    /// For each file, the files of its package. Files of one package share
+    /// one list.
+    packages: OnceLock<Vec<Arc<Vec<usize>>>>,
     visible_cache: RwLock<HashMap<usize, Arc<Vec<usize>>>>,
     /// The `cfg` twins that `twin_members` found, or an empty list when the
     /// members are not twins.
@@ -371,7 +373,7 @@ impl<'a> Resolver<'a> {
             twin_members_cache: RwLock::new(HashMap::new()),
             module_scopes_cache: RwLock::new(HashMap::new()),
             exported_cache: RwLock::new(HashMap::new()),
-            package_cache: RwLock::new(HashMap::new()),
+            packages: OnceLock::new(),
             visible_cache: RwLock::new(HashMap::new()),
         }
     }
@@ -408,6 +410,8 @@ impl<'a> Resolver<'a> {
             .filter(move |id| self.family(id.0) == family)
     }
 
+    /// The rule that `packages_of_files` applies to each pair of files.
+    #[cfg(test)]
     fn same_package(&self, left: usize, right: usize) -> bool {
         let (left_file, right_file) = (&self.files[left], &self.files[right]);
         match self.family(left) {
@@ -446,22 +450,58 @@ impl<'a> Resolver<'a> {
 
     /// The files of the same package as `file`, with `file`.
     fn package_files(&self, file: usize) -> Arc<Vec<usize>> {
-        if let Some(found) = self.package_cache.read().get(&file) {
-            return Arc::clone(found);
+        let packages = self.packages.get_or_init(|| self.packages_of_files());
+        Arc::clone(&packages[file])
+    }
+
+    /// For each file, the files `other` for which `same_package(file, other)`
+    /// is true, in the order of the files. Files with one key share one list,
+    /// thus the cost is linear in the number of files.
+    fn packages_of_files(&self) -> Vec<Arc<Vec<usize>>> {
+        let mut by_directory: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut by_module: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (file, facts) in self.files.iter().enumerate() {
+            by_directory
+                .entry(directory(&facts.file))
+                .or_default()
+                .push(file);
+            for module in &facts.modules {
+                let files = by_module.entry(module.as_str()).or_default();
+                if files.last() != Some(&file) {
+                    files.push(file);
+                }
+            }
         }
-        // Only these families have a package of files. For a different
-        // family, a comparison with each file gives no file.
-        let has_packages = matches!(
-            self.family(file),
-            Family::Go | Family::Java | Family::CSharp | Family::Php
-        );
-        let found: Arc<Vec<usize>> = Arc::new(
-            (0..self.files.len())
-                .filter(|other| has_packages && self.same_package(file, *other))
-                .collect(),
-        );
-        self.package_cache.write().insert(file, Arc::clone(&found));
-        found
+        let by_directory: HashMap<&str, Arc<Vec<usize>>> = by_directory
+            .into_iter()
+            .map(|(key, files)| (key, Arc::new(files)))
+            .collect();
+        let by_module: HashMap<&str, Arc<Vec<usize>>> = by_module
+            .into_iter()
+            .map(|(key, files)| (key, Arc::new(files)))
+            .collect();
+        let empty = Arc::new(Vec::new());
+        self.files
+            .iter()
+            .enumerate()
+            .map(|(file, facts)| match self.family(file) {
+                Family::Go => Arc::clone(&by_directory[directory(&facts.file)]),
+                Family::Java | Family::CSharp | Family::Php => match facts.modules.as_slice() {
+                    [] => Arc::clone(&empty),
+                    [module] => Arc::clone(&by_module[module.as_str()]),
+                    modules => {
+                        let mut files: Vec<usize> = modules
+                            .iter()
+                            .flat_map(|module| by_module[module.as_str()].iter().copied())
+                            .collect();
+                        files.sort_unstable();
+                        files.dedup();
+                        Arc::new(files)
+                    }
+                },
+                _ => Arc::clone(&empty),
+            })
+            .collect()
     }
 
     fn files_through_loads(&self, file: usize) -> Vec<usize> {
@@ -4487,5 +4527,114 @@ mod false_edge_tests {
         let rows = rows(&[("Item.cs", source)], "Item.cs");
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0].ends_with("[Item.cs#Item.Item]"), "{rows:?}");
+    }
+
+    /// `packages` packages of two files, in which one file calls a function
+    /// of the other file. The shape gives Go packages (a directory each) or
+    /// Java packages (a package clause each, all in one directory).
+    fn calls_between_the_files_of_packages_resolve_at(
+        packages: usize,
+        java: bool,
+    ) -> std::time::Duration {
+        let mut sources: Vec<(String, String)> = vec![(
+            "go.mod".to_string(),
+            "module example.com/shop\n".to_string(),
+        )];
+        for package in 0..packages {
+            if java {
+                sources.push((
+                    format!("src/A{package}.java"),
+                    format!("package p{package};\n\nclass A{package} {{\n    void run() {{ B{package}.help{package}(); }}\n}}\n"),
+                ));
+                sources.push((
+                    format!("src/B{package}.java"),
+                    format!("package p{package};\n\nclass B{package} {{\n    static void help{package}() {{}}\n}}\n"),
+                ));
+            } else {
+                sources.push((
+                    format!("p{package}/a.go"),
+                    format!("package p{package}\n\nfunc run() {{\n\thelp()\n}}\n"),
+                ));
+                sources.push((
+                    format!("p{package}/b.go"),
+                    format!("package p{package}\n\nfunc help() {{}}\n"),
+                ));
+            }
+        }
+        let files: Vec<(&str, &str)> = sources
+            .iter()
+            .map(|(path, source)| (path.as_str(), source.as_str()))
+            .collect();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        let started = std::time::Instant::now();
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let unique = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| reference.resolution.status == super::Status::UniqueCandidate)
+            .count();
+        assert_eq!(unique, packages);
+        elapsed
+    }
+
+    /// The shared lists of `package_files` give the files that a comparison
+    /// of each pair of files gives.
+    #[test]
+    fn test_package_files_match_the_comparison_of_each_pair() {
+        let files = [
+            ("go.mod", "module example.com/shop\n"),
+            ("shop/a.go", "package shop\n\nfunc A() {}\n"),
+            ("shop/b.go", "package shop\n\nfunc B() {}\n"),
+            ("shop/c_test.go", "package shop_test\n\nfunc C() {}\n"),
+            ("shop/d.js", "function d() {}\n"),
+            ("main.go", "package main\n\nfunc main() {}\n"),
+            ("src/A.java", "package p;\n\nclass A {}\n"),
+            ("src/B.java", "package p;\n\nclass B {}\n"),
+            ("other/C.java", "package q;\n\nclass C {}\n"),
+            (
+                "src/D.cs",
+                "namespace P { class D {} }\nnamespace Q { class E {} }\n",
+            ),
+            ("src/F.cs", "namespace Q { class F {} }\n"),
+            ("src/G.cs", "namespace P { class G {} }\n"),
+            ("src/H.php", "<?php\nnamespace P;\nclass H {}\n"),
+            ("src/i.py", "def i():\n    pass\n"),
+            ("src/k.rb", "def k; end\n"),
+        ];
+        let (facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        let resolver = super::Resolver::new(&facts, &manifests);
+        for file in 0..facts.len() {
+            let has_packages = matches!(
+                resolver.family(file),
+                super::Family::Go
+                    | super::Family::Java
+                    | super::Family::CSharp
+                    | super::Family::Php
+            );
+            let expected: Vec<usize> = (0..facts.len())
+                .filter(|other| has_packages && resolver.same_package(file, *other))
+                .collect();
+            assert_eq!(
+                *resolver.package_files(file),
+                expected,
+                "{}",
+                facts[file].file
+            );
+        }
+        assert!(facts.iter().any(|file| file.modules.len() > 1));
+    }
+
+    /// The files of a package are found without a comparison of each file of
+    /// the repository with each other file.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_calls_between_the_files_of_many_packages_resolve_in_linear_time() {
+        assert_doubles_at_most("go", 8_000, |size| {
+            calls_between_the_files_of_packages_resolve_at(size, false)
+        });
+        assert_doubles_at_most("java", 8_000, |size| {
+            calls_between_the_files_of_packages_resolve_at(size, true)
+        });
     }
 }
