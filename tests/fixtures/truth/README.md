@@ -89,12 +89,32 @@ to a sink, or that omen reports none. The cases are in the directories `paths`.
 - `steps` lists the keys of the symbols on the path, from the handler to the
   symbol that holds the sink. `weakest_basis` is the weakest basis of a call on
   the path. `path_count` is the number of shortest paths.
+- `function_references` is the number of edges of the path that are function
+  references and not calls.
 - `guards` lists the guards of the entry point of the path.
 - `choke_points` lists symbols that each path to a sink goes through.
 - Omen starts a path only at an entry point that has a symbol. An entry point
   that is a block of the file, such as a Python `__main__` block or a Bash
   script, starts no path. The cases for these do not exist, so the labels do
   not claim that the paths exist.
+
+## Reference labels
+
+A `references` label states the functions to which one use of a function as a
+value has an edge. Such a use is not a call: `spawn(worker)` uses `worker`. The
+cases are in the directories `references`.
+
+- `user` is the key of the symbol whose body has the use. `line` is the line of
+  the name, and `name` is the name without a receiver or a path.
+- `expected` lists the key of each function to which the use has an edge. An
+  empty list means that omen must not report an edge.
+- A use that omen does not report has no edge. Thus a label with an empty list
+  is correct for a name in a string or in a comment.
+- Each language has these rows, where the language has the construct: a
+  function as a value by its name, a nested function as a callback, a name that
+  a local value hides, the same name in a file that the user does not import,
+  and the name in a string and in a comment. The `oracle` text of a case names
+  each row that the language cannot have.
 
 ## The ledger
 

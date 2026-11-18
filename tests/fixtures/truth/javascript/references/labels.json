@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "language": "javascript",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid JavaScript. The imports need packages that the case does not include, and `cleanup` has no import on purpose. The harness does not run the code.",
+  "closed_world": false,
+  "references": [
+    {
+      "label": "callback_by_name",
+      "user": "app.js#createJob",
+      "line": 15,
+      "name": "audit",
+      "expected": ["app.js#audit"]
+    },
+    {
+      "label": "nested_function_as_callback",
+      "user": "app.js#createJob",
+      "line": 14,
+      "name": "loadModule",
+      "expected": ["app.js#createJob.loadModule"]
+    },
+    {
+      "label": "shadowed_name",
+      "user": "app.js#shadowed",
+      "line": 21,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "same_name_in_file_without_import",
+      "user": "app.js#otherFile",
+      "line": 26,
+      "name": "cleanup",
+      "expected": []
+    },
+    {
+      "label": "name_in_comment",
+      "user": "app.js#textOnly",
+      "line": 31,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "name_in_string",
+      "user": "app.js#textOnly",
+      "line": 32,
+      "name": "audit",
+      "expected": []
+    }
+  ],
+  "paths": [
+    {
+      "label": "handler_to_nested_callback",
+      "entry_file": "app.js",
+      "entry_line": 36,
+      "sink_file": "app.js",
+      "sink_line": 12,
+      "steps": ["app.js#createJob", "app.js#createJob.loadModule"],
+      "weakest_basis": "lexical_scope",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "handler_to_callback",
+      "entry_file": "app.js",
+      "entry_line": 36,
+      "sink_file": "app.js",
+      "sink_line": 7,
+      "steps": ["app.js#createJob", "app.js#audit"],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "shadowed_name_has_no_path",
+      "entry_file": "app.js",
+      "entry_line": 37,
+      "sink_file": "app.js",
+      "sink_line": 7,
+      "flagged": false
+    },
+    {
+      "label": "file_without_import_has_no_path",
+      "entry_file": "app.js",
+      "entry_line": 38,
+      "sink_file": "other.js",
+      "sink_line": 4,
+      "flagged": false
+    },
+    {
+      "label": "text_has_no_path",
+      "entry_file": "app.js",
+      "entry_line": 39,
+      "sink_file": "app.js",
+      "sink_line": 7,
+      "flagged": false
+    }
+  ]
+}

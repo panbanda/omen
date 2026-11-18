@@ -211,6 +211,29 @@ impl LanguageSpec for Php {
         CALL_SYNTAX
     }
 
+    fn value_syntax(&self) -> crate::index::calls::ValueSyntax {
+        super::values::PHP
+    }
+
+    fn value_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.value_syntax().position_kinds();
+        kinds.push(super::values::ARRAY_CREATION_EXPRESSION);
+        kinds
+    }
+
+    fn value_hook_kinds(&self) -> Vec<&'static str> {
+        super::values::PHP_HOOK_KINDS.to_vec()
+    }
+
+    fn function_values<'tree>(
+        &self,
+        node: Node<'tree>,
+        context: &Context<'_, 'tree>,
+        out: &mut Vec<crate::index::calls::ValueUse<'tree>>,
+    ) {
+        super::values::php(&self.call_syntax(), node, context, out);
+    }
+
     fn call_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().call_kinds();
         kinds.push(OBJECT_CREATION_EXPRESSION);

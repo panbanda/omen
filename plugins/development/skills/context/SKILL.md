@@ -18,7 +18,8 @@ Get the metrics before you change: `{{.focus}}`
 # Get structural outline of the target file
 omen -f json outline --compact --file "{{.focus}}"
 
-# Inspect a specific symbol's definition and callers
+# Inspect a specific symbol's definition and callers. An ambiguous name exits with 1 and lists
+# each definition with the command that selects it.
 omen -f json symbol "{{.focus}}"
 
 # Get the deep context of the whole repository (the command has no target argument)

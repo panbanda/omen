@@ -458,6 +458,7 @@ fn symbol_name(key: &str) -> &str {
 /// Sankey flow (entry kind, component, sink category), the rows of the entry point table,
 /// and nothing that is not in `security.json`. The Sankey does not draw the call graph.
 fn build_security_json(report: &SecurityData) -> serde_json::Value {
+    use crate::index::security::reach::EdgeKind;
     use std::collections::{BTreeMap, BTreeSet};
 
     let entries: BTreeMap<&str, &crate::index::security::entry::EntryPoint> = report
@@ -549,9 +550,16 @@ fn build_security_json(report: &SecurityData) -> serde_json::Value {
                     Some(serde_json::json!({
                         "sink": format!("{} (CWE-{})", sink.category.name(), sink.cwe),
                         "location": format!("{}:{}", sink.file, sink.range.start_line),
-                        "steps": path.steps.iter().map(|step| match step.basis {
-                            Some(basis) => format!("{} ({})", symbol_name(&step.symbol), basis.name()),
-                            None => symbol_name(&step.symbol).to_string(),
+                        "steps": path.steps.iter().map(|step| match (step.basis, step.edge) {
+                            (Some(basis), EdgeKind::FunctionReference) => format!(
+                                "{} (function reference, {})",
+                                symbol_name(&step.symbol),
+                                basis.name()
+                            ),
+                            (Some(basis), EdgeKind::Call) => {
+                                format!("{} ({})", symbol_name(&step.symbol), basis.name())
+                            }
+                            (None, _) => symbol_name(&step.symbol).to_string(),
                         }).collect::<Vec<_>>(),
                     }))
                 })
@@ -1834,6 +1842,24 @@ mod tests {
         assert!(html.contains("entry: http_handler"));
         assert!(html.contains("component: src"));
         assert!(html.contains("Declared guards"));
+    }
+
+    #[test]
+    fn test_renderer_marks_a_step_that_is_a_function_reference() {
+        let source = "from flask import Flask\n\napp = Flask(__name__)\n\n@app.route(\"/run\", methods=[\"POST\"])\ndef run_command(pool):\n    def load():\n        eval(pool.code)\n\n    pool.submit(load)\n";
+        let report = crate::analyzers::security::Report::from_analysis(
+            crate::index::security::analysis::analyze_sources(
+                &[("src/app.py", source)],
+                crate::index::view::DEFAULT_MIN_BASIS,
+            ),
+        );
+        let data_dir = tempfile::tempdir().unwrap();
+        write_fixture(
+            &data_dir.path().join("security.json"),
+            serde_json::to_value(report).unwrap(),
+        );
+        let html = render_directory(data_dir.path());
+        assert!(html.contains("(function reference, lexical_scope)"));
     }
 
     #[test]
