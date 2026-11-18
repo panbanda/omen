@@ -6,10 +6,10 @@
   "closed_world": false,
   "entry_points_closed_world": true,
   "entry_points": [
-    {"label": "wrapped_p", "file": "main.go", "line": 18, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/p", "guards": ["auth"]},
-    {"label": "wrapped_q", "file": "main.go", "line": 19, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/q", "guards": ["authFunc"]},
-    {"label": "wrapped_r", "file": "main.go", "line": 20, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/r", "guards": ["audit", "auth"]},
-    {"label": "wrapped_s", "file": "main.go", "line": 21, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/s", "guards": ["combine"]},
-    {"label": "wrapped_w", "file": "main.go", "line": 22, "kind": "http_handler", "framework": "net/http", "method": "GET", "path": "/w/{id}", "parameters": ["id"], "guards": ["authFunc"]}
+    {"label": "wrapped_p", "file": "main.go", "line": 18, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/p", "guards": ["auth"], "guards_complete": true, "guards_unknown_reason": null},
+    {"label": "wrapped_q", "file": "main.go", "line": 19, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/q", "guards": ["authFunc"], "guards_complete": true, "guards_unknown_reason": null},
+    {"label": "wrapped_r", "file": "main.go", "line": 20, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/r", "guards": ["audit", "auth"], "guards_complete": true, "guards_unknown_reason": null},
+    {"label": "wrapped_s", "file": "main.go", "line": 21, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/s", "guards": ["combine"], "guards_complete": true, "guards_unknown_reason": null},
+    {"label": "wrapped_w", "file": "main.go", "line": 22, "kind": "http_handler", "framework": "net/http", "method": "GET", "path": "/w/{id}", "parameters": ["id"], "guards": ["authFunc"], "guards_complete": true, "guards_unknown_reason": null}
   ]
 }

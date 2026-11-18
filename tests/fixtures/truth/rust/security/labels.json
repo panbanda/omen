@@ -66,6 +66,14 @@
     {"label": "memory_unsafe.real_call.library_block", "category": "memory_unsafe", "scenario": "real_call", "file": "extra.rs", "line": 11, "basis": "builtin"},
     {"label": "memory_unsafe.real_call.from_raw_parts", "category": "memory_unsafe", "scenario": "real_call", "file": "extra.rs", "line": 12, "basis": "imported_symbol"},
     {"label": "memory_unsafe.real_call.from_ptr", "category": "memory_unsafe", "scenario": "real_call", "file": "extra.rs", "line": 13, "basis": "imported_symbol"},
-    {"label": "hardcoded_credential.real_call.raw_string", "category": "hardcoded_credential", "scenario": "real_call", "file": "extra.rs", "line": 18, "basis": "builtin"}
+    {"label": "hardcoded_credential.real_call.raw_string", "category": "hardcoded_credential", "scenario": "real_call", "file": "extra.rs", "line": 18, "basis": "builtin"},
+    {"label": "unsafe_html_output.real_call", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.rs", "line": 5, "basis": "imported_symbol", "constant_argument": false},
+    {"label": "unsafe_html_output.aliased_import", "category": "unsafe_html_output", "scenario": "aliased_import", "file": "html.rs", "line": 6, "basis": "imported_symbol"},
+    {"label": "unsafe_html_output.safe_variant", "category": "unsafe_html_output", "scenario": "safe_variant", "file": "html.rs", "line": 7, "flagged": false},
+    {"label": "unsafe_html_output.name_in_string", "category": "unsafe_html_output", "scenario": "name_in_string", "file": "html.rs", "line": 8, "flagged": false},
+    {"label": "unsafe_html_output.name_in_comment", "category": "unsafe_html_output", "scenario": "name_in_comment", "file": "html.rs", "line": 9, "flagged": false},
+    {"label": "unsafe_html_output.real_call.constant", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.rs", "line": 10, "basis": "imported_symbol", "constant_argument": true},
+    {"label": "unsafe_html_output.same_name_symbol", "category": "unsafe_html_output", "scenario": "same_name_symbol", "file": "html_decoys.rs", "line": 4, "flagged": false},
+    {"label": "unsafe_html_output.in_test", "category": "unsafe_html_output", "scenario": "in_test", "file": "html.rs", "line": 18, "basis": "imported_symbol", "in_test": true}
   ]
 }

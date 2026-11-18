@@ -9,6 +9,7 @@ use tree_sitter::Node;
 use super::spec::{specs_for, syntax_of, LanguageSyntax, Predicate, SinkSpec, Target};
 use super::syntax;
 use super::{Sink, SinkBasis, SinkCategory, SinkFlags};
+use crate::core::Language;
 use crate::index::extract::{language_spec, FileSymbols, Local};
 use crate::index::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ResolutionBasis,
@@ -95,6 +96,70 @@ fn split_path(text: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+fn locals_by_name(file: &FileSymbols) -> HashMap<&str, Vec<&Local>> {
+    let mut found: HashMap<&str, Vec<&Local>> = HashMap::new();
+    for local in &file.locals {
+        found
+            .entry(local.name.name.as_str())
+            .or_default()
+            .push(local);
+    }
+    found
+}
+
+/// The names of the locals whose first value starts with a call of a function `promisify`,
+/// as `promisify(exec)` or `util.promisify(exec)`. Only the text before the first `(` counts.
+fn promisified_names<'a>(file: &'a FileSymbols, source: &[u8]) -> HashSet<&'a str> {
+    const LONGEST_CALLEE: usize = 64;
+    file.locals
+        .iter()
+        .filter(|local| {
+            local.name.value_start.is_some_and(|start| {
+                let end = source.len().min(start + LONGEST_CALLEE);
+                let text = source.get(start..end).unwrap_or_default();
+                text.iter()
+                    .position(|byte| *byte == b'(')
+                    .is_some_and(|open| {
+                        let callee: Vec<u8> = text[..open]
+                            .iter()
+                            .copied()
+                            .filter(|byte| !byte.is_ascii_whitespace())
+                            .collect();
+                        callee.ends_with(b"promisify")
+                    })
+            })
+        })
+        .map(|local| local.name.name.as_str())
+        .collect()
+}
+
+/// The package of an import path: `@scope/name/sub` gives `@scope/name`, and `name/sub`
+/// gives `name`.
+fn package_name(module_path: &str) -> String {
+    let mut parts = module_path.split('/');
+    let first = parts.next().unwrap_or_default();
+    match parts.next() {
+        Some(second) if first.starts_with('@') => format!("{first}/{second}"),
+        _ => first.to_string(),
+    }
+}
+
+/// An import of an external package that is not in `packages` gives the owner.
+fn is_other_package(packages: &str, owner: &Owner) -> bool {
+    let Owner::Paths {
+        package: Some(package),
+        ..
+    } = owner
+    else {
+        return false;
+    };
+    let unscoped = package.rsplit('/').next().unwrap_or(package);
+    !packages.is_empty()
+        && !packages
+            .split('|')
+            .any(|listed| listed == package || listed == unscoped)
 }
 
 /// The path of a declared type: `&mut sql.DB` gives `sql`, `DB`.
@@ -200,6 +265,17 @@ fn constructed_type(text: &str) -> Option<Vec<String>> {
     chain_segments(rest[..open].trim())
 }
 
+/// The one expression of a list, as the sides of the Go assignment `a.b = c` are. A list
+/// with more expressions gives `None`. A node that is not a list is the expression.
+fn single_expression(node: Node<'_>) -> Option<Node<'_>> {
+    if node.kind() != "expression_list" {
+        return Some(node);
+    }
+    (node.named_child_count() == 1)
+        .then(|| node.named_child(0))
+        .flatten()
+}
+
 /// The loaders of PyYAML that build arbitrary objects.
 const UNSAFE_LOADERS: [&str; 6] = [
     "Loader",
@@ -217,9 +293,11 @@ enum Owner {
     /// The head is a variable that has no known type.
     Unknown,
     /// The paths that the written path can mean. `imported` tells that an import gave them.
+    /// `package` is the external package of that import, when the import names one.
     Paths {
         paths: Vec<Vec<String>>,
         imported: bool,
+        package: Option<String>,
     },
 }
 
@@ -230,7 +308,12 @@ struct FileContext<'a> {
     syntax: LanguageSyntax,
     specs: Vec<&'static SinkSpec>,
     source: &'a [u8],
+    generated: bool,
     call_kinds: Vec<&'static str>,
+    /// The locals of the file by name.
+    locals: HashMap<&'a str, Vec<&'a Local>>,
+    /// The names of the locals whose first value is a call of a function `promisify`.
+    promisified_names: HashSet<&'a str>,
 }
 
 pub(super) fn file_sinks(
@@ -254,11 +337,15 @@ pub(super) fn file_sinks(
             )
             .collect(),
         source,
+        generated: language == Language::Go
+            && syntax::has_generated_header(parsed.root_node(), source),
         call_kinds: language_spec(language).call_syntax().call_kinds(),
+        locals: locals_by_name(file),
+        promisified_names: promisified_names(file, source),
     };
     let mut sinks = Vec::new();
-    context.reference_sinks(&mut sinks);
-    context.tree_sinks(parsed.root_node(), &mut sinks);
+    let covered = context.reference_sinks(&mut sinks);
+    context.tree_sinks(parsed.root_node(), &mut sinks, &covered);
     sinks.sort_by_key(|sink| (sink.range.start_byte, sink.category));
     sinks.dedup_by_key(|sink| (sink.range.start_byte, sink.category));
     sinks
@@ -313,10 +400,11 @@ impl FileContext<'_> {
                 && local.name.value_start.is_none_or(|value| value < at)
                 && local.block.as_ref().is_none_or(|block| block.contains(&at))
         };
+        let candidates = self.locals.get(name).map_or(&[][..], Vec::as_slice);
         let nearest = |owner: Option<usize>| {
-            self.file
-                .locals
+            candidates
                 .iter()
+                .copied()
                 .filter(visible)
                 .filter(|local| local.owner == owner)
                 .min_by_key(|local| local.block.as_ref().map_or(usize::MAX, |block| block.len()))
@@ -404,7 +492,13 @@ impl FileContext<'_> {
             if written.len() < 2 {
                 return Owner::Unknown;
             }
-            match local.name.type_name.as_deref().and_then(type_segments) {
+            match local
+                .name
+                .type_name
+                .as_deref()
+                .map(crate::index::calls::required_type)
+                .and_then(type_segments)
+            {
                 Some(declared) => {
                     written.splice(0..1, declared);
                 }
@@ -430,6 +524,8 @@ impl FileContext<'_> {
             return Owner::Paths {
                 paths: vec![path],
                 imported: true,
+                package: (binding.target_file == ImportTarget::External)
+                    .then(|| package_name(&binding.module_path)),
             };
         }
         let wildcards: Vec<&ImportBinding> = imports
@@ -466,6 +562,7 @@ impl FileContext<'_> {
             return Owner::Paths {
                 paths: external,
                 imported: true,
+                package: None,
             };
         }
         if self.is_root(&head) && self.global_name(&head) {
@@ -474,6 +571,7 @@ impl FileContext<'_> {
         Owner::Paths {
             paths: vec![written],
             imported: false,
+            package: None,
         }
     }
 
@@ -582,7 +680,11 @@ impl FileContext<'_> {
         None
     }
 
-    fn reference_sinks(&self, sinks: &mut Vec<Sink>) {
+    /// Pushes the sinks of the calls. The result has the start bytes of the object literals
+    /// that are arguments of a call that a row names. The matcher does not read their
+    /// properties again.
+    fn reference_sinks(&self, sinks: &mut Vec<Sink>) -> HashSet<usize> {
+        let mut covered = HashSet::new();
         let root = self.parsed.root_node();
         let rows: Vec<&SinkSpec> = self
             .specs
@@ -599,14 +701,26 @@ impl FileContext<'_> {
                     .imports
                     .iter()
                     .any(|binding| Self::binds(binding, &reference.name));
+            let chain = self.owner_chain(facts.owner);
+            // `const run = promisify(exec)` makes `run(command)` a call of `exec`.
+            let promisified =
+                if aliased || !self.promisified_names.contains(reference.name.as_str()) {
+                    None
+                } else {
+                    self.promisified(reference, &chain, facts.start_byte)
+                };
+            let callee_name = promisified
+                .as_ref()
+                .and_then(|(path, _)| path.last())
+                .map_or(reference.name.as_str(), String::as_str);
             let named: Vec<&SinkSpec> = rows
                 .iter()
                 .copied()
                 .filter(|spec| match spec.target {
-                    Target::Path { callee, .. } | Target::Method { callee } => {
+                    Target::Path { callee, .. } | Target::Method { callee, .. } => {
                         aliased
                             || callee == "*"
-                            || callee.split('|').any(|name| name == reference.name)
+                            || callee.split('|').any(|name| name == callee_name)
                     }
                     _ => false,
                 })
@@ -618,26 +732,60 @@ impl FileContext<'_> {
                 .receiver
                 .and_then(|(start, end)| self.source.get(start..end))
                 .and_then(|bytes| std::str::from_utf8(bytes).ok());
-            let Some(written) = Self::written_path(reference, receiver_text) else {
-                continue;
-            };
-            let chain = self.owner_chain(facts.owner);
-            let owner = match &written {
-                Some(path) => self.resolve(path, &chain, facts.start_byte),
-                None => Owner::Unknown,
+            let (written, owner) = match &promisified {
+                Some((path, at)) => (Some(path.clone()), self.resolve(path, &chain, *at)),
+                None => {
+                    let Some(written) = Self::written_path(reference, receiver_text) else {
+                        continue;
+                    };
+                    let owner = match &written {
+                        Some(path) => self.resolve(path, &chain, facts.start_byte),
+                        None => Owner::Unknown,
+                    };
+                    (written, owner)
+                }
             };
             let written_length = written.as_ref().map_or(0, Vec::len);
             let call = syntax::call_node(root, facts.start_byte, facts.end_byte, &self.call_kinds);
-            let arguments = call
+            let call_arguments = call
                 .map(|call| syntax::arguments(call, self.file.language))
                 .unwrap_or_default();
+            let receiver: Vec<Node<'_>> = facts
+                .receiver
+                .and_then(|(start, end)| root.descendant_for_byte_range(start, end))
+                .into_iter()
+                .collect();
+            let cover = |covered: &mut HashSet<usize>| {
+                covered.extend(
+                    call_arguments
+                        .iter()
+                        .filter(|argument| argument.kind() == "object")
+                        .map(|argument| argument.start_byte()),
+                );
+            };
+            if matches!(owner, Owner::Repository) || self.resolver_selected_repository(reference) {
+                cover(&mut covered);
+            }
             for spec in named {
+                let arguments = if spec.predicate == Predicate::Receiver {
+                    &receiver
+                } else {
+                    &call_arguments
+                };
                 let matched: Option<(SinkBasis, String)> = match (&spec.target, &owner) {
-                    (_, Owner::Repository) => None,
-                    (Target::Method { .. }, _) => (reference.receiver.is_some()
+                    // A repository class can inherit the method from a library class. Thus
+                    // only a repository definition of the method itself excludes the call.
+                    (Target::Method { packages, .. }, _) => (reference.receiver.is_some()
+                        && !is_other_package(packages, &owner)
                         && !self.resolver_selected_repository(reference))
                     .then(|| (SinkBasis::NameOnly, format!("*.{}", reference.name))),
-                    (Target::Path { module, callee }, Owner::Paths { paths, imported }) => paths
+                    (_, Owner::Repository) => None,
+                    (
+                        Target::Path { module, callee },
+                        Owner::Paths {
+                            paths, imported, ..
+                        },
+                    ) => paths
                         .iter()
                         .find_map(|path| {
                             self.path_match(module, callee, path, *imported)
@@ -654,13 +802,17 @@ impl FileContext<'_> {
                     continue;
                 };
                 let held = call.is_some()
-                    && syntax::holds(&spec.predicate, &arguments, self.source, &self.syntax)
-                    || (call.is_none() && spec.predicate == super::spec::Predicate::Always);
+                    && syntax::holds(&spec.predicate, arguments, self.source, &self.syntax)
+                    || (call.is_none()
+                        && matches!(
+                            spec.predicate,
+                            Predicate::Always | Predicate::Receiver | Predicate::Command { .. }
+                        ));
                 if !held {
                     continue;
                 }
                 if spec.predicate == Predicate::NotSafeLoader
-                    && !self.loader_is_unsafe(&arguments, &chain, facts.start_byte)
+                    && !self.loader_is_unsafe(arguments, &chain, facts.start_byte)
                 {
                     continue;
                 }
@@ -684,12 +836,81 @@ impl FileContext<'_> {
                     reference.enclosing.as_ref().map(|key| key.to_string()),
                     &callee_text,
                     basis,
-                    !arguments.is_empty() && arguments.iter().all(|node| syntax::is_literal(*node)),
+                    self.is_constant(&spec.predicate, arguments),
                 );
                 sink.target = target;
                 sinks.push(sink);
+                cover(&mut covered);
             }
         }
+        covered
+    }
+
+    /// The function that a bare name holds when a `const` declaration binds the name to
+    /// `promisify(function)` of `util`. The result is the written path of the function and the
+    /// byte at which the imports resolve it.
+    fn promisified(
+        &self,
+        reference: &Reference,
+        chain: &[usize],
+        at: usize,
+    ) -> Option<(Vec<String>, usize)> {
+        if reference.receiver.is_some() || reference.qualifier.is_some() {
+            return None;
+        }
+        let local = self.find_local(&reference.name, chain, at)?;
+        let start = local.name.value_start?;
+        let mut node = self
+            .parsed
+            .root_node()
+            .descendant_for_byte_range(start, start)?;
+        while node.kind() != "call_expression" {
+            node = node
+                .parent()
+                .filter(|parent| parent.start_byte() == start)?;
+        }
+        let declarator = node
+            .parent()
+            .filter(|parent| parent.kind() == "variable_declarator")?;
+        let declaration = declarator
+            .parent()
+            .filter(|parent| parent.kind() == "lexical_declaration")?;
+        if declaration.child(0).map(|keyword| keyword.kind()) != Some("const") {
+            return None;
+        }
+        let function_text: String = node
+            .child_by_field_name("function")
+            .map(|function| syntax::text(function, self.source))?
+            .split_whitespace()
+            .collect();
+        let function = chain_segments(&function_text)?;
+        let is_promisify = match self.resolve(&function, chain, start) {
+            Owner::Paths {
+                paths, imported, ..
+            } => paths.iter().any(|path| {
+                self.path_match("util|node:util", "promisify", path, imported)
+                    .is_some()
+            }),
+            Owner::Repository | Owner::Unknown => false,
+        };
+        let arguments = syntax::arguments(node, self.file.language);
+        let [argument] = arguments.as_slice() else {
+            return None;
+        };
+        let argument_text: String = syntax::text(*argument, self.source)
+            .split_whitespace()
+            .collect();
+        let path = chain_segments(&argument_text)?;
+        (is_promisify && path.iter().all(|segment| !segment.ends_with(')')))
+            .then_some((path, start))
+    }
+
+    /// The arguments that make the call a sink are all literals. A call without such
+    /// arguments is not constant.
+    fn is_constant(&self, predicate: &Predicate, arguments: &[Node<'_>]) -> bool {
+        let named = syntax::subject(predicate, arguments, self.source, &self.syntax)
+            .unwrap_or_else(|| arguments.to_vec());
+        !named.is_empty() && named.into_iter().all(syntax::is_literal)
     }
 
     /// A missing loader is not safe. A loader is not safe when the imports resolve it to
@@ -763,6 +984,7 @@ impl FileContext<'_> {
             flags: SinkFlags {
                 constant_argument,
                 in_test: self.in_test(range.start_byte),
+                in_generated: self.generated,
             },
         }
     }
@@ -773,7 +995,7 @@ impl FileContext<'_> {
     }
 
     /// Walks the tree for the sinks that are not calls.
-    fn tree_sinks(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
+    fn tree_sinks(&self, node: Node<'_>, sinks: &mut Vec<Sink>, covered: &HashSet<usize>) {
         let kind = node.kind();
         if self.syntax.string_kinds.contains(&kind) {
             let literal = syntax::text(node, self.source);
@@ -808,11 +1030,22 @@ impl FileContext<'_> {
             self.keyed_field(node, sinks);
         }
         if self.syntax.assignment_kinds.contains(&kind) {
-            self.assignment(node, sinks);
+            if self.has_target(|target| matches!(target, Target::MemberAssignment { .. })) {
+                self.member_assignment(node, sinks);
+            }
+            if self.has_target(|target| matches!(target, Target::Assignment { .. })) {
+                self.assignment(node, sinks);
+            }
+        }
+        if self.syntax.attribute_kinds.contains(&kind) {
+            self.attribute(node, sinks);
+        }
+        if self.syntax.property_kinds.contains(&kind) {
+            self.object_property(node, sinks, covered);
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.tree_sinks(child, sinks);
+            self.tree_sinks(child, sinks, covered);
         }
     }
 
@@ -821,28 +1054,45 @@ impl FileContext<'_> {
     }
 
     fn keyed_field(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
-        let Some((key, value)) = syntax::key_value(node, self.source) else {
+        let Some((key, _)) = syntax::key_value(node, self.source) else {
             return;
         };
+        let count = node.named_child_count();
+        let Some(value) = count
+            .checked_sub(1)
+            .and_then(|last| node.named_child(last as u32))
+        else {
+            return;
+        };
+        let value = syntax::literal_value(value);
         for spec in &self.specs {
             if let Target::KeyedField {
                 key: wanted_key,
-                value: wanted_value,
                 module,
                 owner,
             } = spec.target
             {
                 if key == wanted_key.to_lowercase()
-                    && value == wanted_value
+                    && syntax::holds(&spec.predicate, &[value], self.source, &self.syntax)
                     && self.literal_has_type(node, module, owner)
                 {
+                    // A value can hold a literal, and a literal can be a secret. Thus the text
+                    // of the sink has the value only when the value is a chain of names.
+                    let value_text: String = syntax::text(value, self.source)
+                        .split_whitespace()
+                        .collect();
+                    let shown = if chain_segments(&value_text).is_some() {
+                        value_text
+                    } else {
+                        "<expression>".to_string()
+                    };
                     sinks.push(self.sink(
                         spec.category,
                         Span::of(&node),
                         self.enclosing_key(node.start_byte()),
-                        syntax::text(node, self.source),
+                        &format!("{wanted_key}: {shown}"),
                         SinkBasis::NameOnly,
-                        false,
+                        self.is_constant(&spec.predicate, &[value]),
                     ));
                 }
             }
@@ -871,7 +1121,9 @@ impl FileContext<'_> {
                 }
                 let chain = self.owner_chain(self.enclosing_position(node.start_byte()));
                 return match self.resolve(&written, &chain, node.start_byte()) {
-                    Owner::Paths { paths, imported } => paths
+                    Owner::Paths {
+                        paths, imported, ..
+                    } => paths
                         .iter()
                         .any(|path| self.path_match(module, owner, path, imported).is_some()),
                     Owner::Repository | Owner::Unknown => false,
@@ -887,23 +1139,190 @@ impl FileContext<'_> {
     /// value is a name, and the last segment of the assigned path must be that name.
     fn value_matches(&self, right: Node<'_>, values: &[&str]) -> bool {
         let right = syntax::unwrap_parentheses(right);
-        values.iter().any(|wanted| {
-            if *wanted == "=>true" {
-                return syntax::is_constant_true_lambda(right, self.source);
+        values.is_empty()
+            || values.iter().any(|wanted| {
+                if *wanted == "=>true" {
+                    return syntax::is_constant_true_lambda(right, self.source);
+                }
+                let compact: String = syntax::text(right, self.source)
+                    .split_whitespace()
+                    .collect::<String>()
+                    .to_lowercase();
+                split_path(&compact).last().map(String::as_str) == Some(*wanted)
+            })
+    }
+
+    /// Reports an assignment to a member of any receiver when a row names the member.
+    fn member_assignment(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
+        let (Some(left), Some(right)) = (
+            node.child_by_field_name("left"),
+            node.child_by_field_name("right"),
+        ) else {
+            return;
+        };
+        // `a.b = c` and `a["b"] = c`.
+        let (object, member) = match left.kind() {
+            "member_expression" => (
+                left.child_by_field_name("object"),
+                left.child_by_field_name("property")
+                    .map(|property| syntax::text(property, self.source)),
+            ),
+            "subscript_expression" => (
+                left.child_by_field_name("object"),
+                left.child_by_field_name("index")
+                    .filter(|index| index.kind() == "string" && syntax::is_literal(*index))
+                    .map(|index| syntax::unquote(syntax::text(index, self.source))),
+            ),
+            _ => return,
+        };
+        let (Some(object), Some(member)) = (object, member) else {
+            return;
+        };
+        let object_text: String = syntax::text(object, self.source)
+            .split_whitespace()
+            .collect();
+        for spec in &self.specs {
+            let Target::MemberAssignment { names, receiver } = spec.target else {
+                continue;
+            };
+            if !names.split('|').any(|name| name == member)
+                || (!receiver.is_empty() && object_text != receiver)
+                || !syntax::holds(&spec.predicate, &[right], self.source, &self.syntax)
+            {
+                continue;
             }
-            let compact: String = syntax::text(right, self.source)
+            // A receiver can hold literals, and a literal can be a secret. Thus the text of
+            // the sink is the chain of names, or only the member.
+            let compact: String = syntax::text(left, self.source).split_whitespace().collect();
+            let callee_text = if chain_segments(&compact).is_some() {
+                compact
+            } else {
+                format!("*.{member}")
+            };
+            sinks.push(self.sink(
+                spec.category,
+                Span::of(&node),
+                self.enclosing_key(node.start_byte()),
+                &callee_text,
+                SinkBasis::NameOnly,
+                self.is_constant(&spec.predicate, &[right]),
+            ));
+        }
+    }
+
+    /// Reports a property of an object literal that a row names, unless the object is an
+    /// argument of a call that the call rows read.
+    fn object_property(&self, node: Node<'_>, sinks: &mut Vec<Sink>, covered: &HashSet<usize>) {
+        let Some(object) = node.parent().filter(|parent| parent.kind() == "object") else {
+            return;
+        };
+        if covered.contains(&object.start_byte()) {
+            return;
+        }
+        let (Some(key), Some(value)) = (
+            node.child_by_field_name("key"),
+            node.child_by_field_name("value"),
+        ) else {
+            return;
+        };
+        let written = match key.kind() {
+            "property_identifier" => syntax::text(key, self.source),
+            "string" if syntax::is_literal(key) => syntax::unquote(syntax::text(key, self.source)),
+            _ => return,
+        };
+        for spec in &self.specs {
+            let Target::ObjectProperty { keys } = spec.target else {
+                continue;
+            };
+            if !keys.split('|').any(|wanted| wanted == written)
+                || !syntax::holds(&spec.predicate, &[value], self.source, &self.syntax)
+            {
+                continue;
+            }
+            // A value can hold a literal, and a literal can be a secret.
+            let value_text: String = syntax::text(value, self.source)
                 .split_whitespace()
-                .collect::<String>()
-                .to_lowercase();
-            split_path(&compact).last().map(String::as_str) == Some(*wanted)
-        })
+                .collect();
+            let is_name = matches!(
+                value.kind(),
+                "identifier" | "member_expression" | "true" | "false"
+            );
+            let shown = if is_name && chain_segments(&value_text).is_some() {
+                value_text
+            } else {
+                "<expression>".to_string()
+            };
+            sinks.push(self.sink(
+                spec.category,
+                Span::of(&node),
+                self.enclosing_key(node.start_byte()),
+                &format!("{written}: {shown}"),
+                SinkBasis::NameOnly,
+                self.is_constant(&spec.predicate, &[value]),
+            ));
+        }
+    }
+
+    /// Reports a JSX attribute that a row names. The value is the property `key` of an
+    /// object literal in the attribute, or the expression of the attribute.
+    fn attribute(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
+        let mut cursor = node.walk();
+        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+        let Some((name, rest)) = children.split_first() else {
+            return;
+        };
+        let written = syntax::text(*name, self.source);
+        for spec in &self.specs {
+            let Target::Attribute { name, key } = spec.target else {
+                continue;
+            };
+            if written != name {
+                continue;
+            }
+            let expression = rest
+                .first()
+                .map(|value| {
+                    if value.kind() == "jsx_expression" {
+                        value.named_child(0).unwrap_or(*value)
+                    } else {
+                        *value
+                    }
+                })
+                .map(syntax::unwrap_parentheses);
+            let value = expression.map(|expression| {
+                if expression.kind() != "object" {
+                    return expression;
+                }
+                let mut members = expression.walk();
+                let found = expression.named_children(&mut members).find(|member| {
+                    syntax::key_value(*member, self.source)
+                        .is_some_and(|(found, _)| found == key.to_lowercase())
+                });
+                found
+                    .and_then(|pair| pair.child_by_field_name("value"))
+                    .unwrap_or(expression)
+            });
+            let values: Vec<Node<'_>> = value.into_iter().collect();
+            if !syntax::holds(&spec.predicate, &values, self.source, &self.syntax) {
+                continue;
+            }
+            sinks.push(self.sink(
+                spec.category,
+                Span::of(&node),
+                self.enclosing_key(node.start_byte()),
+                written,
+                SinkBasis::NameOnly,
+                self.is_constant(&spec.predicate, &values),
+            ));
+        }
     }
 
     /// Reports an assignment to a member that a row names.
     fn assignment(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
         let (Some(left), Some(right)) = (
-            node.child_by_field_name("left"),
-            node.child_by_field_name("right"),
+            node.child_by_field_name("left").and_then(single_expression),
+            node.child_by_field_name("right")
+                .and_then(single_expression),
         ) else {
             return;
         };
@@ -917,7 +1336,9 @@ impl FileContext<'_> {
             return;
         }
         let chain = self.owner_chain(self.enclosing_position(node.start_byte()));
-        let Owner::Paths { paths, imported } = self.resolve(&written, &chain, node.start_byte())
+        let Owner::Paths {
+            paths, imported, ..
+        } = self.resolve(&written, &chain, node.start_byte())
         else {
             return;
         };
@@ -932,6 +1353,7 @@ impl FileContext<'_> {
             };
             if written.last().map(String::as_str) != Some(name)
                 || !self.value_matches(right, values)
+                || !syntax::holds(&spec.predicate, &[right], self.source, &self.syntax)
             {
                 continue;
             }
@@ -945,7 +1367,7 @@ impl FileContext<'_> {
                     self.enclosing_key(node.start_byte()),
                     &compact,
                     basis,
-                    false,
+                    self.is_constant(&spec.predicate, &[right]),
                 ));
             }
         }
@@ -964,7 +1386,10 @@ impl FileContext<'_> {
         }
         let chain = self.owner_chain(self.enclosing_position(node.start_byte()));
         let owner = self.resolve(&written, &chain, node.start_byte());
-        let Owner::Paths { paths, imported } = owner else {
+        let Owner::Paths {
+            paths, imported, ..
+        } = owner
+        else {
             return false;
         };
         for spec in &self.specs {

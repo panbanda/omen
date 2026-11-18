@@ -59,7 +59,7 @@ pub const IMPORT_CATEGORIES: [&str; 8] = [
 
 /// The sink categories. Each language labels each category in each scenario,
 /// or declares the category or the scenario not applicable.
-pub const SINK_CATEGORIES: [&str; 9] = [
+pub const SINK_CATEGORIES: [&str; 10] = [
     "command_execution",
     "code_evaluation",
     "unsafe_deserialization",
@@ -69,6 +69,7 @@ pub const SINK_CATEGORIES: [&str; 9] = [
     "tls_verification_disabled",
     "hardcoded_credential",
     "memory_unsafe",
+    "unsafe_html_output",
 ];
 pub const SINK_SCENARIOS: [&str; 7] = [
     "real_call",
@@ -289,6 +290,27 @@ pub struct EntryPointLabel {
     /// The declared guards, in the order in which omen reports them.
     #[serde(default)]
     pub guards: Vec<String>,
+    /// The key of the handler symbol. `null` states that the entry point has no symbol. Without
+    /// the field, the symbol is not checked.
+    #[serde(default, deserialize_with = "present")]
+    pub symbol: Option<Option<String>>,
+    /// Whether the guard list is complete. Without the field, the state is not checked.
+    #[serde(default)]
+    pub guards_complete: Option<bool>,
+    /// The reason when the guard list is not complete. `null` states that omen gives no reason.
+    /// Without the field, the reason is not checked.
+    #[serde(default, deserialize_with = "present")]
+    pub guards_unknown_reason: Option<Option<String>>,
+}
+
+/// Reads a field that is in the label, also when its value is `null`. Thus a label can tell
+/// `null` from a field that it does not have.
+fn present<'de, D, T>(deserializer: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// One call, member access, or literal that is a sink or must not be one.
@@ -312,6 +334,9 @@ pub struct SinkLabel {
     /// The sink is in test code.
     #[serde(default)]
     pub in_test: bool,
+    /// The sink is in a file with the header of generated code.
+    #[serde(default)]
+    pub in_generated: bool,
     /// All arguments of the call are literals. Only a label that states it gets the check.
     #[serde(default)]
     pub constant_argument: Option<bool>,
@@ -476,6 +501,9 @@ pub struct ObservedEntryPoint {
     pub path: Option<String>,
     pub parameters: Vec<String>,
     pub guards: Vec<String>,
+    pub symbol: Option<String>,
+    pub guards_complete: bool,
+    pub guards_unknown_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -486,6 +514,7 @@ pub struct ObservedSink {
     pub category: String,
     pub basis: String,
     pub in_test: bool,
+    pub in_generated: bool,
     pub constant_argument: bool,
 }
 
@@ -671,7 +700,10 @@ fn symbol_locations(case: &str, labels: &Labels) -> Result<BTreeMap<String, Loca
             )));
         }
         if !sink.flagged
-            && (sink.basis.is_some() || sink.in_test || sink.constant_argument.is_some())
+            && (sink.basis.is_some()
+                || sink.in_test
+                || sink.in_generated
+                || sink.constant_argument.is_some())
         {
             return Err(invalid(format!(
                 "{case}: sink '{}' is not flagged, thus it has no basis and no flags",
@@ -1003,6 +1035,33 @@ fn compare_entry_points(
                 mismatch(format!("{:?}", label.guards), format!("{:?}", entry.guards))
             }),
         ));
+        if let Some(symbol) = &label.symbol {
+            out.push(check(
+                "symbol",
+                found.and_then(|entry| {
+                    mismatch(format!("{symbol:?}"), format!("{:?}", entry.symbol))
+                }),
+            ));
+        }
+        if let Some(complete) = label.guards_complete {
+            out.push(check(
+                "guards_complete",
+                found.and_then(|entry| {
+                    mismatch(complete.to_string(), entry.guards_complete.to_string())
+                }),
+            ));
+        }
+        if let Some(reason) = &label.guards_unknown_reason {
+            out.push(check(
+                "guards_unknown_reason",
+                found.and_then(|entry| {
+                    mismatch(
+                        format!("{reason:?}"),
+                        format!("{:?}", entry.guards_unknown_reason),
+                    )
+                }),
+            ));
+        }
     }
     let closed = labels
         .entry_points_closed_world
@@ -1203,6 +1262,15 @@ fn compare_sinks(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec
         out.push(check(
             "in_test",
             found.and_then(|sink| mismatch(label.in_test.to_string(), sink.in_test.to_string())),
+        ));
+        out.push(check(
+            "in_generated",
+            found.and_then(|sink| {
+                mismatch(
+                    label.in_generated.to_string(),
+                    sink.in_generated.to_string(),
+                )
+            }),
         ));
         if let Some(constant) = label.constant_argument {
             out.push(check(
@@ -2153,6 +2221,7 @@ mod tests {
             category: category.to_string(),
             basis: "imported_symbol".to_string(),
             in_test: file.starts_with("tests/"),
+            in_generated: false,
             constant_argument: false,
         }
     }
@@ -2180,8 +2249,8 @@ mod tests {
     fn correct_sinks_pass_every_assertion() {
         let assertions = compare("python/security", &sink_labels(), &correct_sinks()).unwrap();
         assert_eq!(sink_failures(&correct_sinks()), Vec::<String>::new());
-        // The real call has four checks, the safe variant one, and the test call two.
-        assert_eq!(assertions.len(), 4 + 1 + 2);
+        // The real call has five checks, the safe variant one, and the test call three.
+        assert_eq!(assertions.len(), 5 + 1 + 3);
     }
 
     #[test]
@@ -2194,6 +2263,7 @@ mod tests {
                 "python/security/sinks/command_execution.real_call/found",
                 "python/security/sinks/command_execution.real_call/basis",
                 "python/security/sinks/command_execution.real_call/in_test",
+                "python/security/sinks/command_execution.real_call/in_generated",
                 "python/security/sinks/command_execution.real_call/constant_argument",
             ]
         );
@@ -2224,6 +2294,7 @@ mod tests {
         observed.sinks[0].in_test = true;
         observed.sinks[1].in_test = false;
         observed.sinks[0].constant_argument = true;
+        observed.sinks[1].in_generated = true;
         assert_eq!(
             sink_failures(&observed),
             [
@@ -2231,6 +2302,7 @@ mod tests {
                 "python/security/sinks/command_execution.real_call/in_test",
                 "python/security/sinks/command_execution.real_call/constant_argument",
                 "python/security/sinks/command_execution.in_test/in_test",
+                "python/security/sinks/command_execution.in_test/in_generated",
             ]
         );
     }
@@ -2276,6 +2348,9 @@ mod tests {
             path: Some("/u/<id>".to_string()),
             parameters: vec!["id".to_string()],
             guards: vec!["login_required".to_string()],
+            symbol: Some("app.py#update".to_string()),
+            guards_complete: false,
+            guards_unknown_reason: Some("layer_not_read".to_string()),
         }
     }
 
@@ -2295,6 +2370,52 @@ mod tests {
             ..Observed::default()
         };
         assert_eq!(entry_failures(&observed), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_label_checks_the_symbol_and_the_guard_state_only_when_it_has_the_fields() {
+        let mut labels = entry_labels();
+        let mut wrong = observed_entry();
+        wrong.symbol = None;
+        wrong.guards_complete = true;
+        wrong.guards_unknown_reason = None;
+        let observed = Observed {
+            entry_points: vec![wrong],
+            ..Observed::default()
+        };
+        let failures = |labels: &Labels| -> Vec<String> {
+            compare("python/entry_points", labels, &observed)
+                .unwrap()
+                .into_iter()
+                .filter(|assertion| !assertion.passed)
+                .map(|assertion| assertion.id)
+                .collect()
+        };
+        assert_eq!(failures(&labels), Vec::<String>::new());
+        labels.entry_points[0].symbol = Some(Some("app.py#update".to_string()));
+        labels.entry_points[0].guards_complete = Some(false);
+        labels.entry_points[0].guards_unknown_reason = Some(Some("layer_not_read".to_string()));
+        assert_eq!(
+            failures(&labels),
+            [
+                "python/entry_points/entry_points/update/symbol",
+                "python/entry_points/entry_points/update/guards_complete",
+                "python/entry_points/entry_points/update/guards_unknown_reason",
+            ]
+        );
+        let stated: Labels = serde_json::from_value(serde_json::json!({
+            "version": 1, "language": "python", "split": "development", "oracle": "x",
+            "closed_world": true,
+            "entry_points": [
+                {"label": "update", "file": "app.py", "line": 7, "kind": "http_handler",
+                 "framework": "flask", "method": "POST", "path": "/u/<id>",
+                 "parameters": ["id"], "guards": ["login_required"], "symbol": null,
+                 "guards_complete": true, "guards_unknown_reason": null}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(stated.entry_points[0].symbol, Some(None));
+        assert_eq!(failures(&stated), Vec::<String>::new());
     }
 
     #[test]
@@ -2462,6 +2583,7 @@ mod tests {
                 "python/security/sinks/command_execution.twin/found",
                 "python/security/sinks/command_execution.twin/basis",
                 "python/security/sinks/command_execution.twin/in_test",
+                "python/security/sinks/command_execution.twin/in_generated",
                 "python/security/sinks/command_execution.twin/constant_argument",
             ]
         );
