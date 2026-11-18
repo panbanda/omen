@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{join, rust_library_name};
+use super::join;
 
 /// The directories in which `cargo` finds a target for each file, with the
 /// key of `[package]` that stops the search.
@@ -116,10 +116,15 @@ pub fn package(directory: &str, cargo_toml: &str) -> Option<Package> {
     let manifest = toml::from_str::<toml::Table>(cargo_toml).ok()?;
     let mut found = Package::default();
     let package = table_of(manifest.get("package"));
-    if package.is_some() {
-        found.library_name = rust_library_name(cargo_toml);
+    let library = table_of(manifest.get("lib"));
+    if let Some(package) = package {
+        let package_name = text_of(package, "name").map(|name| name.replace('-', "_"));
+        found.library_name = library
+            .and_then(|library| text_of(library, "name"))
+            .map(str::to_string)
+            .or(package_name);
     }
-    found.library_path = table_of(manifest.get("lib"))
+    found.library_path = library
         .and_then(|library| text_of(library, "path"))
         .and_then(|path| join(directory, path));
     for kind in TARGET_TABLES {
@@ -274,6 +279,25 @@ mod tests {
 
     const WORKSPACE: &str = "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies]\ntools = { path = \"crates/tools\" }\nserde = \"1\"\nfixed = { package = \"fixed-up\", version = \"1\" }\n\n[patch.crates-io]\nfixed-up = { path = \"vendor/fixed\" }\n";
     const APP: &str = "[package]\nname = \"app\"\n\n[dependencies]\ntools.workspace = true\nserde = { workspace = true }\nkit = { package = \"render-kit\", path = \"../render-kit\" }\nfixed.workspace = true\nlost.workspace = true\nlog = \"0.4\"\noutside = { path = \"../../../outside\" }\n\n[target.'cfg(unix)'.dev-dependencies]\nunix-only = { path = \"../unix\" }\n";
+
+    /// The name of the library is `[lib] name`, else the name of the package
+    /// with `_` for each `-`. Comments and each form of a TOML text are valid.
+    #[test]
+    fn test_package_reads_the_library_name_from_the_toml_tables() {
+        let library = |manifest: &str| package("kit", manifest).unwrap().library_name;
+        let commented = "[package] # the package\nname = \"render-kit\" # the name\n";
+        assert_eq!(library(commented).as_deref(), Some("render_kit"));
+        let single_quotes = "[package]\nname = 'render-kit'\n";
+        assert_eq!(library(single_quotes).as_deref(), Some("render_kit"));
+        let inline = "package = { name = \"render-kit\" }\n";
+        assert_eq!(library(inline).as_deref(), Some("render_kit"));
+        let named =
+            "[package]\nname = \"render-kit\"\n\n[lib] # the library\nname = 'kit' # short\n";
+        assert_eq!(library(named).as_deref(), Some("kit"));
+        let dependency_name = "[package]\nname = \"app\"\n\n[dependencies.other]\nname = \"x\"\n";
+        assert_eq!(library(dependency_name).as_deref(), Some("app"));
+        assert_eq!(library("[workspace]\nmembers = []\n"), None);
+    }
 
     #[test]
     fn test_package_reads_the_library_and_the_target_paths() {

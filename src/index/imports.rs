@@ -394,31 +394,6 @@ impl Manifests {
     }
 }
 
-/// The name with which Rust source refers to the library of a `Cargo.toml`
-/// file: the `name` of `[lib]`, or the `name` of `[package]` with `_` for `-`.
-pub fn rust_library_name(cargo_toml: &str) -> Option<String> {
-    let mut section = "";
-    let mut package = None;
-    let mut library = None;
-    for line in cargo_toml.lines().map(str::trim) {
-        if line.starts_with('[') {
-            section = line;
-            continue;
-        }
-        let name = line
-            .strip_prefix("name")
-            .map(str::trim_start)
-            .and_then(|rest| rest.strip_prefix('='))
-            .map(|value| value.trim().trim_matches('"').to_string());
-        match (section, name) {
-            ("[package]", Some(name)) => package = Some(name.replace('-', "_")),
-            ("[lib]", Some(name)) => library = Some(name),
-            _ => {}
-        }
-    }
-    library.or(package)
-}
-
 /// The `require_paths` of a gem specification. Without the assignment, the
 /// value is `lib`. If the value is not a list of string literals, the result is empty.
 pub fn ruby_require_paths(gemspec: &str) -> Vec<String> {
