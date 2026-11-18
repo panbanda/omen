@@ -131,6 +131,9 @@ pub struct Draft<'tree> {
     pub named_by_binding: bool,
     /// The `cfg` attributes that control the definition.
     pub condition: Option<Condition>,
+    /// The wrapper type of the `self` parameter of a Rust method, as `Arc`
+    /// for `self: &Arc<Self>`.
+    pub self_wrapper: Option<&'static str>,
 }
 
 /// The `cfg` attributes that control a Rust definition. Two definitions of
@@ -167,6 +170,7 @@ pub struct LinkFacts {
     pub bases: Vec<String>,
     pub named_by_binding: bool,
     pub condition: Option<Condition>,
+    pub self_wrapper: Option<&'static str>,
     /// The names, different from its own, under which the module exports
     /// this top-level symbol, as `export { a as b }` gives `b` to `a`.
     pub export_aliases: Vec<String>,
@@ -807,6 +811,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 && (name_node.start_byte() < node.start_byte()
                     || name_node.end_byte() > node.end_byte()),
             condition: None,
+            self_wrapper: None,
         };
         if draft.kind == SymbolKind::Module {
             draft.role = ScopeRole::Module;
@@ -1606,6 +1611,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             bases: draft.bases,
             named_by_binding: draft.named_by_binding,
             condition: draft.condition,
+            self_wrapper: draft.self_wrapper,
             export_aliases,
         });
     }

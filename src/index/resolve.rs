@@ -222,7 +222,29 @@ struct Resolver<'a> {
     /// The `cfg` twins that `twin_members` found, or an empty list when the
     /// members are not twins.
     twin_members_cache: RwLock<HashMap<TwinQuery, Arc<Vec<Id>>>>,
+    /// The results of `module_scopes`, by the file.
+    module_scopes_cache: RwLock<HashMap<usize, Arc<ModuleScopes>>>,
 }
+
+/// The traits whose methods `Arc` and `Rc` have only when the trait is in
+/// scope: the name of the method, the name of the trait, and the modules
+/// that export the trait.
+const SCOPED_WRAPPER_TRAITS: [(&str, &str, &[&str]); 3] = [
+    (
+        "borrow",
+        "Borrow",
+        &["std::borrow", "core::borrow", "alloc::borrow"],
+    ),
+    ("deref", "Deref", &["std::ops", "core::ops"]),
+    ("type_id", "Any", &["std::any", "core::any"]),
+];
+
+/// The imports of each module scope of a Rust file, by the position of the
+/// inline module, or `None` for the file. A scope has the traits of
+/// `SCOPED_WRAPPER_TRAITS` that it imports, and the paths of the modules of
+/// the file that it imports with a wildcard, as `self::a` for `use super::*`
+/// in the module `a::b`.
+type ModuleScopes = HashMap<Option<usize>, ([bool; 3], Vec<String>)>;
 
 /// The types, the name, and the number of arguments of one lookup of the
 /// members of `cfg` twin types.
@@ -322,6 +344,7 @@ impl<'a> Resolver<'a> {
             ruby_children: OnceLock::new(),
             types_cache: RwLock::new(HashMap::new()),
             twin_members_cache: RwLock::new(HashMap::new()),
+            module_scopes_cache: RwLock::new(HashMap::new()),
             exported_cache: RwLock::new(HashMap::new()),
             package_cache: RwLock::new(HashMap::new()),
             visible_cache: RwLock::new(HashMap::new()),
@@ -969,7 +992,27 @@ impl<'a> Resolver<'a> {
             if let Some(container) = &symbol.container {
                 let parent = self.facts(*id).parent.map(|position| (id.0, position));
                 if let Some(parent) = parent.filter(|parent| is_container(self.symbol(*parent))) {
-                    return Some(parent);
+                    if self.symbol(parent).name == *container {
+                        return Some(parent);
+                    }
+                    // A Rust `impl` block is not a symbol. The parent of its
+                    // method is the module that has the `impl` block, and the
+                    // type is in that module.
+                    if self.symbol(parent).kind == SymbolKind::Module {
+                        let owned: Vec<Id> = self
+                            .named(container, id.0)
+                            .filter(|owner| {
+                                owner.0 == id.0
+                                    && is_container(self.symbol(*owner))
+                                    && self.facts(*owner).parent == Some(parent.1)
+                            })
+                            .collect();
+                        if let [only] = owned.as_slice() {
+                            return Some(*only);
+                        }
+                    } else {
+                        return Some(parent);
+                    }
                 }
                 let types = self.types(container, None, id.0);
                 if let [only] = types.as_slice() {
@@ -1519,7 +1562,7 @@ impl<'a> Resolver<'a> {
     /// the methods of the wrapper first: its inherent methods, then the
     /// methods of the traits in scope. These methods do not call the method
     /// of the content with the same name.
-    fn is_wrapper_method(&self, file: usize, name: &str) -> bool {
+    fn is_wrapper_method(&self, file: usize, chain: &[Id], name: &str) -> bool {
         // The traits of the Rust 2021 prelude: `AsRef`, `Clone`, `Into`,
         // `ToOwned`, and `TryInto`.
         const PRELUDE: [&str; 6] = [
@@ -1530,62 +1573,137 @@ impl<'a> Resolver<'a> {
             "to_owned",
             "try_into",
         ];
-        // A method of a different trait applies only when the file imports
-        // the trait or its module with a wildcard.
-        const IMPORTED: [(&str, &str, &[&str]); 3] = [
-            (
-                "borrow",
-                "Borrow",
-                &["std::borrow", "core::borrow", "alloc::borrow"],
-            ),
-            ("deref", "Deref", &["std::ops", "core::ops"]),
-            ("type_id", "Any", &["std::any", "core::any"]),
-        ];
         if PRELUDE.contains(&name) {
             return true;
         }
-        let Some((_, trait_name, modules)) = IMPORTED.iter().find(|(method, ..)| *method == name)
+        let Some(index) = SCOPED_WRAPPER_TRAITS
+            .iter()
+            .position(|(method, ..)| *method == name)
         else {
             return false;
         };
-        self.files[file].imports.iter().any(|binding| {
+        // A module does not get the imports of its parent, but `use super::*`
+        // gives them.
+        let scopes = self.module_scopes(file);
+        let mut module = chain
+            .iter()
+            .find(|id| self.symbol(**id).kind == SymbolKind::Module)
+            .map(|id| id.1);
+        while let Some(position) = module {
+            let Some((traits, wildcards)) = scopes.get(&module) else {
+                return false;
+            };
+            if traits[index] {
+                return true;
+            }
+            let parent = self.enclosing_module((file, position));
+            let parent_path = match parent {
+                Some(parent) => format!("self::{}", self.member_path((file, parent)).join("::")),
+                None => "self".to_string(),
+            };
+            if !wildcards.contains(&parent_path) {
+                return false;
+            }
+            module = parent;
+        }
+        scopes.get(&None).is_some_and(|(traits, _)| traits[index])
+    }
+
+    /// The nearest inline module that contains the symbol `id`, or `None`
+    /// for the file.
+    fn enclosing_module(&self, id: Id) -> Option<usize> {
+        let mut current = self.facts(id).parent;
+        while let Some(position) = current {
+            if self.symbol((id.0, position)).kind == SymbolKind::Module {
+                return Some(position);
+            }
+            current = self.files[id.0].link_facts[position].parent;
+        }
+        None
+    }
+
+    /// The imports of each module scope of `file`. The search goes through
+    /// the imports and the modules in the order of their start, thus it costs
+    /// the number of the imports and modules, and not their product.
+    fn module_scopes(&self, file: usize) -> Arc<ModuleScopes> {
+        if let Some(found) = self.module_scopes_cache.read().get(&file) {
+            return Arc::clone(found);
+        }
+        let facts = &self.files[file];
+        let mut modules: Vec<(usize, std::cmp::Reverse<usize>, usize)> = facts
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, symbol)| symbol.kind == SymbolKind::Module)
+            .map(|(position, symbol)| {
+                (
+                    symbol.range.start_byte,
+                    std::cmp::Reverse(symbol.range.end_byte),
+                    position,
+                )
+            })
+            .collect();
+        modules.sort();
+        let mut imports: Vec<&ImportBinding> = facts.imports.iter().collect();
+        imports.sort_by_key(|binding| binding.range.start_byte);
+        let mut scopes = ModuleScopes::new();
+        let mut open: Vec<(usize, usize)> = Vec::new();
+        let mut next = 0;
+        for binding in imports {
+            let start = binding.range.start_byte;
+            while let Some((module_start, std::cmp::Reverse(end), position)) = modules.get(next) {
+                if *module_start > start {
+                    break;
+                }
+                while open
+                    .last()
+                    .is_some_and(|(open_end, _)| open_end <= module_start)
+                {
+                    open.pop();
+                }
+                open.push((*end, *position));
+                next += 1;
+            }
+            while open.last().is_some_and(|(open_end, _)| *open_end <= start) {
+                open.pop();
+            }
+            let module = open.last().map(|(_, position)| *position);
+            let scope = scopes.entry(module).or_default();
             let wildcard = matches!(
                 binding.kind,
                 ImportKind::Wildcard | ImportKind::ReExportWildcard
             );
-            modules.iter().any(|module| {
-                if wildcard {
-                    binding.module_path == *module
-                } else {
-                    binding.module_path == format!("{module}::{trait_name}")
-                }
-            })
-        })
+            if wildcard
+                && (binding.module_path == "self" || binding.module_path.starts_with("self::"))
+            {
+                scope.1.push(binding.module_path.clone());
+            }
+            for (index, (_, trait_name, paths)) in SCOPED_WRAPPER_TRAITS.iter().enumerate() {
+                scope.0[index] |= paths.iter().any(|path| {
+                    if wildcard {
+                        binding.module_path == *path
+                    } else {
+                        binding.module_path == format!("{path}::{trait_name}")
+                    }
+                });
+            }
+        }
+        let scopes = Arc::new(scopes);
+        self.module_scopes_cache
+            .write()
+            .insert(file, Arc::clone(&scopes));
+        scopes
     }
 
     /// The wrapper type of the `self` parameter of the nearest method in
-    /// `chain`, as `Arc` for `self: &Arc<Self>`. `owner` is the type of the
-    /// method. A type of the repository with the name of the wrapper is a
-    /// different type, thus it gives `None`.
-    fn self_parameter_wrapper(&self, file: usize, chain: &[Id], owner: Id) -> Option<&'static str> {
+    /// `chain`, as `Arc` for `self: &Arc<Self>`. A type of the repository
+    /// with the name of the wrapper is a different type, thus it gives `None`.
+    fn self_parameter_wrapper(&self, file: usize, chain: &[Id]) -> Option<&'static str> {
         let method = chain
             .iter()
             .take_while(|id| !is_container(self.symbol(**id)))
             .find(|id| self.symbol(**id).kind == SymbolKind::Method)?;
-        let declared = self.facts(*method).parameter_types.as_ref()?.first()?;
-        let declared = match declared.strip_prefix('&') {
-            Some(reference) => reference.strip_prefix("mut").unwrap_or(reference),
-            None => declared,
-        };
-        let (path, argument) = declared.split_once('<')?;
-        let owner_name = self.symbol(owner).name.as_str();
-        if argument != "Self>" && argument != format!("{owner_name}>") {
-            return None;
-        }
-        let wrapper = path.rsplit("::").next()?;
-        let wrapper = crate::index::lang::rust::SELF_WRAPPERS
-            .into_iter()
-            .find(|known| *known == wrapper)?;
+        let wrapper = self.facts(*method).self_wrapper?;
         self.types(wrapper, None, file)
             .is_empty()
             .then_some(wrapper)
@@ -1610,13 +1728,11 @@ impl<'a> Resolver<'a> {
         let wrapper = local.self_wrapper.as_deref()?;
         let owner = self.enclosing_type(chain)?;
         let wrapper = match wrapper {
-            "" => self
-                .self_parameter_wrapper(file, chain, owner)
-                .unwrap_or_default(),
+            "" => self.self_parameter_wrapper(file, chain).unwrap_or_default(),
             _ if !self.types(wrapper, None, file).is_empty() => return None,
             _ => wrapper,
         };
-        if !wrapper.is_empty() && self.is_wrapper_method(file, name) {
+        if !wrapper.is_empty() && self.is_wrapper_method(file, chain, name) {
             return Some(Outcome::none(Status::External));
         }
         if wrapper.is_empty() {
@@ -2356,8 +2472,8 @@ impl<'a> Resolver<'a> {
                 }
                 // `self.clone()` with `self: &Arc<Self>` calls `Arc::clone`.
                 if self.family(file) == Family::Rust
-                    && self.self_parameter_wrapper(file, &chain, owner).is_some()
-                    && self.is_wrapper_method(file, name)
+                    && self.self_parameter_wrapper(file, &chain).is_some()
+                    && self.is_wrapper_method(file, &chain, name)
                 {
                     return Outcome::none(Status::External);
                 }
@@ -3710,14 +3826,19 @@ mod false_edge_tests {
 
     /// With `self: &Arc<Self>` or `self: Rc<Self>`, `self.clone()` is the
     /// `clone` of the wrapper, also when the type has an inherent `clone`.
+    /// A lifetime and `mut` in the reference do not change this.
     #[test]
     fn test_rust_clone_of_a_wrapped_self_parameter_is_the_wrapper() {
         for receiver in [
             "self: &Arc<Self>",
             "self: Arc<Self>",
+            "mut self: Arc<Self>",
             "self: &std::rc::Rc<Self>",
+            "self: &'a Arc<Self>",
+            "self: &'a mut Rc<Node>",
+            "self: &mut Arc<Self>",
         ] {
-            let source = format!("use std::sync::Arc;\n\nstruct Node;\n\nstruct Other;\n\nimpl Other {{\n    fn start(&self) {{}}\n}}\n\nimpl Node {{\n    fn start(&self) {{}}\n\n    fn clone(&self) -> Other {{\n        Other\n    }}\n\n    fn share({receiver}) {{\n        let copy = self.clone();\n        copy.start();\n        copy.clone();\n    }}\n}}\n");
+            let source = format!("use std::sync::Arc;\n\nstruct Node;\n\nstruct Other;\n\nimpl Other {{\n    fn start(&self) {{}}\n}}\n\nimpl Node {{\n    fn start(&self) {{}}\n\n    fn clone(&self) -> Other {{\n        Other\n    }}\n\n    fn share<'a>({receiver}) {{\n        let copy = self.clone();\n        copy.start();\n        copy.clone();\n    }}\n}}\n");
             assert_eq!(
                 rows_of(&[("a.rs", source.as_str())], "a.rs", "start"),
                 ["20 Node.share>copy.start UniqueCandidate EnclosingType [a.rs#Node.start]"],
@@ -3732,6 +3853,43 @@ mod false_edge_tests {
                 "{receiver}"
             );
         }
+    }
+
+    /// The `impl` block of a type in an inline module is not a symbol, thus
+    /// the parent of its method is the module. The type of the method is the
+    /// type of the `impl` block, not the module.
+    #[test]
+    fn test_rust_self_call_in_an_impl_block_of_an_inline_module() {
+        let source = "mod shapes {\n    pub struct Circle;\n\n    impl Circle {\n        fn area(&self) {}\n\n        fn run(&self) {\n            self.area();\n        }\n    }\n}\n\nstruct Square;\n\nimpl Square {\n    fn area(&self) {}\n}\n";
+        assert_eq!(
+            rows_of(&[("a.rs", source)], "a.rs", "area"),
+            ["8 shapes.Circle.run>self.area UniqueCandidate EnclosingType [a.rs#shapes.Circle.area]"]
+        );
+    }
+
+    /// A `use` of a parent module is not in scope in an inline child module,
+    /// but `use super::*` brings it into scope.
+    #[test]
+    fn test_rust_trait_of_the_wrapper_in_scope_of_the_module_of_the_call() {
+        let item = |name: &str| {
+            format!("    struct {name};\n\n    impl {name} {{\n        fn borrow(&self) {{}}\n\n        fn run(self) {{\n            let this = Arc::new(self);\n            this.borrow();\n        }}\n    }}\n")
+        };
+        let source = format!(
+            "use std::borrow::Borrow;\nuse std::sync::Arc;\n\nmod plain {{\n    use std::sync::Arc;\n\n{}}}\n\nmod glob {{\n    use super::*;\n\n{}}}\n\nmod own {{\n    use std::sync::Arc;\n\n    mod deeper {{\n        use std::borrow::Borrow;\n    }}\n\n{}}}\n\nmod outer {{\n    use super::*;\n\n    mod inner {{\n        use super::*;\n\n{}    }}\n}}\n",
+            item("Plain"),
+            item("Glob"),
+            item("Own"),
+            item("Deep")
+        );
+        assert_eq!(
+            rows_of(&[("a.rs", source.as_str())], "a.rs", "borrow"),
+            [
+                "14 plain.Plain.run>this.borrow UniqueCandidate EnclosingType [a.rs#plain.Plain.borrow]",
+                "29 glob.Glob.run>this.borrow External - []",
+                "48 own.Own.run>this.borrow UniqueCandidate EnclosingType [a.rs#own.Own.borrow]",
+                "66 outer.inner.Deep.run>this.borrow External - []",
+            ]
+        );
     }
 
     /// A type of the repository with the name `Arc` is not the standard type.

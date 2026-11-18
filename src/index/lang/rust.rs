@@ -76,7 +76,7 @@ const TEXT_ID_MEMO: u8 = 1;
 const IMPLEMENTATION_MEMO: u8 = 2;
 
 /// The types that hold the object of a method and give its methods.
-pub const SELF_WRAPPERS: [&str; 2] = ["Arc", "Rc"];
+const SELF_WRAPPERS: [&str; 2] = ["Arc", "Rc"];
 
 /// The longest text of a first value that `self_wrapper` reads.
 const SELF_WRAPPER_LIMIT: usize = 48;
@@ -255,6 +255,38 @@ pub fn self_wrapper(source: &[u8], start: usize) -> Option<String> {
             .contains(&call)
             .then(|| wrapper.to_string())
     })
+}
+
+/// The wrapper type of the `self` parameter of a method, as `Arc` for
+/// `self: &'a mut Arc<Self>`. The type argument is `Self` or the name of the
+/// type of the `impl` block.
+fn self_parameter_wrapper(function: Node<'_>, context: &Context<'_, '_>) -> Option<&'static str> {
+    let parameters = function.child_by_field_name("parameters")?;
+    let mut cursor = parameters.walk();
+    let first = parameters.named_children(&mut cursor).next()?;
+    let pattern = first.child_by_field_name("pattern")?;
+    if first.kind() != "parameter" || !context.text(pattern).ends_with("self") {
+        return None;
+    }
+    let mut declared = first.child_by_field_name("type")?;
+    if declared.kind() == REFERENCE_TYPE {
+        declared = declared.child_by_field_name("type")?;
+    }
+    if declared.kind() != GENERIC_TYPE {
+        return None;
+    }
+    let wrapper = declared.child_by_field_name("type")?;
+    let wrapper = match wrapper.kind() {
+        SCOPED_TYPE_IDENTIFIER => wrapper.child_by_field_name("name")?,
+        _ => wrapper,
+    };
+    let wrapper = context.text(wrapper);
+    let wrapper = SELF_WRAPPERS.into_iter().find(|known| *known == wrapper)?;
+    let arguments = declared.child_by_field_name("type_arguments")?;
+    let argument: String = context.text(arguments).split_whitespace().collect();
+    let owner = context.scopes.last().map(|scope| scope.name.as_str());
+    let content = argument.strip_prefix('<')?.strip_suffix('>')?;
+    (content == "Self" || Some(content) == owner).then_some(wrapper)
 }
 
 /// `pub` exports an item. `pub(crate)` and the other restricted forms do not.
@@ -561,6 +593,7 @@ impl LanguageSpec for Rust {
             CLOSURE_EXPRESSION => draft.span = Span::between(&draft.name_node, &draft.node),
             FUNCTION_ITEM | FUNCTION_SIGNATURE_ITEM => {
                 draft.condition = condition(draft.node, context);
+                draft.self_wrapper = self_parameter_wrapper(draft.node, context);
             }
             _ => {}
         }
