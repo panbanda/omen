@@ -819,7 +819,8 @@ impl Repository<'_> {
             .flatten()
             .cloned()
             .collect();
-        if entries.is_empty() {
+        // An exact key applies before a pattern, also with `null`.
+        if !package.exports.contains_key(subpath) {
             entries = export_pattern(package, subpath);
         }
         let legacy = entries.is_empty() && !package.has_exports && subpath != ".";
@@ -866,13 +867,17 @@ impl Repository<'_> {
             let (Some(out_dir), Some(root_dir)) = (&options.out_dir, &options.root_dir) else {
                 continue;
             };
-            let Some(rest) = output
-                .strip_prefix(out_dir.as_str())
-                .and_then(|rest| rest.strip_prefix('/'))
-            else {
+            // An empty directory is the root of the repository.
+            let rest = match out_dir.as_str() {
+                "" => Some(output),
+                out_dir => output
+                    .strip_prefix(out_dir)
+                    .and_then(|rest| rest.strip_prefix('/')),
+            };
+            let Some(source) = rest.and_then(|rest| join(root_dir, rest)) else {
                 continue;
             };
-            found.extend(self.sources_of(&format!("{root_dir}/{rest}")));
+            found.extend(self.sources_of(&source));
         }
         found
     }
@@ -1764,6 +1769,34 @@ mod typescript_tests {
             "src/utils/math.ts"
         );
         assert_eq!(target(&files, "src/main.ts", "lodash"), "external");
+    }
+
+    /// An exact entry of `exports` with `null` hides the subpath from a
+    /// pattern. A config at the root of the repository with `rootDir: "."`
+    /// maps the output to a source at the root.
+    #[test]
+    fn test_null_export_and_a_root_directory_of_the_repository() {
+        let files = [
+            (
+                "package.json",
+                "{\"name\": \"root-lib\", \"exports\": {\".\": \"./out/index.js\", \"./private\": null, \"./*\": \"./out/*.js\"}}",
+            ),
+            (
+                "tsconfig.json",
+                "{\"compilerOptions\": {\"rootDir\": \".\", \"outDir\": \"out\"}}",
+            ),
+            ("index.ts", "export function root() {}\n"),
+            ("private.ts", "export function hidden() {}\n"),
+            ("open.ts", "export function open() {}\n"),
+            (
+                "app/main.ts",
+                "import { root } from 'root-lib';\nimport { hidden } from 'root-lib/private';\nimport { open } from 'root-lib/open';\n",
+            ),
+        ];
+        let main = "app/main.ts";
+        assert_eq!(target(&files, main, "root-lib"), "index.ts");
+        assert_eq!(target(&files, main, "root-lib/open"), "open.ts");
+        assert_eq!(target(&files, main, "root-lib/private"), "unresolved");
     }
 
     #[test]
