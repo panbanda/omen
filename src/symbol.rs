@@ -315,7 +315,7 @@ pub fn select(
                 && declarations
                     .iter()
                     .all(|&position| container_of(&index.symbols[position]) == container);
-            same_function.then(|| Selection {
+            same_function.then_some(Selection {
                 definition: *definition,
                 declarations,
             })
