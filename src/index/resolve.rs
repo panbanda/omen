@@ -277,6 +277,17 @@ struct Resolver<'a> {
     twin_members_cache: RwLock<HashMap<TwinQuery, Arc<Vec<Id>>>>,
     /// The results of `module_scopes`, by the file.
     module_scopes_cache: RwLock<HashMap<usize, Arc<ModuleScopes>>>,
+    /// For each file, the positions of its imports by their local name, in
+    /// source order.
+    imports_by_local: Vec<HashMap<&'a str, Vec<usize>>>,
+    /// For each file, the positions of its imports by the segments of their
+    /// module path, in source order.
+    imports_by_path: Vec<HashMap<Vec<&'a str>, Vec<usize>>>,
+    /// For each file, if a wildcard import names a module of the repository.
+    repository_wildcards: OnceLock<Vec<bool>>,
+    /// For each file, the names that its imports from outside the repository
+    /// provide by the rules of its language.
+    provided_names: OnceLock<Vec<HashSet<&'static str>>>,
     /// The results of `constructor_position`, by the function and the type
     /// parameter.
     constructor_position_cache: RwLock<HashMap<(Id, String), Option<usize>>>,
@@ -415,10 +426,31 @@ impl<'a> Resolver<'a> {
                 by_container
             })
             .collect();
+        let mut imports_by_local = Vec::with_capacity(files.len());
+        let mut imports_by_path = Vec::with_capacity(files.len());
+        for facts in files {
+            let mut by_local: HashMap<&str, Vec<usize>> = HashMap::new();
+            let mut by_path: HashMap<Vec<&str>, Vec<usize>> = HashMap::new();
+            for (position, binding) in facts.imports.iter().enumerate() {
+                if let Some(local) = binding.local_name.as_deref() {
+                    by_local.entry(local).or_default().push(position);
+                }
+                by_path
+                    .entry(segments(&binding.module_path))
+                    .or_default()
+                    .push(position);
+            }
+            imports_by_local.push(by_local);
+            imports_by_path.push(by_path);
+        }
         Self {
             files,
             manifests,
             rebound,
+            imports_by_local,
+            imports_by_path,
+            repository_wildcards: OnceLock::new(),
+            provided_names: OnceLock::new(),
             php_names,
             constructors_by_container,
             by_name,
@@ -437,6 +469,20 @@ impl<'a> Resolver<'a> {
             package_cache: RwLock::new(HashMap::new()),
             visible_cache: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// The imports of `file` whose local name is `name`, in source order.
+    fn imports_named(
+        &self,
+        file: usize,
+        name: &str,
+    ) -> impl Iterator<Item = &'a ImportBinding> + '_ {
+        let imports = &self.files[file].imports;
+        self.imports_by_local[file]
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(move |position| &imports[*position])
     }
 
     fn symbol(&self, id: Id) -> &'a Symbol {
@@ -749,10 +795,7 @@ impl<'a> Resolver<'a> {
     /// of `file`. Then the import selects the files of the type.
     fn is_import_qualifier(&self, qualifier: &str, file: usize) -> bool {
         let last = segments(qualifier).last().copied().unwrap_or(qualifier);
-        self.files[file]
-            .imports
-            .iter()
-            .any(|binding| binding.local_name.as_deref() == Some(last))
+        self.imports_named(file, last).next().is_some()
     }
 
     fn types_by_name(&self, name: &str, qualifier: Option<&str>, file: usize) -> Vec<Id> {
@@ -762,14 +805,9 @@ impl<'a> Resolver<'a> {
                 .filter(|id| files.contains(&id.0) && is_type(id))
                 .collect()
         };
-        let facts = &self.files[file];
         if let Some(qualifier) = qualifier {
             let last = segments(qualifier).last().copied().unwrap_or(qualifier);
-            let mut bindings = facts
-                .imports
-                .iter()
-                .filter(|binding| binding.local_name.as_deref() == Some(last))
-                .peekable();
+            let mut bindings = self.imports_named(file, last).peekable();
             // A qualifier that is an import selects only the files of that
             // import. A file can export a type with a different name, as
             // `pub use inner::Original as Public`.
@@ -791,10 +829,10 @@ impl<'a> Resolver<'a> {
         let mut found = Vec::new();
         let mut outside = false;
         // An import of a name does not apply to a name with a qualifier.
-        for binding in facts.imports.iter().filter(|_| qualifier.is_none()) {
-            if binding.local_name.as_deref() != Some(name) {
-                continue;
-            }
+        for binding in self
+            .imports_named(file, name)
+            .filter(|_| qualifier.is_none())
+        {
             let imported = binding.imported_name.as_deref().unwrap_or(name);
             let targets = self.target_files(binding);
             outside |= targets.is_empty();
@@ -1566,10 +1604,7 @@ impl<'a> Resolver<'a> {
         if !own.is_empty() {
             return own;
         }
-        self.files[file]
-            .imports
-            .iter()
-            .filter(|binding| binding.local_name.as_deref() == Some(name))
+        self.imports_named(file, name)
             .flat_map(|binding| {
                 let imported = binding.imported_name.as_deref().unwrap_or(name);
                 self.target_files(binding)
@@ -2116,10 +2151,7 @@ impl<'a> Resolver<'a> {
             return Outcome::of(Basis::LexicalScope, vec![closure])
                 .unwrap_or_else(|| Outcome::none(Status::Unresolved));
         }
-        let binding = self.files[file]
-            .imports
-            .iter()
-            .find(|binding| binding.local_name.as_deref() == Some(x));
+        let binding = self.imports_named(file, x).next();
         // `const a = require('b')` is an import and a local name of the file.
         // The import gives the files.
         let local = self
@@ -2250,11 +2282,24 @@ impl<'a> Resolver<'a> {
         let qualifier = expanded.as_deref().unwrap_or(qualifier);
         let path = segments(qualifier);
         let facts = &self.files[file];
-        let binding = facts.imports.iter().find(|binding| {
-            binding.local_name.as_deref() == Some(qualifier)
-                || segments(&binding.module_path) == path
-                || (path.len() == 1 && binding.local_name.as_deref() == Some(path[0]))
-        });
+        // The first import whose local name is the qualifier, or whose module
+        // path is the path, or whose local name is the one name of the path.
+        let first_named = |name: &str| {
+            self.imports_by_local[file]
+                .get(name)
+                .and_then(|positions| positions.first())
+        };
+        let binding = [
+            first_named(qualifier),
+            self.imports_by_path[file]
+                .get(&path)
+                .and_then(|positions| positions.first()),
+            (path.len() == 1).then(|| first_named(path[0])).flatten(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .map(|position| &facts.imports[*position]);
         if let Some(binding) = binding {
             // The import can name a type, for example with an alias. Then
             // the call is a call of a member of that type.
@@ -2449,10 +2494,9 @@ impl<'a> Resolver<'a> {
         if let Some(outcome) = Outcome::of(Basis::SameFile, linked) {
             return outcome;
         }
-        let binding = self.files[file].imports.iter().find(|binding| {
-            binding.local_name.as_deref() == Some(name)
-                && matches!(binding.kind, ImportKind::Named | ImportKind::ReExportNamed)
-        });
+        let binding = self
+            .imports_named(file, name)
+            .find(|binding| matches!(binding.kind, ImportKind::Named | ImportKind::ReExportNamed));
         if let Some(binding) = binding {
             let imported = binding.imported_name.as_deref().unwrap_or(name);
             return self.imported(binding, imported, arity);
@@ -5164,12 +5208,52 @@ mod ecma_timing_tests {
         elapsed
     }
 
+    /// One file with `2 * size` imports, `size` classes and `size`
+    /// functions, and a call of each function and of a method of each class.
+    fn imports_in_one_file_at(size: usize) -> std::time::Duration {
+        let mut owned = vec![("di.ts".to_string(), DI.to_string())];
+        let mut main = String::from("import { Container } from './di';\n");
+        let mut body = String::from("\nexport function run(): void {\n");
+        for position in 0..size {
+            owned.push((
+                format!("s{position}.ts"),
+                format!("export class S{position} {{\n  plain(): void {{}}\n}}\nexport function f{position}(): void {{}}\n"),
+            ));
+            main.push_str(&format!(
+                "import {{ S{position} }} from './s{position}';\nimport {{ f{position} }} from './s{position}';\n"
+            ));
+            body.push_str(&format!(
+                "  Container.get(S{position}).plain();\n  f{position}();\n"
+            ));
+        }
+        main.push_str(&body);
+        main.push_str("}\n");
+        owned.push(("main.ts".to_string(), main));
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let found = rows(&files, "main.ts");
+        let elapsed = started.elapsed();
+        let last = size - 1;
+        let line = 2 * size + 4 + 2 * last;
+        for edge in [
+            format!("{line} run>(..).plain UniqueCandidate ReceiverDeclaredType [s{last}.ts#S{last}.plain]"),
+            format!("{} run>f{last} UniqueCandidate ImportedName [s{last}.ts#f{last}]", line + 1),
+        ] {
+            assert!(found.contains(&edge), "{edge} {:?}", &found[found.len() - 3..]);
+        }
+        elapsed
+    }
+
     #[test]
     fn test_ecma_timing_cases_resolve() {
         overloads_at(50);
         decorators_at(50);
         container_calls_at(50);
         branching_aliases_at(20);
+        imports_in_one_file_at(20);
     }
 
     #[test]
@@ -5188,6 +5272,12 @@ mod ecma_timing_tests {
     #[ignore = "timing: run in release"]
     fn timing_typescript_container_calls_resolve_in_linear_time() {
         assert_scales_linearly("container calls", 5_000, container_calls_at);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_typescript_imports_in_one_file_resolve_in_linear_time() {
+        assert_scales_linearly("imports in one file", 5_000, imports_in_one_file_at);
     }
 
     #[test]
