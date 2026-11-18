@@ -484,8 +484,30 @@ impl Default for RiskThresholds {
     }
 }
 
-// Bug fix patterns (Mockus & Votta 2000) omen:ignore
+/// The Conventional Commit types that are not a fix.
+const NOT_FIX_TYPES: &[&str] = &[
+    "feat", "refactor", "perf", "docs", "chore", "test", "ci", "build", "style",
+];
+
+/// The Conventional Commit type of the subject, as in `type(scope)!: text`.
+fn conventional_commit_type(message: &str) -> Option<String> {
+    static PATTERN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let pattern = PATTERN
+        .get_or_init(|| Regex::new(r"^\s*([A-Za-z]+)(\([^)]*\))?!?:\s").expect("valid regex"));
+    let subject = message.lines().next().unwrap_or("");
+    pattern
+        .captures(subject)
+        .map(|captures| captures[1].to_ascii_lowercase())
+}
+
+/// A known Conventional Commit type in the subject decides. Other messages
+/// use the bug fix patterns of Mockus and Votta (2000). omen:ignore
 fn is_bug_fix_commit(message: &str) -> bool {
+    match conventional_commit_type(message).as_deref() {
+        Some("fix") => return true,
+        Some(kind) if NOT_FIX_TYPES.contains(&kind) => return false,
+        _ => {}
+    }
     static PATTERNS: std::sync::OnceLock<Vec<Regex>> = std::sync::OnceLock::new();
     let patterns = PATTERNS.get_or_init(|| {
         vec![
@@ -1115,6 +1137,37 @@ mod tests {
         assert!(is_bug_fix_commit("Patch security vulnerability"));
         assert!(!is_bug_fix_commit("Add new feature"));
         assert!(!is_bug_fix_commit("Update dependencies"));
+    }
+
+    /// A Conventional Commit type decides. The keyword rule applies only to a
+    /// subject without a known type.
+    #[test]
+    fn test_bug_fix_detection_with_conventional_commit_type() {
+        for message in [
+            "fix: handle the empty list",
+            "fix(api): restore the old field",
+            "fix!: drop the broken option",
+            "Fix: crash on startup",
+        ] {
+            assert!(is_bug_fix_commit(message), "{message}");
+        }
+        for message in [
+            "refactor: clean up error system",
+            "feat: restrict the issue list to members",
+            "perf: speed up the fix of the index",
+            "docs: explain the bug report form",
+            "chore(deps): patch lodash",
+            "test: cover the crash on startup",
+            "ci: resolve the cache key",
+            "build: fix the release script",
+            "style: fix the indentation",
+        ] {
+            assert!(!is_bug_fix_commit(message), "{message}");
+        }
+        assert!(is_bug_fix_commit("hotfix: resolve the login error"));
+        assert!(is_bug_fix_commit(
+            "Fix crash on startup\n\nfeat: is in the body"
+        ));
     }
 
     #[test]
