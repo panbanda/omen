@@ -1,0 +1,49 @@
+---
+source: tests/output_shape.rs
+expression: body
+---
+{
+  "error": {
+    "code": "ambiguous",
+    "expected": "a name, or a name and a start line, that select one definition",
+    "message": "3 definitions agree with the symbol `helper`. Select one with its key or its start line.",
+    "next": "Call `impact` again with the arguments of this call. Use the `arguments` of one suggestion in place of the arguments with the same names.",
+    "param": "symbol",
+    "received": "helper",
+    "suggestions": [
+      {
+        "arguments": {
+          "symbol": "main.rs#shadow.helper"
+        },
+        "container": "shadow",
+        "file": "main.rs",
+        "kind": "Function",
+        "name": "main.rs#shadow.helper",
+        "signature": "helper = ||",
+        "start_line": 38
+      },
+      {
+        "arguments": {
+          "symbol": "other.rs#helper"
+        },
+        "container": null,
+        "file": "other.rs",
+        "kind": "Function",
+        "name": "other.rs#helper",
+        "signature": "pub fn helper() -> u32",
+        "start_line": 1
+      },
+      {
+        "arguments": {
+          "symbol": "util.rs#helper"
+        },
+        "container": null,
+        "file": "util.rs",
+        "kind": "Function",
+        "name": "util.rs#helper",
+        "signature": "pub fn helper() -> u32",
+        "start_line": 1
+      }
+    ]
+  }
+}

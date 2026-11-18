@@ -71,6 +71,11 @@ pub enum Error {
     /// Template rendering error.
     #[error("Template error: {0}")]
     Template(String),
+
+    /// A symbol name does not select exactly one definition. The failure has
+    /// the near names or the choices.
+    #[error("{0}")]
+    SymbolLookup(Box<crate::symbol::LookupFailure>),
 }
 
 impl From<minijinja::Error> for Error {
