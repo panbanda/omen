@@ -285,6 +285,7 @@ fn observed_sinks(trees: &[omen::parser::ParseResult], files: &[FileSymbols]) ->
             category: sink.category.name().to_string(),
             basis: sink.basis.name().to_string(),
             in_test: sink.flags.in_test,
+            in_generated: sink.flags.in_generated,
             constant_argument: sink.flags.constant_argument,
         })
         .collect()

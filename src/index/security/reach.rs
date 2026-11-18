@@ -451,8 +451,8 @@ impl<'e> InlineRegions<'e> {
 
 /// Finds the paths from the entry points to the sinks.
 ///
-/// An entry point or a sink in test code is not in the result. An entry point without a
-/// symbol in the index has no paths.
+/// An entry point or a sink in test code is not in the result. A sink in generated code is
+/// not in the result either. An entry point without a symbol in the index has no paths.
 pub fn reachability(
     view: &CallView,
     sinks: &[Sink],
@@ -467,7 +467,7 @@ pub fn reachability(
     });
     let sink_symbols: Vec<(&Sink, Option<usize>)> = sinks
         .iter()
-        .filter(|sink| !sink.flags.in_test)
+        .filter(|sink| !sink.flags.in_test && !sink.flags.in_generated)
         .map(|sink| {
             let symbol = regions.holder(sink).or_else(|| {
                 sink.enclosing

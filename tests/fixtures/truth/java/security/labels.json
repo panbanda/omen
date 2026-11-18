@@ -6,6 +6,7 @@
   "closed_world": false,
   "sinks_closed_world": true,
   "not_applicable": [
+    {"dimension": "sinks", "category": "unsafe_html_output", "reason": "The standard library has no type that marks a string as safe HTML. The template engines mark raw output in the template files, which omen does not parse."},
     {"dimension": "sinks", "category": "memory_unsafe", "reason": "Java is a memory-safe language."},
     {"dimension": "sinks", "category": "command_execution/aliased_import", "reason": "Java has no import alias syntax."},
     {"dimension": "sinks", "category": "code_evaluation/aliased_import", "reason": "Java has no import alias syntax."},

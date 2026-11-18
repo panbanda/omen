@@ -448,6 +448,7 @@ const SECURITY_CATEGORIES: &[&str] = &[
     "tls_verification_disabled",
     "hardcoded_credential",
     "memory_unsafe",
+    "unsafe_html_output",
 ];
 
 pub(super) static SECURITY: ToolSpec = ToolSpec {

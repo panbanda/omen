@@ -134,10 +134,12 @@ pub enum SinkCategory {
     TlsVerificationDisabled,
     HardcodedCredential,
     MemoryUnsafe,
+    /// Code marks a string as safe HTML, and the template does not escape it.
+    UnsafeHtmlOutput,
 }
 
 impl SinkCategory {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::CommandExecution,
         Self::CodeEvaluation,
         Self::UnsafeDeserialization,
@@ -147,6 +149,7 @@ impl SinkCategory {
         Self::TlsVerificationDisabled,
         Self::HardcodedCredential,
         Self::MemoryUnsafe,
+        Self::UnsafeHtmlOutput,
     ];
 
     /// The name of the category in the output, for example `weak_hash`.
@@ -161,6 +164,7 @@ impl SinkCategory {
             Self::TlsVerificationDisabled => "tls_verification_disabled",
             Self::HardcodedCredential => "hardcoded_credential",
             Self::MemoryUnsafe => "memory_unsafe",
+            Self::UnsafeHtmlOutput => "unsafe_html_output",
         }
     }
 
@@ -196,6 +200,7 @@ impl SinkCategory {
             Self::TlsVerificationDisabled => 295,
             Self::HardcodedCredential => 798,
             Self::MemoryUnsafe => 119,
+            Self::UnsafeHtmlOutput => 79,
         }
     }
 }
@@ -230,6 +235,10 @@ pub struct SinkFlags {
     pub constant_argument: bool,
     /// The sink is in a test file or in a Rust `#[cfg(test)]` module.
     pub in_test: bool,
+    /// The sink is in a Go file that has the standard header of generated code,
+    /// `// Code generated ... DO NOT EDIT.`, before the package clause.
+    #[serde(default)]
+    pub in_generated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,6 +276,11 @@ mod tests {
     type Found = (String, u32, &'static str, &'static str);
 
     fn sinks(language: Language, files: &[(&str, &str)]) -> Vec<Sink> {
+        sinks_timed(language, files).0
+    }
+
+    /// The sinks, and the time of the matcher alone.
+    fn sinks_timed(language: Language, files: &[(&str, &str)]) -> (Vec<Sink>, std::time::Duration) {
         let parsed: Vec<ParseResult> = files
             .iter()
             .map(|(name, text)| {
@@ -283,7 +297,49 @@ mod tests {
         link_files(&mut index);
         resolve_imports(&mut index, &Manifests::default());
         resolve_references(&mut index);
-        find_sinks(&parsed, &index)
+        // The index can have another order than `files`. Each tree goes with the facts of
+        // the same path.
+        let mut by_path: std::collections::HashMap<String, ParseResult> = files
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .zip(parsed)
+            .collect();
+        let trees: Vec<ParseResult> = index
+            .iter()
+            .map(|file| {
+                by_path
+                    .remove(&*file.file)
+                    .expect("each file of the index has a tree")
+            })
+            .collect();
+        let start = std::time::Instant::now();
+        let found = find_sinks(&trees, &index);
+        (found, start.elapsed())
+    }
+
+    /// A function with `count` locals and a bare call of each local.
+    fn many_bare_calls_at(count: usize) -> std::time::Duration {
+        let mut source = String::from("export function run() {\n");
+        for number in 0..count {
+            source.push_str(&format!(
+                "  const v{number} = make({number});\n  v{number}();\n"
+            ));
+        }
+        source.push_str("}\n");
+        let (found, elapsed) = sinks_timed(Language::TypeScript, &[("a.ts", &source)]);
+        assert!(found.is_empty());
+        elapsed
+    }
+
+    #[test]
+    fn many_bare_calls_give_no_sink() {
+        many_bare_calls_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_bare_calls_of_locals_scale_linearly() {
+        crate::index::timing::assert_scales_linearly("bare calls", 20_000, many_bare_calls_at);
     }
 
     fn found(language: Language, files: &[(&str, &str)]) -> Vec<Found> {
@@ -322,6 +378,7 @@ mod tests {
                 ("tls_verification_disabled", 295),
                 ("hardcoded_credential", 798),
                 ("memory_unsafe", 119),
+                ("unsafe_html_output", 79),
             ]
         );
     }
@@ -478,7 +535,8 @@ mod tests {
             result[0].flags,
             SinkFlags {
                 constant_argument: true,
-                in_test: true
+                in_test: true,
+                in_generated: false,
             }
         );
         let result = sinks(Language::Python, &[("a.py", source)]);
@@ -862,6 +920,580 @@ mod tests {
             .map(|sink| sink.1)
             .collect();
         assert_eq!(lines, [5, 6, 7]);
+    }
+
+    /// The line, the category, and the flag `constant_argument` of each sink.
+    fn constants(language: Language, files: &[(&str, &str)]) -> Vec<(u32, &'static str, bool)> {
+        sinks(language, files)
+            .into_iter()
+            .map(|sink| {
+                (
+                    sink.range.start_line,
+                    sink.category.name(),
+                    sink.flags.constant_argument,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_process_that_os_or_syscall_starts_is_a_command_sink_go() {
+        let source = "package main\n\nimport (\n\t\"os\"\n\tsys \"syscall\"\n)\n\nfunc run(program string, arguments []string) {\n\tos.StartProcess(program, arguments, nil)\n\tsys.Exec(program, arguments, nil)\n\tsys.ForkExec(program, arguments, nil)\n\tsys.StartProcess(program, arguments, nil)\n\tos.Getpid()\n\ttext := \"os.StartProcess(program)\"\n\t// syscall.Exec(program)\n\t_ = text\n}\n";
+        assert_eq!(
+            found(Language::Go, &[("a.go", source)]),
+            [
+                one("a.go", 9, "command_execution", "imported_symbol"),
+                one("a.go", 10, "command_execution", "imported_symbol"),
+                one("a.go", 11, "command_execution", "imported_symbol"),
+                one("a.go", 12, "command_execution", "imported_symbol"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_concatenation_of_literals_is_a_constant_argument() {
+        let go = "package main\n\nimport \"database/sql\"\n\nfunc run(db *sql.DB, id int, name string) {\n\tdb.Query(\"SELECT a \"+\n\t\t\"FROM t WHERE id = ?\", id)\n\tdb.Query(\"SELECT a FROM t WHERE name = '\" + name + \"'\")\n\tdb.Query((\"SELECT \" + \"a \") + \"FROM t\")\n}\n";
+        assert_eq!(
+            constants(Language::Go, &[("a.go", go)]),
+            [
+                (6, "sql_string_construction", true),
+                (8, "sql_string_construction", false),
+                (9, "sql_string_construction", true),
+            ]
+        );
+        let python = "def run(cursor, name):\n    cursor.execute(\"SELECT a \" + \"FROM t WHERE id = %s\", (name,))\n    cursor.execute(\"SELECT a \" + name)\n";
+        assert_eq!(
+            constants(Language::Python, &[("a.py", python)]),
+            [
+                (2, "sql_string_construction", true),
+                (3, "sql_string_construction", false),
+            ]
+        );
+        let java = "import java.sql.Statement;\n\nclass A {\n    void run(Statement statement, String name) throws Exception {\n        statement.executeQuery(\"SELECT a \" + \"FROM t\");\n        statement.executeQuery(\"SELECT a \" + name);\n    }\n}\n";
+        assert_eq!(
+            constants(Language::Java, &[("A.java", java)]),
+            [
+                (5, "sql_string_construction", true),
+                (6, "sql_string_construction", false),
+            ]
+        );
+        let php = "<?php\nfunction run($name) {\n    mysql_query(\"SELECT a \" . \"FROM t\");\n    mysql_query(\"SELECT a \" . $name);\n}\n";
+        assert_eq!(
+            constants(Language::Php, &[("a.php", php)]),
+            [
+                (3, "sql_string_construction", true),
+                (4, "sql_string_construction", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_sql_methods_of_xorm_sqlx_and_gorm_take_a_built_string_go() {
+        let source = "package main\n\nimport \"fmt\"\n\nfunc run(engine Engine, ctx int, table string) {\n\tengine.SQL(fmt.Sprintf(\"SELECT * FROM %s\", table)).Get(nil)\n\tengine.SQL(\"SELECT * FROM t WHERE id = ?\", table)\n\tengine.Raw(fmt.Sprintf(\"SELECT * FROM %s\", table))\n\tengine.Prepare(\"SELECT * FROM \" + table)\n\tengine.PrepareContext(ctx, \"SELECT * FROM \" + table)\n\tengine.Queryx(\"SELECT * FROM \" + table)\n\tengine.QueryRowx(\"SELECT * FROM \" + table)\n\tengine.MustExec(\"DELETE FROM \" + table)\n\tengine.NamedExec(\"DELETE FROM \" + table, nil)\n\tengine.NamedQuery(\"SELECT * FROM \" + table, nil)\n\tengine.QueryxContext(ctx, \"SELECT * FROM \" + table)\n\tengine.Get(fmt.Sprintf(\"key-%s\", table))\n\tengine.Select(fmt.Sprintf(\"a-%s\", table))\n}\n";
+        let lines: Vec<u32> = found(Language::Go, &[("a.go", source)])
+            .iter()
+            .map(|sink| sink.1)
+            .collect();
+        assert_eq!(lines, [6, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    }
+
+    #[test]
+    fn a_tls_setting_that_is_not_a_constant_is_a_sink_with_the_flag_go() {
+        let source = "package main\n\nimport \"crypto/tls\"\n\nfunc run(skip bool, options Options) {\n\t_ = &tls.Config{InsecureSkipVerify: true}\n\t_ = &tls.Config{InsecureSkipVerify: false}\n\t_ = &tls.Config{InsecureSkipVerify: skip}\n\t_ = &tls.Config{InsecureSkipVerify: options.Skip}\n\t_ = &Options{InsecureSkipVerify: skip}\n\tconfig := &tls.Config{}\n\tconfig.InsecureSkipVerify = skip\n\tconfig.InsecureSkipVerify = false\n\tconfig.InsecureSkipVerify = true\n\toptions.InsecureSkipVerify = skip\n}\n";
+        assert_eq!(
+            constants(Language::Go, &[("a.go", source)]),
+            [
+                (6, "tls_verification_disabled", true),
+                (8, "tls_verification_disabled", false),
+                (9, "tls_verification_disabled", false),
+                (12, "tls_verification_disabled", false),
+                (14, "tls_verification_disabled", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tls_setting_that_is_not_a_constant_is_a_sink_with_the_flag_python() {
+        let source = "import requests\n\ndef run(url, check):\n    requests.get(url, verify=False)\n    requests.get(url, verify=True)\n    requests.get(url, verify=check)\n    requests.get(url, verify=\"/etc/ca.pem\")\n    requests.get(url)\n";
+        assert_eq!(
+            constants(Language::Python, &[("a.py", source)]),
+            [
+                (4, "tls_verification_disabled", true),
+                (6, "tls_verification_disabled", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tls_setting_that_is_not_a_constant_is_a_sink_with_the_flag_ecma() {
+        let source = "import https from \"https\";\n\nexport function run(url, check) {\n  https.request(url, { rejectUnauthorized: false });\n  https.request(url, { rejectUnauthorized: true });\n  https.request(url, { rejectUnauthorized: check });\n  https.request(url, { timeout: 1 });\n}\n";
+        assert_eq!(
+            constants(Language::JavaScript, &[("a.js", source)]),
+            [
+                (4, "tls_verification_disabled", true),
+                (6, "tls_verification_disabled", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tls_setting_that_is_not_a_constant_is_a_sink_with_the_flag_rust() {
+        let source = "pub fn run(builder: reqwest::ClientBuilder, check: bool) {\n    builder.danger_accept_invalid_certs(true);\n    builder.danger_accept_invalid_certs(false);\n    builder.danger_accept_invalid_certs(check);\n    builder.danger_accept_invalid_hostnames(check);\n}\n";
+        assert_eq!(
+            constants(Language::Rust, &[("a.rs", source)]),
+            [
+                (2, "tls_verification_disabled", true),
+                (4, "tls_verification_disabled", false),
+                (5, "tls_verification_disabled", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tls_setting_that_is_not_a_constant_is_a_sink_with_the_flag_php_and_c() {
+        let php = "<?php\nfunction run($handle, $check) {\n    curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, false);\n    curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, true);\n    curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, $check);\n    curl_setopt($handle, CURLOPT_TIMEOUT, $check);\n}\n";
+        assert_eq!(
+            constants(Language::Php, &[("a.php", php)]),
+            [
+                (3, "tls_verification_disabled", true),
+                (5, "tls_verification_disabled", false),
+            ]
+        );
+        let c = "void run(void *handle, long check) {\n    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 0L);\n    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);\n    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, check);\n}\n";
+        assert_eq!(
+            constants(Language::C, &[("a.c", c)]),
+            [
+                (2, "tls_verification_disabled", true),
+                (4, "tls_verification_disabled", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_go_file_with_the_generated_header_has_the_flag_in_generated() {
+        let body = "package main\n\nimport \"os/exec\"\n\nfunc run(program string) {\n\texec.Command(program)\n}\n";
+        let generated = |header: &str| -> Vec<bool> {
+            let source = format!("{header}{body}");
+            sinks(Language::Go, &[("a.go", source.as_str())])
+                .iter()
+                .map(|sink| sink.flags.in_generated)
+                .collect()
+        };
+        assert_eq!(
+            generated("// Code generated by protoc-gen-go. DO NOT EDIT.\n\n"),
+            [true]
+        );
+        assert_eq!(
+            generated("// Copyright 2024 The Authors.\n\n// Code generated by mockery v2. DO NOT EDIT.\n\n"),
+            [true]
+        );
+        assert_eq!(
+            generated("// Code generated by protoc-gen-go. DO NOT EDIT.\r\n\r\n"),
+            [true]
+        );
+        assert_eq!(generated(""), [false]);
+        assert_eq!(
+            generated("// Code generated by hand. Edit it.\n\n"),
+            [false]
+        );
+        assert_eq!(generated("// Code generated DO NOT EDIT.\n\n"), [false]);
+        assert_eq!(
+            generated("/* Code generated by x. DO NOT EDIT. */\n\n"),
+            [false]
+        );
+        assert_eq!(
+            generated("// code generated by x. DO NOT EDIT.\n\n"),
+            [false]
+        );
+        let late = format!("{body}\n// Code generated by x. DO NOT EDIT.\n");
+        let flags: Vec<bool> = sinks(Language::Go, &[("b.go", late.as_str())])
+            .iter()
+            .map(|sink| sink.flags.in_generated)
+            .collect();
+        assert_eq!(flags, [false]);
+        let python = "# Code generated by x. DO NOT EDIT.\nimport os\n\ndef run(command):\n    os.system(command)\n";
+        let flags: Vec<bool> = sinks(Language::Python, &[("a.py", python)])
+            .iter()
+            .map(|sink| sink.flags.in_generated)
+            .collect();
+        assert_eq!(flags, [false]);
+    }
+
+    /// The line, the basis, and the flag `constant_argument` of each sink of the category
+    /// `unsafe_html_output`.
+    fn html_sinks(language: Language, files: &[(&str, &str)]) -> Vec<(u32, &'static str, bool)> {
+        sinks(language, files)
+            .into_iter()
+            .filter(|sink| sink.category == SinkCategory::UnsafeHtmlOutput)
+            .map(|sink| {
+                (
+                    sink.range.start_line,
+                    sink.basis.name(),
+                    sink.flags.constant_argument,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_conversion_to_a_trusted_template_type_is_unsafe_html_output_go() {
+        let source = "package main\n\nimport (\n\t\"html/template\"\n\ttrusted \"html/template\"\n)\n\nfunc run(text string) {\n\t_ = template.HTML(text)\n\t_ = trusted.JS(text)\n\t_ = template.URL(text)\n\t_ = template.HTMLAttr(text)\n\t_ = template.CSS(text)\n\t_ = template.HTML(\"<br>\")\n\t_ = template.HTML(\"<a>\" + \"</a>\")\n\t_ = template.HTMLEscapeString(text)\n\t_ = \"template.HTML(text)\"\n\t// template.HTML(text)\n}\n";
+        assert_eq!(
+            html_sinks(Language::Go, &[("a.go", source)]),
+            [
+                (9, "imported_symbol", false),
+                (10, "imported_symbol", false),
+                (11, "imported_symbol", false),
+                (12, "imported_symbol", false),
+                (13, "imported_symbol", false),
+                (14, "imported_symbol", true),
+                (15, "imported_symbol", true),
+            ]
+        );
+        let text_template = "package main\n\nimport \"text/template\"\n\nfunc run(text string) {\n\t_ = template.HTMLEscapeString(text)\n}\n";
+        assert_eq!(html_sinks(Language::Go, &[("b.go", text_template)]), []);
+    }
+
+    #[test]
+    fn a_string_that_code_marks_as_safe_is_unsafe_html_output_python() {
+        let source = "from django.utils.safestring import mark_safe\nfrom markupsafe import Markup as Trusted, escape\n\ndef run(text):\n    mark_safe(text)\n    Trusted(text)\n    mark_safe(\"<br>\")\n    escape(text)\n";
+        assert_eq!(
+            html_sinks(Language::Python, &[("a.py", source)]),
+            [
+                (5, "imported_symbol", false),
+                (6, "imported_symbol", false),
+                (7, "imported_symbol", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_string_that_code_marks_as_safe_is_unsafe_html_output_ruby() {
+        let source = "def run(text)\n  text.html_safe\n  \"<br>\".html_safe\n  ERB::Util.html_escape(text)\nend\n";
+        assert_eq!(
+            html_sinks(Language::Ruby, &[("a.rb", source)]),
+            [(2, "name_only", false), (3, "name_only", true)]
+        );
+    }
+
+    #[test]
+    fn raw_html_in_the_dom_or_in_react_is_unsafe_html_output_ecma() {
+        let source = "export function run(element, text) {\n  element.innerHTML = text;\n  element.outerHTML += text;\n  element.innerHTML = \"<br>\";\n  element.textContent = text;\n  element.insertAdjacentHTML(\"beforeend\", text);\n  element.insertAdjacentText(\"beforeend\", text);\n  return <div dangerouslySetInnerHTML={{ __html: text }} />;\n}\n\nexport function constant() {\n  return <div dangerouslySetInnerHTML={{ __html: \"<br>\" }} title=\"innerHTML\" />;\n}\n";
+        assert_eq!(
+            html_sinks(Language::Jsx, &[("a.jsx", source)]),
+            [
+                (2, "name_only", false),
+                (3, "name_only", false),
+                (4, "name_only", true),
+                (6, "name_only", false),
+                (8, "name_only", false),
+                (12, "name_only", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_callee_text_of_a_member_assignment_has_no_literal() {
+        let source = "export function run(element, text) {\n  element.querySelector(\"AKIAJ3KD92LQ7MZP5XWB\").innerHTML = text;\n  element.body.innerHTML = text;\n}\n";
+        let callees: Vec<String> = sinks(Language::JavaScript, &[("a.js", source)])
+            .into_iter()
+            .filter(|sink| sink.category == SinkCategory::UnsafeHtmlOutput)
+            .map(|sink| sink.callee_text)
+            .collect();
+        assert_eq!(callees, ["*.innerHTML", "element.body.innerHTML"]);
+    }
+
+    #[test]
+    fn the_callee_text_of_a_struct_field_has_no_literal_go() {
+        let source = "package main\n\nimport \"crypto/tls\"\n\nfunc run(settings Settings) {\n\t_ = &tls.Config{InsecureSkipVerify: lookup(\"AKIAJ3KD92LQ7MZP5XWB\")}\n\t_ = &tls.Config{InsecureSkipVerify: settings.Skip}\n\t_ = &tls.Config{InsecureSkipVerify: true}\n}\n";
+        let callees: Vec<String> = sinks(Language::Go, &[("a.go", source)])
+            .into_iter()
+            .filter(|sink| sink.category == SinkCategory::TlsVerificationDisabled)
+            .map(|sink| sink.callee_text)
+            .collect();
+        assert_eq!(
+            callees,
+            [
+                "InsecureSkipVerify: <expression>",
+                "InsecureSkipVerify: settings.Skip",
+                "InsecureSkipVerify: true",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_shell_with_the_option_c_is_a_command_sink_ecma() {
+        let source = "import { execFile, spawn, spawnSync, execFileSync } from \"node:child_process\";\n\nexport function run(command, program) {\n  execFile(\"sh\", [\"-c\", command]);\n  spawn(\"/bin/bash\", [\"-c\", command]);\n  spawnSync(\"zsh\", [\"-c\", \"ls\"]);\n  execFileSync(\"sh\", [\"-c\", command], { cwd: \"/\" });\n  spawn(\"sh\", [\"script.sh\", command]);\n  spawn(program, [\"-c\", command]);\n  spawn(\"git\", [\"-c\", command]);\n  execFile(program, []);\n  spawn(program, [\"-x\"]);\n  spawn(program, { shell: true });\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [
+                (4, "command_execution", false),
+                (5, "command_execution", false),
+                (6, "command_execution", true),
+                (7, "command_execution", false),
+                (13, "command_execution", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_shell_with_the_option_c_is_a_command_sink_python() {
+        let source = "import subprocess\n\ndef run(command):\n    subprocess.run([\"sh\", \"-c\", command])\n    subprocess.check_output([\"/bin/bash\", \"-c\", \"ls\"])\n    subprocess.run([\"ls\", \"-c\", command])\n    subprocess.run([\"sh\", \"script.sh\"])\n";
+        assert_eq!(
+            constants(Language::Python, &[("a.py", source)]),
+            [
+                (4, "command_execution", false),
+                (5, "command_execution", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_promisified_command_function_is_the_command_sink_ecma() {
+        let source = "import { exec, execFile } from \"node:child_process\";\nimport * as childProcess from \"child_process\";\nimport { promisify } from \"node:util\";\nimport util from \"util\";\n\nconst asyncExec = promisify(exec);\nconst asyncExecFile = promisify(execFile);\nconst other = util.promisify(childProcess.exec);\nlet changed = promisify(exec);\n\nexport async function run(command) {\n  await asyncExec(command);\n  await asyncExecFile(command, []);\n  await asyncExecFile(\"sh\", [\"-c\", command]);\n  await other(command);\n  await changed(command);\n}\n";
+        assert_eq!(
+            found(Language::TypeScript, &[("a.ts", source)]),
+            [
+                one("a.ts", 12, "command_execution", "imported_symbol"),
+                one("a.ts", 14, "command_execution", "imported_symbol"),
+                one("a.ts", 15, "command_execution", "imported_symbol"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_promisified_function_of_the_repository_is_not_a_sink_ecma() {
+        let helpers = "export function exec(command) {\n  return command;\n}\n";
+        let main = "import { exec } from \"./helpers\";\nimport { promisify } from \"node:util\";\n\nconst asyncExec = promisify(exec);\n\nexport async function run(command) {\n  await asyncExec(command);\n}\n";
+        assert_eq!(
+            found(
+                Language::TypeScript,
+                &[("helpers.ts", helpers), ("main.ts", main)]
+            ),
+            []
+        );
+    }
+
+    #[test]
+    fn a_script_of_the_vm_module_is_code_evaluation_ecma() {
+        let source = "import { Script, createContext, compileFunction } from \"node:vm\";\nimport * as vm from \"vm\";\nimport type ivm from \"isolated-vm\";\n\nexport function run(code: string, context: ivm.Context, isolate: ivm.Isolate) {\n  const script = new Script(code);\n  script.runInContext(createContext({}));\n  new vm.Script(code).runInThisContext();\n  compileFunction(code, []);\n  vm.compileFunction(\"return 1\");\n  context.evalSync(code);\n  isolate.compileScriptSync(code);\n  createContext({});\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [
+                (6, "code_evaluation", false),
+                (8, "code_evaluation", false),
+                (9, "code_evaluation", false),
+                (10, "code_evaluation", true),
+                (11, "code_evaluation", false),
+                (12, "code_evaluation", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tls_property_in_any_object_literal_is_a_sink_ecma() {
+        let source = "import https from \"node:https\";\nimport { Pool } from \"pg\";\n\nexport function run(url: string, allow: boolean, options: { rejectUnauthorized?: boolean }) {\n  https.request(url, { rejectUnauthorized: false });\n  new Pool({ ssl: { rejectUnauthorized: false } });\n  const tls = { host: url, rejectUnauthorized: !allow };\n  const safe = { rejectUnauthorized: true };\n  const { rejectUnauthorized } = options;\n  const quoted = { \"rejectUnauthorized\": false };\n  const text = \"rejectUnauthorized: false\";\n  // rejectUnauthorized: false\n  const env = { NODE_TLS_REJECT_UNAUTHORIZED: \"0\" };\n  return [tls, safe, rejectUnauthorized, quoted, text, env];\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [
+                (5, "tls_verification_disabled", true),
+                (6, "tls_verification_disabled", true),
+                (7, "tls_verification_disabled", false),
+                (10, "tls_verification_disabled", true),
+                (13, "tls_verification_disabled", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_text_of_a_tls_property_has_only_names_ecma() {
+        let source = "export function run(options) {\n  return [\n    { rejectUnauthorized: options.verify },\n    { rejectUnauthorized: options.ssl as boolean },\n    { rejectUnauthorized: check(\"key\") },\n    { rejectUnauthorized: false },\n  ];\n}\n";
+        let texts: Vec<String> = sinks(Language::TypeScript, &[("a.ts", source)])
+            .into_iter()
+            .map(|sink| sink.callee_text)
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "rejectUnauthorized: options.verify",
+                "rejectUnauthorized: <expression>",
+                "rejectUnauthorized: <expression>",
+                "rejectUnauthorized: false",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tls_property_for_a_repository_function_is_not_a_sink_ecma() {
+        let helpers = "export function request(options) {\n  return options;\n}\n";
+        let main = "import { request } from \"./helpers\";\n\nexport function run() {\n  request({ rejectUnauthorized: false });\n}\n";
+        assert_eq!(
+            found(
+                Language::TypeScript,
+                &[("helpers.ts", helpers), ("main.ts", main)]
+            ),
+            []
+        );
+    }
+
+    #[test]
+    fn the_environment_variable_that_turns_off_tls_checks_is_a_sink_ecma() {
+        let source = "export function run(value: string) {\n  process.env.NODE_TLS_REJECT_UNAUTHORIZED = \"0\";\n  process.env[\"NODE_TLS_REJECT_UNAUTHORIZED\"] = \"0\";\n  process.env.NODE_TLS_REJECT_UNAUTHORIZED = value;\n  process.env.NODE_TLS_REJECT_UNAUTHORIZED = \"1\";\n  settings.NODE_TLS_REJECT_UNAUTHORIZED = \"0\";\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [
+                (2, "tls_verification_disabled", true),
+                (3, "tls_verification_disabled", true),
+                (4, "tls_verification_disabled", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_array_argument_is_not_a_built_sql_string_ecma() {
+        let source = "export async function run(git, db, branch: string) {\n  await git.raw([\"init\", `--initial-branch=${branch}`]);\n  await db.raw(`SELECT * FROM t WHERE name = '${branch}'`);\n  await db.query([`SELECT ${branch}`]);\n  await db.query`SELECT * FROM t WHERE name = ${branch}`;\n  return String.raw`${branch}\\.json`;\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [(3, "sql_string_construction", false)]
+        );
+    }
+
+    #[test]
+    fn a_receiver_of_a_library_that_is_not_sql_is_not_a_sql_sink_ecma() {
+        let source = "import type { SimpleGit } from \"simple-git\";\nimport type { Knex } from \"knex\";\nimport type { QueryRunner } from \"@n8n/typeorm\";\n\nexport async function run(git: SimpleGit, knex: Knex, runner: QueryRunner, other, name: string) {\n  await git.raw(`log ${name}`);\n  await knex.raw(`SELECT * FROM t WHERE name = '${name}'`);\n  await runner.query(`SELECT * FROM t WHERE name = '${name}'`);\n  await other.query(`SELECT * FROM t WHERE name = '${name}'`);\n}\n";
+        assert_eq!(
+            found(Language::TypeScript, &[("a.ts", source)]),
+            [
+                one("a.ts", 7, "sql_string_construction", "name_only"),
+                one("a.ts", 8, "sql_string_construction", "name_only"),
+                one("a.ts", 9, "sql_string_construction", "name_only"),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_inherited_sql_method_of_a_repository_class_is_a_sink_ecma() {
+        let repository = "import { Repository } from \"typeorm\";\n\nexport class Statistics extends Repository<object> {\n  count() {\n    return 1;\n  }\n}\n\nexport class Own {\n  query(text: string) {\n    return text;\n  }\n}\n";
+        let main = "import { Statistics, Own } from \"./repository\";\n\nexport async function run(statistics: Statistics, own: Own, id: string) {\n  await statistics.query(`SELECT * FROM t WHERE id = ${id}`);\n  await own.query(`SELECT * FROM t WHERE id = ${id}`);\n}\n";
+        assert_eq!(
+            found(
+                Language::TypeScript,
+                &[("repository.ts", repository), ("main.ts", main)]
+            ),
+            [one("main.ts", 4, "sql_string_construction", "name_only")]
+        );
+    }
+
+    #[test]
+    fn a_template_with_only_literal_substitutions_is_constant_ecma() {
+        let source = "export async function run(db, prefix: string) {\n  await db.query(`SELECT * FROM ${\"users\"} WHERE id = ${1}`);\n  await db.query(`SELECT * FROM ${prefix}users`);\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [
+                (2, "sql_string_construction", true),
+                (3, "sql_string_construction", false),
+            ]
+        );
+    }
+
+    /// The flag `constant_argument` of each command sink, in the order of the lines.
+    fn command_constants(language: Language, name: &str, source: &str) -> Vec<bool> {
+        constants(language, &[(name, source)])
+            .into_iter()
+            .filter(|(_, category, _)| *category == "command_execution")
+            .map(|(_, _, constant)| constant)
+            .collect()
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_ecma() {
+        let source = "import { exec, execSync, spawn } from \"node:child_process\";\n\nexport function run(command: string, options: object) {\n  exec(\"ls -l\", options, () => {});\n  execSync(\"ls\", { cwd: options });\n  spawn(\"ls\", [\"-l\"], { shell: true, cwd: options });\n  exec(command, { timeout: 5 });\n}\n";
+        assert_eq!(
+            command_constants(Language::TypeScript, "a.ts", source),
+            [true, true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_python() {
+        let source = "import os\nimport subprocess\n\ndef run(command, directory):\n    subprocess.run(\"ls -l\", shell=True, cwd=directory)\n    os.popen(\"ls\", \"r\", directory)\n    subprocess.getoutput(command)\n";
+        assert_eq!(
+            command_constants(Language::Python, "a.py", source),
+            [true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_go() {
+        let source = "package main\n\nimport (\n\t\"context\"\n\t\"os\"\n\t\"os/exec\"\n\t\"syscall\"\n)\n\nfunc run(ctx context.Context, attributes *os.ProcAttr, environment []string, program string) {\n\texec.CommandContext(ctx, \"ls\", \"-l\")\n\tos.StartProcess(\"/bin/ls\", []string{\"ls\"}, attributes)\n\tsyscall.Exec(\"/bin/ls\", []string{\"ls\"}, environment)\n\texec.CommandContext(ctx, program)\n}\n";
+        assert_eq!(
+            command_constants(Language::Go, "main.go", source),
+            [true, true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_java() {
+        let source = "public class A {\n    void run(String[] environment, java.io.File directory, String command) throws Exception {\n        Runtime.getRuntime().exec(\"ls -l\", environment, directory);\n        Runtime.getRuntime().exec(command, environment);\n    }\n}\n";
+        assert_eq!(
+            command_constants(Language::Java, "A.java", source),
+            [true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_csharp() {
+        let source = "using System.Diagnostics;\n\npublic class A {\n    public void Run(string user, System.Security.SecureString password, string domain, string command) {\n        Process.Start(\"ls\", \"-l\", user, password, domain);\n        Process.Start(command, \"-l\", user, password, domain);\n    }\n}\n";
+        assert_eq!(
+            command_constants(Language::CSharp, "A.cs", source),
+            [true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_ruby() {
+        let source = "require \"open3\"\n\ndef run(directory, command)\n  system({ \"HOME\" => directory }, \"ls -l\", chdir: directory)\n  Open3.capture2(\"ls\", chdir: directory)\n  system(command, chdir: directory)\nend\n";
+        assert_eq!(
+            command_constants(Language::Ruby, "a.rb", source),
+            [true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_php() {
+        let source = "<?php\nfunction run($command, $environment) {\n    exec(\"ls -l\", $output, $code);\n    proc_open(\"ls\", $descriptors, $pipes, \"/\", $environment);\n    pcntl_exec(\"/bin/ls\", [\"-l\"], $environment);\n    system($command, $code);\n}\n";
+        assert_eq!(
+            command_constants(Language::Php, "a.php", source),
+            [true, true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_options_of_a_command_call_do_not_change_the_constant_flag_c_and_cpp() {
+        let c = "#include <stdio.h>\n#include <unistd.h>\n\nvoid run(const char *mode, char *const environment[], char *const arguments[], const char *command) {\n    popen(\"ls -l\", mode);\n    execve(\"/bin/ls\", 0, environment);\n    popen(command, \"r\");\n}\n";
+        assert_eq!(
+            command_constants(Language::C, "a.c", c),
+            [true, true, false]
+        );
+        let cpp = "#include <cstdlib>\n\nvoid run(const char *command) {\n    std::system(\"ls\");\n    std::system(command);\n}\n";
+        assert_eq!(
+            command_constants(Language::Cpp, "a.cpp", cpp),
+            [true, false]
+        );
+    }
+
+    #[test]
+    fn a_trusted_html_string_is_unsafe_html_output_csharp_and_rust() {
+        let csharp = "using Microsoft.AspNetCore.Html;\n\npublic class A {\n    public object Run(string text) {\n        new HtmlString(text);\n        return new HtmlString(\"<br>\");\n    }\n}\n";
+        assert_eq!(
+            html_sinks(Language::CSharp, &[("A.cs", csharp)]),
+            [(5, "imported_symbol", false), (6, "imported_symbol", true)]
+        );
+        let rust = "use maud::PreEscaped;\n\npub fn run(text: String) {\n    PreEscaped(text);\n    maud::PreEscaped(\"<br>\");\n}\n";
+        assert_eq!(
+            html_sinks(Language::Rust, &[("a.rs", rust)]),
+            [(4, "imported_symbol", false), (5, "imported_symbol", true)]
+        );
     }
 
     #[test]
