@@ -602,6 +602,14 @@ impl<'a> Resolver<'a> {
                 .and_then(|module| self.by_file.get(module.as_str()))
                 .map(|module| self.exported(*module, name).to_vec())
                 .unwrap_or_default();
+            // `pub use inner::Original as Public` exports a type whose name
+            // is not the name of the path.
+            found.extend(
+                exported
+                    .iter()
+                    .copied()
+                    .filter(|id| is_container(self.symbol(*id)) || self.facts(*id).defined_type),
+            );
             found.retain(|id| {
                 (!relative.is_empty() && containers(id).ends_with(&relative))
                     || exported.contains(id)
@@ -651,12 +659,18 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .filter(|binding| binding.local_name.as_deref() == Some(last))
                 .peekable();
-            // A qualifier that is an import selects only the files of that import.
+            // A qualifier that is an import selects only the files of that
+            // import. A file can export a type with a different name, as
+            // `pub use inner::Original as Public`.
             if bindings.peek().is_some() {
                 let imported: Vec<usize> = bindings
                     .flat_map(|binding| self.target_files(binding))
                     .collect();
-                return in_files(&imported);
+                let mut found = in_files(&imported);
+                for target in &imported {
+                    found.extend(self.exported(*target, name).iter().copied().filter(is_type));
+                }
+                return found;
             }
         }
         let found = in_files(&[file]);
@@ -3636,6 +3650,30 @@ mod false_edge_tests {
                 "4 run>cx.quit UniqueCandidate ReceiverDeclaredType [src/app.rs#App.quit]",
                 "5 run>cx.theme UniqueCandidate ReceiverDeclaredType [src/user.rs#App.theme]",
             ]
+        );
+    }
+
+    /// `pub use inner::Original as Public` gives the type `Original` to the
+    /// path `dep::Public`, which has no type with the name `Public`.
+    #[test]
+    fn test_rust_path_to_a_type_that_a_module_exports_with_a_different_name() {
+        let files = [
+            ("Cargo.toml", "[package]\nname = \"kit\"\n"),
+            ("src/lib.rs", "pub mod dep;\nmod user;\n\nfn run() {\n    dep::Public::make();\n}\n\nfn typed(value: dep::Public) {\n    value.size();\n}\n"),
+            ("src/user.rs", "fn run() {\n    crate::dep::Public::make();\n}\n"),
+            ("src/dep.rs", "mod inner;\n\npub use inner::Original as Public;\n"),
+            ("src/dep/inner.rs", "pub struct Original;\n\nimpl Original {\n    pub fn make() {}\n\n    pub fn size(&self) {}\n}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "src/lib.rs"),
+            [
+                "5 run>dep::Public::make UniqueCandidate QualifiedPath [src/dep/inner.rs#Original.make]",
+                "9 typed>value.size UniqueCandidate ReceiverDeclaredType [src/dep/inner.rs#Original.size]",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "src/user.rs"),
+            ["2 run>crate::dep::Public::make UniqueCandidate QualifiedPath [src/dep/inner.rs#Original.make]"]
         );
     }
 
