@@ -671,6 +671,10 @@ time. Omen gives the names only. It does not give the type or the source of a pa
   not a string literal, a cycle of calls, and a router with more than 256 chains give one
   entry for each route. Its path starts with `<unresolved>` in place of the part that omen
   cannot read, and its guards are not complete, with the reason `unresolved_router`.
+  These limits keep the work for each route bounded: a group deeper than 256 groups, a
+  chain of more than 256 mounts, and a prefix longer than 4096 bytes give the same
+  `<unresolved>` path. A list of more than 256 guards keeps its first 256 guards and the
+  placeholder `<expression>` in place of the others.
 - Omen does not read the code of a method that changes the path. For example, Gitea removes
   a slash at the end of a pattern, so 16 paths of Gitea that end with a slash have that
   slash in the result of omen, but not in Gitea.

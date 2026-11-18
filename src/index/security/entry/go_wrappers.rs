@@ -79,6 +79,19 @@ const EVAL_DEPTH_LIMIT: usize = 1000;
 /// chain whose path is not known, so that the cost stays in proportion to the size of the repository.
 const PLACEMENT_LIMIT: usize = 256;
 
+/// The depth of the groups of a router that the walk reads. A deeper group gives a path that is
+/// not known, so that the work for each route stays bounded.
+const GROUP_DEPTH_LIMIT: usize = 256;
+
+/// The number of mounts in one chain. A longer chain gives a path that is not known.
+const MOUNT_LIMIT: usize = 256;
+
+/// The number of guards in one list. A longer list keeps its first guards and a placeholder.
+const GUARD_LIMIT: usize = 256;
+
+/// The length in bytes of a prefix. A longer prefix is not known.
+const PREFIX_LIMIT: usize = 4096;
+
 /// The router of a framework that a field of a router type holds.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Inner {
@@ -221,6 +234,16 @@ impl Guard {
     fn unread() -> Self {
         Self::Name(UNREAD_GUARD.to_string())
     }
+}
+
+/// Keeps the first `GUARD_LIMIT` guards of a list. A longer list gets a placeholder in place of
+/// the other guards.
+fn limited(mut guards: Vec<Guard>) -> Vec<Guard> {
+    if guards.len() > GUARD_LIMIT {
+        guards.truncate(GUARD_LIMIT);
+        guards.push(Guard::unread());
+    }
+    guards
 }
 
 /// The guards of each argument of one call of a function.
@@ -1976,12 +1999,33 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
     /// The prefix and the guards of the open groups of a router.
     fn group_of(&self, router: usize) -> (Prefix, Vec<Guard>) {
         let mut prefix = Prefix::default();
-        let mut guards = self.layers.get(&router).cloned().unwrap_or_default();
-        for (part, names) in self.groups.get(&router).into_iter().flatten() {
-            prefix = prefix.join(part.as_deref());
-            guards.extend(names.iter().cloned());
+        let layers = self
+            .layers
+            .get(&router)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let mut guards: Vec<Guard> = layers.iter().take(GUARD_LIMIT + 1).cloned().collect();
+        let open = self
+            .groups
+            .get(&router)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let (read, deeper) = open.split_at(open.len().min(GROUP_DEPTH_LIMIT));
+        for (part, names) in read {
+            match part {
+                Some(part) => prefix.text.push_str(part),
+                None => prefix = Prefix::default().join(None),
+            }
+            let room = (GUARD_LIMIT + 1).saturating_sub(guards.len());
+            guards.extend(names.iter().take(room).cloned());
         }
-        (prefix, guards)
+        if !deeper.is_empty() || prefix.text.len() > PREFIX_LIMIT {
+            prefix = Prefix::default().join(None);
+        }
+        if !deeper.is_empty() {
+            guards.push(Guard::unread());
+        }
+        (prefix, limited(guards))
     }
 
     fn made(&mut self, origin: Origin, router_type: usize) -> usize {
@@ -2584,8 +2628,9 @@ impl WrapperRoutes {
             );
         }
         let mut placements: Vec<Option<Rc<Vec<Placement>>>> = vec![None; count];
-        // The components come with each parent before its children.
-        for component in petgraph::algo::tarjan_scc(&network) {
+        // The components come with each parent before its children. Kosaraju's algorithm does not
+        // recurse, so a long chain of links does not overflow the stack.
+        for component in petgraph::algo::kosaraju_scc(&network) {
             let cyclic = component.len() > 1
                 || component.first().is_some_and(|node| {
                     parents[node.index()]
@@ -2744,6 +2789,7 @@ impl WrapperRoutes {
                 }
                 guards.extend(substitute(&link.guards, outer));
                 guards.extend(global.iter().cloned());
+                let guards = limited(guards);
                 let arguments = match &link.kind {
                     LinkKind::Alias(call) if graph.spread_functions.contains(&call.function) => {
                         Some(Rc::new(Arguments {
@@ -2758,7 +2804,11 @@ impl WrapperRoutes {
                     LinkKind::Alias(_) | LinkKind::Return => None,
                     LinkKind::Mount => placement.arguments.clone(),
                 };
-                let (unresolved, mut mounts, mut open) = if link.prefix.unresolved {
+                let size = placement.mounts.iter().map(String::len).sum::<usize>()
+                    + placement.open.len()
+                    + link.prefix.text.len();
+                let too_long = placement.mounts.len() >= MOUNT_LIMIT || size > PREFIX_LIMIT;
+                let (unresolved, mut mounts, mut open) = if link.prefix.unresolved || too_long {
                     (true, Vec::new(), String::new())
                 } else {
                     (
@@ -3824,5 +3874,101 @@ func main() {
     #[ignore = "timing: run in release"]
     fn timing_many_layers_of_one_router_cost_linear_time() {
         assert_scales_linearly("layers", 10_000, |count| layered_routers(1, count).1);
+    }
+
+    /// Groups inside groups, `depth` deep, with a route at each level.
+    fn nested_groups(depth: usize) -> (usize, std::time::Duration) {
+        let mut main = String::from(HEADER);
+        main.push_str("func main() {\n\tm := web.NewRouter()\n");
+        for level in 0..depth {
+            main.push_str(&format!(
+                "\tm.Group(\"/g{level}\", func() {{\n\tm.Get(\"/r\", Home)\n"
+            ));
+        }
+        for level in 0..depth {
+            main.push_str(&format!("\t}}, guard{level})\n"));
+        }
+        main.push_str("}\n");
+        timed(main)
+    }
+
+    /// A chain of factories, `count` long: each makes a router, mounts the router of the factory
+    /// before it, and returns it. Only the first factory registers a route.
+    fn a_chain_of_mounting_factories(count: usize) -> (usize, std::time::Duration) {
+        let mut main = String::from(HEADER);
+        main.push_str(
+            "func factory0() *web.Router {\n\tr := web.NewRouter()\n\tr.Get(\"/leaf\", Home)\n\treturn r\n}\n\n",
+        );
+        for number in 1..count {
+            main.push_str(&format!(
+                "func factory{number}() *web.Router {{\n\tr := web.NewRouter()\n\tr.Mount(\"/p{number}\", factory{}())\n\treturn r\n}}\n\n",
+                number - 1
+            ));
+        }
+        main.push_str(&format!(
+            "func main() {{\n\tm := web.NewRouter()\n\tm.Mount(\"/root\", factory{}())\n}}\n",
+            count - 1
+        ));
+        timed(main)
+    }
+
+    #[test]
+    fn a_group_deeper_than_the_limit_gives_an_unresolved_path_that_is_not_complete() {
+        let depth = super::GROUP_DEPTH_LIMIT + 2;
+        let mut main = String::from(HEADER);
+        main.push_str("func main() {\n\tm := web.NewRouter()\n");
+        for _ in 0..depth {
+            main.push_str("\tm.Group(\"/g\", func() {\n");
+        }
+        main.push_str("\tm.Get(\"/deep\", Home)\n");
+        for _ in 0..depth {
+            main.push_str("\t})\n");
+        }
+        main.push_str("}\n");
+        assert_eq!(
+            states(&[("main.go", &main), ("web/router.go", ROUTER)]),
+            ["GET <unresolved>/deep [<expression>] unresolved_router"]
+        );
+    }
+
+    #[test]
+    fn a_chain_of_more_mounts_than_the_limit_gives_an_unresolved_path() {
+        let found = entries(
+            Language::Go,
+            &[
+                ("main.go", &{
+                    let count = super::MOUNT_LIMIT + 2;
+                    let mut main = String::from(HEADER);
+                    main.push_str("func factory0() *web.Router {\n\tr := web.NewRouter()\n\tr.Get(\"/leaf\", Home)\n\treturn r\n}\n\n");
+                    for number in 1..count {
+                        main.push_str(&format!("func factory{number}() *web.Router {{\n\tr := web.NewRouter()\n\tr.Mount(\"/p\", factory{}())\n\treturn r\n}}\n\n", number - 1));
+                    }
+                    main.push_str(&format!("func main() {{\n\tm := web.NewRouter()\n\tm.Mount(\"/root\", factory{}())\n}}\n", count - 1));
+                    main
+                }),
+                ("web/router.go", ROUTER),
+            ],
+        );
+        let paths: Vec<String> = found
+            .iter()
+            .filter_map(|entry| entry.route.as_ref().map(|route| route.path.clone()))
+            .collect();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].starts_with("<unresolved>"), "{paths:?}");
+        assert!(paths[0].ends_with("/leaf"), "{paths:?}");
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_groups_with_a_route_at_each_level_cost_linear_time() {
+        assert_scales_linearly("nested groups", 2_000, |depth| nested_groups(depth).1);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_chain_of_mounting_factories_costs_linear_time() {
+        assert_scales_linearly("mount chain", 5_000, |count| {
+            a_chain_of_mounting_factories(count).1
+        });
     }
 }

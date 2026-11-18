@@ -2163,11 +2163,15 @@ impl<'t, 'c> FileUses<'t, 'c> {
             bad: HashMap::new(),
             bad_strict: HashMap::new(),
         };
-        let mut pending = vec![root];
-        while let Some(node) = pending.pop() {
-            if node.kind() == "identifier" && uses.is_bad_use(node, true) {
+        // The walk keeps the ancestors of each node. `Node::parent` searches down from the root,
+        // so a call for each name costs time in proportion to the depth.
+        let mut ancestors: Vec<Node<'t>> = Vec::new();
+        let mut pending = vec![(root, 0)];
+        while let Some((node, depth)) = pending.pop() {
+            ancestors.truncate(depth);
+            if node.kind() == "identifier" && uses.is_bad_use(node, &ancestors, true) {
                 let name = uses.text(node).to_string();
-                if uses.is_bad_use(node, false) {
+                if uses.is_bad_use(node, &ancestors, false) {
                     uses.bad
                         .entry(name.clone())
                         .or_default()
@@ -2180,7 +2184,8 @@ impl<'t, 'c> FileUses<'t, 'c> {
             }
             let mut cursor = node.walk();
             let children: Vec<Node<'t>> = node.named_children(&mut cursor).collect();
-            pending.extend(children.into_iter().rev());
+            pending.extend(children.into_iter().rev().map(|child| (child, depth + 1)));
+            ancestors.push(node);
         }
         uses
     }
@@ -2213,7 +2218,12 @@ impl<'t, 'c> FileUses<'t, 'c> {
 
     /// Tells if a selector is a call of a method that registers a route, or that serves the
     /// router, on the node. A call that adds middleware changes the guards of the routes.
-    fn is_router_call(&self, selector: Node<'t>, operand: Node<'t>) -> bool {
+    fn is_router_call(
+        &self,
+        selector: Node<'t>,
+        operand: Node<'t>,
+        call: Option<Node<'t>>,
+    ) -> bool {
         const SERVING: [&str; 7] = [
             "Run",
             "RunTLS",
@@ -2224,7 +2234,7 @@ impl<'t, 'c> FileUses<'t, 'c> {
             "Walk",
         ];
         selector.child_by_field_name("operand") == Some(operand)
-            && selector.parent().is_some_and(|call| {
+            && call.is_some_and(|call| {
                 call.kind() == "call_expression"
                     && call.child_by_field_name("function") == Some(selector)
             })
@@ -2256,22 +2266,25 @@ impl<'t, 'c> FileUses<'t, 'c> {
 
     /// Tells if a use of a name is not a use as a router that the walk understands. A router
     /// that a variable holds is only a receiver of a call, or the root handler of a server.
-    fn is_bad_use(&self, node: Node<'t>, strict: bool) -> bool {
+    /// `ancestors` holds the ancestors of the node, with its parent last.
+    fn is_bad_use(&self, node: Node<'t>, ancestors: &[Node<'t>], strict: bool) -> bool {
         let mut child = node;
-        let mut parent = child.parent();
+        let mut up = ancestors.iter().rev().copied();
+        let mut parent = up.next();
         while let Some(found) = parent.filter(|found| found.kind() == "parenthesized_expression") {
             child = found;
-            parent = found.parent();
+            parent = up.next();
         }
         let Some(parent) = parent else {
             return false;
         };
+        let grand = up.next();
         match parent.kind() {
-            "selector_expression" => strict || !self.is_router_call(parent, child),
-            "argument_list" => !self.is_sink(parent.parent()),
+            "selector_expression" => strict || !self.is_router_call(parent, child, grand),
+            "argument_list" => !self.is_sink(grand),
             "var_spec" => parent.child_by_field_name("value") == Some(child),
             "expression_list" => {
-                let Some(grand) = parent.parent() else {
+                let Some(grand) = grand else {
                     return false;
                 };
                 match grand.kind() {
@@ -2283,11 +2296,11 @@ impl<'t, 'c> FileUses<'t, 'c> {
                 }
             }
             "literal_element" | "keyed_element" | "literal_value" => {
-                let mut up = parent.parent();
-                while let Some(found) = up.filter(|found| found.kind() != "composite_literal") {
-                    up = found.parent();
-                }
-                !up.is_some_and(|literal| self.is_server_literal(literal))
+                let literal = std::iter::once(grand)
+                    .flatten()
+                    .chain(up)
+                    .find(|found| found.kind() == "composite_literal");
+                !literal.is_some_and(|literal| self.is_server_literal(literal))
             }
             "block" | "statement_list" | "expression_statement" | "source_file" => false,
             _ => true,
@@ -2324,7 +2337,7 @@ impl<'t, 'c> FileUses<'t, 'c> {
         };
         match parent.kind() {
             "expression_statement" => false,
-            "selector_expression" => strict || !self.is_router_call(parent, value),
+            "selector_expression" => strict || !self.is_router_call(parent, value, parent.parent()),
             "argument_list" => !self.is_sink(parent.parent()),
             "literal_element" | "keyed_element" => {
                 let mut up = parent.parent();
