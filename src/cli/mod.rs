@@ -47,6 +47,65 @@ pub struct Cli {
     pub command: Command,
 }
 
+/// The position of the symbol name of `symbol` or `impact` in the command
+/// line, or `None` for another command.
+///
+/// The text of the name can also be the value of a flag. Thus each argument
+/// with that text gets a marker in turn, and clap parses the line again. The
+/// argument for which the parsed name is the marker is the name.
+pub fn symbol_name_position(arguments: &[String]) -> Option<usize> {
+    const MARKER: &str = "\u{0}symbol-name";
+    let name = |arguments: &[String]| match Cli::try_parse_from(arguments).ok()?.command {
+        Command::Symbol(args) => Some(args.name),
+        Command::Impact(args) => Some(args.symbol),
+        _ => None,
+    };
+    let text = name(arguments)?;
+    (1..arguments.len())
+        .filter(|&position| arguments[position] == text)
+        .find(|&position| {
+            let mut marked = arguments.to_vec();
+            marked[position] = MARKER.to_string();
+            name(&marked).as_deref() == Some(MARKER)
+        })
+}
+
+/// The positions of the `--start-line` flag and its value in the command
+/// line of `symbol` or `impact`. The command line without them parses with
+/// no start line. Empty when the command line has no start line.
+pub fn start_line_positions(arguments: &[String]) -> Vec<usize> {
+    let start_line = |arguments: &[String]| match Cli::try_parse_from(arguments) {
+        Ok(Cli {
+            command: Command::Symbol(args),
+            ..
+        }) => Ok(args.start_line),
+        Ok(Cli {
+            command: Command::Impact(args),
+            ..
+        }) => Ok(args.start_line),
+        _ => Err(()),
+    };
+    if matches!(start_line(arguments), Ok(Some(_))) {
+        for position in 1..arguments.len() {
+            let positions = match arguments[position].as_str() {
+                "--start-line" => vec![position, position + 1],
+                argument if argument.starts_with("--start-line=") => vec![position],
+                _ => continue,
+            };
+            let rest: Vec<String> = arguments
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| !positions.contains(other))
+                .map(|(_, argument)| argument.clone())
+                .collect();
+            if start_line(&rest) == Ok(None) {
+                return positions;
+            }
+        }
+    }
+    Vec::new()
+}
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Analyze code complexity (cyclomatic and cognitive)
@@ -79,7 +138,16 @@ pub enum Command {
     #[command(alias = "jit")]
     Changes(AnalyzerArgs),
 
-    /// Analyze a specific diff (PR review)
+    /// Give the risk and the change set of a branch (PR review)
+    #[command(
+        long_about = "Give the risk of the changes on the current branch in relation to a target ref.\n\n\
+        With `-f json`, the output also has the change set: `summary`, `symbols`, `files`, \
+        `new_findings`, and `security`. The symbols that are not test code come first. Then a \
+        changed or removed symbol comes before an added symbol. Then the symbol with more \
+        transitive callers comes first. `--top` and `--offset` page `symbols`. The counts in \
+        `summary` are always complete.\n\n\
+        With `-f markdown`, the output is a comment for a pull request with the same order."
+    )]
     #[command(alias = "pr")]
     Diff(DiffArgs),
 
@@ -300,6 +368,10 @@ pub struct DiffArgs {
     /// Node cap of the call graph in the Markdown comment
     #[arg(long, default_value_t = crate::changeset::markdown::DEFAULT_MAX_NODES)]
     pub max_nodes: usize,
+
+    /// Cap of the direct callers of each symbol in the JSON (0 = unlimited)
+    #[arg(long, default_value_t = crate::commands::diff::DEFAULT_MAX_CALLERS)]
+    pub max_callers: usize,
 
     // `diff` has no file set to filter, so it takes only the pagination flags
     // and not the full `AnalyzerArgs`.
@@ -803,9 +875,14 @@ pub enum ImpactDirection {
 /// Arguments for the impact command.
 #[derive(Args)]
 pub struct ImpactArgs {
-    /// Symbol name to analyze (bare name or qualified file:name)
+    /// Symbol name to analyze: a bare name, `file:name`, or the key of a definition
     #[arg()]
     pub symbol: String,
+
+    /// The line on which the definition starts. Use it to select one of two
+    /// definitions with the same name
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    pub start_line: Option<u32>,
 
     /// BFS depth for traversal
     #[arg(long, default_value = "2")]
@@ -882,9 +959,14 @@ pub struct EvalArgs {
 /// Arguments for the symbol command.
 #[derive(Args)]
 pub struct SymbolArgs {
-    /// Symbol name to look up (bare name or qualified file:name)
+    /// Symbol name to look up: a bare name, `file:name`, or the key of a definition
     #[arg()]
     pub name: String,
+
+    /// The line on which the definition starts. Use it to select one of two
+    /// definitions with the same name
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    pub start_line: Option<u32>,
 
     /// Exclude source code from the report
     #[arg(long)]
@@ -2234,6 +2316,77 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_symbol_and_impact_start_line_flag() {
+        let Command::Symbol(symbol) =
+            parse(&["omen", "symbol", "foo", "--start-line", "12"]).command
+        else {
+            panic!("Expected Symbol command");
+        };
+        assert_eq!(symbol.start_line, Some(12));
+        let Command::Impact(impact) =
+            parse(&["omen", "impact", "foo", "--start-line", "3"]).command
+        else {
+            panic!("Expected Impact command");
+        };
+        assert_eq!(impact.start_line, Some(3));
+        assert!(Cli::try_parse_from(["omen", "symbol", "foo", "--start-line", "0"]).is_err());
+    }
+
+    #[test]
+    fn test_the_position_of_the_symbol_name_in_the_arguments() {
+        let arguments = |text: &[&str]| -> Vec<String> {
+            text.iter().map(|argument| argument.to_string()).collect()
+        };
+        assert_eq!(
+            symbol_name_position(&arguments(&[
+                "omen",
+                "--path=foo",
+                "-c",
+                "foo",
+                "sym",
+                "-f",
+                "json",
+                "foo",
+                "--glob",
+                "foo"
+            ])),
+            Some(7)
+        );
+        assert_eq!(
+            symbol_name_position(&arguments(&["omen", "blast", "--depth=3", "foo"])),
+            Some(3)
+        );
+        assert_eq!(
+            symbol_name_position(&arguments(&["omen", "complexity", "foo"])),
+            None
+        );
+    }
+
+    #[test]
+    fn test_start_line_positions_of_each_form() {
+        let arguments = |text: &[&str]| -> Vec<String> {
+            text.iter().map(|argument| argument.to_string()).collect()
+        };
+        assert_eq!(
+            start_line_positions(&arguments(&[
+                "omen",
+                "-p",
+                "9",
+                "symbol",
+                "foo",
+                "--start-line",
+                "9"
+            ])),
+            [5, 6]
+        );
+        assert_eq!(
+            start_line_positions(&arguments(&["omen", "impact", "--start-line=9", "foo"])),
+            [2]
+        );
+        assert!(start_line_positions(&arguments(&["omen", "symbol", "foo"])).is_empty());
+    }
+
     // -----------------------------------------------------------------
     // Pagination: --top/-n/--offset
     // -----------------------------------------------------------------
@@ -2291,6 +2444,16 @@ mod tests {
         };
         assert_eq!(args.max_bytes, 60000);
         assert_eq!(args.max_nodes, 30);
+        assert_eq!(args.max_callers, 20);
+    }
+
+    #[test]
+    fn test_diff_max_callers_flag_parses() {
+        let cli = parse(&["omen", "diff", "--max-callers", "0"]);
+        let Command::Diff(args) = cli.command else {
+            panic!("expected Diff command");
+        };
+        assert_eq!(args.max_callers, 0);
     }
 
     #[test]

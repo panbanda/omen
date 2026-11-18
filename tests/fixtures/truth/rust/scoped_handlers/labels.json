@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "language": "rust",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Rust. The route names its handler with a module path, and another module has a function with the same name. The axum import needs a package that the case does not include. The harness does not run the code.",
+  "closed_world": false,
+  "paths": [
+    {
+      "label": "module_path_handler_to_command",
+      "entry_file": "server.rs",
+      "entry_line": 5,
+      "sink_file": "routes/run.rs",
+      "sink_line": 8,
+      "steps": [
+        "routes/run.rs#run",
+        "routes/run.rs#execute"
+      ],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "guards": [],
+      "choke_points": [
+        "routes/run.rs#run"
+      ]
+    }
+  ]
+}

@@ -50,6 +50,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                 ]
               }
             ],
+            "declarations": [],
             "files_affected": [
               "string"
             ],
@@ -68,7 +69,6 @@ expression: "shape(&response, &dynamic_key_objects)"
               "reaches": [],
               "sinks_in_body": []
             },
-            "suggestions": [],
             "symbol": "string",
             "total_callees": "number",
             "total_callers": "number"

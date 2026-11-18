@@ -21,11 +21,11 @@ Base `7537d9d` (merge base with `main`), head `e0a576e`.
 
 | Change | Symbol | Location | Complexity | Direct / transitive callers | Tests | Weakest edge |
 | --- | --- | --- | --- | --- | --- | --- |
-| ~ changed | `describe` | `src/report.rs:3` | CC 1 -> 1, CG 0 -> 0 | 0 / 0 | 0 | none |
-| + added | `solid` | `src/report.rs:11` | CC none -> 1, CG none -> 0 | 0 / 0 | 0 | none |
 | ~ changed | `area` | `src/shapes.rs:1` | CC 1 -> 4, CG 0 -> 3 | 3 / 4 | 1 | imported_name |
 | - removed | `legacy` | `src/shapes.rs:9` | CC 1 -> none, CG 0 -> none | 1 / 1 | 0 | imported_name |
+| ~ changed | `describe` | `src/report.rs:3` | CC 1 -> 1, CG 0 -> 0 | 0 / 0 | 0 | none |
 | + added | `volume` | `src/shapes.rs:16` | CC none -> 1, CG none -> 0 | 1 / 1 | 0 | imported_name |
+| + added | `solid` | `src/report.rs:11` | CC none -> 1, CG none -> 0 | 0 / 0 | 0 | none |
 | + added | `unfinished` | `src/shapes.rs:20` | CC none -> 1, CG none -> 0 | 0 / 0 | 0 | none |
 | ~ changed | `tests.test_area` | `src/shapes.rs:29` | CC 1 -> 1, CG 0 -> 0 | 0 / 0 | 0 | none |
 

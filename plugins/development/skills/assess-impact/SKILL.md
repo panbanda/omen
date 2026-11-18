@@ -23,11 +23,21 @@ omen -f json impact <symbol-name> --depth 2
 
 The command returns the affected files, the caller and callee BFS levels, and the total count. This is much faster than a manual analysis.
 
+If more than one definition has the name, the command does not select one. It writes an `ambiguous` error to stdout and exits with the status 1. Each item of `error.suggestions` has the `kind`, the `container`, the `file`, the `start_line`, and a `command`. Run the `command` of the correct definition. If no definition has the name, the error code is `not_found`, and `error.suggestions` holds near names. If the code is `not_found` and `error.param` is `start_line`, no definition of the name starts on that line. Run the `command` of one suggestion.
+
 To inspect a specific symbol first, use this command:
 
 ```bash
 omen -f json symbol <symbol-name>
 ```
+
+If the change is already on a branch, get the blast radius of each changed symbol in one call:
+
+```bash
+omen -f json diff --target main --top 20
+```
+
+Each entry of `symbols` has `direct_callers`, `direct_caller_count`, `test_caller_count`, and `transitive_callers`. The symbols with the most effect come first. Give a `key` from `symbols` to the `impact` command to get the full list of callers. If the `state` of the entry is `removed`, add `--ref <base>` (for example `--ref main`), because the symbol is only in the base.
 
 ### Step 2: Map the File-Level Dependencies
 

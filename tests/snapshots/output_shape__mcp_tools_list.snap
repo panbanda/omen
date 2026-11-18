@@ -350,7 +350,7 @@ expression: "responses[0]"
         "name": "changes"
       },
       {
-        "description": "Gives the risk of the changes on the current branch in relation to a target ref. If you give no ref, the tool finds the default branch.",
+        "description": "Gives the risk and the change set of the current branch in relation to a target ref. `symbols` has each symbol that the branch added, removed, or changed, with its signature, its complexity, and its callers. `summary` has the complete counts. `security` has the sinks, the entry points, and the paths that the branch adds or removes. The symbols that are not test code come first. Then a changed or removed symbol comes before an added symbol. Then the symbol with more transitive callers comes first. The limit applies to the symbols. If you give no ref, the tool finds the default branch.",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -365,6 +365,13 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_callers": {
+              "default": 20,
+              "description": "The maximum number of direct callers that each symbol lists. The value 0 removes the limit. `direct_caller_count` is always the complete count.",
               "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
@@ -762,7 +769,7 @@ expression: "responses[0]"
         "name": "search"
       },
       {
-        "description": "Gives the source, the location, the complexity, the callers, and the callees of one symbol. `call_resolutions` shows the unique, ambiguous, and unresolved candidates of each call. The edges come from names, and a compiler does not prove them. The graph does not include ambiguous and unresolved calls.",
+        "description": "Gives the source, the location, the complexity, the callers, and the callees of one symbol. `call_resolutions` shows the unique, ambiguous, and unresolved candidates of each call. The edges come from names, and a compiler does not prove them. The graph does not include ambiguous and unresolved calls. A name that agrees with more than one definition gives the `ambiguous` error.",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -809,7 +816,7 @@ expression: "responses[0]"
               "type": "string"
             },
             "name": {
-              "description": "The symbol name. Use a bare name or the qualified form `file:name`.",
+              "description": "The symbol name: a bare name, the qualified form `file:name`, or the key of a definition.",
               "type": "string"
             },
             "offset": {
@@ -884,7 +891,7 @@ expression: "responses[0]"
         "name": "task_context"
       },
       {
-        "description": "Gives the possible blast radius of a symbol: its callers and callees to a given depth. The edges come from names. The tool does not include ambiguous and unresolved calls, thus the result is not a full safety check. The limit applies to the symbols of all levels.",
+        "description": "Gives the possible blast radius of a symbol: its callers and callees to a given depth. The edges come from names. The tool does not include ambiguous and unresolved calls, thus the result is not a full safety check. A name that agrees with more than one definition gives the `ambiguous` error. The limit applies to the symbols of all levels.",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -946,8 +953,14 @@ expression: "responses[0]"
               "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             },
+            "start_line": {
+              "description": "The line on which the definition starts. Use it to select one of two definitions with the same name.",
+              "maximum": 4294967295,
+              "minimum": 1,
+              "type": "integer"
+            },
             "symbol": {
-              "description": "The symbol name. Use a bare name or the qualified form `file:name`.",
+              "description": "The symbol name: a bare name, the qualified form `file:name`, or the key of a definition.",
               "type": "string"
             }
           },

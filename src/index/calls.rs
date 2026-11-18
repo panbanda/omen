@@ -85,7 +85,7 @@ impl CallSyntax {
     }
 
     /// The receiver or the qualifier that an expression before a name gives.
-    fn before_name(
+    pub fn before_name(
         &self,
         node: Node<'_>,
         context: &Context<'_, '_>,
@@ -211,9 +211,14 @@ impl CallSyntax {
         } else {
             node.child_by_field_name(callee)?
         };
-        let callee = without_type_arguments(callee)?;
-        let (_, receiver, _) = self.members.iter().find(|rule| rule.0 == callee.kind())?;
-        let receiver = callee.child_by_field_name(receiver)?;
+        self.member_receiver_range(callee)
+    }
+
+    /// The byte range of the receiver expression of a member expression.
+    pub fn member_receiver_range(&self, member: Node<'_>) -> Option<(usize, usize)> {
+        let member = without_type_arguments(member)?;
+        let (_, receiver, _) = self.members.iter().find(|rule| rule.0 == member.kind())?;
+        let receiver = member.child_by_field_name(receiver)?;
         Some((receiver.start_byte(), receiver.end_byte()))
     }
 
@@ -310,6 +315,105 @@ impl CallSyntax {
             }
         }
     }
+}
+
+/// Where a language uses a function as a value, without a call of it. An
+/// argument, the right side of an assignment, a returned value, and an
+/// element of a collection are such positions.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ValueSyntax {
+    /// `(kind, field)`. Each child in the field is a value. With an empty
+    /// field name, each named child that has no field name is a value. Thus
+    /// the name of a named argument and the name that a declaration binds
+    /// are not values.
+    pub positions: &'static [(&'static str, &'static str)],
+    /// The node kinds of a list of values. When a list is at a position, each
+    /// named child of the list is a value.
+    pub lists: &'static [&'static str],
+    /// The node kinds of a value that can name a function: a name, a member,
+    /// or a path. The walk reads no other value.
+    pub forms: &'static [&'static str],
+    /// A name at a position is always a variable, as in a language where a
+    /// variable and a method do not share names. Only a function value that
+    /// the variable holds is then a function.
+    pub variables: bool,
+}
+
+impl ValueSyntax {
+    /// Each node kind for which the walk reads values.
+    pub fn position_kinds(&self) -> Vec<&'static str> {
+        self.positions.iter().map(|rule| rule.0).collect()
+    }
+
+    /// Each node kind in the table. The grammar lint examines these kinds.
+    pub fn kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.position_kinds();
+        kinds.extend(self.lists);
+        kinds.extend(self.forms);
+        kinds
+    }
+
+    /// Adds each value at a position of `node` that has one of the forms.
+    pub fn values<'tree>(
+        &self,
+        calls: &CallSyntax,
+        node: Node<'tree>,
+        context: &Context<'_, 'tree>,
+        out: &mut Vec<ValueUse<'tree>>,
+    ) {
+        let mut add = |value: Node<'tree>| {
+            if !self.forms.contains(&value.kind()) {
+                return;
+            }
+            if let Some(callee) = calls.callee(value, context) {
+                out.push(ValueUse {
+                    receiver: calls.member_receiver_range(value),
+                    callee,
+                    node: value,
+                    name: None,
+                    variable: self.variables,
+                });
+            }
+        };
+        for (_, field) in self.positions.iter().filter(|rule| rule.0 == node.kind()) {
+            let mut cursor = node.walk();
+            let mut children: Vec<Node<'tree>> = Vec::new();
+            if field.is_empty() {
+                let mut more = cursor.goto_first_child();
+                while more {
+                    if cursor.node().is_named() && cursor.field_name().is_none() {
+                        children.push(cursor.node());
+                    }
+                    more = cursor.goto_next_sibling();
+                }
+            } else {
+                children.extend(node.children_by_field_name(field, &mut cursor));
+            }
+            for child in children {
+                if self.lists.contains(&child.kind()) {
+                    let mut cursor = child.walk();
+                    child.named_children(&mut cursor).for_each(&mut add);
+                } else {
+                    add(child);
+                }
+            }
+        }
+    }
+}
+
+/// A use of a name as a value. The resolver tells if the name is a function.
+#[derive(Debug, Clone)]
+pub struct ValueUse<'tree> {
+    pub callee: Callee<'tree>,
+    /// The expression of the value.
+    pub node: Node<'tree>,
+    /// The byte range of the receiver expression of a member.
+    pub receiver: Option<(usize, usize)>,
+    /// The name, when it is not the text of the name node, as the name in
+    /// the Ruby symbol `:name` is.
+    pub name: Option<String>,
+    /// The name is a variable. See `ValueSyntax::variables`.
+    pub variable: bool,
 }
 
 /// The callee without the type arguments after it. Rust `helper::<u8>` is a

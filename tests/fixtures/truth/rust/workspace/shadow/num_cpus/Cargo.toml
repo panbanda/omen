@@ -1,0 +1,4 @@
+[package]
+name = "num_cpus"
+version = "0.1.0"
+edition = "2021"

@@ -1,0 +1,11 @@
+[package]
+name = "tools"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/tools.rs"
+
+[[bin]]
+name = "tools-cli"
+path = "src/cli.rs"

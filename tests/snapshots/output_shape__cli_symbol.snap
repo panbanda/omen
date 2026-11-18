@@ -44,9 +44,9 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "qualified_name": "string"
     }
   ],
-  "candidates": [],
   "cognitive": "number",
   "cyclomatic": "number",
+  "declarations": [],
   "end_line": "number",
   "file": "string",
   "kind": "string",
