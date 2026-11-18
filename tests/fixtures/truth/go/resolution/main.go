@@ -14,7 +14,17 @@ func runLocal(source *local.Rand) int {
 	return source.Int()
 }
 
+type Context struct {
+	*local.Base
+	name string
+}
+
+func render(ctx *Context) string {
+	return ctx.JSON() + ctx.name
+}
+
 func main() {
 	runExternal(nil)
 	runLocal(nil)
+	render(&Context{})
 }

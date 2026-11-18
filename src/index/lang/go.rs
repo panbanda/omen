@@ -49,6 +49,9 @@ const SHORT_VAR_DECLARATION: &str = "short_var_declaration";
 const VAR_SPEC: &str = "var_spec";
 const IDENTIFIER: &str = "identifier";
 const TYPE_IDENTIFIER: &str = "type_identifier";
+const FIELD_DECLARATION: &str = "field_declaration";
+const QUALIFIED_TYPE: &str = "qualified_type";
+const GENERIC_TYPE: &str = "generic_type";
 
 const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new(
@@ -65,12 +68,9 @@ const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new(TYPE_SPEC, SymbolKind::TypeAlias, NameRule::Field("name")),
     DefinitionRule::new("type_alias", SymbolKind::TypeAlias, NameRule::Field("name")),
     DefinitionRule::new(FUNCTION_LITERAL, SymbolKind::Function, NameRule::Hook),
-    // A declaration with two or more names gives the first name only.
-    DefinitionRule::new(
-        "field_declaration",
-        SymbolKind::Field,
-        NameRule::Field("name"),
-    ),
+    // A declaration with two or more names gives the first name only. An
+    // embedded field has the name of its type.
+    DefinitionRule::new(FIELD_DECLARATION, SymbolKind::Field, NameRule::Hook),
 ];
 
 impl LanguageSpec for Go {
@@ -220,6 +220,9 @@ impl LanguageSpec for Go {
             VAR_SPEC,
             IDENTIFIER,
             TYPE_IDENTIFIER,
+            FIELD_DECLARATION,
+            QUALIFIED_TYPE,
+            GENERIC_TYPE,
         ]
     }
 
@@ -233,6 +236,11 @@ impl LanguageSpec for Go {
         node: Node<'tree>,
         context: &Context<'_, 'tree>,
     ) -> Option<Node<'tree>> {
+        if node.kind() == FIELD_DECLARATION {
+            return node
+                .child_by_field_name("name")
+                .or_else(|| embedded_type_name(node));
+        }
         let values = node
             .parent()
             .filter(|list| list.kind() == EXPRESSION_LIST)?;
@@ -274,7 +282,14 @@ impl LanguageSpec for Go {
             TYPE_SPEC => {
                 let definition = draft.node.child_by_field_name("type");
                 match definition.map(|definition| definition.kind()) {
-                    Some(STRUCT_TYPE) => draft.kind = SymbolKind::Struct,
+                    Some(STRUCT_TYPE) => {
+                        draft.kind = SymbolKind::Struct;
+                        // The methods of an embedded field are methods of the struct.
+                        draft.supertypes = definition
+                            .and_then(|structure| structure.named_child(0))
+                            .map(|fields| embedded_types(fields, context))
+                            .unwrap_or_default();
+                    }
                     Some(INTERFACE_TYPE) => draft.kind = SymbolKind::Interface,
                     // The type that a name is based on, for example a slice. A
                     // defined type has its own methods.
@@ -334,6 +349,37 @@ fn var_values(
             local.type_name.get_or_insert(literal);
         }
     }
+}
+
+/// The type name of an embedded field, as `Base` in `*web.Base` and in
+/// `Base[T]`. A field with a name gives `None`.
+fn embedded_type_name(field: Node<'_>) -> Option<Node<'_>> {
+    if field.child_by_field_name("name").is_some() {
+        return None;
+    }
+    let mut declared = field.child_by_field_name("type")?;
+    if declared.kind() == GENERIC_TYPE {
+        declared = declared.child_by_field_name("type")?;
+    }
+    match declared.kind() {
+        TYPE_IDENTIFIER => Some(declared),
+        QUALIFIED_TYPE => declared.child_by_field_name("name"),
+        _ => None,
+    }
+}
+
+/// The types of the embedded fields of a field list, as the source has them
+/// without `*`.
+fn embedded_types(fields: Node<'_>, context: &Context<'_, '_>) -> Vec<String> {
+    let mut cursor = fields.walk();
+    let found: Vec<String> = fields
+        .named_children(&mut cursor)
+        .filter(|field| field.kind() == FIELD_DECLARATION)
+        .filter(|field| embedded_type_name(*field).is_some())
+        .filter_map(|field| field.child_by_field_name("type"))
+        .map(|declared| context.text(declared))
+        .collect();
+    found
 }
 
 /// The type that a composite literal names: `Type{...}` or `&Type{...}`.
