@@ -869,7 +869,18 @@ impl<'a> Resolver<'a> {
                 frame.next = 0;
                 continue;
             }
-            returned = Some(std::mem::take(&mut frame.collected));
+            let mut collected = std::mem::take(&mut frame.collected);
+            // A TypeScript method of a parent class implements the method
+            // of an interface that the class names. The method of the
+            // interface has no body.
+            if self.family(frame.owner.0) == Family::Ecma
+                && collected
+                    .iter()
+                    .any(|id| self.symbol(*id).body_range.is_some())
+            {
+                collected.retain(|id| self.symbol(*id).body_range.is_some());
+            }
+            returned = Some(collected);
             stack.pop();
         }
     }
@@ -5015,5 +5026,29 @@ mod ecma_timing_tests {
     #[ignore = "timing: run in release"]
     fn timing_typescript_container_calls_resolve_in_linear_time() {
         assert_scales_linearly("container calls", 5_000, container_calls_at);
+    }
+}
+
+#[cfg(test)]
+mod ecma_interface_tests {
+    use super::testing::rows;
+
+    #[test]
+    fn test_member_of_a_parent_class_implements_the_member_of_an_interface_typescript() {
+        let types = "export interface Hooks {\n  read(name: string): string;\n}\n\nexport abstract class Base {\n  read(name: string): string {\n    return name;\n  }\n}\n\nexport class Hook extends Base implements Hooks {}\n";
+        let main = "import { Hook } from './types';\n\nexport function run(hook: Hook): string {\n  return hook.read('a');\n}\n";
+        for extension in ["ts", "tsx"] {
+            let types_file = format!("types.{extension}");
+            let main_file = format!("main.{extension}");
+            let files = [(types_file.as_str(), types), (main_file.as_str(), main)];
+            let found = rows(&files, &main_file);
+            assert_eq!(
+                found,
+                [
+                    format!("4 run>hook.read UniqueCandidate ReceiverDeclaredType [types.{extension}#Base.read]"),
+                ],
+                "{extension}"
+            );
+        }
     }
 }
