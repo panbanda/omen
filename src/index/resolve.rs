@@ -222,6 +222,8 @@ struct Resolver<'a> {
     ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// For each Go type, the Go structs that embed it.
     go_embedders: OnceLock<BTreeMap<Id, Vec<Id>>>,
+    /// For each Go type, the methods that it has itself.
+    go_methods: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// The results of `implementations`, by the interface and the method name.
     implementations_cache: RwLock<HashMap<MethodQuery, Arc<Vec<Id>>>>,
     /// The results of `types`, `package_files`, and `visible_files`. The
@@ -377,6 +379,7 @@ impl<'a> Resolver<'a> {
             references_by_start,
             ruby_children: OnceLock::new(),
             go_embedders: OnceLock::new(),
+            go_methods: OnceLock::new(),
             implementations_cache: RwLock::new(HashMap::new()),
             types_cache: RwLock::new(HashMap::new()),
             twin_members_cache: RwLock::new(HashMap::new()),
@@ -2336,17 +2339,15 @@ impl<'a> Resolver<'a> {
                 pending.extend(embedders.get(&owner).into_iter().flatten().copied());
             }
         }
+        let mut names = required.clone();
+        names.insert(name);
+        let promoted = self.promoted_go_methods(&owners, &names);
         let mut found: Vec<Id> = owners
-            .into_iter()
-            .filter(|owner| self.symbol(*owner).kind != SymbolKind::Interface)
-            .filter(|owner| {
-                required.iter().all(|method| {
-                    !self
-                        .members(*owner, method, 0, &mut BTreeSet::new())
-                        .is_empty()
-                })
-            })
-            .flat_map(|owner| self.members(owner, name, 0, &mut BTreeSet::new()))
+            .iter()
+            .filter(|owner| self.symbol(**owner).kind != SymbolKind::Interface)
+            .filter_map(|owner| promoted.get(owner))
+            .filter(|methods| required.iter().all(|method| methods.contains_key(*method)))
+            .flat_map(|methods| methods.get(name).into_iter().flatten().copied())
             .collect();
         found.sort();
         found.dedup();
@@ -2382,6 +2383,93 @@ impl<'a> Resolver<'a> {
             pending.extend(self.parents(current));
         }
         names
+    }
+
+    /// For each type of `owners`, the methods with a name of `names` that the
+    /// type has: its own method of the name, or else the methods of the name
+    /// that its embedded types have. This is the result of `members`, but
+    /// each type is visited one time, thus a long chain of embedded types
+    /// costs linear time.
+    fn promoted_go_methods(
+        &self,
+        owners: &BTreeSet<Id>,
+        names: &BTreeSet<&str>,
+    ) -> HashMap<Id, BTreeMap<String, Vec<Id>>> {
+        let methods = self.go_methods.get_or_init(|| self.methods_of_go_types());
+        let mut promoted: HashMap<Id, BTreeMap<String, Vec<Id>>> = HashMap::new();
+        let mut active = BTreeSet::new();
+        for start in owners {
+            let mut stack = vec![(*start, false)];
+            while let Some((current, expanded)) = stack.pop() {
+                if promoted.contains_key(&current) {
+                    continue;
+                }
+                let parents = self.parents(current);
+                if !expanded {
+                    // A type that is active is on the current path, as in a
+                    // cycle of embedded pointers. It adds no method.
+                    if active.insert(current) {
+                        stack.push((current, true));
+                        stack.extend(parents.into_iter().map(|parent| (parent, false)));
+                    }
+                    continue;
+                }
+                let mut own: BTreeMap<String, Vec<Id>> = BTreeMap::new();
+                for method in methods.get(&current).into_iter().flatten() {
+                    let method_name = self.symbol(*method).name.as_str();
+                    if names.contains(method_name) {
+                        own.entry(method_name.to_string())
+                            .or_default()
+                            .push(*method);
+                    }
+                }
+                let mut found: BTreeMap<String, Vec<Id>> = own
+                    .into_iter()
+                    .map(|(method_name, list)| (method_name, self.preferred(list, 0)))
+                    .collect();
+                let mut inherited: BTreeMap<String, Vec<Id>> = BTreeMap::new();
+                for parent in &parents {
+                    for (method_name, list) in promoted.get(parent).into_iter().flatten() {
+                        if !found.contains_key(method_name) {
+                            inherited
+                                .entry(method_name.clone())
+                                .or_default()
+                                .extend(list.iter().copied());
+                        }
+                    }
+                }
+                for (method_name, mut list) in inherited {
+                    list.sort();
+                    list.dedup();
+                    found.insert(method_name, list);
+                }
+                active.remove(&current);
+                promoted.insert(current, found);
+            }
+        }
+        promoted
+    }
+
+    /// For each Go type, the methods that it has itself.
+    fn methods_of_go_types(&self) -> BTreeMap<Id, Vec<Id>> {
+        let mut methods: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
+        for (file, facts) in self.files.iter().enumerate() {
+            if self.family(file) != Family::Go {
+                continue;
+            }
+            for (position, symbol) in facts.symbols.iter().enumerate() {
+                if !is_callable(symbol) || symbol.receiver_type.is_none() {
+                    continue;
+                }
+                let Some(container) = symbol.container.as_deref() else {
+                    continue;
+                };
+                if let [owner] = self.types(container, None, file).as_slice() {
+                    methods.entry(*owner).or_default().push((file, position));
+                }
+            }
+        }
+        methods
     }
 
     /// For each Go type, the Go structs that embed it.

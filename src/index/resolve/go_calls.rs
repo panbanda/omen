@@ -159,6 +159,27 @@ fn test_interface_call_offers_the_implementations() {
     );
 }
 
+/// Two structs that embed a pointer to each other are a cycle. The search for
+/// the methods of an implementation stops at the cycle.
+#[test]
+fn test_interface_call_with_a_cycle_of_embedded_pointers() {
+    let files = [
+        ("go.mod", "module example.com/shop\n"),
+        (
+            "storage/storage.go",
+            "package storage\n\ntype Store interface {\n\tSave() error\n}\n\ntype Left struct{ *Right }\n\ntype Right struct{ *Left }\n\nfunc (r *Right) Save() error { return nil }\n",
+        ),
+        (
+            "main.go",
+            "package main\n\nimport \"example.com/shop/storage\"\n\nfunc run(store storage.Store) {\n\t_ = store.Save()\n}\n",
+        ),
+    ];
+    assert_eq!(
+        rows(&files, "main.go"),
+        ["6 run>store.Save Ambiguous Implementation [storage/storage.go#Right.Save, storage/storage.go#Store.Save]"]
+    );
+}
+
 /// A local name that an assignment gives a new value keeps the type of its
 /// declaration. A Go assignment cannot change the type of a variable.
 #[test]
@@ -186,4 +207,56 @@ fn test_reassigned_local_keeps_its_declared_type() {
         rows_of(&files, "main.go", "GetCommit"),
         ["15 diff>gitRepo.GetCommit UniqueCandidate ReceiverDeclaredType [git/repo.go#Repository.GetCommit]"]
     );
+}
+
+/// The resolution time of `calls` calls through an interface that `types`
+/// types implement. Each type embeds the type before it, thus a chain of
+/// `types` embedded types promotes the methods of the first type.
+fn interface_calls_resolve_at(types: usize, calls: usize, chain: bool) -> std::time::Duration {
+    let mut storage = String::from(
+        "package storage\n\ntype Store interface {\n\tSave() error\n\tClose() error\n}\n",
+    );
+    for position in 0..types {
+        if chain && position > 0 {
+            storage.push_str(&format!(
+                "\ntype T{position} struct{{ *T{} }}\n",
+                position - 1
+            ));
+        } else {
+            storage.push_str(&format!(
+                "\ntype T{position} struct{{}}\n\nfunc (t *T{position}) Save() error {{ return nil }}\n\nfunc (t *T{position}) Close() error {{ return nil }}\n"
+            ));
+        }
+    }
+    let mut main = String::from("package main\n\nimport \"example.com/shop/storage\"\n");
+    for position in 0..calls {
+        main.push_str(&format!(
+            "\nfunc run{position}(store storage.Store) {{\n\t_ = store.Save()\n}}\n"
+        ));
+    }
+    let files = [
+        ("go.mod", "module example.com/shop\n"),
+        ("storage/storage.go", storage.as_str()),
+        ("main.go", main.as_str()),
+    ];
+    let started = std::time::Instant::now();
+    let found = rows(&files, "main.go");
+    let elapsed = started.elapsed();
+    assert_eq!(found.len(), calls);
+    elapsed
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_interface_calls_resolve_in_linear_time() {
+    use super::function_references::assert_scales_linearly;
+    assert_scales_linearly("calls", 8_000, |size| {
+        interface_calls_resolve_at(10, size, false)
+    });
+    assert_scales_linearly("types", 8_000, |size| {
+        interface_calls_resolve_at(size, 10, false)
+    });
+    assert_scales_linearly("embedded chain", 8_000, |size| {
+        interface_calls_resolve_at(size, 10, true)
+    });
 }
