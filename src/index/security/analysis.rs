@@ -899,6 +899,64 @@ mod tests {
         );
     }
 
+    /// `depth` nested inline handlers that close at one byte, and `depth` bytes after it that
+    /// only the outermost handler contains.
+    fn innermost_after_a_deep_nest(depth: usize) -> std::time::Duration {
+        use crate::index::model::Span;
+        use crate::index::security::entry::{EntryBasis, EntryKind, InlineHandler};
+        let entries: Vec<EntryPoint> = (0..depth)
+            .map(|level| {
+                let end = if level == 0 { 3 * depth } else { depth + 1 };
+                let range = Span {
+                    start_byte: level,
+                    end_byte: end,
+                    start_line: 1,
+                    start_column: 0,
+                    end_line: 1,
+                    end_column: 0,
+                };
+                EntryPoint {
+                    key: format!("a.ts:{level}"),
+                    file: "a.ts".to_string(),
+                    kind: EntryKind::HttpHandler,
+                    range,
+                    symbol: None,
+                    framework: "express".to_string(),
+                    route: None,
+                    guards: Vec::new(),
+                    basis: EntryBasis::Registered,
+                    in_test: false,
+                    inline_handler: Some(InlineHandler {
+                        range,
+                        enclosing: None,
+                    }),
+                }
+            })
+            .collect();
+        let regions = InlineRegions::new(&entries, |position, _| Some(position));
+        let start = std::time::Instant::now();
+        for byte in depth + 1..2 * depth + 1 {
+            assert_eq!(regions.innermost("a.ts", None, byte), Some(0));
+        }
+        assert_eq!(regions.innermost("a.ts", None, depth), Some(depth - 1));
+        start.elapsed()
+    }
+
+    #[test]
+    fn a_byte_after_a_nest_belongs_to_the_handler_around_the_nest() {
+        innermost_after_a_deep_nest(10);
+    }
+
+    #[test]
+    #[ignore = "timing test: run in release with --ignored"]
+    fn timing_bytes_after_a_deep_nest_of_inline_handlers_resolve_in_linear_time() {
+        super::super::entry::tests::assert_scales_linearly(
+            "bytes after a nest",
+            20_000,
+            innermost_after_a_deep_nest,
+        );
+    }
+
     #[test]
     #[ignore = "timing test: run in release with --ignored"]
     fn timing_inline_handlers_resolve_in_linear_time() {

@@ -344,11 +344,21 @@ struct Region {
     value: usize,
 }
 
+/// The regions of one file and one symbol around them, in the order of their start. Two regions
+/// of one syntax tree are nested or apart.
+#[derive(Default)]
+struct Place {
+    regions: Vec<Region>,
+    /// From each boundary of a region to the next one, the value of the innermost region, in the
+    /// order of the boundaries. A search of a byte is then one binary search, also below a deep
+    /// nest of regions.
+    segments: Vec<(usize, Option<usize>)>,
+}
+
 /// The inline handlers of the entry points, by the file and the symbol around them, each with a
-/// value that the caller gives. The regions of one key are in the order of their start. Two
-/// regions of one syntax tree are nested or apart.
+/// value that the caller gives.
 pub(super) struct InlineRegions<'e> {
-    by_place: BTreeMap<(&'e str, Option<&'e str>), Vec<Region>>,
+    by_place: BTreeMap<(&'e str, Option<&'e str>), Place>,
 }
 
 impl<'e> InlineRegions<'e> {
@@ -358,7 +368,7 @@ impl<'e> InlineRegions<'e> {
         entries: &'e [EntryPoint],
         value_of: impl Fn(usize, &EntryPoint) -> Option<usize>,
     ) -> Self {
-        let mut by_place: BTreeMap<(&'e str, Option<&'e str>), Vec<Region>> = BTreeMap::new();
+        let mut by_place: BTreeMap<(&'e str, Option<&'e str>), Place> = BTreeMap::new();
         for (index, entry) in entries.iter().enumerate() {
             let (Some(inline), Some(value)) =
                 (entry.inline_handler.as_ref(), value_of(index, entry))
@@ -368,6 +378,7 @@ impl<'e> InlineRegions<'e> {
             by_place
                 .entry((entry.file.as_str(), inline.enclosing.as_deref()))
                 .or_default()
+                .regions
                 .push(Region {
                     start: inline.range.start_byte,
                     end: inline.range.end_byte,
@@ -375,19 +386,28 @@ impl<'e> InlineRegions<'e> {
                     value,
                 });
         }
-        for regions in by_place.values_mut() {
+        for place in by_place.values_mut() {
+            let Place { regions, segments } = place;
             regions.sort_by_key(|region| (region.start, std::cmp::Reverse(region.end)));
             regions.dedup_by_key(|region| (region.start, region.end));
             let mut open: Vec<usize> = Vec::new();
             for index in 0..regions.len() {
-                while open
+                while let Some(last) = open
                     .last()
-                    .is_some_and(|last| regions[*last].end <= regions[index].start)
+                    .copied()
+                    .filter(|last| regions[*last].end <= regions[index].start)
                 {
                     open.pop();
+                    let around = open.last().map(|outer| regions[*outer].value);
+                    segments.push((regions[last].end, around));
                 }
                 regions[index].parent = open.last().copied();
                 open.push(index);
+                segments.push((regions[index].start, Some(regions[index].value)));
+            }
+            while let Some(last) = open.pop() {
+                let around = open.last().map(|outer| regions[*outer].value);
+                segments.push((regions[last].end, around));
             }
         }
         Self { by_place }
@@ -400,17 +420,9 @@ impl<'e> InlineRegions<'e> {
         enclosing: Option<&str>,
         byte: usize,
     ) -> Option<usize> {
-        let regions = self.by_place.get(&(file, enclosing))?;
-        let after = regions.partition_point(|region| region.start <= byte);
-        let mut current = after.checked_sub(1);
-        while let Some(index) = current {
-            let region = &regions[index];
-            if byte < region.end {
-                return Some(region.value);
-            }
-            current = region.parent;
-        }
-        None
+        let segments = &self.by_place.get(&(file, enclosing))?.segments;
+        let after = segments.partition_point(|(boundary, _)| *boundary <= byte);
+        segments[after.checked_sub(1)?].1
     }
 
     /// The value of the inline handler that directly contains the inline handler with the range.
@@ -420,7 +432,7 @@ impl<'e> InlineRegions<'e> {
         enclosing: Option<&str>,
         range: &Span,
     ) -> Option<usize> {
-        let regions = self.by_place.get(&(file, enclosing))?;
+        let regions = &self.by_place.get(&(file, enclosing))?.regions;
         let key = (range.start_byte, std::cmp::Reverse(range.end_byte));
         let index = regions
             .binary_search_by_key(&key, |region| (region.start, std::cmp::Reverse(region.end)))
