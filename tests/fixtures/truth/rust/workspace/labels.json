@@ -18,7 +18,7 @@
     {"label": "cli_main_other", "category": "cfg_twin", "file": "crates/tools/src/cli.rs", "name": "main", "kind": "function", "container": null, "start_line": 8, "end_line": 8, "exported": false},
     {"label": "kit_draw", "category": "free_function", "file": "crates/render-kit/src/lib.rs", "name": "draw", "kind": "function", "container": null, "start_line": 1, "end_line": 3, "exported": true},
     {"label": "kit_init", "category": "free_function", "file": "crates/render-kit/src/lib.rs", "name": "init", "kind": "function", "container": null, "start_line": 5, "end_line": 7, "exported": true},
-    {"label": "vendor_get", "category": "free_function", "file": "vendor/num_cpus/src/lib.rs", "name": "get", "kind": "function", "container": null, "start_line": 1, "end_line": 3, "exported": true},
+    {"label": "shadow_get", "category": "free_function", "file": "shadow/num_cpus/src/lib.rs", "name": "get", "kind": "function", "container": null, "start_line": 1, "end_line": 3, "exported": true},
     {"label": "perform_update", "category": "free_function", "file": "crates/app/src/updater.rs", "name": "perform_update", "kind": "function", "container": null, "start_line": 1, "end_line": 3, "exported": true},
     {"label": "app_run", "category": "free_function", "file": "crates/app/src/lib.rs", "name": "run", "kind": "function", "container": null, "start_line": 6, "end_line": 8, "exported": true},
     {"label": "helper_update", "category": "inline_module", "file": "crates/app/src/lib.rs", "name": "update", "kind": "function", "container": "helper", "start_line": 13, "end_line": 15, "exported": true},
