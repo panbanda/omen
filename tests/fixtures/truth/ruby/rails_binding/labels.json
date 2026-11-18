@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "language": "ruby",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Ruby. The case needs the Rails framework that it does not include. The harness does not run the code. The labels follow the source of the mapper of Rails 7.2.2. The case has the forms that the routes of a large application use: a scope with a nil path, a constraint object, a loop over a literal list, a helper that the draw block disables, a redirect, and an engine with one mount. The loop over `FILTERS`, the `patch` call, and the routes of the engine with two mounts give no entry.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "scope_nil_path", "file": "config/routes.rb", "line": 6, "kind": "http_handler", "framework": "rails", "method": "POST", "path": "/webhooks/aws", "parameters": [], "guards": ["check_signature"]},
+    {"label": "redirect", "file": "config/routes.rb", "line": 7, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/old", "parameters": [], "guards": []},
+    {"label": "namespace_constraint", "file": "config/routes.rb", "line": 9, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/admin/users", "parameters": [], "guards": ["StaffConstraint.new", "require_login", "ensure_admin"]},
+    {"label": "namespace_resources_show", "file": "config/routes.rb", "line": 10, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/admin/users/:id", "parameters": ["id"], "guards": ["StaffConstraint.new", "require_login", "ensure_admin"]},
+    {"label": "resources_update_without_patch", "file": "config/routes.rb", "line": 10, "kind": "http_handler", "framework": "rails", "method": "PUT", "path": "/admin/users/:id", "parameters": ["id"], "guards": ["StaffConstraint.new", "require_login", "ensure_admin"]},
+    {"label": "route_constraint", "file": "config/routes.rb", "line": 11, "kind": "http_handler", "framework": "rails", "method": "DELETE", "path": "/admin/users/:id", "parameters": ["id"], "guards": ["StaffConstraint.new", "AdminConstraint.new", "require_login", "ensure_admin"]},
+    {"label": "loop_users", "file": "config/routes.rb", "line": 14, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/users/:username", "parameters": ["username"], "guards": ["require_login"]},
+    {"label": "loop_u", "file": "config/routes.rb", "line": 14, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/u/:username", "parameters": ["username"], "guards": ["require_login"]},
+    {"label": "match_shorthand", "file": "config/routes.rb", "line": 19, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/session/current", "parameters": [], "guards": ["require_login"]},
+    {"label": "engine_get", "file": "plugins/blog/config/routes.rb", "line": 2, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/blog/posts", "parameters": [], "guards": ["BlogConstraint.new", "require_login", "ensure_blog"]},
+    {"label": "engine_update_patch", "file": "plugins/blog/config/routes.rb", "line": 3, "kind": "http_handler", "framework": "rails", "method": "PATCH", "path": "/blog/posts/:id", "parameters": ["id"], "guards": ["BlogConstraint.new", "require_login", "ensure_blog"]},
+    {"label": "engine_update_put", "file": "plugins/blog/config/routes.rb", "line": 3, "kind": "http_handler", "framework": "rails", "method": "PUT", "path": "/blog/posts/:id", "parameters": ["id"], "guards": ["BlogConstraint.new", "require_login", "ensure_blog"]}
+  ]
+}

@@ -529,6 +529,8 @@ struct Context<'a> {
     rails_handled: std::cell::RefCell<std::collections::HashMap<rails::HandlerKey, rails::Handler>>,
     /// Tells for a chain of modules and a controller if the repository has the class.
     rails_known: std::cell::RefCell<std::collections::HashMap<(usize, rails::ControllerKey), bool>>,
+    /// The names that a Rails routes file assigns a value to.
+    rails_assigned: std::sync::OnceLock<std::collections::HashSet<String>>,
     /// The position of the first symbol of the file for each start of a name.
     symbol_starts: std::sync::OnceLock<std::collections::HashMap<usize, usize>>,
     /// The positions of the functions, the methods, and the constructors of the file, by name.
@@ -588,6 +590,7 @@ impl<'a> Context<'a> {
             rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_handled: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_known: std::cell::RefCell::new(std::collections::HashMap::new()),
+            rails_assigned: std::sync::OnceLock::new(),
             symbol_starts: std::sync::OnceLock::new(),
             callables_here: std::sync::OnceLock::new(),
             go_locals: std::sync::OnceLock::new(),
@@ -894,30 +897,65 @@ impl<'a> Context<'a> {
     /// so no node asks for its ancestors. A node with no readable scope has no readable descendant,
     /// and the visit does not enter it.
     fn walk(&self, root: Node<'_>, out: &mut Vec<Draft>) {
-        let routes_file =
-            self.file.language == Language::Ruby && self.file.file.ends_with("routes.rb");
-        let mut stack: Vec<(
-            Node<'_>,
-            Option<Node<'_>>,
-            Option<std::rc::Rc<rails::Scope>>,
-        )> = vec![(root, None, routes_file.then(rails::root_scope))];
-        while let Some((node, parent, outer)) = stack.pop() {
-            let scope = if routes_file {
-                match outer.and_then(|outer| self.scope_inside(node, parent, outer)) {
-                    Some(scope) => Some(scope),
-                    None => continue,
-                }
-            } else {
-                None
-            };
-            self.visit(node, scope.as_ref(), out);
+        if self.file.language == Language::Ruby && self.file.file.ends_with("routes.rb") {
+            self.walk_scoped(
+                root,
+                None,
+                rails::root_scope(),
+                false,
+                &mut |node, scope| self.visit(node, Some(scope), out),
+            );
+            return;
+        }
+        let mut stack: Vec<Node<'_>> = vec![root];
+        while let Some(node) = stack.pop() {
+            self.visit(node, None, out);
             let mut cursor = node.walk();
             let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
+            stack.extend(children.into_iter().rev());
+        }
+    }
+
+    /// Visits the nodes of Rails routes from `start` in source order, each with its scope. The
+    /// block of a loop over a literal list is visited one time for each item. `entered` tells that
+    /// `scope` is the scope of `start`, and not of its parent.
+    fn walk_scoped<'t>(
+        &self,
+        start: Node<'t>,
+        parent: Option<Node<'t>>,
+        scope: std::rc::Rc<rails::Scope>,
+        entered: bool,
+        visit: &mut dyn FnMut(Node<'t>, &std::rc::Rc<rails::Scope>),
+    ) {
+        // The flag tells that the scope is the scope of the node, and not of its parent.
+        let mut stack: Vec<(Node<'t>, Option<Node<'t>>, std::rc::Rc<rails::Scope>, bool)> =
+            vec![(start, parent, scope, entered)];
+        while let Some((node, parent, outer, entered)) = stack.pop() {
+            let scope = if entered {
+                outer
+            } else {
+                match self.scope_inside(node, parent, outer) {
+                    rails::Entered::One(scope) => scope,
+                    rails::Entered::Each(scopes) => {
+                        stack.extend(
+                            scopes
+                                .into_iter()
+                                .rev()
+                                .map(|scope| (node, parent, scope, true)),
+                        );
+                        continue;
+                    }
+                    rails::Entered::No => continue,
+                }
+            };
+            visit(node, &scope);
+            let mut cursor = node.walk();
+            let children: Vec<Node<'t>> = node.children(&mut cursor).collect();
             stack.extend(
                 children
                     .into_iter()
                     .rev()
-                    .map(|child| (child, Some(node), scope.clone())),
+                    .map(|child| (child, Some(node), scope.clone(), false)),
             );
         }
     }
@@ -7511,7 +7549,7 @@ func routes() {
         );
         assert_eq!(found[0].guards, ["lower"]);
         let real = "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  inflect.acronym \"API\"\nend\n";
-        let shadow = "module ActiveSupport\n  module Inflector\n  end\nend\n";
+        let shadow = "module ActiveSupport\n  module Inflector\n    def self.inflections\n      yield Object.new\n    end\n  end\nend\n";
         let found = rails_routes(
             routes,
             &[
@@ -9176,7 +9214,7 @@ func routes() {
 
     #[test]
     fn routes_that_omen_cannot_read_exactly_are_skipped() {
-        let routes = "Rails.application.routes.draw do\n  name = \"dynamic\"\n  get \"/#{name}\", to: \"a#b\"\n  %w[a b].each do |part|\n    get \"/#{part}\", to: \"a#b\"\n  end\n  [:c].each do |part|\n    resources part\n  end\n  concern :commentable do\n    get \"/comments\", to: \"comments#index\"\n  end\n  resources :things, concerns: :commentable, only: [:index]\n  draw(:admin)\n  mount Sidekiq::Web => \"/sidekiq\"\n  resources :users, only: only_actions\n  resources :slugs, param: :slug\n  resources name\n  get \"/kept\", to: \"a#b\"\nend\n";
+        let routes = "Rails.application.routes.draw do\n  name = \"dynamic\"\n  get \"/#{name}\", to: \"a#b\"\n  PARTS.each do |part|\n    get \"/#{part}\", to: \"a#b\"\n  end\n  [:c, other].each do |part|\n    resources part\n  end\n  concern :commentable do\n    get \"/comments\", to: \"comments#index\"\n  end\n  resources :things, concerns: :commentable, only: [:index]\n  draw(:admin)\n  mount Sidekiq::Web => \"/sidekiq\"\n  resources :users, only: only_actions\n  resources :slugs, param: :slug\n  resources name\n  get \"/kept\", to: \"a#b\"\nend\n";
         let found = rails_routes(routes, &[]);
         assert_eq!(
             verbs_and_paths(&found),

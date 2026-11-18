@@ -16,6 +16,8 @@
     {"label": "api_status", "file": "config/routes.rb", "line": 13, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/api/status", "parameters": [], "guards": []},
     {"label": "hook_get", "file": "config/routes.rb", "line": 15, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/hook", "parameters": [], "guards": []},
     {"label": "hook_post", "file": "config/routes.rb", "line": 15, "kind": "http_handler", "framework": "rails", "method": "POST", "path": "/hook", "parameters": [], "guards": []},
-    {"label": "legacy", "file": "config/routes.rb", "line": 16, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/legacy", "parameters": [], "guards": ["require_login"]}
+    {"label": "legacy", "file": "config/routes.rb", "line": 16, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/legacy", "parameters": [], "guards": ["require_login"]},
+    {"label": "loop_a", "file": "config/routes.rb", "line": 19, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/a", "parameters": [], "guards": []},
+    {"label": "loop_b", "file": "config/routes.rb", "line": 19, "kind": "http_handler", "framework": "rails", "method": "GET", "path": "/b", "parameters": [], "guards": []}
   ]
 }
