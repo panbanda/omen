@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "language": "tsx",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid TSX. The imports need packages that the case does not include, and `Button` has no import on purpose. `cleanup` is a declared constant of `app.tsx`, and `app.tsx` does not import `other.tsx`. The harness does not run the code.",
+  "closed_world": false,
+  "references": [
+    {
+      "label": "attribute_value_by_name",
+      "user": "app.tsx#page",
+      "line": 17,
+      "name": "audit",
+      "expected": ["app.tsx#audit"]
+    },
+    {
+      "label": "nested_function_as_attribute_value",
+      "user": "app.tsx#page",
+      "line": 17,
+      "name": "handleClick",
+      "expected": ["app.tsx#page.handleClick"]
+    },
+    {
+      "label": "shadowed_name",
+      "user": "app.tsx#shadowed",
+      "line": 22,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "same_name_in_file_without_import",
+      "user": "app.tsx#otherFile",
+      "line": 26,
+      "name": "cleanup",
+      "expected": []
+    },
+    {
+      "label": "name_in_comment",
+      "user": "app.tsx#textOnly",
+      "line": 30,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "name_in_string",
+      "user": "app.tsx#textOnly",
+      "line": 31,
+      "name": "audit",
+      "expected": []
+    }
+  ],
+  "paths": [
+    {
+      "label": "handler_to_nested_callback",
+      "entry_file": "app.tsx",
+      "entry_line": 34,
+      "sink_file": "app.tsx",
+      "sink_line": 15,
+      "steps": ["app.tsx#page", "app.tsx#page.handleClick"],
+      "weakest_basis": "lexical_scope",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "handler_to_callback",
+      "entry_file": "app.tsx",
+      "entry_line": 34,
+      "sink_file": "app.tsx",
+      "sink_line": 10,
+      "steps": ["app.tsx#page", "app.tsx#audit"],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "shadowed_name_has_no_path",
+      "entry_file": "app.tsx",
+      "entry_line": 35,
+      "sink_file": "app.tsx",
+      "sink_line": 10,
+      "flagged": false
+    },
+    {
+      "label": "file_without_import_has_no_path",
+      "entry_file": "app.tsx",
+      "entry_line": 36,
+      "sink_file": "other.tsx",
+      "sink_line": 4,
+      "flagged": false
+    },
+    {
+      "label": "text_has_no_path",
+      "entry_file": "app.tsx",
+      "entry_line": 37,
+      "sink_file": "app.tsx",
+      "sink_line": 10,
+      "flagged": false
+    }
+  ]
+}

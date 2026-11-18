@@ -4,10 +4,10 @@ The command `omen security` finds three things: the sinks (the calls and the
 constructs that can cause harm), the entry points (the places where outside input
 enters the code), and the paths from an entry point to a sink.
 
-Omen does not follow data. A path says that a call chain exists. It does not say
-that input reaches the sink. A sink with no known entry point is not safe: it means
-that no entry point that omen knows reaches it through a call that the index
-resolves. Each result carries a coverage statement that says what omen recognises.
+Omen does not follow data. A path says that a chain of calls and function references
+exists. It does not say that input reaches the sink. A sink with no known entry point
+is not safe: it means that no entry point that omen knows reaches it through a call
+or a function reference that the index resolves. Each result carries a coverage statement that says what omen recognises.
 An empty result does not mean that the code is safe.
 
 ## Commands
@@ -79,6 +79,80 @@ The gate (`--gate`) compares the branch with its base and counts the sinks that 
 change adds. You can add sinks and entry points for your own wrappers and
 frameworks with `[[security.sinks]]` and `[[security.entry_points]]`. See
 `omen.example.toml`.
+
+## Function references
+
+A function can run although no call names it. A handler can give a function to
+a scheduler, a thread, or a framework, and that code calls the function later:
+
+```python
+@router.post("/test")
+async def test_code(request):
+    def load_module():
+        exec(request.code)
+
+    await call_off_loop(load_module, 5)
+```
+
+No call of `load_module` is in the source. Thus the index also records a function
+reference: a use of a function as a value. A function reference is not a call. It
+says that the symbol with the use can cause the function to run. It does not say
+that the symbol calls the function, and it does not say when the function runs.
+
+The value positions are an argument, the value of a named argument, the right
+side of an assignment, a returned value, and an element of a collection. The
+resolution rules of a call give the function: the lexical scope first, and then
+the other bases. A local value that has the name hides the function. An
+ambiguous name gives no edge. A class, a constructor, and a name in a string or
+in a comment are not function references.
+
+A name at a value position is a variable or a field much more frequently than it
+is a function. Thus a function reference needs more evidence than a call. The
+name alone is no evidence: a function reference never has the basis `name_only`,
+also with `--min-basis name_only`. A member `value.name` is a function reference
+only when the type of `value` is known.
+
+A path follows calls and function references. In the JSON output, a step that
+comes from a function reference has `"edge": "function_reference"`. A step that
+comes from a call has no field `edge`. `basis` is the basis of the resolution of
+the name for the two kinds, and `--min-basis` applies to the two kinds. A path
+has the field `function_references` when one or more of its steps are function
+references. The value is the number of such steps. When a call and a function
+reference go to a symbol in the same number of steps, the path shows the call.
+The Mermaid diagram has a dotted arrow for a function reference. The diagram of a
+pull request comment has the same arrow for the two kinds.
+
+A function that registers a handler has a function reference to the handler. Thus
+a `main` function that registers routes has a path to each sink that a handler
+reaches, in addition to the path from the route.
+
+An anonymous function is a part of the function that contains it. A sink in a
+lambda, a closure, or a block has the enclosing function as its symbol. A function
+value that a local name holds is a symbol of its own, and the use of the local
+name is a function reference to it.
+
+| Language | Forms that give a function reference | Forms that give none |
+| --- | --- | --- |
+| Python | `name`, `self.name`, `module.name` at a value position | A class. A name in `getattr`. |
+| JavaScript, TypeScript, JSX, TSX | `name`, `this.name`, `object.name` at a value position. `{ name }`. The value of a JSX attribute, as `onClick={name}`. | `name as Type`, `name!`. A JSX expression that is a child of an element. |
+| Go | `name`, `value.Method`, `package.Name` at a value position | The key of a composite literal. |
+| Rust | `name`, `module::name`, `Type::name`, `name::<T>` at a value position, and as the last expression of a block | A name in the tokens of a macro. A tuple struct or an enum variant as a function. |
+| Java | `Type::name`, `Type::<T>name`, `this::name`, `super::name`, `value::name`. A local name that holds a lambda. | `Type::new`. A method with more than one overload. |
+| C# | A method group: `Name`, `this.Name`, `Type.Name` at a value position. A local function. | A method with more than one overload. |
+| C | `name` and `&name` at a value position, and in an initializer | A member `value.name`. A name that a macro makes. |
+| C++ | The forms of C, and `&Type::name`, `scope::name` | `std::thread worker(name);`, which the grammar reads as a declaration of a function. |
+| Ruby | `method(:name)`, `value.method(:name)`. A local name that holds a lambda or a proc. | `&:name`, which calls `name` on an element of an unknown type. A symbol that a framework reads, as `before_action :name`. |
+| PHP | `[$this, 'name']`, `[Type::class, 'name']`. A variable that holds a function value. | A string alone, as `'name'`. |
+| Bash | The first operand of `trap`, when it is one name, with or without quotation marks | A name that a different command gets as an argument, as `xargs name`. |
+
+The PHP syntax `name(...)` makes a function value from a function. The index
+reads it as a call of `name`, as it did before the function references. Thus a
+path through it has a call edge.
+
+The commands `symbol`, `impact`, and `repomap` use only calls. Their lists of
+callers and callees do not have the function references. The command `deadcode`
+uses a function reference as it uses a call: a function that a live definition
+uses as a value is not dead.
 
 ## Pull requests and reports
 
@@ -234,9 +308,118 @@ branch has no effect. A call in any other `if`, `case`, loop, method, or block, 
 `inflections`, makes the inflections unreadable. If an `acronym` argument is not a string, or the
 files call `clear`, omen does not know the class names. Then no route has a symbol or a guard.
 
+## Python routes
+
+Omen reads the routes of FastAPI, Flask, and Django.
+
+| Framework | Entry point | Guards | Parameters |
+| --- | --- | --- | --- |
+| FastAPI | A decorator `get`, `post`, `put`, `patch`, `delete`, `head`, or `options` on a `FastAPI` value or an `APIRouter` value | The known decorators below the route decorator, then the declared dependencies | The parameters of the path, then the request parameters of the handler |
+| Flask | A decorator `route`, or one of the verbs, on a `Flask` value or a `Blueprint` value | The known decorators below the route decorator | The parameters of the path |
+| Django | A call of `path`, `re_path`, or `url` with a view that is one function of the repository | The known decorators of the view function | The parameters of the path |
+
+The known decorators are `login_required`, `permission_required`, `user_passes_test`,
+`jwt_required`, `token_required`, `auth_required`, `requires_auth`, `roles_required`, and
+`roles_accepted`. Omen compares the last part of the name of the decorator.
+
+### FastAPI dependencies
+
+A guard of a FastAPI route is a declared dependency: the name `f` in `Depends(f)` or in
+`Security(f)`. A guard is a declared fact. It does not mean that the handler is authenticated.
+A dependency such as `Depends(get_db)` opens a database session, and omen lists `get_db` as it
+lists `verify_key`. Omen does not know what a dependency does. The other frameworks have the
+same rule: omen lists each `before_action` callback of Rails and each middleware of Express,
+chi, echo, and gin.
+
+Omen gives the guards in the order in which FastAPI adds the declared dependencies to the route.
+`APIRouter.add_api_route` and `APIRouter.include_router` give this order. It is an order of
+declarations. It is not the order in which the functions run: FastAPI runs a dependency of a
+dependency first, and omen does not read the dependencies of a dependency. The order is:
+
+1. The dependencies of the routers around the router, from the outer router to the inner one.
+   For each `include_router` call, the dependencies of the router that gets the routes come
+   before the dependencies of the call.
+2. The dependencies of the router of the route.
+3. The dependencies of the route decorator.
+4. The dependencies in the parameters of the handler, in the order of the signature.
+
+A name occurs one time in the list, at its first place.
+
+| Form | Result |
+| --- | --- |
+| `dependencies=[Depends(f), Security(g, scopes=["a"])]` on the route decorator | Read. The guards are `f` and `g`. Omen does not report the scopes. |
+| `dependencies=(Depends(f),)` | Read. The value can be a literal list or a literal tuple. |
+| `dependencies=NAME`, or any other value that is not a literal | No guard. |
+| An item of the list that is not a `Depends` call or a `Security` call, as `NAME` or `*NAMES` | The item gives no guard. The other items stay. |
+| `APIRouter(dependencies=[...])` and `FastAPI(dependencies=[...])` | Read for each route of the router. The receiver of the route decorator must be a name with one binding in its scope, and the binding must be an assignment of the call. |
+| A router name with two bindings in its scope, a name in a `global` statement or a `nonlocal` statement, a router that an import gives, and a receiver that is not a name | No guard from the router. The guards of the route decorator and of the parameters stay. |
+| `parent.include_router(router, dependencies=[...])` | Read for the routes of `router` in three conditions. The file has one `include_router` call for the router. The call is a statement of the body of the module or of the function that has the route decorator. The call comes after the route decorator. The route also gets the dependencies of `parent`, and the guards that the same rule gives to `parent`. |
+| An `include_router` call on a receiver that is not a `FastAPI` value or an `APIRouter` value of the file, as a value of a different class or a router that an import gives | No guard from the call. |
+| A route decorator after the `include_router` call | No guard from the call. FastAPI copies the routes of the router at the time of the call. |
+| Two `include_router` calls for one router, a call in a condition, a loop, a class, or a different function, and routers that include each other | No guard from an `include_router` call. |
+| An `include_router` call in a different file | Not read. The route has only the guards that its own file declares. A call in a different file can also serve the route without the dependencies of the call in this file. |
+| A parameter default `= Depends(f)` or `= Security(f)` | Read. |
+| `Annotated[T, Depends(f)]`, `typing.Annotated[...]`, and `Annotated` from `typing_extensions` | Read. With two annotations of FastAPI in one `Annotated`, FastAPI uses the last one, and omen does the same. |
+| A name that the file binds one time to an `Annotated` type, as `UserDep = Annotated[User, Depends(f)]` or `type UserDep = ...` | Read. |
+| A name for an `Annotated` type that an import gives | Not read. The parameter is in the list of the request parameters. |
+| `Depends()` without an argument | No guard. FastAPI uses the type of the parameter as the dependency. Omen does not read it. The parameter is not a request parameter. |
+| `Depends(Checker("admin"))`, a lambda, a subscript, or any dependency that is not a name or a dotted name | No guard. The parameter is not a request parameter. |
+| `Depends(dependency=f)` | Read. |
+| `from fastapi import Depends as D`, `import fastapi as fa` with `fa.Depends(f)`, and `from fastapi.params import Depends` | Read. The index gives the import of each name. |
+| A function, a class, a parameter, or an assignment that binds `Depends` in the scope of the use, and a `Depends` from a module that is not `fastapi` | No guard. Omen resolves the name in the scopes of Python: the function, the functions around it, and the module. |
+| Two imports of the same name of the same module, as in the branches of `if TYPE_CHECKING:` | One import. |
+| `from module import *` | Omen does not read the names of a wildcard import. If a wildcard import binds `Depends` again, omen does not see it. |
+| `Depends(f)` in a string or in a comment | No guard. Omen reads the syntax tree. |
+| `router.dependencies.append(...)` and `dependency_overrides` | Not read. |
+| `api_route`, `websocket`, `add_api_route`, and a route method that `getattr` gives | No entry. |
+| The `prefix` of `APIRouter` and of `include_router` | Not read. The path is the path of the route decorator. |
+
+### FastAPI request parameters
+
+The parameters of a FastAPI route are the parameters of the path, in the order of the path, and
+then the request parameters of the handler, in the order of the signature. A name occurs one
+time. Omen gives the names only. It does not give the type or the source of a parameter.
+
+| Form | Result |
+| --- | --- |
+| A parameter with a type, without a type, with a plain default, or with a default `Query`, `Path`, `Header`, `Cookie`, `Body`, `Form`, or `File` | A request parameter. The name is the name of the function parameter. Omen does not read `alias=`. |
+| A body model, as `item: Item` | A request parameter. |
+| A parameter that is a dependency, with a name or without one | Not a request parameter. FastAPI also reads the request parameters of the dependency function. Omen does not list them. |
+| A parameter with the type `Request`, `Response`, `BackgroundTasks`, `WebSocket`, `HTTPConnection`, or `SecurityScopes`, or a response class such as `JSONResponse`, when an import from `fastapi` or `starlette` gives the name | Not a request parameter. FastAPI gives the object to the handler. |
+| The same type name from a different module, or from a class of the file | A request parameter. |
+| A string annotation that is one name, as `"Request"` | Omen resolves the name as it resolves an annotation without quotation marks. |
+| `Annotated[Request, "text"]`, with no annotation of FastAPI in the metadata | Omen reads the base type. A framework type is not a request parameter. |
+| A type around a framework type, as `Optional[Request]` | A request parameter. |
+| `*args` and `**kwargs` | Not listed. |
+
+### Flask and Django guards
+
+| Form | Result |
+| --- | --- |
+| A known decorator below the route decorator of Flask or FastAPI | A guard. The route gets the function with the decorator. |
+| A known decorator above the route decorator | No guard. The framework registers the function before the decorator wraps it. |
+| A known decorator on the view function of a Django route, in any file of the repository | A guard. Each decorator wraps the function before `path` gets it. |
+| A qualified view, as `views.detail` | The view is the one function with the name in the module that the import of `views` gives. A function with the same name in the file of the route is not the view. If the index did not resolve the import, the view is the one function with the name in the repository. With two such functions, the route gives no entry. |
+| `path("x/", login_required(view))`, a class-based view with `as_view()`, and `include(...)` | No entry. |
+| `before_request` of Flask, a middleware of Django, and a mixin such as `LoginRequiredMixin` | Not read. |
+| A handler of Flask | The handler gets only the parameters of the path. Omen lists no other parameter. |
+
 ## Limits
 
-- Omen does not follow data. A path is a chain of calls that the index resolves.
+- Omen does not follow data. A path is a chain of calls and function references that
+  the index resolves.
+- A function reference does not tell that the function runs. Code that keeps a
+  function and does not call it also gives a path. See "Function references".
+- The index does not know each construct that binds a local name. Examples are a
+  pattern of a Rust `match` arm, a Python comprehension, and a `with` statement.
+  When such a name is also the name of a function that the file can see, the use
+  of the name has a false function reference. A call of the name has the same
+  false edge.
+- The read of a property, as `value.name` for a Python `@property`, is a function
+  reference to the method of the property. The read runs the method.
+- A function that goes through a variable of a different function, a field, or a
+  parameter has no function reference. A decorator that registers a function, and a
+  name that reflection reads, have none.
 - A script and a Python `__main__` block are not symbols. An entry point of this kind
   starts no path.
 - A route is an entry point only when its receiver is a framework object. The receiver

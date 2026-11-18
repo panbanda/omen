@@ -169,6 +169,68 @@ has no tree only when the file cannot be read or parsed a second time.
   `a_file_without_a_tree_sends_the_analysis_to_the_slow_path` (security analysis)
   show that the two paths give the same sinks, entry points, and comments.
 - The truth, parity, and snapshot tests did not change.
+- `timing_many_function_references_in_one_file_scale_linearly` and
+  `timing_chain_of_callbacks_scales_linearly` (function references) show that
+  twice the input takes less than three times as long.
+
+## Function references
+
+The index also keeps the uses of a function as a value (see "Function references"
+in `docs/SECURITY.md`). The walk reads each name at a value position. Most of these
+names are local values and fields, thus the index drops them in three steps:
+
+1. The extraction makes no record for a use that the facts of the file show to
+   name no function. A local name hides the name. In Python, ECMAScript, Rust, and
+   Bash, a bare name is a function of the file or an import, unless the file loads
+   a file or has a wildcard import. A member of a parameter without a type and
+   without a value has no known type.
+2. Before the resolution, the index drops each use whose name no function and no
+   method has. An export or an import can give a function a different name, and
+   the step knows these names.
+3. The resolver keeps only the uses that have a candidate with more evidence than
+   the name.
+
+The uses of a file that are not yet resolved are in two blocks of memory: one for
+the records (`ValueSites`), and one for their texts. The first version made a
+`Reference` and its resolver facts for each use, with a string for each text. On
+litellm these small parts added 120 MiB to the peak RSS, although the index freed
+them before the resolution. The process did not use the freed parts again.
+
+The numbers of the two repositories, with the release build:
+
+| Fact | omen | litellm |
+| --- | ---: | ---: |
+| Files | 525 | 13,109 |
+| Call references (not changed) | 55,491 | 1,342,124 |
+| Uses of a name as a value after step 1 | 5,628 | 262,302 |
+| Uses after step 2 | 1,485 | 140,155 |
+| Function references in the index | 307 | 25,177 |
+| Function references with an edge | 304 | 24,735 |
+
+The reachability search (`src/index/security/reach.rs`) kept the result of the
+search of each entry point until the end. With function references, a search
+reaches a larger part of the repository: the 1,382 searches of litellm added
+190 MiB. The search now keeps only the paths of each entry point and one count for
+each symbol, and the searches run in parallel.
+
+The table shows `omen -f json security`, as the median of three runs in turns.
+`before` is the commit `0d77c1d`.
+
+| Repository | Before: RSS (MiB) | After: RSS (MiB) | Before: time (s) | After: time (s) |
+| --- | ---: | ---: | ---: | ---: |
+| omen | 126 | 124 | 0.28 | 0.27 |
+| litellm | 2,261 | 2,322 | 10.77 | 12.37 |
+
+The peak RSS of litellm is 61 MiB (2.7%) higher. The machine had a load average
+of 39 to 49 in these runs, thus the times of litellm have a large error: the
+three runs of `before` took 6.73 s, 10.77 s, and 12.08 s. Do not use these times
+as a result. Measure the time again on a machine without load.
+
+Python had a second cost that these inputs showed. The extraction read all
+statements of a module one time for each definition at the top level, to find
+`__all__`. It now reads them one time for each module. A file with 20,000
+functions at the top level took 17.4 s before and 1.2 s after
+(`timing_chain_of_callbacks_scales_linearly`).
 
 ## Not changed
 
