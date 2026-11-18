@@ -20,6 +20,28 @@ placed in a doc comment or code comment at each site.
 
 No entries.
 
+## Changed after 5.1.0
+
+These changes have no compatibility shim. Each row gives the old behaviour, the
+new behaviour, and the necessary change in a client.
+
+### A symbol name must select one definition
+
+| Area | 5.1.0 | Now | Change in a client |
+|---|---|---|---|
+| Ambiguous name in the `symbol` command | The command selected the first definition and listed the other keys in `candidates`. | The command writes an `ambiguous` error to stdout and exits with 1. Each choice has `name` (the key), `kind`, `container`, `file`, `start_line`, `signature`, and `command`. | Run the `command` of one choice, or send the key, or add `--start-line`. |
+| Ambiguous name in the `impact` command and the MCP tool `impact` | The traversal started at each definition of the name. `security` had the facts of the first definition only. | The `ambiguous` error, as for `symbol`. Each MCP choice has `arguments`. `resolved` holds one key, and `security` has the facts of that definition. | Send the key of one choice. |
+| Unknown name in the `impact` command | Empty result with `suggestions`, and the exit status 0. | A `not_found` error on stdout with near names in `error.suggestions`, and the exit status 1. | Read `error.code`. |
+| Unknown name in the `symbol` command | A message on stderr only. | A `not_found` error on stdout, and the same message on stderr. The near names also come from the edit distance. | Read `error.code`. |
+| `candidates` of `symbol` and `get_symbol` | The other definitions of an ambiguous name. Always empty in `get_symbol`. | Removed. | Read the choices of the `ambiguous` error. |
+| `suggestions` of `impact` | The near names of an unknown name. | Removed. | Read `error.suggestions` of the `not_found` error. |
+| C prototype or C++ member declaration and one definition of the same function | `symbol` selected the first. `impact` started at each. | The commands select the definition. `declarations` of `symbol`, `get_symbol`, and `impact` lists the declarations without a body. `impact` and `task_context` also start at each declaration. Two definitions, for example under `#ifdef`, are ambiguous. | Read `declarations`. |
+| `--start-line` of `symbol` and `impact`, `start_line` of the MCP tool `impact` | Not available. | Selects the definition that starts on that line. | None. |
+| Choices of the MCP `ambiguous` error | `name`, `start_line`, and, for `get_symbol`, `signature`. | Also `kind`, `container`, `file`, and `arguments`. `task_context` choices also have `signature`. | None, unless the client rejects unknown keys. |
+| `message` of the `not_found` error for a symbol | No near names. | The near names after `Near names:`. | None. |
+| A start line that no definition of the name has, in `symbol`, `impact`, `get_symbol`, `impact`, and `task_context` | The `not_found` error with `param` `name` and the near names. | The `not_found` error with `param` `start_line`. The suggestions are the definitions of the name: CLI choices have a `command` without `--start-line`, and MCP choices have `arguments` with the correct `start_line`. | Read `error.param`. |
+| A `static` C or C++ function and a declaration in a different file | One function. | Different functions. A bare name that agrees with both is ambiguous. | Send the key of one choice. |
+
 ## Removed in 5.0
 
 Omen 5.0 removed each item in this section. There is no alias and no shim.

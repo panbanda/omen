@@ -23,6 +23,7 @@ use omen::commands::context::ContextRequest;
 use omen::commands::diff::DiffRequest;
 use omen::commands::eval::EvalRequest;
 use omen::commands::impact::ImpactRequest;
+use omen::commands::lookup::CommandLine;
 use omen::commands::outline::OutlineRequest;
 use omen::commands::scope::Scope;
 use omen::commands::score::{ScoreRequest, TrendRequest};
@@ -381,6 +382,8 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 min_basis: args.min_basis,
                 scope: scope_of(cli, &args.common),
                 git_ref: commands::repository::local_ref(cli).map(str::to_string),
+                start_line: args.start_line,
+                command_line: CommandLine::from_process(std::env::args_os().collect()),
             };
             commands::impact::run(path, &config, &request, format, &mut stdout())?;
         }
@@ -392,6 +395,8 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 min_basis: args.min_basis,
                 scope: scope_of(cli, &args.common),
                 git_ref: commands::repository::local_ref(cli).map(str::to_string),
+                start_line: args.start_line,
+                command_line: CommandLine::from_process(std::env::args_os().collect()),
             };
             commands::symbol::run(path, &config, &request, format, &mut stdout())?;
         }

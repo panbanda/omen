@@ -124,9 +124,12 @@ fn ambiguity_and_unavailable_history_remain_explicit() {
     )
     .unwrap();
     let snapshot = IndexCache::default().load(dir.path(), &[path]).unwrap();
-    let report = build(&snapshot, dir.path(), "helper", &Options::default()).unwrap();
-    assert_eq!(report["ambiguous"], true);
-    assert!(report.get("symbols").is_none());
+    let error = build(&snapshot, dir.path(), "helper", &Options::default()).unwrap_err();
+    assert!(
+        matches!(&error, omen::core::Error::SymbolLookup(failure)
+            if matches!(**failure, omen::symbol::LookupFailure::Ambiguous { .. })),
+        "{error}"
+    );
     let selected = build(
         &snapshot,
         dir.path(),
@@ -250,4 +253,22 @@ fn wide_unicode_neighborhood_has_exact_omission_counts_and_byte_bounds() {
             101
         );
     }
+}
+
+#[test]
+fn a_c_prototype_does_not_make_the_name_ambiguous() {
+    let dir = TempDir::new().unwrap();
+    let header = dir.path().join("area.h");
+    let source = dir.path().join("area.c");
+    std::fs::write(&header, "int area(void);\n").unwrap();
+    std::fs::write(
+        &source,
+        "#include \"area.h\"\nint area(void) { return 1; }\n",
+    )
+    .unwrap();
+    let snapshot = IndexCache::default()
+        .load(dir.path(), &[header, source])
+        .unwrap();
+    let report = build(&snapshot, dir.path(), "area", &Options::default()).unwrap();
+    assert_eq!(report["seed"]["qualified_name"], "area.c#area");
 }
