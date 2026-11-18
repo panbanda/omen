@@ -23,6 +23,8 @@ omen -f json impact <symbol-name> --depth 2
 
 The command returns the affected files, the caller and callee BFS levels, and the total count. This is much faster than a manual analysis.
 
+If more than one definition has the name, the command does not select one. It writes an `ambiguous` error to stdout and exits with the status 1. Each item of `error.suggestions` has the `kind`, the `container`, the `file`, the `start_line`, and a `command`. Run the `command` of the correct definition. If no definition has the name, the error code is `not_found`, and `error.suggestions` holds near names.
+
 To inspect a specific symbol first, use this command:
 
 ```bash

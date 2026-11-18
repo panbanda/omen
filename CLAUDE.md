@@ -141,6 +141,8 @@ Top-level commands (flat structure):
 
 **Pagination flags** (most analyzers): `--top N` (limit to N results), `--offset N` (skip first N results). Combine for pagination.
 
+**Symbol lookup**: `symbol` and `impact`, and the MCP tools `get_symbol`, `impact`, and `task_context`, select one definition. The name is a bare name, `file:name`, or a symbol key. `--start-line` (MCP `start_line`) selects the definition that starts on that line. A name that agrees with more than one definition gives the `ambiguous` error with each choice. The commands do not select the first choice, and `impact` does not merge the definitions. A C prototype or a C++ member declaration without a body is not a second definition: the commands select the one definition and list the declarations in `declarations`. An unknown name gives `not_found` with near names. The CLI writes the error object to stdout and exits with 1. Each CLI choice has a `command`, and each MCP choice has `arguments`, that select only that definition.
+
 **Special safety flags**: `deadcode --cargo-check` executes `cargo check`, including build scripts, and is for trusted repositories only. Mutation testing refuses dirty working trees unless `mutation --allow-dirty` is supplied. MCP transport is stdio-only; `mcp --allow-external-paths` permits tool paths outside the configured repository root.
 
 **MCP tool list**: `context`, `outline`, `complexity`, `satd`, `deadcode`, `stubs`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `search`, `get_symbol`, `task_context`, `impact`, `security`. A test compares this line with `McpServer::tool_names()`.
