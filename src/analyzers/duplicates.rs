@@ -76,9 +76,29 @@ pub struct Config {
     /// modules. Defaults to true since repetitive test setup is expected
     /// and low-value to flag as duplication.
     pub exclude_tests: bool,
+    /// DEPRECATED(remove-in: 6.0): no replacement. The exact search does not
+    /// use MinHash, so it ignores this field.
+    #[deprecated(
+        since = "5.2.0",
+        note = "ignored: clone search is exact and does not use MinHash"
+    )]
+    pub num_hash_functions: usize,
+    /// DEPRECATED(remove-in: 6.0): no replacement. Ignored.
+    #[deprecated(
+        since = "5.2.0",
+        note = "ignored: clone search is exact and does not use LSH bands"
+    )]
+    pub num_bands: usize,
+    /// DEPRECATED(remove-in: 6.0): no replacement. Ignored.
+    #[deprecated(
+        since = "5.2.0",
+        note = "ignored: clone search is exact and does not use LSH bands"
+    )]
+    pub rows_per_band: usize,
 }
 
 impl Default for Config {
+    #[allow(deprecated)]
     fn default() -> Self {
         let configured = crate::config::DuplicatesConfig::default();
         Self {
@@ -90,6 +110,9 @@ impl Default for Config {
             ignore_comments: true,
             min_group_size: 2,
             exclude_tests: true,
+            num_hash_functions: 200,
+            num_bands: 20,
+            rows_per_band: 10,
         }
     }
 }
@@ -1368,6 +1391,38 @@ mod tests {
     }
 
     const BASE_FUNCTION: &str = "package main\n\nfunc total(items []int) int {\n\tsum := 0\n\tfor _, item := range items {\n\t\tif item > 10 {\n\t\t\tsum += item * 2\n\t\t} else {\n\t\t\tsum += item\n\t\t}\n\t}\n\treturn sum\n}\n";
+
+    /// The MinHash fields stay until 6.0, so code that sets them still
+    /// compiles. The search ignores them.
+    #[test]
+    #[allow(deprecated)]
+    fn test_minhash_fields_are_ignored() {
+        let renamed = BASE_FUNCTION.replace("total", "count");
+        let tmp_dir = TempDir::new().unwrap();
+        fs::write(tmp_dir.path().join("a.go"), BASE_FUNCTION).unwrap();
+        fs::write(tmp_dir.path().join("b.go"), renamed).unwrap();
+        let core = CoreConfig::default();
+        let file_set = FileSet::from_path(tmp_dir.path(), &core).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &core, Some(tmp_dir.path()));
+        let base = Config {
+            min_tokens: 20,
+            similarity_threshold: 0.6,
+            ..Config::default()
+        };
+        let legacy = Config {
+            num_hash_functions: 7,
+            num_bands: 1,
+            rows_per_band: 1,
+            ..base.clone()
+        };
+        let expected = Analyzer::new().with_config(base).analyze(&ctx).unwrap();
+        let actual = Analyzer::new().with_config(legacy).analyze(&ctx).unwrap();
+        assert_eq!(expected.clones.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&expected.clones).unwrap(),
+            serde_json::to_value(&actual.clones).unwrap()
+        );
+    }
 
     fn only_clone(analysis: &Analysis) -> &Clone {
         assert_eq!(analysis.clones.len(), 1, "{:?}", analysis.clones);

@@ -18,7 +18,14 @@ placed in a doc comment or code comment at each site.
 
 ## Scheduled for removal
 
-No entries.
+### Remove in 6.0
+
+| Deprecated | Replacement |
+|---|---|
+| Rust API: the fields `num_hash_functions`, `num_bands`, and `rows_per_band` of `omen::analyzers::duplicates::Config` | None. The clone search is exact and ignores these fields. |
+
+The configuration file never had these keys. Only code that uses the `omen`
+library can set them.
 
 ## Removed in 5.0
 
