@@ -981,7 +981,8 @@ expression: "responses[0]"
                 "weak_cipher",
                 "tls_verification_disabled",
                 "hardcoded_credential",
-                "memory_unsafe"
+                "memory_unsafe",
+                "unsafe_html_output"
               ],
               "type": "string"
             },

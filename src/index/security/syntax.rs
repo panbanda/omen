@@ -379,12 +379,15 @@ pub fn subject<'tree>(
     match predicate {
         Predicate::BuiltString { index }
         | Predicate::ArgNotLiteral { index }
+        | Predicate::HasArgument { index }
         | Predicate::ArgSetting { index, .. } => {
             Some(arguments.get(*index).copied().into_iter().collect())
         }
         Predicate::KeywordSetting { name, .. } => {
             Some(keyword_value(arguments, name, source).into_iter().collect())
         }
+        // The matcher gives the receiver as the only argument.
+        Predicate::Receiver => Some(arguments.to_vec()),
         Predicate::All(all) => {
             let named: Vec<Node<'tree>> = all
                 .iter()
@@ -442,6 +445,7 @@ pub fn holds(
         Predicate::Without(inner) => !holds(inner, arguments, source, syntax),
         Predicate::HasArgument { index } => arguments.get(*index).is_some(),
         Predicate::BlockPass => arguments.iter().any(|node| node.kind() == "block_argument"),
+        Predicate::Receiver => true,
         Predicate::AnyArgStartsWith(prefixes) => arguments.iter().any(|node| {
             let found = argument_text(node);
             prefixes.iter().any(|prefix| found.starts_with(prefix))

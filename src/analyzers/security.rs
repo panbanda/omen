@@ -645,7 +645,10 @@ mod tests {
         let value = sarif(&report);
         assert_eq!(value["version"], "2.1.0");
         let run = &value["runs"][0];
-        assert_eq!(run["tool"]["driver"]["rules"].as_array().unwrap().len(), 9);
+        assert_eq!(
+            run["tool"]["driver"]["rules"].as_array().unwrap().len(),
+            SinkCategory::ALL.len()
+        );
         let results = run["results"].as_array().unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0]["ruleId"], "command_execution");

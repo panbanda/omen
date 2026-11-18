@@ -42,6 +42,7 @@ The MCP tool `security` has the same sections and filters. The tools `symbol` an
 | tls_verification_disabled | 295 | `requests.get(url, verify=False)` |
 | hardcoded_credential (experimental) | 798 | a token with a provider prefix |
 | memory_unsafe | 119 | a Rust `unsafe` block |
+| unsafe_html_output | 79 | `template.HTML(text)` |
 
 A sink has a basis: `imported_symbol` (an import binds the callee), `builtin` (the
 language gives the name), or `name_only` (only the name is evidence). A sink in test
@@ -69,6 +70,23 @@ assignment, Python `verify=`, Node `rejectUnauthorized:`, Rust
 of PHP and C. A Java hostname verifier and a C# validation callback are not settings. A
 verifier or a callback that is not a constant is usually a real check, thus omen reports only
 a verifier or a callback that always accepts.
+
+A sink of the category `unsafe_html_output` marks a string as safe HTML. The template or the
+page then does not escape the string. These are the sinks:
+
+| Language | Sink |
+| --- | --- |
+| Go | A conversion to `HTML`, `HTMLAttr`, `JS`, `JSStr`, `CSS`, `URL`, or `Srcset` of `html/template` |
+| Python | `mark_safe` and `SafeString` of `django.utils.safestring`, and `Markup` of `markupsafe`, `flask`, or `jinja2` |
+| Ruby | A call of the method `html_safe`. The receiver is the value. |
+| JavaScript and TypeScript | An assignment to a member `innerHTML` or `outerHTML`, a call of the method `insertAdjacentHTML`, and the JSX attribute `dangerouslySetInnerHTML` |
+| C# | The constructor of `HtmlString` of `Microsoft.AspNetCore.Html` or `System.Web` |
+| Rust | `PreEscaped` of `maud` |
+
+Java, PHP, C, C++, and Bash have no such sink in the standard library. A template file, such
+as an ERB file or a JSX file that omen does not parse, is not in the analysis. The receiver
+of an assignment to `innerHTML` can have any type. Thus such a sink has the basis
+`name_only`, and a repository class with a member `innerHTML` also gives a sink.
 
 The Go SQL sinks are methods: omen does not know the type of the receiver. The names are
 `Query`, `QueryRow`, `Exec`, `Prepare` (`database/sql`), `Queryx`, `QueryRowx`, `MustExec`,

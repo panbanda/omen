@@ -102,7 +102,7 @@ min_basis = "same_package"
 # The sink categories that the gate counts. An empty list means each category.
 # Categories: command_execution, code_evaluation, unsafe_deserialization,
 # sql_string_construction, weak_hash, weak_cipher, tls_verification_disabled,
-# hardcoded_credential, memory_unsafe
+# hardcoded_credential, memory_unsafe, unsafe_html_output
 gate_categories = []
 # The gate counts a sink with this basis or a stronger one:
 # name_only, builtin, or imported_symbol.

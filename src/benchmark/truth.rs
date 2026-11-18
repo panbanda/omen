@@ -59,7 +59,7 @@ pub const IMPORT_CATEGORIES: [&str; 8] = [
 
 /// The sink categories. Each language labels each category in each scenario,
 /// or declares the category or the scenario not applicable.
-pub const SINK_CATEGORIES: [&str; 9] = [
+pub const SINK_CATEGORIES: [&str; 10] = [
     "command_execution",
     "code_evaluation",
     "unsafe_deserialization",
@@ -69,6 +69,7 @@ pub const SINK_CATEGORIES: [&str; 9] = [
     "tls_verification_disabled",
     "hardcoded_credential",
     "memory_unsafe",
+    "unsafe_html_output",
 ];
 pub const SINK_SCENARIOS: [&str; 7] = [
     "real_call",

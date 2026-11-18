@@ -644,10 +644,20 @@ impl FileContext<'_> {
             };
             let written_length = written.as_ref().map_or(0, Vec::len);
             let call = syntax::call_node(root, facts.start_byte, facts.end_byte, &self.call_kinds);
-            let arguments = call
+            let call_arguments = call
                 .map(|call| syntax::arguments(call, self.file.language))
                 .unwrap_or_default();
+            let receiver: Vec<Node<'_>> = facts
+                .receiver
+                .and_then(|(start, end)| root.descendant_for_byte_range(start, end))
+                .into_iter()
+                .collect();
             for spec in named {
+                let arguments = if spec.predicate == Predicate::Receiver {
+                    &receiver
+                } else {
+                    &call_arguments
+                };
                 let matched: Option<(SinkBasis, String)> = match (&spec.target, &owner) {
                     (_, Owner::Repository) => None,
                     (Target::Method { .. }, _) => (reference.receiver.is_some()
@@ -670,13 +680,14 @@ impl FileContext<'_> {
                     continue;
                 };
                 let held = call.is_some()
-                    && syntax::holds(&spec.predicate, &arguments, self.source, &self.syntax)
-                    || (call.is_none() && spec.predicate == super::spec::Predicate::Always);
+                    && syntax::holds(&spec.predicate, arguments, self.source, &self.syntax)
+                    || (call.is_none()
+                        && matches!(spec.predicate, Predicate::Always | Predicate::Receiver));
                 if !held {
                     continue;
                 }
                 if spec.predicate == Predicate::NotSafeLoader
-                    && !self.loader_is_unsafe(&arguments, &chain, facts.start_byte)
+                    && !self.loader_is_unsafe(arguments, &chain, facts.start_byte)
                 {
                     continue;
                 }
@@ -700,7 +711,7 @@ impl FileContext<'_> {
                     reference.enclosing.as_ref().map(|key| key.to_string()),
                     &callee_text,
                     basis,
-                    self.is_constant(&spec.predicate, &arguments),
+                    self.is_constant(&spec.predicate, arguments),
                 );
                 sink.target = target;
                 sinks.push(sink);
@@ -833,7 +844,15 @@ impl FileContext<'_> {
             self.keyed_field(node, sinks);
         }
         if self.syntax.assignment_kinds.contains(&kind) {
-            self.assignment(node, sinks);
+            if self.has_target(|target| matches!(target, Target::MemberAssignment { .. })) {
+                self.member_assignment(node, sinks);
+            }
+            if self.has_target(|target| matches!(target, Target::Assignment { .. })) {
+                self.assignment(node, sinks);
+            }
+        }
+        if self.syntax.attribute_kinds.contains(&kind) {
+            self.attribute(node, sinks);
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -930,6 +949,96 @@ impl FileContext<'_> {
                     .to_lowercase();
                 split_path(&compact).last().map(String::as_str) == Some(*wanted)
             })
+    }
+
+    /// Reports an assignment to a member of any receiver when a row names the member.
+    fn member_assignment(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
+        let (Some(left), Some(right)) = (
+            node.child_by_field_name("left"),
+            node.child_by_field_name("right"),
+        ) else {
+            return;
+        };
+        let Some(property) = left
+            .child_by_field_name("property")
+            .filter(|_| left.kind() == "member_expression")
+        else {
+            return;
+        };
+        let member = syntax::text(property, self.source);
+        for spec in &self.specs {
+            let Target::MemberAssignment { names } = spec.target else {
+                continue;
+            };
+            if !names.split('|').any(|name| name == member)
+                || !syntax::holds(&spec.predicate, &[right], self.source, &self.syntax)
+            {
+                continue;
+            }
+            let compact: String = syntax::text(left, self.source).split_whitespace().collect();
+            sinks.push(self.sink(
+                spec.category,
+                Span::of(&node),
+                self.enclosing_key(node.start_byte()),
+                &compact,
+                SinkBasis::NameOnly,
+                self.is_constant(&spec.predicate, &[right]),
+            ));
+        }
+    }
+
+    /// Reports a JSX attribute that a row names. The value is the property `key` of an
+    /// object literal in the attribute, or the expression of the attribute.
+    fn attribute(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
+        let mut cursor = node.walk();
+        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+        let Some((name, rest)) = children.split_first() else {
+            return;
+        };
+        let written = syntax::text(*name, self.source);
+        for spec in &self.specs {
+            let Target::Attribute { name, key } = spec.target else {
+                continue;
+            };
+            if written != name {
+                continue;
+            }
+            let expression = rest
+                .first()
+                .map(|value| {
+                    if value.kind() == "jsx_expression" {
+                        value.named_child(0).unwrap_or(*value)
+                    } else {
+                        *value
+                    }
+                })
+                .map(syntax::unwrap_parentheses);
+            let value = expression.map(|expression| {
+                if expression.kind() != "object" {
+                    return expression;
+                }
+                let mut members = expression.walk();
+                let found = expression.named_children(&mut members).find(|member| {
+                    syntax::key_value(*member, self.source)
+                        .is_some_and(|(found, _)| found == key.to_lowercase())
+                });
+                found
+                    .and_then(|pair| pair.child_by_field_name("value"))
+                    .unwrap_or(expression)
+            });
+            let values: Vec<Node<'_>> = value.into_iter().collect();
+            if !syntax::holds(&spec.predicate, &values, self.source, &self.syntax) {
+                continue;
+            }
+            sinks.push(self.sink(
+                spec.category,
+                Span::of(&node),
+                self.enclosing_key(node.start_byte()),
+                written,
+                SinkBasis::NameOnly,
+                self.is_constant(&spec.predicate, &values),
+            ));
+        }
     }
 
     /// Reports an assignment to a member that a row names.

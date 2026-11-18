@@ -86,6 +86,14 @@
     {"label": "sql_string_construction.safe_variant.composed_query", "category": "sql_string_construction", "scenario": "safe_variant", "file": "declared_safe.py", "line": 7, "flagged": false},
     {"label": "weak_hash.safe_variant.not_for_security", "category": "weak_hash", "scenario": "safe_variant", "file": "declared_safe.py", "line": 8, "flagged": false},
     {"label": "weak_hash.safe_variant.not_for_security_new", "category": "weak_hash", "scenario": "safe_variant", "file": "declared_safe.py", "line": 9, "flagged": false},
-    {"label": "hardcoded_credential.safe_variant.documentation_token", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "declared_safe.py", "line": 10, "flagged": false}
+    {"label": "hardcoded_credential.safe_variant.documentation_token", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "declared_safe.py", "line": 10, "flagged": false},
+    {"label": "unsafe_html_output.real_call", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.py", "line": 7, "basis": "imported_symbol", "constant_argument": false},
+    {"label": "unsafe_html_output.aliased_import", "category": "unsafe_html_output", "scenario": "aliased_import", "file": "html.py", "line": 8, "basis": "imported_symbol"},
+    {"label": "unsafe_html_output.safe_variant", "category": "unsafe_html_output", "scenario": "safe_variant", "file": "html.py", "line": 9, "flagged": false},
+    {"label": "unsafe_html_output.name_in_string", "category": "unsafe_html_output", "scenario": "name_in_string", "file": "html.py", "line": 10, "flagged": false},
+    {"label": "unsafe_html_output.name_in_comment", "category": "unsafe_html_output", "scenario": "name_in_comment", "file": "html.py", "line": 11, "flagged": false},
+    {"label": "unsafe_html_output.real_call.constant", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.py", "line": 12, "basis": "imported_symbol", "constant_argument": true},
+    {"label": "unsafe_html_output.same_name_symbol", "category": "unsafe_html_output", "scenario": "same_name_symbol", "file": "html_decoys.py", "line": 5, "flagged": false},
+    {"label": "unsafe_html_output.in_test", "category": "unsafe_html_output", "scenario": "in_test", "file": "tests/test_html.py", "line": 5, "basis": "imported_symbol", "in_test": true}
   ]
 }

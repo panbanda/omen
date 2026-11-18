@@ -126,10 +126,12 @@ pub enum SinkCategory {
     TlsVerificationDisabled,
     HardcodedCredential,
     MemoryUnsafe,
+    /// Code marks a string as safe HTML, and the template does not escape it.
+    UnsafeHtmlOutput,
 }
 
 impl SinkCategory {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::CommandExecution,
         Self::CodeEvaluation,
         Self::UnsafeDeserialization,
@@ -139,6 +141,7 @@ impl SinkCategory {
         Self::TlsVerificationDisabled,
         Self::HardcodedCredential,
         Self::MemoryUnsafe,
+        Self::UnsafeHtmlOutput,
     ];
 
     /// The name of the category in the output, for example `weak_hash`.
@@ -153,6 +156,7 @@ impl SinkCategory {
             Self::TlsVerificationDisabled => "tls_verification_disabled",
             Self::HardcodedCredential => "hardcoded_credential",
             Self::MemoryUnsafe => "memory_unsafe",
+            Self::UnsafeHtmlOutput => "unsafe_html_output",
         }
     }
 
@@ -188,6 +192,7 @@ impl SinkCategory {
             Self::TlsVerificationDisabled => 295,
             Self::HardcodedCredential => 798,
             Self::MemoryUnsafe => 119,
+            Self::UnsafeHtmlOutput => 79,
         }
     }
 }
@@ -318,6 +323,7 @@ mod tests {
                 ("tls_verification_disabled", 295),
                 ("hardcoded_credential", 798),
                 ("memory_unsafe", 119),
+                ("unsafe_html_output", 79),
             ]
         );
     }
@@ -916,6 +922,93 @@ mod tests {
             .map(|sink| sink.flags.in_generated)
             .collect();
         assert_eq!(flags, [false]);
+    }
+
+    /// The line, the basis, and the flag `constant_argument` of each sink of the category
+    /// `unsafe_html_output`.
+    fn html_sinks(language: Language, files: &[(&str, &str)]) -> Vec<(u32, &'static str, bool)> {
+        sinks(language, files)
+            .into_iter()
+            .filter(|sink| sink.category == SinkCategory::UnsafeHtmlOutput)
+            .map(|sink| {
+                (
+                    sink.range.start_line,
+                    sink.basis.name(),
+                    sink.flags.constant_argument,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_conversion_to_a_trusted_template_type_is_unsafe_html_output_go() {
+        let source = "package main\n\nimport (\n\t\"html/template\"\n\ttrusted \"html/template\"\n)\n\nfunc run(text string) {\n\t_ = template.HTML(text)\n\t_ = trusted.JS(text)\n\t_ = template.URL(text)\n\t_ = template.HTMLAttr(text)\n\t_ = template.CSS(text)\n\t_ = template.HTML(\"<br>\")\n\t_ = template.HTML(\"<a>\" + \"</a>\")\n\t_ = template.HTMLEscapeString(text)\n\t_ = \"template.HTML(text)\"\n\t// template.HTML(text)\n}\n";
+        assert_eq!(
+            html_sinks(Language::Go, &[("a.go", source)]),
+            [
+                (9, "imported_symbol", false),
+                (10, "imported_symbol", false),
+                (11, "imported_symbol", false),
+                (12, "imported_symbol", false),
+                (13, "imported_symbol", false),
+                (14, "imported_symbol", true),
+                (15, "imported_symbol", true),
+            ]
+        );
+        let text_template = "package main\n\nimport \"text/template\"\n\nfunc run(text string) {\n\t_ = template.HTMLEscapeString(text)\n}\n";
+        assert_eq!(html_sinks(Language::Go, &[("b.go", text_template)]), []);
+    }
+
+    #[test]
+    fn a_string_that_code_marks_as_safe_is_unsafe_html_output_python() {
+        let source = "from django.utils.safestring import mark_safe\nfrom markupsafe import Markup as Trusted, escape\n\ndef run(text):\n    mark_safe(text)\n    Trusted(text)\n    mark_safe(\"<br>\")\n    escape(text)\n";
+        assert_eq!(
+            html_sinks(Language::Python, &[("a.py", source)]),
+            [
+                (5, "imported_symbol", false),
+                (6, "imported_symbol", false),
+                (7, "imported_symbol", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_string_that_code_marks_as_safe_is_unsafe_html_output_ruby() {
+        let source = "def run(text)\n  text.html_safe\n  \"<br>\".html_safe\n  ERB::Util.html_escape(text)\nend\n";
+        assert_eq!(
+            html_sinks(Language::Ruby, &[("a.rb", source)]),
+            [(2, "name_only", false), (3, "name_only", true)]
+        );
+    }
+
+    #[test]
+    fn raw_html_in_the_dom_or_in_react_is_unsafe_html_output_ecma() {
+        let source = "export function run(element, text) {\n  element.innerHTML = text;\n  element.outerHTML += text;\n  element.innerHTML = \"<br>\";\n  element.textContent = text;\n  element.insertAdjacentHTML(\"beforeend\", text);\n  element.insertAdjacentText(\"beforeend\", text);\n  return <div dangerouslySetInnerHTML={{ __html: text }} />;\n}\n\nexport function constant() {\n  return <div dangerouslySetInnerHTML={{ __html: \"<br>\" }} title=\"innerHTML\" />;\n}\n";
+        assert_eq!(
+            html_sinks(Language::Jsx, &[("a.jsx", source)]),
+            [
+                (2, "name_only", false),
+                (3, "name_only", false),
+                (4, "name_only", true),
+                (6, "name_only", false),
+                (8, "name_only", false),
+                (12, "name_only", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_trusted_html_string_is_unsafe_html_output_csharp_and_rust() {
+        let csharp = "using Microsoft.AspNetCore.Html;\n\npublic class A {\n    public object Run(string text) {\n        new HtmlString(text);\n        return new HtmlString(\"<br>\");\n    }\n}\n";
+        assert_eq!(
+            html_sinks(Language::CSharp, &[("A.cs", csharp)]),
+            [(5, "imported_symbol", false), (6, "imported_symbol", true)]
+        );
+        let rust = "use maud::PreEscaped;\n\npub fn run(text: String) {\n    PreEscaped(text);\n    maud::PreEscaped(\"<br>\");\n}\n";
+        assert_eq!(
+            html_sinks(Language::Rust, &[("a.rs", rust)]),
+            [(4, "imported_symbol", false), (5, "imported_symbol", true)]
+        );
     }
 
     #[test]

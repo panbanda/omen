@@ -78,6 +78,14 @@
     {"label": "tls_verification_disabled.real_call.assignment", "category": "tls_verification_disabled", "scenario": "real_call", "file": "tls_extra.go", "line": 17, "basis": "imported_symbol", "constant_argument": false},
     {"label": "tls_verification_disabled.safe_variant.assignment_false", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_extra.go", "line": 18, "flagged": false},
     {"label": "command_execution.real_call.generated", "category": "command_execution", "scenario": "real_call", "file": "service.pb.go", "line": 9, "basis": "imported_symbol", "in_generated": true},
+    {"label": "unsafe_html_output.real_call", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.go", "line": 10, "basis": "imported_symbol", "constant_argument": false},
+    {"label": "unsafe_html_output.aliased_import", "category": "unsafe_html_output", "scenario": "aliased_import", "file": "html.go", "line": 11, "basis": "imported_symbol"},
+    {"label": "unsafe_html_output.safe_variant", "category": "unsafe_html_output", "scenario": "safe_variant", "file": "html.go", "line": 12, "flagged": false},
+    {"label": "unsafe_html_output.name_in_string", "category": "unsafe_html_output", "scenario": "name_in_string", "file": "html.go", "line": 13, "flagged": false},
+    {"label": "unsafe_html_output.name_in_comment", "category": "unsafe_html_output", "scenario": "name_in_comment", "file": "html.go", "line": 14, "flagged": false},
+    {"label": "unsafe_html_output.real_call.constant", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.go", "line": 15, "basis": "imported_symbol", "constant_argument": true},
+    {"label": "unsafe_html_output.same_name_symbol", "category": "unsafe_html_output", "scenario": "same_name_symbol", "file": "html_decoys.go", "line": 6, "flagged": false},
+    {"label": "unsafe_html_output.in_test", "category": "unsafe_html_output", "scenario": "in_test", "file": "html_test.go", "line": 9, "basis": "imported_symbol", "in_test": true},
     {"label": "tls_verification_disabled.safe_variant.repository_assignment", "category": "tls_verification_disabled", "scenario": "safe_variant", "file": "tls_extra.go", "line": 19, "flagged": false}
   ]
 }

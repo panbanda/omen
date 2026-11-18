@@ -74,6 +74,9 @@ pub enum Predicate {
     },
     /// An argument passes a block, as `&block` does in Ruby.
     BlockPass,
+    /// The receiver of the method is the value of the sink, as in `text.html_safe`. The
+    /// predicate always holds. The receiver tells if the sink is constant.
+    Receiver,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,6 +109,18 @@ pub enum Target {
         module: &'static str,
         name: &'static str,
         values: &'static [&'static str],
+    },
+    /// An assignment to a member with one of the names, as `element.innerHTML = text` is.
+    /// The receiver can have any type, thus only the name gives the evidence. The predicate
+    /// gets the assigned value as its only argument.
+    MemberAssignment {
+        names: &'static str,
+    },
+    /// A JSX attribute with the name. The value is the property `key` of the object in the
+    /// attribute, or the whole expression of the attribute when it has no such property.
+    Attribute {
+        name: &'static str,
+        key: &'static str,
     },
     UnsafeBlock,
     /// A string literal that is a token with a provider prefix.
@@ -158,7 +173,7 @@ use Predicate::{
 };
 use SinkCategory::{
     CodeEvaluation, CommandExecution, HardcodedCredential, MemoryUnsafe, SqlStringConstruction,
-    TlsVerificationDisabled, UnsafeDeserialization, WeakCipher, WeakHash,
+    TlsVerificationDisabled, UnsafeDeserialization, UnsafeHtmlOutput, WeakCipher, WeakHash,
 };
 
 const fn path(
@@ -327,6 +342,14 @@ pub const SPECS: &[SinkSpec] = &[
         },
     ),
     path(TlsVerificationDisabled, PYTHON, "ssl", "_create_unverified_context", Always),
+    path(
+        UnsafeHtmlOutput,
+        PYTHON,
+        "django.utils.safestring",
+        "mark_safe|SafeString",
+        Always,
+    ),
+    path(UnsafeHtmlOutput, PYTHON, "markupsafe|flask|jinja2", "Markup", Always),
     // JavaScript and TypeScript
     path(
         CommandExecution,
@@ -387,6 +410,29 @@ pub const SPECS: &[SinkSpec] = &[
             disabled: &["false"],
         },
     ),
+    SinkSpec {
+        category: UnsafeHtmlOutput,
+        languages: ECMA,
+        target: Target::MemberAssignment {
+            names: "innerHTML|outerHTML",
+        },
+        predicate: Always,
+    },
+    method(
+        UnsafeHtmlOutput,
+        ECMA,
+        "insertAdjacentHTML",
+        Predicate::HasArgument { index: 1 },
+    ),
+    SinkSpec {
+        category: UnsafeHtmlOutput,
+        languages: ECMA,
+        target: Target::Attribute {
+            name: "dangerouslySetInnerHTML",
+            key: "__html",
+        },
+        predicate: Always,
+    },
     // Go
     // A command is built here. The sink does not say that the command runs.
     path(CommandExecution, GO, "os/exec", "Command|CommandContext", Always),
@@ -424,6 +470,14 @@ pub const SPECS: &[SinkSpec] = &[
         "InsecureSkipVerify",
         &[],
         FIRST_IS_TRUE_OR_UNKNOWN,
+    ),
+    // A conversion to a type of `html/template` tells the template not to escape the value.
+    path(
+        UnsafeHtmlOutput,
+        GO,
+        "html/template",
+        "HTML|HTMLAttr|JS|JSStr|CSS|URL|Srcset",
+        Always,
     ),
     path(
         MemoryUnsafe,
@@ -473,6 +527,7 @@ pub const SPECS: &[SinkSpec] = &[
         Always,
     ),
     path(MemoryUnsafe, RUST, "std::ffi::CStr", "from_ptr", Always),
+    path(UnsafeHtmlOutput, RUST, "maud", "PreEscaped", Always),
     // Java
     path(
         CommandExecution,
@@ -591,6 +646,13 @@ pub const SPECS: &[SinkSpec] = &[
         &["=>true"],
         Always,
     ),
+    path(
+        UnsafeHtmlOutput,
+        CSHARP,
+        "Microsoft.AspNetCore.Html|System.Web",
+        "HtmlString",
+        Always,
+    ),
     SinkSpec {
         category: MemoryUnsafe,
         languages: CSHARP,
@@ -645,6 +707,7 @@ pub const SPECS: &[SinkSpec] = &[
         Always,
     ),
     mention(TlsVerificationDisabled, RUBY, "OpenSSL::SSL", "VERIFY_NONE"),
+    method(UnsafeHtmlOutput, RUBY, "html_safe", Predicate::Receiver),
     // PHP
     path(
         CommandExecution,
@@ -876,6 +939,8 @@ pub struct LanguageSyntax {
     pub keyed_kinds: &'static [&'static str],
     /// The node kinds of an assignment to a member.
     pub assignment_kinds: &'static [&'static str],
+    /// The node kinds of an attribute of a markup element, such as a JSX attribute.
+    pub attribute_kinds: &'static [&'static str],
     /// The node kind of a block that the language marks as unsafe.
     pub unsafe_kinds: &'static [&'static str],
     /// The modules that the language gives without an import. A callee in one of them can be written without the module.
@@ -895,6 +960,7 @@ pub fn syntax_of(language: Language) -> LanguageSyntax {
         mention_kinds: &[],
         keyed_kinds: &[],
         assignment_kinds: &[],
+        attribute_kinds: &[],
         unsafe_kinds: &[],
         implicit_modules: &[],
         global_namespace: false,
@@ -909,6 +975,8 @@ pub fn syntax_of(language: Language) -> LanguageSyntax {
         Language::JavaScript | Language::TypeScript | Language::Tsx | Language::Jsx => {
             LanguageSyntax {
                 string_kinds: &["string", "template_string"],
+                assignment_kinds: &["assignment_expression", "augmented_assignment_expression"],
+                attribute_kinds: &["jsx_attribute"],
                 ..base
             }
         }

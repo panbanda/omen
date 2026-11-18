@@ -25,3 +25,7 @@ func NewCipher(key []byte) []byte {
 func Exec(program string) string {
 	return program
 }
+
+func HTML(text string) string {
+	return text
+}
