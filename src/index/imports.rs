@@ -1774,6 +1774,32 @@ mod typescript_tests {
     /// An exact entry of `exports` with `null` hides the subpath from a
     /// pattern. A config at the root of the repository with `rootDir: "."`
     /// maps the output to a source at the root.
+    /// A substitution with `${configDir}` is a path from the directory of
+    /// the config, not from `baseUrl`.
+    #[test]
+    fn test_config_directory_substitution_does_not_use_the_base_url() {
+        let files = [
+            (
+                "config/tsconfig.base.json",
+                "{\"compilerOptions\": {\"paths\": {\"@/*\": [\"${configDir}/lib/*\", \"./other/*\"]}}}",
+            ),
+            (
+                "app/tsconfig.json",
+                "{\"extends\": \"../config/tsconfig.base.json\", \"compilerOptions\": {\"baseUrl\": \"src\"}}",
+            ),
+            ("app/lib/a.ts", "export function a() {}\n"),
+            ("app/src/lib/a.ts", "export function a() {}\n"),
+            ("app/src/other/b.ts", "export function b() {}\n"),
+            (
+                "app/src/main.ts",
+                "import { a } from '@/a';\nimport { b } from '@/b';\n",
+            ),
+        ];
+        let main = "app/src/main.ts";
+        assert_eq!(target(&files, main, "@/a"), "app/lib/a.ts");
+        assert_eq!(target(&files, main, "@/b"), "app/src/other/b.ts");
+    }
+
     #[test]
     fn test_null_export_and_a_root_directory_of_the_repository() {
         let files = [
@@ -1872,7 +1898,8 @@ mod typescript_tests {
 
 #[cfg(test)]
 mod typescript_timing_tests {
-    use super::testing::rows;
+    use super::testing::{index, rows};
+    use super::ImportTarget;
     use crate::index::timing::assert_scales_linearly;
 
     /// A config with `size` patterns, `size` packages whose configs extend
@@ -1920,6 +1947,59 @@ mod typescript_timing_tests {
             found.iter().any(|row| row.contains(&last)),
             "{:?}",
             found.last()
+        );
+        elapsed
+    }
+
+    /// `size` patterns of `paths` with one prefix and different suffixes in
+    /// a base config, and `size` configs that extend it. A file beside each
+    /// config imports a name that no suffix matches, and a name that the
+    /// pattern of the config matches.
+    fn same_prefix_patterns_at(size: usize) -> std::time::Duration {
+        let patterns: Vec<String> = (0..size)
+            .map(|position| format!("\"@x/*.p{position}\": [\"${{configDir}}/src/*\"]"))
+            .collect();
+        let mut owned = vec![(
+            "tsconfig.base.json".to_string(),
+            format!(
+                "{{ \"compilerOptions\": {{ \"paths\": {{ {} }} }} }}",
+                patterns.join(", ")
+            ),
+        )];
+        for position in 0..size {
+            owned.push((
+                format!("c{position}/tsconfig.json"),
+                "{ \"extends\": \"../tsconfig.base.json\" }".to_string(),
+            ));
+            owned.push((
+                format!("c{position}/src/value.ts"),
+                "export const value = 1;\n".to_string(),
+            ));
+            owned.push((
+                format!("c{position}/src/main.ts"),
+                format!("import {{ value }} from '@x/value.p{position}';\nimport {{ other }} from '@x/value.q';\n"),
+            ));
+        }
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let facts = index(&files);
+        let elapsed = started.elapsed();
+        let last = format!("c{}/src/main.ts", size - 1);
+        let main = facts.iter().find(|facts| facts.file == last).unwrap();
+        let targets: Vec<&ImportTarget> = main
+            .imports
+            .iter()
+            .map(|binding| &binding.target_file)
+            .collect();
+        assert_eq!(
+            targets,
+            [
+                &ImportTarget::Resolved(format!("c{}/src/value.ts", size - 1)),
+                &ImportTarget::External
+            ]
         );
         elapsed
     }
@@ -2047,5 +2127,16 @@ mod typescript_timing_tests {
     #[ignore = "timing: run in release"]
     fn timing_many_path_patterns_resolve_in_linear_time() {
         assert_scales_linearly("path patterns", 2_000, path_patterns_at);
+    }
+
+    #[test]
+    fn test_patterns_with_one_prefix_resolve() {
+        same_prefix_patterns_at(50);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_patterns_with_one_prefix_resolve_in_linear_time() {
+        assert_scales_linearly("patterns with one prefix", 1_000, same_prefix_patterns_at);
     }
 }

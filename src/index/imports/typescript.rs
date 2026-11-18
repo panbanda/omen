@@ -28,8 +28,82 @@ const OUTPUT_EXTENSIONS: &[&str] = &[".d.mts", ".d.cts", ".d.ts", ".mjs", ".cjs"
 /// The extensions of a source file that can give a build output.
 const BUILD_SOURCE_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
 
-/// Each pattern of `paths` and its substitutions, sorted by the pattern.
-pub type PathPatterns = Vec<(String, Vec<String>)>;
+/// The patterns of `paths` of one config. The configs that inherit them
+/// share them.
+pub type PathPatterns = Arc<PathTable>;
+
+/// The patterns of `paths` and their substitutions.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PathTable {
+    /// The patterns without `*`, sorted by the pattern.
+    exact: Vec<(String, Vec<String>)>,
+    /// The patterns with one `*`, by the text before `*`. For each prefix,
+    /// the text after `*` in reverse order of its characters, sorted.
+    wildcard: HashMap<String, Vec<(String, Vec<String>)>>,
+}
+
+impl PathTable {
+    fn new(patterns: Vec<(String, Vec<String>)>) -> Self {
+        let mut table = Self::default();
+        for (pattern, substitutions) in patterns {
+            match pattern.split_once('*') {
+                None => table.exact.push((pattern, substitutions)),
+                Some((prefix, suffix)) if !suffix.contains('*') => {
+                    let reversed = suffix.chars().rev().collect();
+                    table
+                        .wildcard
+                        .entry(prefix.to_string())
+                        .or_default()
+                        .push((reversed, substitutions));
+                }
+                // TypeScript does not accept a pattern with two `*`.
+                Some(_) => {}
+            }
+        }
+        table.exact.sort();
+        for group in table.wildcard.values_mut() {
+            group.sort();
+        }
+        table
+    }
+
+    /// The substitutions of the pattern that applies to `module`, the text
+    /// that `*` matches, and if the pattern is `*` alone. Of the patterns
+    /// with `*`, the pattern with the longest prefix applies, and of these,
+    /// the pattern with the longest suffix. The cost does not grow with the
+    /// number of patterns.
+    fn find<'m>(&self, module: &'m str) -> Option<(&[String], &'m str, bool)> {
+        if let Ok(position) = self
+            .exact
+            .binary_search_by(|(pattern, _)| pattern.as_str().cmp(module))
+        {
+            return Some((&self.exact[position].1, "", false));
+        }
+        (0..=module.len())
+            .rev()
+            .filter(|length| module.is_char_boundary(*length))
+            .find_map(|length| {
+                let group = self.wildcard.get(&module[..length])?;
+                let tail = &module[length..];
+                let reversed: String = tail.chars().rev().collect();
+                (0..=reversed.len())
+                    .rev()
+                    .filter(|end| reversed.is_char_boundary(*end))
+                    .find_map(|end| {
+                        let suffix = &reversed[..end];
+                        let position = group
+                            .binary_search_by(|(text, _)| text.as_str().cmp(suffix))
+                            .ok()?;
+                        let matched = &tail[..tail.len() - end];
+                        Some((
+                            group[position].1.as_slice(),
+                            matched,
+                            length == 0 && end == 0,
+                        ))
+                    })
+            })
+    }
+}
 
 /// The options of one project file, as the file gives them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -48,6 +122,8 @@ pub struct ProjectOptions {
     pub base_url: Option<String>,
     /// The patterns of `paths`, and the directory of the config that has them.
     paths: Option<(PathPatterns, String)>,
+    /// The directory of the config, which is the value of `${configDir}`.
+    config_directory: String,
     pub out_dir: Option<String>,
     pub root_dir: Option<String>,
 }
@@ -71,39 +147,20 @@ impl ProjectOptions {
         let (Some((patterns, _)), Some(base)) = (&self.paths, self.paths_base()) else {
             return (Vec::new(), false);
         };
-        let exact = patterns
-            .binary_search_by(|(pattern, _)| pattern.as_str().cmp(module))
-            .ok()
-            .map(|position| (&patterns[position].1, ""));
-        // The patterns are sorted, thus the patterns with one prefix before
-        // `*` are together. The search tries the longest prefix first, and
-        // the cost does not grow with the number of patterns.
-        let wildcard = || {
-            (0..=module.len())
-                .rev()
-                .filter(|length| module.is_char_boundary(*length))
-                .map(|length| &module[..length])
-                .filter(|prefix| !prefix.contains('*'))
-                .find_map(|prefix| {
-                    let start = format!("{prefix}*");
-                    let first = patterns.partition_point(|(pattern, _)| *pattern < start);
-                    patterns[first..]
-                        .iter()
-                        .take_while(|(pattern, _)| pattern.starts_with(&start))
-                        .find_map(|(pattern, substitutions)| {
-                            let matched =
-                                module[prefix.len()..].strip_suffix(&pattern[start.len()..])?;
-                            Some((substitutions, matched, pattern == "*"))
-                        })
-                })
-        };
-        let exact = exact.map(|(substitutions, matched)| (substitutions, matched, false));
-        let Some((substitutions, matched, catch_all)) = exact.or_else(wildcard) else {
+        let Some((substitutions, matched, catch_all)) = patterns.find(module) else {
             return (Vec::new(), false);
         };
+        // A substitution that starts with `${configDir}` is a path from the
+        // directory of the config, not from `baseUrl`.
         let paths = substitutions
             .iter()
-            .filter_map(|substitution| join(base, &substitution.replace('*', matched)))
+            .filter_map(|substitution| {
+                let substitution = substitution.replace('*', matched);
+                match substitution.strip_prefix("${configDir}") {
+                    Some(rest) => join(&self.config_directory, rest.trim_start_matches('/')),
+                    None => join(base, &substitution),
+                }
+            })
             .collect();
         (paths, catch_all)
     }
@@ -147,7 +204,7 @@ pub fn strip_comments(text: &str) -> String {
                 position += 1;
             }
             ('/', Some('/')) => {
-                while position < characters.len() && characters[position] != '\n' {
+                while position < characters.len() && !['\n', '\r'].contains(&characters[position]) {
                     position += 1;
                 }
                 without_comments.push(' ');
@@ -240,12 +297,9 @@ pub fn project_config(text: &str) -> Option<ProjectConfig> {
                         .collect();
                     (pattern.clone(), substitutions)
                 })
-                .collect::<PathPatterns>()
+                .collect()
         })
-        .map(|mut paths| {
-            paths.sort_by(|left, right| left.0.cmp(&right.0));
-            paths
-        });
+        .map(|paths| Arc::new(PathTable::new(paths)));
     Some(ProjectConfig {
         extends,
         base_url: text_option("baseUrl"),
@@ -432,23 +486,10 @@ impl ProjectConfigs {
             }
             join(directory, &text)
         };
-        let paths = inherited.paths.as_ref().map(|(patterns, directory)| {
-            let to_leaf = relative_to(directory, leaf);
-            let patterns = patterns
-                .iter()
-                .map(|(pattern, substitutions)| {
-                    let substitutions = substitutions
-                        .iter()
-                        .map(|substitution| substitution.replace("${configDir}", &to_leaf))
-                        .collect();
-                    (pattern.clone(), substitutions)
-                })
-                .collect();
-            (patterns, directory.clone())
-        });
         ProjectOptions {
             base_url: located(&inherited.base_url),
-            paths,
+            paths: inherited.paths.clone(),
+            config_directory: leaf.to_string(),
             out_dir: located(&inherited.out_dir),
             root_dir: located(&inherited.root_dir),
         }
@@ -584,7 +625,7 @@ fn own_options(path: &str, config: &ProjectConfig, mut options: Inherited) -> In
         options.base_url = located(&config.base_url);
     }
     if let Some(paths) = &config.paths {
-        options.paths = Some((paths.clone(), here.to_string()));
+        options.paths = Some((Arc::clone(paths), here.to_string()));
     }
     if config.out_dir.is_some() {
         options.out_dir = located(&config.out_dir);
@@ -658,6 +699,13 @@ mod tests {
         assert_eq!(value["a"], "//x/*y*/");
         assert_eq!(value["b"], serde_json::json!([1, 2]));
         assert_eq!(value["c"], "\"");
+    }
+
+    #[test]
+    fn test_strip_comments_ends_a_line_comment_at_a_carriage_return() {
+        let text = "{\r  // a\r  \"a\": 1\r}\r";
+        let value: serde_json::Value = serde_json::from_str(&strip_comments(text)).unwrap();
+        assert_eq!(value["a"], 1);
     }
 
     #[test]
