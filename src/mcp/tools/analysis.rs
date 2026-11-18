@@ -170,8 +170,13 @@ pub(super) static CHANGES: ToolSpec = ToolSpec {
 
 pub(super) static DIFF: ToolSpec = ToolSpec {
     name: "diff",
-    description: "Gives the risk of the changes on the current branch in relation to a target ref. \
-        If you give no ref, the tool finds the default branch.",
+    description: "Gives the risk and the change set of the current branch in relation to a target ref. \
+        `symbols` has each symbol that the branch added, removed, or changed, with its signature, \
+        its complexity, and its callers. `summary` has the complete counts. \
+        `security` has the sinks, the entry points, and the paths that the branch adds or removes. \
+        The symbols that are not test code come first. Then a changed or removed symbol comes \
+        before an added symbol. Then the symbol with more transitive callers comes first. \
+        The limit applies to the symbols. If you give no ref, the tool finds the default branch.",
     params: &[
         PATH,
         Param::string("base", "The target ref, such as a branch or a commit."),
@@ -180,16 +185,50 @@ pub(super) static DIFF: ToolSpec = ToolSpec {
             "The target ref when `base` is absent. \
              The tool always compares the current branch, thus it ignores `head` when you give `base`.",
         ),
+        Param::integer(
+            "max_callers",
+            0,
+            MAX_COUNT,
+            "The maximum number of direct callers that each symbol lists. The value 0 removes the limit. \
+             `direct_caller_count` is always the complete count.",
+        )
+        .with_default(ParamDefault::Integer(
+            crate::commands::diff::DEFAULT_MAX_CALLERS as u64,
+        )),
     ],
-    paginated: Pagination::Field("recommendations"),
+    paginated: Pagination::Field(crate::commands::diff::PAGED_LIST),
     handler: diff,
 };
 
 fn diff(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     let scope = server.scope(arguments)?;
     let target = arguments.string("base").or(arguments.string("head"));
-    let result = crate::commands::diff::analyze(&scope.path, target)?;
-    Ok(ToolOutput::data(serde_json::to_value(&result)?))
+    let max_callers = arguments
+        .count("max_callers")
+        .unwrap_or(crate::commands::diff::DEFAULT_MAX_CALLERS);
+    let report = crate::commands::diff::analyze(&scope.path, target, &server.config, max_callers)?;
+
+    let limit = arguments.count("limit").unwrap_or(0);
+    let page = report
+        .symbols
+        .iter()
+        .skip(arguments.count("offset").unwrap_or(0))
+        .take(if limit == 0 { usize::MAX } else { limit });
+    let (total, omitted) = page.fold((0, 0), |(total, omitted), symbol| {
+        (
+            total + symbol.direct_caller_count,
+            omitted + symbol.direct_callers_omitted,
+        )
+    });
+    let mut data = super::ToolData::new(serde_json::to_value(&report)?);
+    if omitted > 0 {
+        data.truncated.push(crate::mcp::envelope::Truncation {
+            path: format!("/{}/*/direct_callers", crate::commands::diff::PAGED_LIST),
+            total,
+            returned: total - omitted,
+        });
+    }
+    Ok(ToolOutput::Data(data))
 }
 
 pub(super) static TDG: ToolSpec = ToolSpec {

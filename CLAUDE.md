@@ -113,7 +113,7 @@ Top-level commands (flat structure):
 - `clones` - Code clone detection
 - `defect` - Defect probability prediction
 - `changes` - Commit-level change risk (JIT)
-- `diff` - Branch diff risk analysis. With `-f markdown` it writes the pull-request comment: it starts with `<!-- omen:diff -->`, and `--max-bytes` (default 60000, 0 = no limit) and `--max-nodes` (default 30) limit it. `report generate --ref REF` adds the "Changes since" view to the HTML report.
+- `diff` - Branch diff risk analysis. With `-f json` and in the MCP tool it adds the change set: `--top` and `--offset` page `symbols`, and `--max-callers` (default 20, 0 = no limit) limits the direct callers of each symbol. With `-f markdown` it writes the pull-request comment: it starts with `<!-- omen:diff -->`, and `--max-bytes` (default 60000, 0 = no limit) and `--max-nodes` (default 30) limit it. `report generate --ref REF` adds the "Changes since" view to the HTML report.
 - `tdg` - Technical Debt Gradient
 - `graph` - Dependency graph
 - `hotspot` - High churn + complexity files
