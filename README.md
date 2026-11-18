@@ -406,23 +406,23 @@ Omen builds a graph showing which files import which other files, then calculate
 
 Hotspots are files that are both complex AND frequently modified. A simple file that changes often is probably fine - it's easy to work with. A complex file that rarely changes is also manageable - you can leave it alone. But a complex file that changes constantly? That's where bugs breed.
 
-Omen calculates hotspot scores using the **geometric mean** of normalized churn and complexity:
+Omen calculates the hotspot score as the product of two percentile ranks:
 
 ```
-hotspot = sqrt(churn_percentile * complexity_percentile)
+hotspot = (churn_percentile / 100) * (complexity_percentile / 100)
 ```
 
-Both factors are normalized against industry benchmarks using empirical CDFs, so scores are comparable across projects:
+Each percentile is a rank in the files of the repository:
 
-- **Churn percentile** - Where this file's commit count ranks against typical OSS projects
-- **Complexity percentile** - Where the average cognitive complexity ranks against industry benchmarks
+- **Churn percentile** - The rank of the churn score of the file: 1 for each commit, and 1 more for each 100 changed lines.
+- **Complexity percentile** - The rank of the sum of the cyclomatic complexity of the functions of the file. As in Tornhill, this measure grows with the size of the file.
 
 | Hotspot Score | Severity | Action                 |
 | ------------- | -------- | ---------------------- |
-| >= 0.6        | Critical | Prioritize immediately |
-| >= 0.4        | High     | Schedule for review    |
-| >= 0.25       | Moderate | Monitor                |
-| < 0.25        | Low      | Healthy                |
+| >= 0.81       | Critical | Prioritize immediately |
+| >= 0.64       | High     | Schedule for review    |
+| >= 0.36       | Moderate | Monitor                |
+| < 0.36        | Low      | Healthy                |
 
 **Why it matters:** [Adam Tornhill's "Your Code as a Crime Scene"](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) introduced hotspot analysis as a way to find the most impactful refactoring targets. His research shows that a small percentage of files (typically 4-8%) contain most of the bugs. [Graves et al. (2000)](https://ieeexplore.ieee.org/document/859533) and [Nagappan et al. (2005)](https://www.microsoft.com/en-us/research/publication/use-of-relative-code-churn-measures-to-predict-system-defect-density/) demonstrated that relative code churn is a strong defect predictor.
 

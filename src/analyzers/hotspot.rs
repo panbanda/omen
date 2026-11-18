@@ -1,8 +1,16 @@
 //! Hotspot analysis (churn x complexity).
 //!
 //! Identifies files that have both high churn (change frequency) and
-//! high complexity (cyclomatic/cognitive). These are prime candidates
-//! for refactoring as they represent high-risk, hard-to-maintain code.
+//! high complexity. These are prime candidates for refactoring as they
+//! represent high-risk, hard-to-maintain code.
+//!
+//! The complexity of a file is the sum of the cyclomatic complexity of its
+//! functions. As in Tornhill, it is a measure of the whole file, so it grows
+//! with the size of the file. The mean for one function is `avg_complexity`,
+//! and the score does not use it.
+//!
+//! The score is `churn_percentile / 100 * complexity_percentile / 100`. Each
+//! percentile is a rank in the files of the repository.
 //!
 //! # References
 //!
