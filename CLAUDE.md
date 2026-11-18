@@ -46,7 +46,7 @@ src/
     satd.rs       - Self-admitted technical debt
     deadcode.rs   - Unused code detection
     churn.rs      - Git history file churn
-    duplicates.rs - Code clone detection (MinHash+LSH)
+    duplicates.rs - Code clone detection (exact shingle Jaccard, prefix filter)
     defect.rs     - Defect probability (PMAT)
     changes.rs    - JIT commit-level risk
     tdg.rs        - Technical Debt Gradient

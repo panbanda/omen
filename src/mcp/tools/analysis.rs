@@ -155,7 +155,10 @@ pub(super) static DEFECT: ToolSpec = ToolSpec {
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
         let days = window_days(arguments, server.config.defect.since.days())?;
-        server.analyze(arguments, crate::commands::analyzers::defect_analyzer(days))
+        server.analyze(
+            arguments,
+            crate::commands::analyzers::defect_analyzer_with_config(&server.config, days),
+        )
     },
 };
 

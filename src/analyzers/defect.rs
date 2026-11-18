@@ -2,8 +2,10 @@
 //!
 //! Predicts defect probability based on:
 //! - Churn: How frequently the file changes (from git history)
-//! - Complexity: Cyclomatic/cognitive complexity (from complexity::Analyzer)
-//! - Duplication: Code clone ratio (from duplicates::Analyzer)
+//! - Complexity: the largest cyclomatic complexity of a function in the file
+//!   (from complexity::Analyzer), on the percentile scale of one function
+//! - Duplication: the lines of the file in a clone pair, divided by the lines
+//!   of the file (from the same duplicates::Analyzer as `omen clones`)
 //! - Coupling: Afferent coupling (from graph::Analyzer edge analysis)
 //! - Ownership: Contributor diffusion (Bird et al. 2011, from git history)
 
@@ -67,12 +69,21 @@ impl Default for Weights {
 
 /// The precomputed inputs every file's score is derived from.
 struct ScoringInputs<'a> {
-    complexity_data: &'a HashMap<String, (u32, u32)>,
-    duplication_data: &'a HashMap<String, f32>,
+    complexity_data: &'a HashMap<String, FileComplexity>,
+    /// file -> the number of its lines in a clone pair
+    duplication_data: &'a HashMap<String, usize>,
     coupling_data: &'a HashMap<String, (f32, f32)>,
     git_metrics: &'a HashMap<PathBuf, (usize, usize)>,
     /// Window width used to normalize churn into a per-30-day rate.
     window_days: u32,
+}
+
+/// The complexity of one file.
+#[derive(Debug, Clone, Copy, Default)]
+struct FileComplexity {
+    total_cyclomatic: u32,
+    total_cognitive: u32,
+    max_cyclomatic: u32,
 }
 
 /// Git-derived inputs for one analysis run.
@@ -109,6 +120,8 @@ pub struct Analyzer {
     precomputed_complexity: Option<complexity::Analysis>,
     precomputed_duplicates: Option<duplicates::Analysis>,
     precomputed_graph: Option<graph::Analysis>,
+    /// Finds the clones when no analysis is precomputed.
+    duplicates: duplicates::Analyzer,
 }
 
 impl Default for Analyzer {
@@ -124,6 +137,7 @@ impl Analyzer {
             precomputed_complexity: None,
             precomputed_duplicates: None,
             precomputed_graph: None,
+            duplicates: duplicates::Analyzer::new(),
         }
     }
 
@@ -136,7 +150,9 @@ impl Analyzer {
     /// subcommand, `omen all`, `report generate`, `score` -- uses the same
     /// window rather than the default.
     pub fn from_config(config: &crate::config::Config) -> Self {
-        Self::new().with_churn_days(config.defect.since.days())
+        let mut analyzer = Self::new().with_churn_days(config.defect.since.days());
+        analyzer.duplicates = duplicates::Analyzer::from_config(config);
+        analyzer
     }
 
     pub fn with_churn_days(mut self, days: u32) -> Self {
@@ -165,73 +181,28 @@ impl Analyzer {
     }
 
     /// Compute complexity data from complexity::Analyzer.
-    /// Returns a map of file path -> (cyclomatic, cognitive) complexity.
-    fn compute_complexity_data(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, (u32, u32)> {
-        let mut data = HashMap::new();
-
-        let mut collect = |analysis: &complexity::Analysis| {
-            for file_result in &analysis.files {
-                data.insert(
-                    file_result.file.clone(),
-                    (file_result.total_cyclomatic, file_result.total_cognitive),
-                );
-            }
-        };
+    fn compute_complexity_data(
+        &self,
+        ctx: &AnalysisContext<'_>,
+    ) -> HashMap<String, FileComplexity> {
         if let Some(analysis) = &self.precomputed_complexity {
-            collect(analysis);
+            complexity_per_file(analysis)
         } else if let Ok(analysis) = complexity::Analyzer::new().analyze(ctx) {
-            collect(&analysis);
+            complexity_per_file(&analysis)
+        } else {
+            HashMap::new()
         }
-
-        data
     }
 
-    /// Compute duplication data from duplicates::Analyzer.
-    /// Returns a map of file path -> duplication ratio (0.0-1.0).
-    fn compute_duplication_data(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, f32> {
-        let mut data = HashMap::new();
-
-        let mut collect = |analysis: &duplicates::Analysis| {
-            // Count lines involved in clones per file
-            let mut clone_lines: HashMap<String, usize> = HashMap::new();
-            let mut total_lines: HashMap<String, usize> = HashMap::new();
-
-            for clone in &analysis.clones {
-                // File A
-                *clone_lines.entry(clone.file_a.clone()).or_insert(0) += clone.lines_a;
-                // File B
-                *clone_lines.entry(clone.file_b.clone()).or_insert(0) += clone.lines_b;
-            }
-
-            // Get total lines per file (approximate from clone data)
-            for clone in &analysis.clones {
-                total_lines.entry(clone.file_a.clone()).or_insert_with(|| {
-                    // Estimate total lines from file (read if needed)
-                    std::fs::read_to_string(ctx.root.join(&clone.file_a))
-                        .map(|c| c.lines().count())
-                        .unwrap_or(1000)
-                });
-                total_lines.entry(clone.file_b.clone()).or_insert_with(|| {
-                    std::fs::read_to_string(ctx.root.join(&clone.file_b))
-                        .map(|c| c.lines().count())
-                        .unwrap_or(1000)
-                });
-            }
-
-            // Calculate ratio for each file that has clones
-            for (file, lines) in clone_lines {
-                let total = *total_lines.get(&file).unwrap_or(&1);
-                let ratio = (lines as f32 / total as f32).min(1.0);
-                data.insert(file, ratio);
-            }
-        };
+    /// Compute, for each file, the number of its lines in a clone pair.
+    fn compute_duplication_data(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, usize> {
         if let Some(analysis) = &self.precomputed_duplicates {
-            collect(analysis);
-        } else if let Ok(analysis) = duplicates::Analyzer::new().analyze(ctx) {
-            collect(&analysis);
+            duplicated_lines_per_file(analysis)
+        } else if let Ok(analysis) = self.duplicates.analyze(ctx) {
+            duplicated_lines_per_file(&analysis)
+        } else {
+            HashMap::new()
         }
-
-        data
     }
 
     /// Compute coupling data from graph::Analyzer.
@@ -351,7 +322,8 @@ impl Analyzer {
     /// Uses pre-computed data from other analyzers when available.
     fn get_file_metrics(
         &self,
-        root_path: &std::path::Path,
+        ctx: &AnalysisContext<'_>,
+        path: &std::path::Path,
         file_path: &str,
         inputs: &ScoringInputs<'_>,
     ) -> FileMetrics {
@@ -378,17 +350,19 @@ impl Analyzer {
             metrics.ownership_diffusion = contributor_count as f32;
         }
 
-        // Get file LOC for confidence calculation
-        if let Ok(content) = std::fs::read_to_string(root_path.join(file_path)) {
-            metrics.lines_of_code = content.lines().count();
+        // The line count comes from the same content as the clone ranges: the
+        // commit of `--ref`, or else the checkout.
+        if let Ok(content) = ctx.read_file(path) {
+            metrics.lines_of_code = String::from_utf8_lossy(&content).lines().count();
         }
 
         // Use pre-computed complexity data if available, otherwise estimate from LOC
-        if let Some(&(cyclomatic, cognitive)) = complexity_data.get(file_path) {
-            metrics.cyclomatic_complexity = cyclomatic;
-            metrics.cognitive_complexity = cognitive;
-            // Use cyclomatic complexity directly for the complexity metric
-            metrics.complexity = cyclomatic as f32;
+        if let Some(file_complexity) = complexity_data.get(file_path) {
+            metrics.cyclomatic_complexity = file_complexity.total_cyclomatic;
+            metrics.cognitive_complexity = file_complexity.total_cognitive;
+            // `COMPLEXITY_PERCENTILES` is a scale for one function, not for
+            // the sum of the functions of a file.
+            metrics.complexity = file_complexity.max_cyclomatic as f32;
             metrics.uses_estimated_complexity = false;
         } else {
             // Fall back to LOC-based estimate
@@ -397,8 +371,8 @@ impl Analyzer {
         }
 
         // Use pre-computed duplication data if available
-        if let Some(&ratio) = duplication_data.get(file_path) {
-            metrics.duplicate_ratio = ratio;
+        if let Some(&lines) = duplication_data.get(file_path) {
+            metrics.duplicate_ratio = (lines as f32 / metrics.lines_of_code.max(1) as f32).min(1.0);
         }
 
         // Use pre-computed coupling data if available
@@ -565,7 +539,7 @@ impl AnalyzerTrait for Analyzer {
                 let file_path = path.strip_prefix(ctx.root).unwrap_or(path);
                 let file_str = file_path.to_string_lossy();
 
-                let metrics = self.get_file_metrics(ctx.root, &file_str, &scoring_inputs);
+                let metrics = self.get_file_metrics(ctx, path, &file_str, &scoring_inputs);
                 let prob = self.calculate_probability(&metrics);
                 let confidence = self.calculate_confidence(&metrics);
                 let risk = RiskLevel::from_probability(prob);
@@ -725,6 +699,58 @@ pub struct Summary {
 
 // PMAT-compatible CDF percentile tables for normalization
 
+fn complexity_per_file(analysis: &complexity::Analysis) -> HashMap<String, FileComplexity> {
+    analysis
+        .files
+        .iter()
+        .map(|file| {
+            let complexity = FileComplexity {
+                total_cyclomatic: file.total_cyclomatic,
+                total_cognitive: file.total_cognitive,
+                max_cyclomatic: file
+                    .functions
+                    .iter()
+                    .map(|function| function.metrics.cyclomatic)
+                    .max()
+                    .unwrap_or(0),
+            };
+            (file.file.clone(), complexity)
+        })
+        .collect()
+}
+
+/// The number of lines of each file in a clone pair. A line in more than one
+/// pair counts once.
+fn duplicated_lines_per_file(analysis: &duplicates::Analysis) -> HashMap<String, usize> {
+    let mut ranges: HashMap<&str, Vec<(u32, u32)>> = HashMap::new();
+    for clone in &analysis.clones {
+        ranges
+            .entry(&clone.file_a)
+            .or_default()
+            .push((clone.start_line_a, clone.end_line_a));
+        ranges
+            .entry(&clone.file_b)
+            .or_default()
+            .push((clone.start_line_b, clone.end_line_b));
+    }
+    ranges
+        .into_iter()
+        .map(|(file, mut file_ranges)| {
+            file_ranges.sort_unstable();
+            let mut lines = 0usize;
+            let mut covered_to = 0u32;
+            for (start, end) in file_ranges {
+                let first = start.max(covered_to + 1);
+                if end >= first {
+                    lines += (end - first + 1) as usize;
+                    covered_to = end;
+                }
+            }
+            (file.to_string(), lines)
+        })
+        .collect()
+}
+
 const CHURN_PERCENTILES: &[[f32; 2]] = &[
     [0.0, 0.0],
     [0.1, 0.05],
@@ -823,6 +849,113 @@ fn sigmoid(raw_score: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn clone_pair(
+        file_a: &str,
+        lines_a: (u32, u32),
+        file_b: &str,
+        lines_b: (u32, u32),
+    ) -> duplicates::Clone {
+        duplicates::Clone {
+            clone_type: duplicates::CloneType::Type2,
+            similarity: 1.0,
+            file_a: file_a.to_string(),
+            file_b: file_b.to_string(),
+            start_line_a: lines_a.0,
+            end_line_a: lines_a.1,
+            start_line_b: lines_b.0,
+            end_line_b: lines_b.1,
+            lines_a: (lines_a.1 - lines_a.0 + 1) as usize,
+            lines_b: (lines_b.1 - lines_b.0 + 1) as usize,
+            group_id: 1,
+        }
+    }
+
+    /// A line in more than one clone pair counts once.
+    #[test]
+    fn test_duplicated_lines_count_each_line_once() {
+        let analysis = duplicates::Analysis {
+            clones: vec![
+                clone_pair("a.go", (10, 19), "b.go", (10, 19)),
+                clone_pair("a.go", (10, 19), "c.go", (1, 10)),
+                clone_pair("d.go", (1, 10), "a.go", (15, 24)),
+            ],
+            groups: Vec::new(),
+            summary: duplicates::AnalysisSummary::default(),
+            total_files_scanned: 4,
+            min_lines: 6,
+            threshold: 0.9,
+        };
+        let lines = duplicated_lines_per_file(&analysis);
+        assert_eq!(lines["a.go"], 15);
+        assert_eq!(lines["b.go"], 10);
+        assert_eq!(lines["c.go"], 10);
+        assert_eq!(lines["d.go"], 10);
+    }
+
+    /// The defect analyzer finds clones with the configuration of `clones`.
+    #[test]
+    fn test_from_config_uses_the_clone_configuration() {
+        let mut config = crate::config::Config::default();
+        config.duplicates.min_tokens = 77;
+        config.duplicates.min_similarity = 0.95;
+        let analyzer = Analyzer::from_config(&config);
+        let clone_config = analyzer.duplicates.config();
+        assert_eq!(clone_config.min_tokens, 77);
+        assert_eq!(clone_config.similarity_threshold, 0.95);
+    }
+
+    fn function(cyclomatic: u32) -> complexity::FunctionResult {
+        complexity::FunctionResult {
+            name: "f".to_string(),
+            start_line: 1,
+            end_line: 2,
+            is_test: false,
+            metrics: complexity::Metrics {
+                cyclomatic,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// The percentile table of the complexity factor is a scale for one
+    /// function. A file with many small functions is not complex.
+    #[test]
+    fn test_complexity_metric_is_the_most_complex_function() {
+        let analysis = complexity::Analysis {
+            files: vec![complexity::FileResult {
+                file: "a.go".to_string(),
+                language: "go".to_string(),
+                functions: vec![function(2), function(6), function(4)],
+                total_cyclomatic: 12,
+                total_cognitive: 9,
+                avg_cyclomatic: 4.0,
+                avg_cognitive: 3.0,
+            }],
+            summary: complexity::AnalysisSummary::default(),
+        };
+        let complexity_data = complexity_per_file(&analysis);
+        let duplication_data = HashMap::from([("a.go".to_string(), 20usize)]);
+        let coupling_data = HashMap::new();
+        let git_metrics = HashMap::new();
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::write(root.path().join("a.go"), "line\n".repeat(40)).unwrap();
+        let inputs = ScoringInputs {
+            complexity_data: &complexity_data,
+            duplication_data: &duplication_data,
+            coupling_data: &coupling_data,
+            git_metrics: &git_metrics,
+            window_days: 30,
+        };
+        let config = crate::config::Config::default();
+        let files = crate::core::FileSet::from_path(root.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(root.path()));
+        let metrics =
+            Analyzer::new().get_file_metrics(&ctx, std::path::Path::new("a.go"), "a.go", &inputs);
+        assert_eq!(metrics.complexity, 6.0);
+        assert_eq!(metrics.cyclomatic_complexity, 12);
+        assert_eq!(metrics.duplicate_ratio, 0.5);
+    }
 
     fn score(file: &str, probability: f32) -> FileScore {
         FileScore {
@@ -1031,6 +1164,56 @@ mod tests {
         };
         let recs = analyzer.generate_recommendations(&metrics, 0.5);
         assert!(recs.iter().any(|r| r.contains("complexity")));
+    }
+
+    /// With `--ref`, the line count of the duplication ratio comes from the
+    /// same commit as the clone ranges, not from the checkout.
+    #[test]
+    fn test_duplication_reads_the_line_count_at_the_selected_commit() {
+        let function = "package main\n\nfunc total(items []int) int {\n\tsum := 0\n\tfor _, item := range items {\n\t\tif item > 10 {\n\t\t\tsum += item * 2\n\t\t} else {\n\t\t\tsum += item\n\t\t}\n\t}\n\treturn sum\n}\n";
+        let padding: String = (0..40).map(|i| format!("\nvar v{i} = {i}\n")).collect();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path();
+        std::fs::write(path.join("a.go"), format!("{function}{padding}")).unwrap();
+        std::fs::write(path.join("b.go"), function.replace("total", "count")).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("run git");
+            assert!(output.status.success(), "git {args:?}: {output:?}");
+            String::from_utf8(output.stdout).unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test Author"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "add the functions"]);
+        let commit = git(&["rev-parse", "HEAD"]).trim().to_string();
+
+        let mut config = crate::config::Config::default();
+        config.duplicates.min_tokens = 20;
+        let duplication_of_a = || {
+            let tree = crate::core::TreeSource::new(path, &commit).unwrap();
+            let files = crate::core::FileSet::from_tree_source(&tree, &config).unwrap();
+            let ctx = AnalysisContext::new(&files, &config, Some(path))
+                .with_git_path(path)
+                .with_content_source(std::sync::Arc::new(tree));
+            let analysis = Analyzer::from_config(&config).analyze(&ctx).unwrap();
+            analysis
+                .files
+                .iter()
+                .find(|file| file.file == "a.go")
+                .map(|file| file.contributing_factors["duplication"])
+                .unwrap()
+        };
+        let with_checkout = duplication_of_a();
+        std::fs::remove_file(path.join("a.go")).unwrap();
+        let without_checkout = duplication_of_a();
+        assert!(with_checkout > 0.0);
+        assert_eq!(with_checkout, without_checkout);
     }
 
     #[test]
