@@ -473,10 +473,11 @@ not add decorators.
 
 A handler that is a function value without a name, as `(req, res) => ...`, has the symbol
 `file#Enclosing.<inline@line:column>`, or `file#<inline@line:column>` at the top level. The
-security analysis adds this symbol to its call graph. The calls and the function references in
-the function value are its edges, and a sink in it belongs to it. The function around the
-handler has an edge to it, because that function makes it. The index, and the other commands,
-do not know the symbol.
+security analysis adds this symbol to its call graph. A call, a function reference, or a sink in
+the function value belongs to the innermost inline handler that contains it, and not to the
+function around it. The inline handler, or else the function, that contains a handler has a
+function reference to it, because it gives the handler as a value and does not call it. The
+index, and the other commands, do not know the symbol.
 
 ### Limits of TypeScript and JavaScript routes
 

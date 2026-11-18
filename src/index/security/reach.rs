@@ -14,8 +14,9 @@
 //! resolves, and an entry point that the table does not know has no paths.
 //!
 //! An inline handler, as an arrow function that a route registers, is a node of the graph. A
-//! sink in the inline handler belongs to that node. The function around the inline handler has
-//! an edge to it, because that function makes it.
+//! call, a function reference, or a sink belongs to the innermost inline handler that contains
+//! it. The inline handler or the function that contains a handler has a function reference to
+//! it, because it gives the handler as a value.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -27,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use super::entry::EntryPoint;
 use super::{Sink, SinkCategory};
 use crate::core::Language;
-use crate::index::model::ResolutionBasis;
+use crate::index::model::{ResolutionBasis, Span};
 use crate::index::view::CallView;
 
 /// How one symbol on a path leads to the next symbol.
@@ -335,33 +336,33 @@ fn shortest_path_members(
     members
 }
 
-/// One inline handler in the view: its range, the position of the region that contains it,
-/// and its position in the view.
+/// One inline handler: its range, the index of the region that contains it, and its value.
 struct Region {
     start: usize,
     end: usize,
     parent: Option<usize>,
-    symbol: usize,
+    value: usize,
 }
 
-/// The inline handlers of the entry points that are in the view, by the file and the symbol
-/// around them. The regions of one key are in the order of their start. Two regions of one
-/// syntax tree are nested or apart.
-struct InlineRegions<'e> {
+/// The inline handlers of the entry points, by the file and the symbol around them, each with a
+/// value that the caller gives. The regions of one key are in the order of their start. Two
+/// regions of one syntax tree are nested or apart.
+pub(super) struct InlineRegions<'e> {
     by_place: BTreeMap<(&'e str, Option<&'e str>), Vec<Region>>,
 }
 
 impl<'e> InlineRegions<'e> {
-    fn new(view: &CallView, entries: &'e [EntryPoint]) -> Self {
+    /// The regions of the entries for which `value_of` gives a value. Of two entries with one
+    /// range, the first one gives the value.
+    pub(super) fn new(
+        entries: &'e [EntryPoint],
+        value_of: impl Fn(usize, &EntryPoint) -> Option<usize>,
+    ) -> Self {
         let mut by_place: BTreeMap<(&'e str, Option<&'e str>), Vec<Region>> = BTreeMap::new();
-        for entry in entries {
-            let (Some(inline), Some(symbol)) = (
-                entry.inline_handler.as_ref(),
-                entry
-                    .symbol
-                    .as_deref()
-                    .and_then(|key| view.position_of(key)),
-            ) else {
+        for (index, entry) in entries.iter().enumerate() {
+            let (Some(inline), Some(value)) =
+                (entry.inline_handler.as_ref(), value_of(index, entry))
+            else {
                 continue;
             };
             by_place
@@ -371,7 +372,7 @@ impl<'e> InlineRegions<'e> {
                     start: inline.range.start_byte,
                     end: inline.range.end_byte,
                     parent: None,
-                    symbol,
+                    value,
                 });
         }
         for regions in by_place.values_mut() {
@@ -392,22 +393,44 @@ impl<'e> InlineRegions<'e> {
         Self { by_place }
     }
 
-    /// The innermost inline handler that holds the sink.
-    fn holder(&self, sink: &Sink) -> Option<usize> {
-        let regions = self
-            .by_place
-            .get(&(sink.file.as_str(), sink.enclosing.as_deref()))?;
-        let position = sink.range.start_byte;
-        let after = regions.partition_point(|region| region.start <= position);
+    /// The value of the innermost inline handler of the place that contains the byte.
+    pub(super) fn innermost(
+        &self,
+        file: &str,
+        enclosing: Option<&str>,
+        byte: usize,
+    ) -> Option<usize> {
+        let regions = self.by_place.get(&(file, enclosing))?;
+        let after = regions.partition_point(|region| region.start <= byte);
         let mut current = after.checked_sub(1);
         while let Some(index) = current {
             let region = &regions[index];
-            if position < region.end {
-                return Some(region.symbol);
+            if byte < region.end {
+                return Some(region.value);
             }
             current = region.parent;
         }
         None
+    }
+
+    /// The value of the inline handler that directly contains the inline handler with the range.
+    pub(super) fn parent(
+        &self,
+        file: &str,
+        enclosing: Option<&str>,
+        range: &Span,
+    ) -> Option<usize> {
+        let regions = self.by_place.get(&(file, enclosing))?;
+        let key = (range.start_byte, std::cmp::Reverse(range.end_byte));
+        let index = regions
+            .binary_search_by_key(&key, |region| (region.start, std::cmp::Reverse(region.end)))
+            .ok()?;
+        regions[index].parent.map(|parent| regions[parent].value)
+    }
+
+    /// The innermost inline handler that holds the sink.
+    fn holder(&self, sink: &Sink) -> Option<usize> {
+        self.innermost(&sink.file, sink.enclosing.as_deref(), sink.range.start_byte)
     }
 }
 
@@ -421,7 +444,12 @@ pub fn reachability(
     entries: &[EntryPoint],
     min_basis: ResolutionBasis,
 ) -> Reachability {
-    let regions = InlineRegions::new(view, entries);
+    let regions = InlineRegions::new(entries, |_, entry| {
+        entry
+            .symbol
+            .as_deref()
+            .and_then(|key| view.position_of(key))
+    });
     let sink_symbols: Vec<(&Sink, Option<usize>)> = sinks
         .iter()
         .filter(|sink| !sink.flags.in_test)

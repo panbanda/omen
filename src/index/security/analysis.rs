@@ -1,17 +1,16 @@
 //! The security analysis of a set of files: the sinks, the entry points, and the paths.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::entry::{
-    entry_points_of_file, find_entry_points_with, EntryPoint, EntryRule, InlineHandler,
-    OnDemandTrees,
+    entry_points_of_file, find_entry_points_with, EntryPoint, EntryRule, OnDemandTrees,
 };
 use super::matcher::{file_sinks, Repository};
-use super::reach::{coverage, reachability, Coverage, Reachability};
+use super::reach::{coverage, reachability, Coverage, InlineRegions, Reachability};
 use super::spec::SinkSpec;
 use super::suppress::{self, InvalidSuppression, Suppressed};
 use super::{find_sinks_with, Sink};
@@ -120,8 +119,8 @@ pub fn analyze_with_index(
         .map(|position| index.files[*position].file.clone())
         .collect();
     let (sinks, suppressed, invalid_suppressions) = suppress::split(all_sinks, &names, comments);
-    let mut view = CallView::from_index(index);
-    view.add_function_values(&inline_handlers(index, &entry_points));
+    let view =
+        CallView::from_index_with_function_values(index, &inline_handlers(index, &entry_points));
     let reach = reachability(&view, &sinks, &entry_points, options.min_basis);
     let mut languages: Vec<Language> = Vec::new();
     for position in &kept {
@@ -140,56 +139,79 @@ pub fn analyze_with_index(
     })
 }
 
-/// The inline handlers of the entry points, each with the calls and the function references in
-/// it that the index gives to the symbol around it.
+/// The inline handlers of the entry points, in the order of the file and the start. Each call
+/// and each function reference that the index gives to the symbol around a handler belongs to
+/// the innermost handler that contains it.
 fn inline_handlers<'i>(index: &'i CodeIndex, entries: &[EntryPoint]) -> Vec<FunctionValue<'i>> {
-    let mut by_file: BTreeMap<&str, Vec<(&str, &InlineHandler)>> = BTreeMap::new();
-    for entry in entries {
-        if let (Some(inline), Some(key)) = (&entry.inline_handler, &entry.symbol) {
-            by_file
-                .entry(entry.file.as_str())
-                .or_default()
-                .push((key.as_str(), inline));
-        }
-    }
-    let by_start = |references: &'i [Reference]| {
-        let mut sorted: Vec<&'i Reference> = references.iter().collect();
-        sorted.sort_by_key(|reference| reference.name_range.start_byte);
-        sorted
-    };
-    let mut values = Vec::new();
-    for file in index
-        .files
-        .iter()
-        .filter(|file| by_file.contains_key(file.file.as_str()))
-    {
-        let calls = by_start(&file.references);
-        let function_references = by_start(&file.function_references);
-        for (key, inline) in &by_file[file.file.as_str()] {
+    let mut values: Vec<FunctionValue<'i>> = Vec::new();
+    let mut value_of_entry: Vec<Option<usize>> = vec![None; entries.len()];
+    let mut by_key: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut order: Vec<usize> = (0..entries.len())
+        .filter(|position| {
+            entries[*position].inline_handler.is_some() && entries[*position].symbol.is_some()
+        })
+        .collect();
+    order.sort_by_key(|position| {
+        let entry = &entries[*position];
+        let range = entry.inline_handler.as_ref().map(|inline| inline.range);
+        (
+            entry.file.as_str(),
+            range.map(|range| range.start_byte),
+            std::cmp::Reverse(range.map(|range| range.end_byte)),
+        )
+    });
+    for position in order {
+        let entry = &entries[position];
+        let (Some(inline), Some(key)) = (&entry.inline_handler, &entry.symbol) else {
+            continue;
+        };
+        let value = *by_key.entry(key.as_str()).or_insert_with(|| {
             values.push(FunctionValue {
-                key: key.to_string(),
-                file: file.file.clone(),
+                key: key.clone(),
+                file: entry.file.clone(),
                 range: inline.range,
                 enclosing: inline.enclosing.clone(),
-                references: inside(&calls, inline),
-                function_references: inside(&function_references, inline),
+                parent: None,
+                references: Vec::new(),
+                function_references: Vec::new(),
             });
+            values.len() - 1
+        });
+        value_of_entry[position] = Some(value);
+    }
+    let regions = InlineRegions::new(entries, |position, _| value_of_entry[position]);
+    let parents: Vec<Option<String>> = values
+        .iter()
+        .map(|value| {
+            regions
+                .parent(&value.file, value.enclosing.as_deref(), &value.range)
+                .map(|parent| values[parent].key.clone())
+        })
+        .collect();
+    for (value, parent) in values.iter_mut().zip(parents) {
+        value.parent = parent;
+    }
+    let files: BTreeSet<String> = values.iter().map(|value| value.file.clone()).collect();
+    for file in index.files.iter().filter(|file| files.contains(&file.file)) {
+        let holder = |reference: &Reference| {
+            regions.innermost(
+                &file.file,
+                reference.enclosing.as_deref(),
+                reference.name_range.start_byte,
+            )
+        };
+        for reference in &file.references {
+            if let Some(value) = holder(reference) {
+                values[value].references.push(reference);
+            }
+        }
+        for reference in &file.function_references {
+            if let Some(value) = holder(reference) {
+                values[value].function_references.push(reference);
+            }
         }
     }
     values
-}
-
-/// The references in the range of the inline handler that the index gives to the symbol around
-/// it. `references` is in the order of the start.
-fn inside<'i>(references: &[&'i Reference], inline: &InlineHandler) -> Vec<&'i Reference> {
-    let first = references
-        .partition_point(|reference| reference.name_range.start_byte < inline.range.start_byte);
-    references[first..]
-        .iter()
-        .take_while(|reference| reference.name_range.start_byte < inline.range.end_byte)
-        .filter(|reference| reference.enclosing.as_deref() == inline.enclosing.as_deref())
-        .copied()
-        .collect()
 }
 
 type Comments = Vec<(Vec<suppress::Allow>, Vec<InvalidSuppression>)>;
@@ -820,6 +842,63 @@ mod tests {
         );
     }
 
+    /// The steps of each path with the kind of the edge to each step.
+    fn path_edges(analysis: &Analysis) -> Vec<Vec<(String, EdgeKind)>> {
+        let mut found: Vec<Vec<(String, EdgeKind)>> = analysis
+            .reachability
+            .paths
+            .iter()
+            .map(|path| {
+                path.steps
+                    .iter()
+                    .map(|step| (step.symbol.clone(), step.edge))
+                    .collect()
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    use crate::index::security::reach::EdgeKind;
+
+    #[test]
+    fn a_call_in_an_inline_handler_is_an_edge_of_the_handler_and_not_of_the_function_around_it() {
+        let source = "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\napp.get('/boot', boot);\nfunction boot(req, res) {\n  setup();\n}\nfunction setup() {\n  app.post('/run', (req, res) => deep(req.body.cmd));\n}\nfunction deep(command) {\n  exec(command);\n}\n";
+        let analysis = run(&[("server.js", source)], DEFAULT_MIN_BASIS);
+        let inline = "server.js#setup.<inline@9:19>".to_string();
+        let deep = "server.js#deep".to_string();
+        assert_eq!(
+            path_edges(&analysis),
+            [
+                vec![
+                    ("server.js#boot".to_string(), EdgeKind::Call),
+                    ("server.js#setup".to_string(), EdgeKind::Call),
+                    (inline.clone(), EdgeKind::FunctionReference),
+                    (deep.clone(), EdgeKind::Call),
+                ],
+                vec![(inline, EdgeKind::Call), (deep, EdgeKind::Call)],
+            ]
+        );
+    }
+
+    #[test]
+    fn an_inline_handler_that_registers_an_inline_handler_reaches_it() {
+        let source = "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\nfunction setup() {\n  app.get('/outer', (req, res) => {\n    app.post('/inner', (q, s) => exec(q.body.c));\n  });\n}\n";
+        let analysis = run(&[("server.js", source)], DEFAULT_MIN_BASIS);
+        let outer = "server.js#setup.<inline@5:20>".to_string();
+        let inner = "server.js#setup.<inline@6:23>".to_string();
+        assert_eq!(
+            path_edges(&analysis),
+            [
+                vec![
+                    (outer, EdgeKind::Call),
+                    (inner.clone(), EdgeKind::FunctionReference)
+                ],
+                vec![(inner, EdgeKind::Call)],
+            ]
+        );
+    }
+
     #[test]
     #[ignore = "timing test: run in release with --ignored"]
     fn timing_inline_handlers_resolve_in_linear_time() {
@@ -845,8 +924,10 @@ mod tests {
             let analysis = run(&[("server.js", text.as_str())], DEFAULT_MIN_BASIS);
             assert_eq!(analysis.reachability.paths.len(), size);
             let start = std::time::Instant::now();
-            let mut view = CallView::from_index(&index);
-            view.add_function_values(&inline_handlers(&index, &analysis.entry_points));
+            let view = CallView::from_index_with_function_values(
+                &index,
+                &inline_handlers(&index, &analysis.entry_points),
+            );
             let found = reachability(
                 &view,
                 &analysis.sinks,
