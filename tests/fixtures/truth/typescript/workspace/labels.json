@@ -2,7 +2,7 @@
   "version": 1,
   "language": "typescript",
   "split": "development",
-  "oracle": "Author-reviewed. The case is a workspace without build output: `my-lib` and `@acme/util` name only files in `dist`. `tsc` did not run. The harness does not run the code.",
+  "oracle": "Author-reviewed. The case is a workspace without build output: `my-lib` names only files in `out`, and `@acme/util` names only files in `dist`. The `outDir` of `my-lib` is `out`, thus only its config, not the `dist` rule, gives the source. `tsc` did not run. The harness does not run the code.",
   "closed_world": false,
   "symbols": [
     {"label": "main", "category": "free_function", "file": "packages/app/src/main.ts", "name": "main", "kind": "function", "container": null, "start_line": 5, "end_line": 7, "exported": true},
