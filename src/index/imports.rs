@@ -273,6 +273,8 @@ pub struct NodePackage {
     /// The `package.json` file has `exports`. Then a subpath that no entry
     /// names is not a file of the package.
     pub has_exports: bool,
+    /// The keys of `exports` with `*`, with the files of each key.
+    pub export_patterns: std::sync::Arc<typescript::PatternTable<BTreeSet<String>>>,
     /// The config that `extends` with the name of the package names: the
     /// `tsconfig` field, else `tsconfig.json`. The path is relative to the
     /// directory of the package.
@@ -322,11 +324,18 @@ pub fn node_package(directory: &str, package_json: &str) -> Option<NodePackage> 
             }
         }
     }
+    let export_patterns = std::sync::Arc::new(typescript::PatternTable::new(
+        exports
+            .iter()
+            .filter(|(key, _)| key.contains('*'))
+            .map(|(key, files)| (key.clone(), files.clone())),
+    ));
     Some(NodePackage {
         name,
         directory: directory.to_string(),
         exports,
         has_exports: package.get("exports").is_some(),
+        export_patterns,
         tsconfig: package
             .get("tsconfig")
             .and_then(|value| value.as_str())
@@ -339,16 +348,7 @@ pub fn node_package(directory: &str, package_json: &str) -> Option<NodePackage> 
 /// matched text for each `*`. Of the keys that match, the key with the
 /// longest text before `*` applies, as in Node.js.
 fn export_pattern(package: &NodePackage, subpath: &str) -> Vec<String> {
-    let best = package
-        .exports
-        .iter()
-        .filter_map(|(key, entries)| {
-            let (prefix, suffix) = key.split_once('*')?;
-            let matched = subpath.strip_prefix(prefix)?.strip_suffix(suffix)?;
-            Some((prefix.len(), key.len(), entries, matched))
-        })
-        .max_by_key(|(prefix, key, _, _)| (*prefix, *key));
-    let Some((_, _, entries, matched)) = best else {
+    let Some((entries, matched, _)) = package.export_patterns.find_wildcard(subpath) else {
         return Vec::new();
     };
     entries
@@ -2057,6 +2057,54 @@ mod typescript_timing_tests {
         elapsed
     }
 
+    /// A package whose `exports` has `size` keys with `*`, and `size` files
+    /// that each import one subpath that a key matches and one that no key
+    /// matches.
+    fn export_patterns_at(size: usize) -> std::time::Duration {
+        let keys: Vec<String> = (0..size)
+            .map(|position| format!("\"./k{position}/*\": \"./src/k{position}/*.ts\""))
+            .collect();
+        let mut owned = vec![(
+            "packages/lib/package.json".to_string(),
+            format!(
+                "{{ \"name\": \"lib\", \"exports\": {{ {} }} }}",
+                keys.join(", ")
+            ),
+        )];
+        for position in 0..size {
+            owned.push((
+                format!("packages/lib/src/k{position}/value.ts"),
+                "export const value = 1;\n".to_string(),
+            ));
+            owned.push((
+                format!("app/m{position}.ts"),
+                format!("import {{ value }} from 'lib/k{position}/value';\nimport {{ other }} from 'lib/none{position}/value';\n"),
+            ));
+        }
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let facts = index(&files);
+        let elapsed = started.elapsed();
+        let last = format!("app/m{}.ts", size - 1);
+        let main = facts.iter().find(|facts| facts.file == last).unwrap();
+        let targets: Vec<&ImportTarget> = main
+            .imports
+            .iter()
+            .map(|binding| &binding.target_file)
+            .collect();
+        assert_eq!(
+            targets,
+            [
+                &ImportTarget::Resolved(format!("packages/lib/src/k{}/value.ts", size - 1)),
+                &ImportTarget::Unresolved
+            ]
+        );
+        elapsed
+    }
+
     /// A chain of `size` configs in sibling directories, each of which
     /// extends the config before it, and one file beside each config that
     /// imports through the pattern of the first config.
@@ -2180,6 +2228,17 @@ mod typescript_timing_tests {
     #[ignore = "timing: run in release"]
     fn timing_many_path_patterns_resolve_in_linear_time() {
         assert_scales_linearly("path patterns", 2_000, path_patterns_at);
+    }
+
+    #[test]
+    fn test_export_patterns_resolve() {
+        export_patterns_at(50);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_export_patterns_resolve_in_linear_time() {
+        assert_scales_linearly("export patterns", 2_000, export_patterns_at);
     }
 
     #[test]

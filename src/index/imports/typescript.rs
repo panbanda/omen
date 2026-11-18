@@ -30,21 +30,25 @@ const BUILD_SOURCE_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "js", "jsx
 
 /// The patterns of `paths` of one config. The configs that inherit them
 /// share them.
-pub type PathPatterns = Arc<PathTable>;
+pub type PathPatterns = Arc<PatternTable<Vec<String>>>;
 
-/// The patterns of `paths` and their substitutions.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct PathTable {
+/// Patterns with at most one `*`, as the keys of `paths` of a config and of
+/// `exports` of a package, each with a value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatternTable<V> {
     /// The patterns without `*`, sorted by the pattern.
-    exact: Vec<(String, Vec<String>)>,
+    exact: Vec<(String, V)>,
     /// The patterns with one `*`, by the text before `*`. For each prefix,
     /// the text after `*` in reverse order of its characters, sorted.
-    wildcard: HashMap<String, Vec<(String, Vec<String>)>>,
+    wildcard: HashMap<String, Vec<(String, V)>>,
 }
 
-impl PathTable {
-    fn new(patterns: Vec<(String, Vec<String>)>) -> Self {
-        let mut table = Self::default();
+impl<V> PatternTable<V> {
+    pub fn new(patterns: impl IntoIterator<Item = (String, V)>) -> Self {
+        let mut table = Self {
+            exact: Vec::new(),
+            wildcard: HashMap::new(),
+        };
         for (pattern, substitutions) in patterns {
             match pattern.split_once('*') {
                 None => table.exact.push((pattern, substitutions)),
@@ -60,25 +64,31 @@ impl PathTable {
                 Some(_) => {}
             }
         }
-        table.exact.sort();
+        table.exact.sort_by(|left, right| left.0.cmp(&right.0));
         for group in table.wildcard.values_mut() {
-            group.sort();
+            group.sort_by(|left, right| left.0.cmp(&right.0));
         }
         table
     }
 
-    /// The substitutions of the pattern that applies to `module`, the text
-    /// that `*` matches, and if the pattern is `*` alone. Of the patterns
-    /// with `*`, the pattern with the longest prefix applies, and of these,
-    /// the pattern with the longest suffix. The cost does not grow with the
-    /// number of patterns.
-    fn find<'m>(&self, module: &'m str) -> Option<(&[String], &'m str, bool)> {
+    /// The value of the pattern that applies to `module`, the text that `*`
+    /// matches, and if the pattern is `*` alone. An exact pattern applies
+    /// first.
+    pub fn find<'m>(&self, module: &'m str) -> Option<(&V, &'m str, bool)> {
         if let Ok(position) = self
             .exact
             .binary_search_by(|(pattern, _)| pattern.as_str().cmp(module))
         {
             return Some((&self.exact[position].1, "", false));
         }
+        self.find_wildcard(module)
+    }
+
+    /// Like `find`, for the patterns with `*` only. The pattern with the
+    /// longest prefix applies, and of these, the pattern with the longest
+    /// suffix, as in TypeScript and Node.js. The cost does not grow with the
+    /// number of patterns.
+    pub fn find_wildcard<'m>(&self, module: &'m str) -> Option<(&V, &'m str, bool)> {
         (0..=module.len())
             .rev()
             .filter(|length| module.is_char_boundary(*length))
@@ -95,11 +105,7 @@ impl PathTable {
                             .binary_search_by(|(text, _)| text.as_str().cmp(suffix))
                             .ok()?;
                         let matched = &tail[..tail.len() - end];
-                        Some((
-                            group[position].1.as_slice(),
-                            matched,
-                            length == 0 && end == 0,
-                        ))
+                        Some((&group[position].1, matched, length == 0 && end == 0))
                     })
             })
     }
@@ -299,7 +305,7 @@ pub fn project_config(text: &str) -> Option<ProjectConfig> {
                 })
                 .collect()
         })
-        .map(|paths| Arc::new(PathTable::new(paths)));
+        .map(|paths: Vec<(String, Vec<String>)>| Arc::new(PatternTable::new(paths)));
     Some(ProjectConfig {
         extends,
         base_url: text_option("baseUrl"),
