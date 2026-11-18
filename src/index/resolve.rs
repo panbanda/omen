@@ -224,8 +224,8 @@ struct Resolver<'a> {
     go_embedders: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// For each Go type, the methods that it has itself.
     go_methods: OnceLock<BTreeMap<Id, Vec<Id>>>,
-    /// The results of `implementations`, by the interface and the method name.
-    implementations_cache: RwLock<HashMap<MethodQuery, Arc<Vec<Id>>>>,
+    /// The results of `implementations`, by the interface.
+    implementations_cache: RwLock<HashMap<Id, Arc<ImplementationsByName>>>,
     /// The results of `types`, `package_files`, and `visible_files`. The
     /// resolution of one call asks for the same facts many times.
     types_cache: RwLock<HashMap<TypeQuery, Vec<Id>>>,
@@ -265,7 +265,8 @@ type ModuleScopes = HashMap<Option<usize>, ([bool; 3], Vec<String>)>;
 type TwinQuery = (Vec<Id>, String, usize);
 
 /// A type and the name of one of its methods.
-type MethodQuery = (Id, String);
+/// For each method name of an interface, the methods that implement it.
+type ImplementationsByName = HashMap<String, Arc<Vec<Id>>>;
 
 /// The file and the name of one lookup of an exported name.
 type ExportQuery = (usize, String);
@@ -2311,18 +2312,35 @@ impl<'a> Resolver<'a> {
     /// signatures, and an embedded interface outside the repository adds no
     /// name. Thus the result can have more types than the compiler accepts.
     fn implementations(&self, interface: Id, name: &str) -> Arc<Vec<Id>> {
-        let query = (interface, name.to_string());
-        if let Some(found) = self.implementations_cache.read().get(&query) {
-            return Arc::clone(found);
-        }
+        let cached = self.implementations_cache.read().get(&interface).cloned();
+        let by_name = cached.unwrap_or_else(|| {
+            let found = Arc::new(self.implementations_by_name(interface));
+            self.implementations_cache
+                .write()
+                .insert(interface, Arc::clone(&found));
+            found
+        });
+        by_name.get(name).cloned().unwrap_or_default()
+    }
+
+    /// The result of `implementations` for each method name of the interface.
+    /// A type that implements the interface has a method of each name, thus
+    /// the search starts at the types with a method of the least common name.
+    fn implementations_by_name(&self, interface: Id) -> ImplementationsByName {
         let required = self.interface_method_names(interface);
+        let Some(rarest) = required
+            .iter()
+            .min_by_key(|name| (self.named(name, interface.0).count(), **name))
+        else {
+            return HashMap::new();
+        };
         let embedders = self
             .go_embedders
             .get_or_init(|| self.embedders_of_go_types());
-        // The types that own a method `name`, and the structs that embed them.
+        // The types that own a method of the rarest name, and the structs that embed them.
         let mut pending: Vec<Id> = self
-            .named(name, interface.0)
-            .filter(|id| is_callable(self.symbol(*id)) && self.symbol(*id).receiver_type.is_some())
+            .named(rarest, interface.0)
+            .filter(|id| is_callable(self.symbol(*id)))
             .filter_map(|id| {
                 match self
                     .types(self.symbol(id).container.as_deref()?, None, id.0)
@@ -2339,28 +2357,38 @@ impl<'a> Resolver<'a> {
                 pending.extend(embedders.get(&owner).into_iter().flatten().copied());
             }
         }
-        let mut names = required.clone();
-        names.insert(name);
-        let promoted = self.promoted_go_methods(&owners, &names);
-        let mut found: Vec<Id> = owners
+        let promoted = self.promoted_go_methods(&owners, &required);
+        let mut found: HashMap<String, Vec<Id>> = HashMap::new();
+        for methods in owners
             .iter()
             .filter(|owner| self.symbol(**owner).kind != SymbolKind::Interface)
             .filter_map(|owner| promoted.get(owner))
             .filter(|methods| required.iter().all(|method| methods.contains_key(*method)))
-            .flat_map(|methods| methods.get(name).into_iter().flatten().copied())
-            .collect();
-        found.sort();
-        found.dedup();
-        let found = Arc::new(found);
-        self.implementations_cache
-            .write()
-            .insert(query, Arc::clone(&found));
+        {
+            for (method_name, list) in methods {
+                // A method that an embedded interface declares is not an
+                // implementation.
+                found.entry(method_name.clone()).or_default().extend(
+                    list.iter()
+                        .copied()
+                        .filter(|id| self.symbol(*id).receiver_type.is_some()),
+                );
+            }
+        }
         found
+            .into_iter()
+            .map(|(method_name, mut list)| {
+                list.sort();
+                list.dedup();
+                (method_name, Arc::new(list))
+            })
+            .collect()
     }
 
     /// The method names of a Go interface, with the names of the interfaces
     /// of the repository that it embeds.
     fn interface_method_names(&self, interface: Id) -> BTreeSet<&'a str> {
+        let methods = self.go_methods.get_or_init(|| self.methods_of_go_types());
         let mut names = BTreeSet::new();
         let mut seen = BTreeSet::new();
         let mut pending = vec![interface];
@@ -2368,17 +2396,13 @@ impl<'a> Resolver<'a> {
             if !seen.insert(current) {
                 continue;
             }
-            let path = self.member_path(current);
-            let facts = &self.files[current.0];
             names.extend(
-                facts
-                    .symbols
-                    .iter()
-                    .zip(&facts.link_facts)
-                    .filter(|(symbol, link)| {
-                        symbol.kind == SymbolKind::Method && link.container_path == path
-                    })
-                    .map(|(symbol, _)| symbol.name.as_str()),
+                methods
+                    .get(&current)
+                    .into_iter()
+                    .flatten()
+                    .filter(|id| self.files[id.0].symbols[id.1].receiver_type.is_none())
+                    .map(|id| self.files[id.0].symbols[id.1].name.as_str()),
             );
             pending.extend(self.parents(current));
         }

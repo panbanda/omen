@@ -314,3 +314,36 @@ fn package_calls_resolve_at(files: usize) -> std::time::Duration {
 fn timing_builtin_calls_in_a_large_package_resolve_in_linear_time() {
     super::function_references::assert_scales_linearly("files", 2_000, package_calls_resolve_at);
 }
+
+/// The resolution time of a call of each method of an interface with
+/// `methods` methods.
+fn calls_of_each_interface_method_resolve_at(methods: usize) -> std::time::Duration {
+    let mut storage = String::from("package storage\n\ntype Store interface {\n");
+    for method in 0..methods {
+        storage.push_str(&format!("\tM{method}() error\n"));
+    }
+    storage.push_str("}\n\nfunc run(store Store) {\n");
+    for method in 0..methods {
+        storage.push_str(&format!("\t_ = store.M{method}()\n"));
+    }
+    storage.push_str("}\n");
+    let files = [
+        ("go.mod", "module example.com/shop\n"),
+        ("storage/storage.go", storage.as_str()),
+    ];
+    let started = std::time::Instant::now();
+    let found = rows(&files, "storage/storage.go");
+    let elapsed = started.elapsed();
+    assert_eq!(found.len(), methods);
+    elapsed
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_calls_of_many_interface_methods_resolve_in_linear_time() {
+    super::function_references::assert_scales_linearly(
+        "methods",
+        4_000,
+        calls_of_each_interface_method_resolve_at,
+    );
+}
