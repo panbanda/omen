@@ -9,7 +9,7 @@
     {"label": "router_in_other_file", "file": "routes/admin.ts", "line": 6, "kind": "http_handler", "framework": "express", "method": "POST", "path": "/reset", "parameters": [], "guards": []},
     {"label": "local_alias_of_field", "file": "server.ts", "line": 24, "kind": "http_handler", "framework": "express", "method": "GET", "path": "/health", "parameters": [], "guards": []},
     {"label": "typed_field_and_template_of_constants", "file": "server.ts", "line": 25, "kind": "http_handler", "framework": "express", "method": "POST", "path": "/api/v1/metrics", "parameters": [], "guards": ["requireAuth"]},
-    {"label": "path_that_is_not_a_constant", "file": "server.ts", "line": 29, "kind": "http_handler", "framework": "express", "method": "GET", "parameters": [], "guards": []}
+    {"label": "path_that_is_not_a_constant", "file": "server.ts", "line": 29, "kind": "http_handler", "framework": "express", "method": "GET", "path": null, "parameters": [], "guards": []}
   ],
   "paths": [
     {"label": "inline_handler_to_command", "entry_file": "routes/admin.ts", "entry_line": 6, "sink_file": "routes/admin.ts", "sink_line": 7, "steps": ["routes/admin.ts#<inline@6:27>"], "path_count": 1, "guards": []},

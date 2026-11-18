@@ -224,13 +224,25 @@ pub struct EntryPointLabel {
     pub framework: String,
     #[serde(default)]
     pub method: Option<String>,
-    #[serde(default)]
-    pub path: Option<String>,
+    /// Omitted: omen does not check the path. `null`: the entry point must have no resolved
+    /// path. A string: the path must be equal to it.
+    #[serde(default, deserialize_with = "present")]
+    pub path: Option<Option<String>>,
     #[serde(default)]
     pub parameters: Vec<String>,
     /// The declared guards, in the order in which omen reports them.
     #[serde(default)]
     pub guards: Vec<String>,
+}
+
+/// A field that is present in the JSON, also with the value `null`. With `#[serde(default)]`, an
+/// omitted field stays `None`.
+fn present<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 /// One call, member access, or literal that is a sink or must not be one.
@@ -863,7 +875,7 @@ fn compare_entry_points(
                     && entry.file == label.file
                     && entry.line == label.line
                     && entry.kind == label.kind
-                    && (label.path.is_none() || entry.path == label.path)
+                    && label.path.as_ref().is_none_or(|path| entry.path == *path)
                     && (label.method.is_none() || entry.method == label.method)
             })
             .map(|(position, entry)| {
@@ -2197,6 +2209,41 @@ mod tests {
             entry_failures(&observed),
             ["python/entry_points/entry_points/unlabelled:app.py:20:http_handler/absent"]
         );
+    }
+
+    #[test]
+    fn a_null_path_requires_that_the_entry_point_has_no_path() {
+        let labels: Labels = serde_json::from_value(serde_json::json!({
+            "version": 1, "language": "typescript", "split": "development", "oracle": "x",
+            "closed_world": false,
+            "entry_points": [
+                {"label": "unresolved", "file": "app.ts", "line": 7, "kind": "http_handler",
+                 "framework": "express", "method": "GET", "path": null}
+            ]
+        }))
+        .unwrap();
+        let mut entry = observed_entry();
+        entry.framework = "express".to_string();
+        entry.method = Some("GET".to_string());
+        entry.parameters.clear();
+        entry.guards.clear();
+        let failures = |path: Option<&str>| -> Vec<String> {
+            let mut entry = entry.clone();
+            entry.file = "app.ts".to_string();
+            entry.path = path.map(str::to_string);
+            let observed = Observed {
+                entry_points: vec![entry],
+                ..Observed::default()
+            };
+            compare("typescript/routes", &labels, &observed)
+                .unwrap()
+                .into_iter()
+                .filter(|assertion| !assertion.passed)
+                .map(|assertion| assertion.id)
+                .collect()
+        };
+        assert_eq!(failures(None), Vec::<String>::new());
+        assert!(!failures(Some("/resolved")).is_empty());
     }
 
     fn path_labels() -> Labels {
