@@ -716,6 +716,153 @@ mod tests {
         assert_eq!(lines, [5, 6, 7]);
     }
 
+    /// The line, the category, and the flag `constant_argument` of each sink.
+    fn constants(language: Language, files: &[(&str, &str)]) -> Vec<(u32, &'static str, bool)> {
+        sinks(language, files)
+            .into_iter()
+            .map(|sink| {
+                (
+                    sink.range.start_line,
+                    sink.category.name(),
+                    sink.flags.constant_argument,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_process_that_os_or_syscall_starts_is_a_command_sink_go() {
+        let source = "package main\n\nimport (\n\t\"os\"\n\tsys \"syscall\"\n)\n\nfunc run(program string, arguments []string) {\n\tos.StartProcess(program, arguments, nil)\n\tsys.Exec(program, arguments, nil)\n\tsys.ForkExec(program, arguments, nil)\n\tsys.StartProcess(program, arguments, nil)\n\tos.Getpid()\n\ttext := \"os.StartProcess(program)\"\n\t// syscall.Exec(program)\n\t_ = text\n}\n";
+        assert_eq!(
+            found(Language::Go, &[("a.go", source)]),
+            [
+                one("a.go", 9, "command_execution", "imported_symbol"),
+                one("a.go", 10, "command_execution", "imported_symbol"),
+                one("a.go", 11, "command_execution", "imported_symbol"),
+                one("a.go", 12, "command_execution", "imported_symbol"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_concatenation_of_literals_is_a_constant_argument() {
+        let go = "package main\n\nimport \"database/sql\"\n\nfunc run(db *sql.DB, id int, name string) {\n\tdb.Query(\"SELECT a \"+\n\t\t\"FROM t WHERE id = ?\", id)\n\tdb.Query(\"SELECT a FROM t WHERE name = '\" + name + \"'\")\n\tdb.Query((\"SELECT \" + \"a \") + \"FROM t\")\n}\n";
+        assert_eq!(
+            constants(Language::Go, &[("a.go", go)]),
+            [
+                (6, "sql_string_construction", true),
+                (8, "sql_string_construction", false),
+                (9, "sql_string_construction", true),
+            ]
+        );
+        let python = "def run(cursor, name):\n    cursor.execute(\"SELECT a \" + \"FROM t WHERE id = %s\", (name,))\n    cursor.execute(\"SELECT a \" + name)\n";
+        assert_eq!(
+            constants(Language::Python, &[("a.py", python)]),
+            [
+                (2, "sql_string_construction", true),
+                (3, "sql_string_construction", false),
+            ]
+        );
+        let java = "import java.sql.Statement;\n\nclass A {\n    void run(Statement statement, String name) throws Exception {\n        statement.executeQuery(\"SELECT a \" + \"FROM t\");\n        statement.executeQuery(\"SELECT a \" + name);\n    }\n}\n";
+        assert_eq!(
+            constants(Language::Java, &[("A.java", java)]),
+            [
+                (5, "sql_string_construction", true),
+                (6, "sql_string_construction", false),
+            ]
+        );
+        let php = "<?php\nfunction run($name) {\n    mysql_query(\"SELECT a \" . \"FROM t\");\n    mysql_query(\"SELECT a \" . $name);\n}\n";
+        assert_eq!(
+            constants(Language::Php, &[("a.php", php)]),
+            [
+                (3, "sql_string_construction", true),
+                (4, "sql_string_construction", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_sql_methods_of_xorm_sqlx_and_gorm_take_a_built_string_go() {
+        let source = "package main\n\nimport \"fmt\"\n\nfunc run(engine Engine, ctx int, table string) {\n\tengine.SQL(fmt.Sprintf(\"SELECT * FROM %s\", table)).Get(nil)\n\tengine.SQL(\"SELECT * FROM t WHERE id = ?\", table)\n\tengine.Raw(fmt.Sprintf(\"SELECT * FROM %s\", table))\n\tengine.Prepare(\"SELECT * FROM \" + table)\n\tengine.PrepareContext(ctx, \"SELECT * FROM \" + table)\n\tengine.Queryx(\"SELECT * FROM \" + table)\n\tengine.QueryRowx(\"SELECT * FROM \" + table)\n\tengine.MustExec(\"DELETE FROM \" + table)\n\tengine.NamedExec(\"DELETE FROM \" + table, nil)\n\tengine.NamedQuery(\"SELECT * FROM \" + table, nil)\n\tengine.QueryxContext(ctx, \"SELECT * FROM \" + table)\n\tengine.Get(fmt.Sprintf(\"key-%s\", table))\n\tengine.Select(fmt.Sprintf(\"a-%s\", table))\n}\n";
+        let lines: Vec<u32> = found(Language::Go, &[("a.go", source)])
+            .iter()
+            .map(|sink| sink.1)
+            .collect();
+        assert_eq!(lines, [6, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    }
+
+    #[test]
+    fn a_tls_setting_that_is_not_a_constant_is_a_sink_with_the_flag_go() {
+        let source = "package main\n\nimport \"crypto/tls\"\n\nfunc run(skip bool, options Options) {\n\t_ = &tls.Config{InsecureSkipVerify: true}\n\t_ = &tls.Config{InsecureSkipVerify: false}\n\t_ = &tls.Config{InsecureSkipVerify: skip}\n\t_ = &tls.Config{InsecureSkipVerify: options.Skip}\n\t_ = &Options{InsecureSkipVerify: skip}\n\tconfig := &tls.Config{}\n\tconfig.InsecureSkipVerify = skip\n\tconfig.InsecureSkipVerify = false\n\tconfig.InsecureSkipVerify = true\n\toptions.InsecureSkipVerify = skip\n}\n";
+        assert_eq!(
+            constants(Language::Go, &[("a.go", source)]),
+            [
+                (6, "tls_verification_disabled", true),
+                (8, "tls_verification_disabled", false),
+                (9, "tls_verification_disabled", false),
+                (12, "tls_verification_disabled", false),
+                (14, "tls_verification_disabled", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tls_setting_that_is_not_a_constant_is_a_sink_with_the_flag_python() {
+        let source = "import requests\n\ndef run(url, check):\n    requests.get(url, verify=False)\n    requests.get(url, verify=True)\n    requests.get(url, verify=check)\n    requests.get(url, verify=\"/etc/ca.pem\")\n    requests.get(url)\n";
+        assert_eq!(
+            constants(Language::Python, &[("a.py", source)]),
+            [
+                (4, "tls_verification_disabled", true),
+                (6, "tls_verification_disabled", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tls_setting_that_is_not_a_constant_is_a_sink_with_the_flag_ecma() {
+        let source = "import https from \"https\";\n\nexport function run(url, check) {\n  https.request(url, { rejectUnauthorized: false });\n  https.request(url, { rejectUnauthorized: true });\n  https.request(url, { rejectUnauthorized: check });\n  https.request(url, { timeout: 1 });\n}\n";
+        assert_eq!(
+            constants(Language::JavaScript, &[("a.js", source)]),
+            [
+                (4, "tls_verification_disabled", true),
+                (6, "tls_verification_disabled", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tls_setting_that_is_not_a_constant_is_a_sink_with_the_flag_rust() {
+        let source = "pub fn run(builder: reqwest::ClientBuilder, check: bool) {\n    builder.danger_accept_invalid_certs(true);\n    builder.danger_accept_invalid_certs(false);\n    builder.danger_accept_invalid_certs(check);\n    builder.danger_accept_invalid_hostnames(check);\n}\n";
+        assert_eq!(
+            constants(Language::Rust, &[("a.rs", source)]),
+            [
+                (2, "tls_verification_disabled", true),
+                (4, "tls_verification_disabled", false),
+                (5, "tls_verification_disabled", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tls_setting_that_is_not_a_constant_is_a_sink_with_the_flag_php_and_c() {
+        let php = "<?php\nfunction run($handle, $check) {\n    curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, false);\n    curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, true);\n    curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, $check);\n    curl_setopt($handle, CURLOPT_TIMEOUT, $check);\n}\n";
+        assert_eq!(
+            constants(Language::Php, &[("a.php", php)]),
+            [
+                (3, "tls_verification_disabled", true),
+                (5, "tls_verification_disabled", false),
+            ]
+        );
+        let c = "void run(void *handle, long check) {\n    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 0L);\n    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);\n    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, check);\n}\n";
+        assert_eq!(
+            constants(Language::C, &[("a.c", c)]),
+            [
+                (2, "tls_verification_disabled", true),
+                (4, "tls_verification_disabled", false),
+            ]
+        );
+    }
+
     #[test]
     fn a_local_in_a_block_that_holds_the_call_hides_the_sink_go() {
         let source = "package main\n\nimport \"os/exec\"\n\nfunc run(cmd string) {\n\t{\n\t\texec := struct{}{}\n\t\texec.Command(cmd)\n\t}\n}\n";

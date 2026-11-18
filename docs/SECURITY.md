@@ -45,8 +45,33 @@ The MCP tool `security` has the same sections and filters. The tools `symbol` an
 
 A sink has a basis: `imported_symbol` (an import binds the callee), `builtin` (the
 language gives the name), or `name_only` (only the name is evidence). A sink in test
-code has the flag `in_test`. A call with only literal arguments has the flag
-`constant_argument`.
+code has the flag `in_test`.
+
+The flag `constant_argument` tells that the value that makes the sink is a constant. A
+constant is a literal, or literals that an operator joins, as in `"SELECT a " + "FROM t"`.
+The value is one of these:
+
+- The SQL text, for a sink of the category `sql_string_construction`.
+- The value of the setting, for a TLS setting such as `verify=` or `InsecureSkipVerify:`.
+- Each argument of the call, for each other sink.
+
+A TLS setting that turns the check off is a sink. The literal value `true` (or `false` for
+`verify=` and `rejectUnauthorized:`) turns the check off. A value that is not a literal,
+as `InsecureSkipVerify: settings.Skip`, is also a sink, with `constant_argument: false`,
+because it can turn the check off at run time. A literal value that keeps the check on gives
+no sink. This rule applies to Go `InsecureSkipVerify` in a `tls.Config` literal and in an
+assignment, Python `verify=`, Node `rejectUnauthorized:`, Rust
+`danger_accept_invalid_certs` and `danger_accept_invalid_hostnames`, and the `curl` options
+of PHP and C. A Java hostname verifier and a C# validation callback are not settings. A
+verifier or a callback that is not a constant is usually a real check, thus omen reports only
+a verifier or a callback that always accepts.
+
+The Go SQL sinks are methods: omen does not know the type of the receiver. The names are
+`Query`, `QueryRow`, `Exec`, `Prepare` (`database/sql`), `Queryx`, `QueryRowx`, `MustExec`,
+`NamedExec`, `NamedQuery` (sqlx), `Raw` (gorm), and `SQL` (xorm), with the SQL text first,
+and the forms with `Context`, with the SQL text second. A built string as the SQL text makes
+the sink. Omen does not use the names `Get` and `Select`: other libraries use them for a
+key or a value.
 
 The precision of each category on real repositories is in
 `docs/benchmarks/security-precision.md`. A category with a precision below 50

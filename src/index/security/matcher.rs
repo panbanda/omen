@@ -202,6 +202,17 @@ fn constructed_type(text: &str) -> Option<Vec<String>> {
     chain_segments(rest[..open].trim())
 }
 
+/// The one expression of a list, as the sides of the Go assignment `a.b = c` are. A list
+/// with more expressions gives `None`. A node that is not a list is the expression.
+fn single_expression(node: Node<'_>) -> Option<Node<'_>> {
+    if node.kind() != "expression_list" {
+        return Some(node);
+    }
+    (node.named_child_count() == 1)
+        .then(|| node.named_child(0))
+        .flatten()
+}
+
 /// The loaders of PyYAML that build arbitrary objects.
 const UNSAFE_LOADERS: [&str; 6] = [
     "Loader",
@@ -686,12 +697,20 @@ impl FileContext<'_> {
                     reference.enclosing.as_ref().map(|key| key.to_string()),
                     &callee_text,
                     basis,
-                    !arguments.is_empty() && arguments.iter().all(|node| syntax::is_literal(*node)),
+                    self.is_constant(&spec.predicate, &arguments),
                 );
                 sink.target = target;
                 sinks.push(sink);
             }
         }
+    }
+
+    /// The arguments that make the call a sink are all literals. A call without such
+    /// arguments is not constant.
+    fn is_constant(&self, predicate: &Predicate, arguments: &[Node<'_>]) -> bool {
+        let named = syntax::subject(predicate, arguments, self.source, &self.syntax)
+            .unwrap_or_else(|| arguments.to_vec());
+        !named.is_empty() && named.into_iter().all(syntax::is_literal)
     }
 
     /// A missing loader is not safe. A loader is not safe when the imports resolve it to
@@ -823,19 +842,26 @@ impl FileContext<'_> {
     }
 
     fn keyed_field(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
-        let Some((key, value)) = syntax::key_value(node, self.source) else {
+        let Some((key, _)) = syntax::key_value(node, self.source) else {
             return;
         };
+        let count = node.named_child_count();
+        let Some(value) = count
+            .checked_sub(1)
+            .and_then(|last| node.named_child(last as u32))
+        else {
+            return;
+        };
+        let value = syntax::literal_value(value);
         for spec in &self.specs {
             if let Target::KeyedField {
                 key: wanted_key,
-                value: wanted_value,
                 module,
                 owner,
             } = spec.target
             {
                 if key == wanted_key.to_lowercase()
-                    && value == wanted_value
+                    && syntax::holds(&spec.predicate, &[value], self.source, &self.syntax)
                     && self.literal_has_type(node, module, owner)
                 {
                     sinks.push(self.sink(
@@ -844,7 +870,7 @@ impl FileContext<'_> {
                         self.enclosing_key(node.start_byte()),
                         syntax::text(node, self.source),
                         SinkBasis::NameOnly,
-                        false,
+                        self.is_constant(&spec.predicate, &[value]),
                     ));
                 }
             }
@@ -889,23 +915,25 @@ impl FileContext<'_> {
     /// value is a name, and the last segment of the assigned path must be that name.
     fn value_matches(&self, right: Node<'_>, values: &[&str]) -> bool {
         let right = syntax::unwrap_parentheses(right);
-        values.iter().any(|wanted| {
-            if *wanted == "=>true" {
-                return syntax::is_constant_true_lambda(right, self.source);
-            }
-            let compact: String = syntax::text(right, self.source)
-                .split_whitespace()
-                .collect::<String>()
-                .to_lowercase();
-            split_path(&compact).last().map(String::as_str) == Some(*wanted)
-        })
+        values.is_empty()
+            || values.iter().any(|wanted| {
+                if *wanted == "=>true" {
+                    return syntax::is_constant_true_lambda(right, self.source);
+                }
+                let compact: String = syntax::text(right, self.source)
+                    .split_whitespace()
+                    .collect::<String>()
+                    .to_lowercase();
+                split_path(&compact).last().map(String::as_str) == Some(*wanted)
+            })
     }
 
     /// Reports an assignment to a member that a row names.
     fn assignment(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
         let (Some(left), Some(right)) = (
-            node.child_by_field_name("left"),
-            node.child_by_field_name("right"),
+            node.child_by_field_name("left").and_then(single_expression),
+            node.child_by_field_name("right")
+                .and_then(single_expression),
         ) else {
             return;
         };
@@ -934,6 +962,7 @@ impl FileContext<'_> {
             };
             if written.last().map(String::as_str) != Some(name)
                 || !self.value_matches(right, values)
+                || !syntax::holds(&spec.predicate, &[right], self.source, &self.syntax)
             {
                 continue;
             }
@@ -947,7 +976,7 @@ impl FileContext<'_> {
                     self.enclosing_key(node.start_byte()),
                     &compact,
                     basis,
-                    false,
+                    self.is_constant(&spec.predicate, &[right]),
                 ));
             }
         }

@@ -52,6 +52,17 @@ pub enum Predicate {
     BuiltString {
         index: usize,
     },
+    /// The argument at the index is one of the values that turn a check off, or it is not a
+    /// literal. A value that is not a literal can turn the check off at run time.
+    ArgSetting {
+        index: usize,
+        disabled: &'static [&'static str],
+    },
+    /// Like [`Predicate::ArgSetting`], for the value of a keyword argument or an object property.
+    KeywordSetting {
+        name: &'static str,
+        disabled: &'static [&'static str],
+    },
     All(&'static [Predicate]),
     /// At least one of the predicates holds.
     AnyOf(&'static [Predicate]),
@@ -82,14 +93,15 @@ pub enum Target {
         name: &'static str,
     },
     /// A field of a struct literal. The literal has the type `owner` of the module `module`.
+    /// The predicate gets the value of the field as its only argument.
     KeyedField {
         key: &'static str,
-        value: &'static str,
         module: &'static str,
         owner: &'static str,
     },
-    /// An assignment to a member. The assigned value, without white space and in
-    /// lower case, contains one of the values.
+    /// An assignment to a member. The last name of the assigned value, in lower case, is one
+    /// of the values. An empty list accepts each value. The predicate gets the assigned value
+    /// as its only argument.
     Assignment {
         module: &'static str,
         name: &'static str,
@@ -196,20 +208,15 @@ const fn keyed(
     category: SinkCategory,
     languages: &'static [Language],
     key: &'static str,
-    value: &'static str,
     module: &'static str,
     owner: &'static str,
+    predicate: Predicate,
 ) -> SinkSpec {
     SinkSpec {
         category,
         languages,
-        target: Target::KeyedField {
-            key,
-            value,
-            module,
-            owner,
-        },
-        predicate: Always,
+        target: Target::KeyedField { key, module, owner },
+        predicate,
     }
 }
 
@@ -219,6 +226,7 @@ const fn assignment(
     module: &'static str,
     name: &'static str,
     values: &'static [&'static str],
+    predicate: Predicate,
 ) -> SinkSpec {
     SinkSpec {
         category,
@@ -228,7 +236,7 @@ const fn assignment(
             name,
             values,
         },
-        predicate: Always,
+        predicate,
     }
 }
 
@@ -245,6 +253,12 @@ const NOT_FOR_SECURITY: Predicate = Predicate::Without(&Predicate::Keyword {
     name: "usedforsecurity",
     value: "false",
 });
+
+/// The first argument turns the check off with `true`, or it is not a constant.
+const FIRST_IS_TRUE_OR_UNKNOWN: Predicate = Predicate::ArgSetting {
+    index: 0,
+    disabled: &["true"],
+};
 
 const WEAK_DIGESTS: &[&str] = &["md5", "sha1", "sha-1", "md2", "md4"];
 const WEAK_CIPHERS: &[&str] = &["des", "rc4", "rc2", "bf", "blowfish", "arcfour"];
@@ -307,7 +321,10 @@ pub const SPECS: &[SinkSpec] = &[
         PYTHON,
         "requests|httpx",
         "get|post|put|patch|delete|head|options|request",
-        keyword("verify", "false"),
+        Predicate::KeywordSetting {
+            name: "verify",
+            disabled: &["false"],
+        },
     ),
     path(TlsVerificationDisabled, PYTHON, "ssl", "_create_unverified_context", Always),
     // JavaScript and TypeScript
@@ -365,21 +382,28 @@ pub const SPECS: &[SinkSpec] = &[
         ECMA,
         "https|node:https|tls|node:tls",
         "request|get|connect|Agent",
-        keyword("rejectunauthorized", "false"),
+        Predicate::KeywordSetting {
+            name: "rejectunauthorized",
+            disabled: &["false"],
+        },
     ),
     // Go
     // A command is built here. The sink does not say that the command runs.
     path(CommandExecution, GO, "os/exec", "Command|CommandContext", Always),
+    path(CommandExecution, GO, "os", "StartProcess", Always),
+    path(CommandExecution, GO, "syscall", "Exec|ForkExec|StartProcess", Always),
+    // `database/sql`, sqlx, gorm, and xorm. A name that other libraries use for a key or a
+    // value, such as `Get` or `Select`, is not in the list.
     method(
         SqlStringConstruction,
         GO,
-        "Query|QueryRow|Exec",
+        "Query|QueryRow|Exec|Prepare|SQL|Raw|Queryx|QueryRowx|MustExec|NamedExec|NamedQuery",
         built(0),
     ),
     method(
         SqlStringConstruction,
         GO,
-        "QueryContext|QueryRowContext|ExecContext",
+        "QueryContext|QueryRowContext|ExecContext|PrepareContext|QueryxContext|QueryRowxContext|MustExecContext|NamedExecContext|NamedQueryContext",
         built(1),
     ),
     path(WeakHash, GO, "crypto/md5|crypto/sha1", "New|Sum", Always),
@@ -389,9 +413,17 @@ pub const SPECS: &[SinkSpec] = &[
         TlsVerificationDisabled,
         GO,
         "InsecureSkipVerify",
-        "true",
         "crypto/tls",
         "Config",
+        FIRST_IS_TRUE_OR_UNKNOWN,
+    ),
+    assignment(
+        TlsVerificationDisabled,
+        GO,
+        "crypto/tls.Config",
+        "InsecureSkipVerify",
+        &[],
+        FIRST_IS_TRUE_OR_UNKNOWN,
     ),
     path(
         MemoryUnsafe,
@@ -424,10 +456,7 @@ pub const SPECS: &[SinkSpec] = &[
         TlsVerificationDisabled,
         RUST,
         "danger_accept_invalid_certs|danger_accept_invalid_hostnames",
-        ArgIn {
-            index: 0,
-            values: &["true"],
-        },
+        FIRST_IS_TRUE_OR_UNKNOWN,
     ),
     SinkSpec {
         category: MemoryUnsafe,
@@ -552,6 +581,7 @@ pub const SPECS: &[SinkSpec] = &[
         "System.Net.Http.HttpClientHandler",
         "ServerCertificateCustomValidationCallback",
         &["dangerousacceptanyservercertificatevalidator", "=>true"],
+        Always,
     ),
     assignment(
         TlsVerificationDisabled,
@@ -559,6 +589,7 @@ pub const SPECS: &[SinkSpec] = &[
         "System.Net.ServicePointManager",
         "ServerCertificateValidationCallback",
         &["=>true"],
+        Always,
     ),
     SinkSpec {
         category: MemoryUnsafe,
@@ -674,9 +705,9 @@ pub const SPECS: &[SinkSpec] = &[
                 index: 1,
                 values: CURL_VERIFY,
             },
-            ArgIn {
+            Predicate::ArgSetting {
                 index: 2,
-                values: &["false", "0"],
+                disabled: &["false", "0"],
             },
         ]),
     ),
@@ -707,9 +738,9 @@ pub const SPECS: &[SinkSpec] = &[
                 index: 1,
                 values: CURL_VERIFY,
             },
-            ArgIn {
+            Predicate::ArgSetting {
                 index: 2,
-                values: &["0l", "0", "false"],
+                disabled: &["0l", "0", "false"],
             },
         ]),
     ),
@@ -884,6 +915,7 @@ pub fn syntax_of(language: Language) -> LanguageSyntax {
         Language::Go => LanguageSyntax {
             string_kinds: &["interpreted_string_literal", "raw_string_literal"],
             keyed_kinds: &["keyed_element"],
+            assignment_kinds: &["assignment_statement"],
             ..base
         },
         Language::Rust => LanguageSyntax {
@@ -977,6 +1009,8 @@ mod tests {
                 Predicate::ArgStartsWith { prefixes, .. } => vec![prefixes],
                 Predicate::ArgContains { needles, .. } => vec![needles],
                 Predicate::AnyArgIn(values) | Predicate::AnyArgStartsWith(values) => vec![values],
+                Predicate::ArgSetting { disabled, .. }
+                | Predicate::KeywordSetting { disabled, .. } => vec![disabled],
                 Predicate::All(inner) | Predicate::AnyOf(inner) => {
                     inner.iter().for_each(check);
                     vec![]

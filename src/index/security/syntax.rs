@@ -177,6 +177,14 @@ pub fn key_value(node: Node<'_>, source: &[u8]) -> Option<(String, String)> {
     Some((clean(text(key, source)), clean(text(value, source))))
 }
 
+/// The expression of a Go `literal_element`, which wraps the key and the value of a field.
+pub fn literal_value(node: Node<'_>) -> Node<'_> {
+    if node.kind() == "literal_element" && node.named_child_count() == 1 {
+        return node.named_child(0).unwrap_or(node);
+    }
+    node
+}
+
 fn has_descendant(node: Node<'_>, test: &dyn Fn(Node<'_>) -> bool) -> bool {
     let mut cursor = node.walk();
     let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
@@ -293,11 +301,23 @@ pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -
     }
 }
 
-/// A literal without an interpolation.
+/// A literal without an interpolation, or an operation whose operands are all such literals,
+/// as `"a " + "b"` is.
 pub fn is_literal(node: Node<'_>) -> bool {
     let kind = node.kind();
     if matches!(kind, "parenthesized_expression" | "argument") {
         return node.named_child(0).is_some_and(is_literal);
+    }
+    if matches!(
+        kind,
+        "binary_expression" | "binary_operator" | "binary" | "additive_expression"
+    ) {
+        let mut cursor = node.walk();
+        let operands: Vec<Node<'_>> = node
+            .named_children(&mut cursor)
+            .filter(|operand| !operand.kind().contains("comment"))
+            .collect();
+        return !operands.is_empty() && operands.into_iter().all(is_literal);
     }
     if kind.contains("string") {
         return !has_interpolation(node);
@@ -310,6 +330,77 @@ pub fn is_literal(node: Node<'_>) -> bool {
     .any(|word| kind.contains(word))
 }
 
+/// The pairs of a call: each argument that is a pair, and each direct member of an object
+/// literal that is an argument. A pair in a nested value, such as `env={"shell": True}`, does
+/// not count.
+fn pairs<'tree>(arguments: &[Node<'tree>]) -> Vec<Node<'tree>> {
+    let mut found = Vec::new();
+    for argument in arguments {
+        if matches!(argument.kind(), "object" | "hash") {
+            let mut cursor = argument.walk();
+            found.extend(argument.named_children(&mut cursor));
+        } else {
+            found.push(*argument);
+        }
+    }
+    found
+}
+
+/// The value node of the last pair with the key, in lower case.
+fn keyword_value<'tree>(
+    arguments: &[Node<'tree>],
+    name: &str,
+    source: &[u8],
+) -> Option<Node<'tree>> {
+    pairs(arguments).into_iter().rev().find_map(|pair| {
+        let (key, _) = key_value(pair, source)?;
+        if key != name {
+            return None;
+        }
+        pair.child_by_field_name("value")
+    })
+}
+
+/// The value turns the check off: it is one of the values, or it is not a literal.
+fn is_disabled_setting(value: Node<'_>, disabled: &[&str], source: &[u8]) -> bool {
+    let found = unquote(text(value, source)).to_lowercase();
+    disabled.contains(&found.as_str()) || !is_literal(value)
+}
+
+/// The arguments that make the call a sink, when the predicate names them: the SQL text, or
+/// the value of a setting. `None` means that the predicate names no argument, and then each
+/// argument counts.
+pub fn subject<'tree>(
+    predicate: &Predicate,
+    arguments: &[Node<'tree>],
+    source: &[u8],
+    syntax: &LanguageSyntax,
+) -> Option<Vec<Node<'tree>>> {
+    match predicate {
+        Predicate::BuiltString { index }
+        | Predicate::ArgNotLiteral { index }
+        | Predicate::ArgSetting { index, .. } => {
+            Some(arguments.get(*index).copied().into_iter().collect())
+        }
+        Predicate::KeywordSetting { name, .. } => {
+            Some(keyword_value(arguments, name, source).into_iter().collect())
+        }
+        Predicate::All(all) => {
+            let named: Vec<Node<'tree>> = all
+                .iter()
+                .filter_map(|inner| subject(inner, arguments, source, syntax))
+                .flatten()
+                .collect();
+            (!named.is_empty()).then_some(named)
+        }
+        Predicate::AnyOf(any) => any
+            .iter()
+            .find(|inner| holds(inner, arguments, source, syntax))
+            .and_then(|inner| subject(inner, arguments, source, syntax)),
+        _ => None,
+    }
+}
+
 /// Tells if the predicate holds for the arguments of a call.
 pub fn holds(
     predicate: &Predicate,
@@ -320,20 +411,14 @@ pub fn holds(
     let argument_text = |node: &Node<'_>| unquote(text(*node, source)).to_lowercase();
     match predicate {
         Predicate::Always => true,
-        Predicate::Keyword { name, value } => arguments.iter().any(|argument| {
-            let is_pair = |node: Node<'_>| {
-                key_value(node, source).is_some_and(|(key, found)| key == *name && found == *value)
-            };
-            // A pair is an argument, or a direct member of an object literal that is an argument.
-            // A pair in a nested value, such as `env={"shell": True}`, does not count.
-            if matches!(argument.kind(), "object" | "hash") {
-                let mut cursor = argument.walk();
-                let members: Vec<Node<'_>> = argument.named_children(&mut cursor).collect();
-                members.into_iter().any(is_pair)
-            } else {
-                is_pair(*argument)
-            }
+        Predicate::Keyword { name, value } => pairs(arguments).into_iter().any(|pair| {
+            key_value(pair, source).is_some_and(|(key, found)| key == *name && found == *value)
         }),
+        Predicate::ArgSetting { index, disabled } => arguments
+            .get(*index)
+            .is_some_and(|node| is_disabled_setting(*node, disabled, source)),
+        Predicate::KeywordSetting { name, disabled } => keyword_value(arguments, name, source)
+            .is_some_and(|value| is_disabled_setting(value, disabled, source)),
         Predicate::ArgIn { index, values } => arguments
             .get(*index)
             .is_some_and(|node| values.contains(&argument_text(node).as_str())),
