@@ -535,12 +535,239 @@ fn test_report_generate_without_ref_writes_no_changes() {
     assert!(!data.path().join("diff.json").exists());
 }
 
+/// The result of the MCP tool `diff` with its envelope.
+fn mcp_diff(repository: &Path, arguments: serde_json::Value) -> serde_json::Value {
+    let request = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "diff", "arguments": arguments}
+    });
+    let response = fixture::mcp_responses(repository, &[request]).remove(0);
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text");
+    let mut envelope: serde_json::Value = serde_json::from_str(text).expect("JSON envelope");
+    envelope["is_error"] = response["result"]["isError"].clone();
+    envelope
+}
+
+fn symbol_keys(value: &serde_json::Value) -> Vec<&str> {
+    value["symbols"]
+        .as_array()
+        .expect("symbols")
+        .iter()
+        .map(|symbol| symbol["key"].as_str().expect("key"))
+        .collect()
+}
+
+/// The keys of the symbols of the fixture in review order.
+const REVIEW_ORDER: [&str; 7] = [
+    "src/shapes.rs#area",
+    "src/shapes.rs#legacy",
+    "src/report.rs#describe",
+    "src/shapes.rs#volume",
+    "src/report.rs#solid",
+    "src/shapes.rs#unfinished",
+    "src/shapes.rs#tests.test_area",
+];
+
 #[test]
-fn test_cli_json_keeps_the_risk_shape() {
+fn test_cli_json_keeps_the_risk_keys_and_adds_the_change_set() {
     let directory = repository();
     let value = fixture::cli_json(directory.path(), &["diff", "-t", "main"]);
-    assert!(value.get("score").is_some());
-    assert!(value.get("symbols").is_none());
+    for key in ["score", "level", "factors", "file_risk", "merge_base"] {
+        assert!(value.get(key).is_some(), "{key} is absent");
+    }
+    assert_eq!(value["summary"]["files_changed"], 2);
+    assert_eq!(value["summary"]["symbols_added"], 3);
+    assert_eq!(value["summary"]["symbols_removed"], 1);
+    assert_eq!(value["summary"]["symbols_changed"], 3);
+    assert_eq!(value["summary"]["new_stubs"], 1);
+    assert_eq!(value["summary"]["new_satd"], 1);
+    assert_eq!(value["files"].as_array().expect("files").len(), 2);
+    assert_eq!(value["new_findings"].as_array().expect("findings").len(), 2);
+    assert!(value["security"].is_object());
+    assert!(value.get("graph").is_none(), "the graph is not in the JSON");
+
+    let area = &value["symbols"][0];
+    assert_eq!(area["key"], "src/shapes.rs#area");
+    assert_eq!(area["name"], "area");
+    assert_eq!(area["kind"], "function");
+    assert_eq!(area["file"], "src/shapes.rs");
+    assert_eq!(area["line"], 1);
+    assert_eq!(area["state"], "changed");
+    assert_eq!(area["is_test"], false);
+    assert_eq!(
+        area["signature_before"],
+        "pub fn area(width: u32, height: u32) -> u32"
+    );
+    assert_eq!(
+        area["signature_after"],
+        "pub fn area(width: u32, height: u32, scale: u32) -> u32"
+    );
+    assert_eq!(area["complexity_before"]["cyclomatic"], 1);
+    assert_eq!(area["complexity_after"]["cyclomatic"], 4);
+    assert_eq!(area["direct_caller_count"], 3);
+    assert_eq!(area["test_caller_count"], 1);
+    assert_eq!(area["direct_callers_omitted"], 0);
+    assert_eq!(area["transitive_callers"], 4);
+    assert_eq!(area["weakest_basis"], "imported_name");
+    let callers = area["direct_callers"].as_array().expect("callers");
+    assert_eq!(callers.len(), 3);
+    assert_eq!(callers[2]["key"], "src/shapes.rs#tests.test_area");
+    assert_eq!(callers[2]["is_test"], true);
+    assert_eq!(callers[0]["is_test"], false);
+
+    let states: Vec<&str> = value["symbols"]
+        .as_array()
+        .expect("symbols")
+        .iter()
+        .map(|symbol| symbol["state"].as_str().expect("state"))
+        .collect();
+    assert_eq!(
+        states,
+        ["changed", "removed", "changed", "added", "added", "added", "changed"]
+    );
+}
+
+#[test]
+fn test_json_symbols_are_in_review_order() {
+    let directory = repository();
+    let value = fixture::cli_json(directory.path(), &["diff", "-t", "main"]);
+    assert_eq!(symbol_keys(&value), REVIEW_ORDER);
+    let tests: Vec<bool> = value["symbols"]
+        .as_array()
+        .expect("symbols")
+        .iter()
+        .map(|symbol| symbol["is_test"].as_bool().expect("is_test"))
+        .collect();
+    assert_eq!(tests, [false, false, false, false, false, false, true]);
+}
+
+#[test]
+fn test_markdown_symbols_are_in_review_order() {
+    let directory = repository();
+    let changes = changes(directory.path());
+    let text = render(&changes, &CommentOptions::default(), &[]);
+    let table = text
+        .split("### Changed symbols")
+        .nth(1)
+        .and_then(|rest| rest.split("\n### ").next())
+        .expect("symbol table");
+    let positions: Vec<usize> = [
+        "`area`",
+        "`legacy`",
+        "`describe`",
+        "`volume`",
+        "`solid`",
+        "`unfinished`",
+        "`tests.test_area`",
+    ]
+    .iter()
+    .map(|name| table.find(name).expect("row"))
+    .collect();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{table}"
+    );
+}
+
+#[test]
+fn test_mcp_diff_pages_the_symbols_and_keeps_the_totals() {
+    let directory = repository();
+    let path = directory.path();
+    let all = mcp_diff(path, serde_json::json!({"base": "main"}));
+    assert_eq!(all["total_items"], 7);
+    assert_eq!(all["returned"], 7);
+    assert_eq!(all["has_more"], false);
+    assert_eq!(symbol_keys(&all["result"]), REVIEW_ORDER);
+
+    let page = mcp_diff(
+        path,
+        serde_json::json!({"base": "main", "limit": 2, "offset": 1}),
+    );
+    assert_eq!(page["total_items"], 7);
+    assert_eq!(page["returned"], 2);
+    assert_eq!(page["offset"], 1);
+    assert_eq!(page["has_more"], true);
+    assert_eq!(page["next_offset"], 3);
+    assert_eq!(
+        page["truncated"],
+        serde_json::json!([{"path": "/symbols", "total": 7, "returned": 2}])
+    );
+    assert_eq!(symbol_keys(&page["result"]), REVIEW_ORDER[1..3]);
+    assert_eq!(page["result"]["summary"], all["result"]["summary"]);
+    assert_eq!(page["result"]["files"], all["result"]["files"]);
+}
+
+#[test]
+fn test_cli_json_with_top_and_offset_equals_the_mcp_result() {
+    let directory = repository();
+    let path = directory.path();
+    let mut cli = fixture::cli_json(path, &["diff", "-t", "main", "--top", "2", "--offset", "1"]);
+    assert_eq!(cli["symbols_omitted"], 4);
+    let mut mcp = mcp_diff(
+        path,
+        serde_json::json!({"base": "main", "limit": 2, "offset": 1}),
+    )["result"]
+        .take();
+    let entries = cli.as_object_mut().expect("object");
+    entries.remove("symbols_omitted");
+    entries.remove("generated_at");
+    mcp.as_object_mut().expect("object").remove("generated_at");
+    assert_eq!(cli, mcp);
+}
+
+#[test]
+fn test_caller_cap_cuts_the_list_and_keeps_the_counts() {
+    let directory = repository();
+    let path = directory.path();
+    let cli = fixture::cli_json(path, &["diff", "-t", "main", "--max-callers", "1"]);
+    let area = &cli["symbols"][0];
+    assert_eq!(area["direct_callers"].as_array().expect("callers").len(), 1);
+    assert_eq!(area["direct_callers"][0]["is_test"], false);
+    assert_eq!(area["direct_caller_count"], 3);
+    assert_eq!(area["test_caller_count"], 1);
+    assert_eq!(area["direct_callers_omitted"], 2);
+
+    let mcp = mcp_diff(
+        path,
+        serde_json::json!({"base": "main", "max_callers": 1, "limit": 2}),
+    );
+    assert_eq!(mcp["result"]["symbols"][0], *area);
+    // The page has `area` with three callers and `legacy` with one caller.
+    assert_eq!(
+        mcp["truncated"],
+        serde_json::json!([
+            {"path": "/symbols", "total": 7, "returned": 2},
+            {"path": "/symbols/*/direct_callers", "total": 4, "returned": 2}
+        ])
+    );
+
+    let unlimited = fixture::cli_json(path, &["diff", "-t", "main", "--max-callers", "0"]);
+    assert_eq!(unlimited["symbols"][0]["direct_callers_omitted"], 0);
+}
+
+#[test]
+fn test_json_of_a_branch_without_changes_has_an_empty_change_set() {
+    let directory = repository();
+    let value = fixture::cli_json(directory.path(), &["diff", "-t", "feature"]);
+    assert_eq!(value["symbols"], serde_json::json!([]));
+    assert_eq!(value["files"], serde_json::json!([]));
+    assert_eq!(value["summary"]["files_changed"], 0);
+    assert_eq!(value["summary"]["symbols_changed"], 0);
+    let mcp = mcp_diff(directory.path(), serde_json::json!({"base": "feature"}));
+    assert_eq!(mcp["total_items"], 0);
+    assert_eq!(mcp["has_more"], false);
+}
+
+#[test]
+fn test_mcp_diff_outside_a_git_repository_is_a_structured_error() {
+    let directory = TempDir::new().expect("temporary directory");
+    write(directory.path(), "a.rs", "fn a() {}\n");
+    let response = mcp_diff(directory.path(), serde_json::json!({}));
+    assert_eq!(response["is_error"], true);
+    assert_eq!(response["error"]["code"], "git_unavailable");
+    assert!(response["error"]["next"].is_string());
 }
 
 #[test]

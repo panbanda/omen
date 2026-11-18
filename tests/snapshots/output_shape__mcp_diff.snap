@@ -31,17 +31,82 @@ expression: "shape(&response, &dynamic_key_objects)"
               "max_complexity": "number",
               "ownership_diffusion": "number"
             },
+            "files": [
+              {
+                "additions": "number",
+                "deletions": "number",
+                "file": "string",
+                "hotspot": "string",
+                "max_cyclomatic": "number",
+                "owners": [
+                  "string"
+                ],
+                "state": "string",
+                "symbols_changed": "number"
+              }
+            ],
             "files_modified": "number",
             "generated_at": "string",
+            "head": "string",
             "level": "string",
             "lines_added": "number",
             "lines_deleted": "number",
             "merge_base": "string",
+            "new_findings": [],
+            "notes": [],
             "recommendations": [
               "string"
             ],
             "score": "number",
+            "security": {
+              "changed_on_path": [],
+              "entry_points_added": [],
+              "entry_points_removed": [],
+              "path_details": [],
+              "paths_added": [],
+              "paths_removed": [],
+              "sinks_added": [],
+              "sinks_removed": []
+            },
             "source_branch": "string",
+            "summary": {
+              "callers_affected": "number",
+              "cyclomatic_after": "number",
+              "cyclomatic_before": "number",
+              "files_changed": "number",
+              "hotspots_touched": "number",
+              "lines_added": "number",
+              "lines_deleted": "number",
+              "new_satd": "number",
+              "new_stubs": "number",
+              "symbols_added": "number",
+              "symbols_changed": "number",
+              "symbols_removed": "number"
+            },
+            "symbols": [
+              {
+                "complexity_after": {
+                  "cognitive": "number",
+                  "cyclomatic": "number"
+                },
+                "complexity_before": "null",
+                "direct_caller_count": "number",
+                "direct_callers": [],
+                "direct_callers_omitted": "number",
+                "file": "string",
+                "is_test": "bool",
+                "key": "string",
+                "kind": "string",
+                "line": "number",
+                "name": "string",
+                "signature_after": "string",
+                "signature_before": "null",
+                "state": "string",
+                "test_caller_count": "number",
+                "transitive_callers": "number",
+                "weakest_basis": "null"
+              }
+            ],
             "target_branch": "string"
           },
           "returned": "number",
