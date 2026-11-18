@@ -1,0 +1,25 @@
+---
+source: tests/output_shape.rs
+expression: body
+---
+{
+  "error": {
+    "code": "not_found",
+    "expected": "the start line of a definition of the name",
+    "message": "No definition of the symbol `util.rs:helper` starts at line 999. Correct the start line or remove it.",
+    "next": "Correct `--start-line` or remove it, or run the `command` of one suggestion.",
+    "param": "start_line",
+    "received": 999,
+    "suggestions": [
+      {
+        "command": "omen -p <root> -f json symbol 'util.rs#helper'",
+        "container": null,
+        "file": "util.rs",
+        "kind": "Function",
+        "name": "util.rs#helper",
+        "signature": "pub fn helper() -> u32",
+        "start_line": 1
+      }
+    ]
+  }
+}

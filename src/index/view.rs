@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::build::CodeIndex;
 use super::model::{
-    Receiver, Reference, ResolutionBasis, ResolutionStatus, SharedStr, Span, SymbolKind,
+    Exported, Receiver, Reference, ResolutionBasis, ResolutionStatus, SharedStr, Span, SymbolKind,
 };
 use crate::core::{Error, Language, Result};
 
@@ -30,6 +30,11 @@ pub struct ViewSymbol {
     pub name: String,
     /// The first byte of the body, or of the declaration when it has no body.
     pub body_start: usize,
+    /// The definition has a body. A C prototype and an abstract method do not.
+    pub has_body: bool,
+    /// A C or C++ function with internal linkage, such as a `static`
+    /// function. Only a declaration in the same file declares it.
+    pub file_local: bool,
     pub qualified_name: String,
     pub kind: SymbolKind,
     pub file: String,
@@ -261,6 +266,11 @@ impl CallView {
                     body_start: symbol
                         .body_range
                         .map_or(symbol.range.start_byte, |body| body.start_byte),
+                    has_body: symbol.body_range.is_some(),
+                    file_local: matches!(file.language, Language::C | Language::Cpp)
+                        && symbol.kind == SymbolKind::Function
+                        && symbol.container.is_none()
+                        && symbol.exported == Exported::NotExported,
                     qualified_name: symbol.key.to_string(),
                     kind: symbol.kind,
                     file: file.file.clone(),
@@ -378,6 +388,8 @@ impl CallView {
                     .unwrap_or_default()
                     .to_string(),
                 body_start: value.range.start_byte,
+                has_body: true,
+                file_local: false,
                 qualified_name: value.key.clone(),
                 kind: SymbolKind::Function,
                 file: value.file.clone(),

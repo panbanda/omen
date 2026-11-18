@@ -181,10 +181,19 @@ fn same_line_symbols_keep_separate_evidence() {
         "main.rs",
         "struct A; struct B; impl A {fn run(){first();}} impl B {fn run(){second();}}",
     )]);
-    let report = get_symbol(dir.path(), &paths, "main.rs:run", &SymbolOptions::default()).unwrap();
-    assert_eq!(report.call_resolutions.len(), 1);
-    assert_eq!(report.call_resolutions[0].call, "first");
-    assert_eq!(report.candidates.len(), 1);
+    let options = SymbolOptions::default();
+    match get_symbol(dir.path(), &paths, "main.rs:run", &options) {
+        Err(omen::core::Error::SymbolLookup(failure)) => assert!(
+            matches!(&*failure, omen::symbol::LookupFailure::Ambiguous { choices, .. } if choices.len() == 2),
+            "{failure:?}"
+        ),
+        other => panic!("expected an ambiguous name: {other:?}"),
+    }
+    for (key, call) in [("main.rs#A.run", "first"), ("main.rs#B.run", "second")] {
+        let report = get_symbol(dir.path(), &paths, key, &options).unwrap();
+        assert_eq!(report.call_resolutions.len(), 1, "{key}");
+        assert_eq!(report.call_resolutions[0].call, call, "{key}");
+    }
 }
 
 #[test]

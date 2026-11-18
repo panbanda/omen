@@ -1,0 +1,43 @@
+---
+source: tests/output_shape.rs
+expression: body
+---
+{
+  "error": {
+    "code": "ambiguous",
+    "expected": "a name, or a name and a start line, that select one definition",
+    "message": "3 definitions agree with the symbol `helper`. Select one with its key or its start line.",
+    "next": "To select one definition, run the `command` of one suggestion.",
+    "param": "symbol",
+    "received": "helper",
+    "suggestions": [
+      {
+        "command": "omen -p <root> -f json impact 'main.rs#shadow.helper'",
+        "container": "shadow",
+        "file": "main.rs",
+        "kind": "Function",
+        "name": "main.rs#shadow.helper",
+        "signature": "helper = ||",
+        "start_line": 38
+      },
+      {
+        "command": "omen -p <root> -f json impact 'other.rs#helper'",
+        "container": null,
+        "file": "other.rs",
+        "kind": "Function",
+        "name": "other.rs#helper",
+        "signature": "pub fn helper() -> u32",
+        "start_line": 1
+      },
+      {
+        "command": "omen -p <root> -f json impact 'util.rs#helper'",
+        "container": null,
+        "file": "util.rs",
+        "kind": "Function",
+        "name": "util.rs#helper",
+        "signature": "pub fn helper() -> u32",
+        "start_line": 1
+      }
+    ]
+  }
+}
