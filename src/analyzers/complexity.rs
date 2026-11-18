@@ -561,31 +561,23 @@ enum ChainBranch {
     None,
 }
 
-fn chain_branch(
-    node: &tree_sitter::Node<'_>,
-    field: Option<&str>,
-    lang: Language,
-    flat_types: &[&str],
-) -> ChainBranch {
+fn chain_branch(kind: &str, parent_kind: &str, field: Option<&str>, lang: Language) -> ChainBranch {
     // These grammars have a clause kind for `else if`. An `if` in their
     // `else` body is a nested `if`.
     if matches!(lang, Language::Python | Language::Ruby | Language::Bash) {
         return ChainBranch::None;
     }
-    let Some(parent) = node.parent() else {
-        return ChainBranch::None;
-    };
-    let kind = node.kind();
     let is_if = IF_KINDS.contains(&kind);
-    if is_if && parent.kind() == "else_clause" {
+    if is_if && parent_kind == "else_clause" {
         return ChainBranch::ElseIf;
     }
-    if field != Some("alternative") || !IF_KINDS.contains(&parent.kind()) {
+    if field != Some("alternative") || !IF_KINDS.contains(&parent_kind) {
         return ChainBranch::None;
     }
     if is_if {
         ChainBranch::ElseIf
-    } else if flat_types.contains(&kind) {
+    } else if matches!(kind, "else_clause" | "else_if_clause" | "else") {
+        // The clause adds its own 1 as a flat kind.
         ChainBranch::None
     } else {
         ChainBranch::BareElse
@@ -594,11 +586,8 @@ fn chain_branch(
 
 /// Whether the node is the `else` of a Ruby `case`. The `case` adds 1 for
 /// all of its branches, and Ruby uses one `else` kind for `if` and `case`.
-fn is_else_of_case(node: &tree_sitter::Node<'_>) -> bool {
-    node.kind() == "else"
-        && node
-            .parent()
-            .is_some_and(|parent| matches!(parent.kind(), "case" | "case_match"))
+fn is_else_of_case(kind: &str, parent_kind: &str) -> bool {
+    kind == "else" && matches!(parent_kind, "case" | "case_match")
 }
 
 /// Whether the node is a `break` or `continue` that does not go to a label.
@@ -620,10 +609,34 @@ fn is_jump_without_label(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
         .any(|child| match child.kind() {
             "statement_identifier" | "label" | "label_name" => true,
             "identifier" => lang == Language::Java,
-            "integer" => child.utf8_text(source).is_ok_and(|text| text.trim() != "1"),
+            "integer" | "parenthesized_expression" => php_jump_level(child, source) != Some(1),
             _ => false,
         });
     !has_label
+}
+
+/// The number of loops that a PHP `break` or `continue` leaves, such as 2 in
+/// `break 2`, `break (2)`, or `break 0b10`.
+fn php_jump_level(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<u64> {
+    match node.kind() {
+        "parenthesized_expression" => php_jump_level(node.named_child(0)?, source),
+        "integer" => {
+            let text = node.utf8_text(source).ok()?.replace('_', "").to_lowercase();
+            let (digits, radix) = if let Some(hex) = text.strip_prefix("0x") {
+                (hex.to_string(), 16)
+            } else if let Some(binary) = text.strip_prefix("0b") {
+                (binary.to_string(), 2)
+            } else if let Some(octal) = text.strip_prefix("0o") {
+                (octal.to_string(), 8)
+            } else if text.len() > 1 && text.starts_with('0') {
+                (text[1..].to_string(), 8)
+            } else {
+                (text, 10)
+            };
+            u64::from_str_radix(&digits, radix).ok()
+        }
+        _ => None,
+    }
 }
 
 /// Calculate cognitive complexity with nesting penalties.
@@ -655,6 +668,9 @@ fn calculate_cognitive_complexity(
     // Track nesting depth separately from cursor depth
     // Use a small stack to track depth changes at each cursor level
     let mut depth_at_level: Vec<u32> = vec![initial_depth; 64]; // Pre-allocate for typical depths
+                                                                // The kind of the node at each cursor level. `Node::parent` searches from
+                                                                // the root, so a call for each node is quadratic in a deep tree.
+    let mut kind_at_level: Vec<&str> = vec![""; 64];
 
     loop {
         let current = cursor.node();
@@ -665,11 +681,18 @@ fn calculate_cognitive_complexity(
         // Ensure we have space for this level
         if level >= depth_at_level.len() {
             depth_at_level.resize(level + 16, initial_depth);
+            kind_at_level.resize(level + 16, "");
         }
+        kind_at_level[level] = kind;
+        let parent_kind = if level == 0 {
+            ""
+        } else {
+            kind_at_level[level - 1]
+        };
 
         let current_depth = depth_at_level[level];
         let branch = if current.is_named() && cursor_depth != start_depth {
-            chain_branch(&current, cursor.field_name(), lang, flat_types)
+            chain_branch(kind, parent_kind, cursor.field_name(), lang)
         } else {
             ChainBranch::None
         };
@@ -679,12 +702,15 @@ fn calculate_cognitive_complexity(
         // keyword (e.g. Ruby's "if"/"while"/"case"), the anonymous keyword
         // token itself shares that kind string with its parent statement
         // node, and must not be double-counted as a second construct.
-        if branch != ChainBranch::None {
-            // SonarSource gives `else if` and `else` +1 each, with no nesting
-            // increment. An `else_clause` parent already added the +1.
-            let in_else_clause =
-                current.parent().map(|parent| parent.kind()) == Some("else_clause");
-            if !in_else_clause {
+        // An `else` body without braces adds 1 for the `else`, and the body
+        // then gets its own score below.
+        if branch == ChainBranch::BareElse {
+            complexity += 1;
+        }
+        if branch == ChainBranch::ElseIf {
+            // SonarSource gives `else if` +1, with no nesting increment. An
+            // `else_clause` parent already added the +1.
+            if parent_kind != "else_clause" {
                 complexity += 1;
             }
             if level + 1 < depth_at_level.len() {
@@ -699,7 +725,8 @@ fn calculate_cognitive_complexity(
             }
         } else if current.is_named() && flat_types.contains(&kind) {
             // Flat constructs: +1 only, NO nesting penalty per SonarSource spec
-            if !is_jump_without_label(&current, source, lang) && !is_else_of_case(&current) {
+            if !is_jump_without_label(&current, source, lang) && !is_else_of_case(kind, parent_kind)
+            {
                 complexity += 1;
             }
             // Children stay at same depth
@@ -758,13 +785,13 @@ fn calculate_cognitive_complexity(
 fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_depth: u32) -> u32 {
     let nesting_types = get_nesting_node_types(lang);
     let boundary_types = get_nested_scope_node_types(lang);
-    let flat_types = get_flat_node_types(lang);
     let mut max_depth = initial_depth;
     let mut cursor = node.walk();
     let start_depth = cursor.depth();
 
     // Track nesting depth at each cursor level
     let mut depth_at_level: Vec<u32> = vec![initial_depth; 64];
+    let mut kind_at_level: Vec<&str> = vec![""; 64];
 
     loop {
         let current = cursor.node();
@@ -774,7 +801,14 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
 
         if level >= depth_at_level.len() {
             depth_at_level.resize(level + 16, initial_depth);
+            kind_at_level.resize(level + 16, "");
         }
+        kind_at_level[level] = kind;
+        let parent_kind = if level == 0 {
+            ""
+        } else {
+            kind_at_level[level - 1]
+        };
 
         let current_depth = depth_at_level[level];
 
@@ -789,7 +823,7 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
         // must not be treated as a second nesting construct.
         let is_else_if = current.is_named()
             && cursor_depth != start_depth
-            && chain_branch(&current, cursor.field_name(), lang, flat_types) == ChainBranch::ElseIf;
+            && chain_branch(kind, parent_kind, cursor.field_name(), lang) == ChainBranch::ElseIf;
         let child_depth = if is_else_if {
             current_depth
         } else if current.is_named() && nesting_types.contains(&kind) {
@@ -2084,6 +2118,68 @@ fn drain(v: &mut Vec<i32>) {
                 .collect();
             if nesting != [2] {
                 failures.push(format!("{lang:?} {nesting:?}: {code}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// The default branch is the one that matches each remaining value: no
+    /// guard, and a pattern that cannot fail.
+    #[test]
+    fn test_default_branch_shapes() {
+        let cases: &[(Language, &str, &str, u32)] = &[
+            (Language::Python, "a.py", "def f(x):\n    match x:\n        case 0:\n            pass\n        case _, _:\n            pass\n", 3),
+            (Language::Python, "a.py", "def f(x):\n    match x:\n        case 0:\n            pass\n        case rest:\n            pass\n", 2),
+            (Language::Python, "a.py", "def f(x):\n    match x:\n        case 0:\n            pass\n        case Color.RED:\n            pass\n", 3),
+            (Language::Python, "a.py", "def f(x, y):\n    match x:\n        case 0:\n            pass\n        case rest if y:\n            pass\n", 3),
+            (Language::CSharp, "A.cs", "class A { int F(int x) { return x switch { 0 => 1, var rest => rest }; } }", 2),
+            (Language::CSharp, "A.cs", "class A { int F((int, int) x) { return x switch { (0, 0) => 1, var (a, b) => a }; } }", 3),
+            (Language::CSharp, "A.cs", "class A { int F(int x) { return x switch { _ when x > 0 => 1, _ => 0 }; } }", 2),
+            (Language::Bash, "a.sh", "f() {\n  case \"$x\" in\n    a) g ;;\n    b|*) g ;;\n  esac\n}\n", 2),
+        ];
+        let mut failures = Vec::new();
+        for (lang, filename, code, expected) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            let cyclomatic: Vec<u32> = result
+                .functions
+                .iter()
+                .map(|f| f.metrics.cyclomatic)
+                .collect();
+            if cyclomatic != [*expected] {
+                failures.push(format!(
+                    "{lang:?} {cyclomatic:?}, expected {expected}: {code}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// An `else` without braces adds 1, and its body keeps its own score.
+    /// A PHP jump level is a number: `break (2)` leaves two loops, and
+    /// `continue 0x1` leaves one.
+    #[test]
+    fn test_bare_else_and_php_jump_levels() {
+        let cases: &[(Language, &str, &str, u32)] = &[
+            (Language::Java, "A.java", "class A { void f(boolean a, boolean b) { if (a) { g(); } else while (b) { g(); } } }", 4),
+            (Language::Java, "A.java", "class A { void f(boolean a, boolean b) { while (a) { if (b) g(); else break; } } }", 4),
+            (Language::CSharp, "A.cs", "class A { void F(bool a, bool b) { if (a) { G(); } else while (b) { G(); } } }", 4),
+            (Language::CSharp, "A.cs", "class A { void F(bool a) { if (a) { G(); } else goto done; done: ; } }", 3),
+            (Language::Php, "a.php", "<?php\nfunction f() { while (1) { while (1) { break (2); } } }\n", 4),
+            (Language::Php, "a.php", "<?php\nfunction f() { while (1) { continue 0x1; } }\n", 1),
+            (Language::Php, "a.php", "<?php\nfunction f() { while (1) { while (1) { continue 0b10; } } }\n", 4),
+        ];
+        let mut failures = Vec::new();
+        for (lang, filename, code, expected) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            let cognitive: Vec<u32> = result
+                .functions
+                .iter()
+                .map(|f| f.metrics.cognitive)
+                .collect();
+            if cognitive != [*expected] {
+                failures.push(format!(
+                    "{lang:?} {cognitive:?}, expected {expected}: {code}"
+                ));
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));

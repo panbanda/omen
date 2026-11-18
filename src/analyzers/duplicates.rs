@@ -138,7 +138,8 @@ impl Analyzer {
     }
 
     /// The analyzer of `[duplicates]` and `exclude_tests` of the configuration.
-    /// Each command that finds clones uses it, so all of them agree.
+    /// Each command that finds clones uses it, so all of them agree: `clones`,
+    /// `defect`, `score`, `all`, and `report`.
     pub fn from_config(config: &crate::config::Config) -> Self {
         Self::new()
             .with_min_tokens(config.duplicates.min_tokens)
@@ -354,7 +355,12 @@ impl Analyzer {
     ) -> Option<CodeFragment> {
         // Normalize and tokenize
         let normalized = self.normalize_code(lines, lang);
-        let tokens = tokenize(&normalized);
+        let comments = if self.config.ignore_comments {
+            CommentSyntax::of(lang)
+        } else {
+            CommentSyntax::default()
+        };
+        let tokens = tokenize(&normalized, comments);
 
         // Normalize tokens with a FRESH identifier map for each fragment.
         // This ensures structurally identical code in different files produces
@@ -408,7 +414,20 @@ impl Analyzer {
     /// a shingle in common. Each pair with this property is a candidate, and
     /// the exact similarity decides. No pair at the threshold is missed.
     fn find_clone_pairs(&self, fragments: &[CodeFragment]) -> Vec<ClonePair> {
-        let threshold = self.config.similarity_threshold.clamp(0.0, 1.0);
+        // No similarity is more than 1, so a threshold above 1 finds no pair.
+        let threshold = self.config.similarity_threshold.max(0.0);
+        if threshold == 0.0 {
+            // Each pair is a clone, also a pair with no shingle in common.
+            let mut pairs = Vec::new();
+            for idx_b in 0..fragments.len() {
+                for idx_a in 0..idx_b {
+                    if !overlapping(&fragments[idx_a], &fragments[idx_b]) {
+                        pairs.push(ClonePair { idx_a, idx_b });
+                    }
+                }
+            }
+            return pairs;
+        }
 
         let mut frequency: HashMap<u64, u32> = HashMap::new();
         for fragment in fragments {
@@ -451,11 +470,9 @@ impl Analyzer {
                 candidates.into_iter().filter_map(move |idx_a| {
                     let frag_a = &fragments[idx_a];
                     let frag_b = &fragments[idx_b];
-                    let overlapping = frag_a.file == frag_b.file
-                        && frag_a.start_line <= frag_b.end_line
-                        && frag_b.start_line <= frag_a.end_line;
                     let similarity = exact_jaccard(&frag_a.shingles, &frag_b.shingles);
-                    (!overlapping && similarity >= threshold).then_some(ClonePair { idx_a, idx_b })
+                    (!overlapping(frag_a, frag_b) && similarity >= threshold)
+                        .then_some(ClonePair { idx_a, idx_b })
                 })
             })
             .collect();
@@ -569,7 +586,12 @@ impl Analyzer {
                     instances,
                     total_lines,
                     total_tokens,
-                    average_similarity: similarity_sum / similarity_count as f64,
+                    // A group of one fragment (`min_group_size` 1) has no pair.
+                    average_similarity: if similarity_count == 0 {
+                        1.0
+                    } else {
+                        similarity_sum / similarity_count as f64
+                    },
                 },
                 member_indices.clone(),
             ));
@@ -696,19 +718,24 @@ impl AnalyzerTrait for Analyzer {
             }
         }
 
-        // Each pair of a group is a clone if its own similarity is at the
-        // threshold. A group can join two fragments through a third one.
+        // The clones are the pairs that the search verified. A group can join
+        // two fragments through a third one, and such a pair is not a clone.
+        let verified: HashSet<(usize, usize)> = clone_pairs
+            .iter()
+            .map(|pair| (pair.idx_a, pair.idx_b))
+            .collect();
         let mut clones = Vec::new();
         for (group, members) in &grouped {
             for i in 0..group.instances.len() {
                 for j in (i + 1)..group.instances.len() {
                     let inst_a = &group.instances[i];
                     let inst_b = &group.instances[j];
-                    let (frag_a, frag_b) = (&all_fragments[members[i]], &all_fragments[members[j]]);
-                    let similarity = exact_jaccard(&frag_a.shingles, &frag_b.shingles);
-                    if similarity < self.config.similarity_threshold {
+                    let (left, right) = (members[i].min(members[j]), members[i].max(members[j]));
+                    if !verified.contains(&(left, right)) {
                         continue;
                     }
+                    let (frag_a, frag_b) = (&all_fragments[members[i]], &all_fragments[members[j]]);
+                    let similarity = exact_jaccard(&frag_a.shingles, &frag_b.shingles);
 
                     let clone = Clone {
                         clone_type: CloneType::of(&[frag_a, frag_b]),
@@ -787,7 +814,7 @@ struct ClonePair {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Analysis {
     pub clones: Vec<Clone>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub groups: Vec<CloneGroup>,
     pub summary: AnalysisSummary,
     pub total_files_scanned: usize,
@@ -845,12 +872,12 @@ pub struct AnalysisSummary {
     pub duplicated_lines: usize,
     pub total_lines: usize,
     pub duplication_ratio: f64,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub file_occurrences: HashMap<String, usize>,
     pub avg_similarity: f64,
     pub p50_similarity: f64,
     pub p95_similarity: f64,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub hotspots: Vec<Hotspot>,
 }
 
@@ -1151,6 +1178,9 @@ fn is_operator_or_delimiter(token: &str) -> bool {
             | "="
             | "=="
             | "!="
+            | "==="
+            | "!=="
+            | "??"
             | "<"
             | ">"
             | "<="
@@ -1194,14 +1224,64 @@ fn is_operator_or_delimiter(token: &str) -> bool {
     )
 }
 
+/// The comment syntax that `tokenize` skips.
+#[derive(Debug, Clone, Copy, Default)]
+struct CommentSyntax {
+    /// `//` to the end of the line, and `/* ... */`.
+    slashes: bool,
+    /// `#` to the end of the line.
+    hash: bool,
+}
+
+impl CommentSyntax {
+    fn of(lang: &str) -> Self {
+        Self {
+            // Python `//` is floor division.
+            slashes: !matches!(lang, "python" | "ruby" | "bash"),
+            hash: matches!(lang, "python" | "ruby" | "bash" | "php"),
+        }
+    }
+
+    /// Whether a comment starts at `start`. `previous` is the character
+    /// before `start`, and `next` is the character after it.
+    fn starts_at(self, c: char, previous: Option<char>, next: Option<char>) -> bool {
+        match c {
+            // The end of a JavaScript regular expression such as `/\//` has
+            // the escaped `/` next to the closing `/`.
+            '/' => self.slashes && previous != Some('\\') && matches!(next, Some('/' | '*')),
+            // PHP `#[...]` is an attribute.
+            '#' => self.hash && next != Some('['),
+            _ => false,
+        }
+    }
+}
+
 /// Tokenize code into tokens.
-fn tokenize(content: &str) -> Vec<String> {
+fn tokenize(content: &str, comments: CommentSyntax) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut chars = content.char_indices().peekable();
 
     while let Some((start, c)) = chars.next() {
         // Skip whitespace
         if c.is_whitespace() {
+            continue;
+        }
+
+        let previous = content[..start].chars().next_back();
+        let next = chars.peek().map(|(_, next)| *next);
+        if comments.starts_at(c, previous, next) {
+            if c == '/' && next == Some('*') {
+                chars.next();
+                let mut star = false;
+                for (_, current) in chars.by_ref() {
+                    if star && current == '/' {
+                        break;
+                    }
+                    star = current == '*';
+                }
+            } else {
+                while chars.next_if(|(_, current)| *current != '\n').is_some() {}
+            }
             continue;
         }
 
@@ -1222,10 +1302,9 @@ fn tokenize(content: &str) -> Vec<String> {
             continue;
         }
 
-        // Numbers
-        if c.is_ascii_digit()
-            || (c == '-' && chars.peek().is_some_and(|(_, next)| next.is_ascii_digit()))
-        {
+        // Numbers. A minus sign is always an operator, so `x-1` and `x - 1`
+        // give the same tokens.
+        if c.is_ascii_digit() {
             while chars.peek().is_some_and(|(_, next)| {
                 next.is_ascii_digit()
                     || matches!(
@@ -1362,6 +1441,13 @@ fn exact_jaccard(left: &[u64], right: &[u64]) -> f64 {
     shared as f64 / (left.len() + right.len() - shared) as f64
 }
 
+/// Whether two fragments are the same lines of one file, or share lines.
+fn overlapping(left: &CodeFragment, right: &CodeFragment) -> bool {
+    left.file == right.file
+        && left.start_line <= right.end_line
+        && right.start_line <= left.end_line
+}
+
 fn hash_tokens(tokens: &[String]) -> u64 {
     xxhash_rust::xxh3::xxh3_64(tokens.join(" ").as_bytes())
 }
@@ -1424,6 +1510,66 @@ mod tests {
         );
     }
 
+    /// A type 1 clone can differ in comments. A comment at the end of a line
+    /// or in a line is not a token. Text in a string and the Python `//`
+    /// operator are tokens.
+    #[test]
+    fn test_clone_type_ignores_comments_in_a_line() {
+        let go = BASE_FUNCTION;
+        let js = "function total(items) {\n  let sum = 0;\n  const url = \"http://a\";\n  for (const item of items) {\n    if (item > 10) {\n      sum += item * 2;\n    } else {\n      sum += item;\n    }\n  }\n  return sum + url.length;\n}\n";
+        let py = "def total(items):\n    result = 0\n    for item in items:\n        if item > 10:\n            result += item // 2\n        else:\n            result += item\n    return result\n";
+        let cases: &[(&str, &str, String, CloneType)] = &[
+            (
+                "a.go",
+                go,
+                go.replace("sum := 0", "sum := 0 // start at zero"),
+                CloneType::Type1,
+            ),
+            (
+                "a.go",
+                go,
+                go.replace("item * 2", "item /* + */ * 2"),
+                CloneType::Type1,
+            ),
+            (
+                "a.js",
+                js,
+                js.replace("let sum = 0;", "let sum = 0; // start"),
+                CloneType::Type1,
+            ),
+            (
+                "a.js",
+                js,
+                js.replace("http://a", "http://b"),
+                CloneType::Type2,
+            ),
+            (
+                "a.py",
+                py,
+                py.replace("result = 0", "result = 0  # start"),
+                CloneType::Type1,
+            ),
+            (
+                "a.py",
+                py,
+                py.replace("item // 2", "item / 2"),
+                CloneType::Type3,
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (name, original, changed, expected) in cases {
+            let other = name.replace("a.", "b.");
+            let analysis = analyze_sources(&[(name, original), (&other, changed)]);
+            let types: Vec<CloneType> = analysis.clones.iter().map(|c| c.clone_type).collect();
+            if types != [*expected] {
+                failures.push(format!(
+                    "{name} {types:?}, expected {expected:?}: {changed}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     fn only_clone(analysis: &Analysis) -> &Clone {
         assert_eq!(analysis.clones.len(), 1, "{:?}", analysis.clones);
         &analysis.clones[0]
@@ -1447,6 +1593,140 @@ mod tests {
         assert_eq!(clone.clone_type, CloneType::Type2);
         assert_eq!(clone.similarity, 1.0);
         assert_eq!(analysis.groups[0].clone_type, CloneType::Type2);
+    }
+
+    #[test]
+    fn test_clone_type2_in_typescript() {
+        let original = "function total(items: number[]): number {\n  let sum = 0;\n  for (const item of items) {\n    if (item > 10) {\n      sum += item * 2;\n    } else {\n      sum += item;\n    }\n  }\n  return sum;\n}\n";
+        let renamed = "function weight(values: number[]): number {\n  let acc = 0;\n  for (const value of values) {\n    if (value > 99) {\n      acc += value * 3;\n    } else {\n      acc += value;\n    }\n  }\n  return acc;\n}\n";
+        let analysis = analyze_sources(&[("a.ts", original), ("b.ts", renamed)]);
+        let clone = only_clone(&analysis);
+        assert_eq!(clone.clone_type, CloneType::Type2);
+        assert_eq!(clone.similarity, 1.0);
+    }
+
+    /// `===` and `!==` are operators, so a change between them is not a
+    /// change of a name.
+    #[test]
+    fn test_strict_comparison_operators_are_operators() {
+        let config = Config::default();
+        let tokens = |code: &str| {
+            normalize_tokens_fresh(&tokenize(code, CommentSyntax::of("javascript")), &config)
+        };
+        assert_ne!(
+            tokens("if (a === b) { f(); }"),
+            tokens("if (a !== b) { f(); }")
+        );
+        assert_ne!(tokens("x = a ?? b;"), tokens("x = a || b;"));
+    }
+
+    /// The tokens do not depend on the spaces around a minus sign.
+    #[test]
+    fn test_minus_tokens_do_not_depend_on_spaces() {
+        let tokens = |code: &str| tokenize(code, CommentSyntax::of("go"));
+        assert_eq!(tokens("return x-1"), tokens("return x - 1"));
+        assert_eq!(tokens("y := -1"), tokens("y := - 1"));
+    }
+
+    /// `omen all` writes a result without clones, and reads it back.
+    #[test]
+    fn test_empty_analysis_reads_back() {
+        let analysis = analyze_sources(&[("a.go", "package main\n")]);
+        assert!(analysis.groups.is_empty());
+        let text = serde_json::to_string(&analysis).unwrap();
+        let read: Analysis = serde_json::from_str(&text).unwrap();
+        assert!(read.clones.is_empty());
+    }
+
+    fn analyze_with(config: Config, sources: &[(&str, &str)]) -> Analysis {
+        let tmp_dir = TempDir::new().unwrap();
+        for (name, code) in sources {
+            fs::write(tmp_dir.path().join(name), code).unwrap();
+        }
+        let core = CoreConfig::default();
+        let file_set = FileSet::from_path(tmp_dir.path(), &core).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &core, Some(tmp_dir.path()));
+        Analyzer::new().with_config(config).analyze(&ctx).unwrap()
+    }
+
+    const OTHER_FUNCTION: &str = "package main\n\nfunc other(text string) bool {\n\tswitch text {\n\tcase \"a\", \"b\":\n\t\treturn true\n\tdefault:\n\t\tfor index := 0; index < 3; index++ {\n\t\t\tprintln(index)\n\t\t}\n\t}\n\treturn false\n}\n";
+
+    /// A group of one fragment has no pair, and its similarity is 1.
+    #[test]
+    fn test_group_of_one_has_a_finite_similarity() {
+        let config = Config {
+            min_tokens: 20,
+            similarity_threshold: 0.6,
+            min_group_size: 1,
+            ..Config::default()
+        };
+        let analysis = analyze_with(
+            config,
+            &[
+                ("a.go", BASE_FUNCTION),
+                ("b.go", BASE_FUNCTION),
+                ("c.go", OTHER_FUNCTION),
+            ],
+        );
+        assert!(analysis.groups.len() >= 2, "{:?}", analysis.groups);
+        for group in &analysis.groups {
+            assert!(group.average_similarity.is_finite(), "{group:?}");
+        }
+    }
+
+    /// No similarity is more than 1, so a threshold above 1 finds nothing.
+    #[test]
+    fn test_threshold_above_one_finds_no_clone() {
+        let config = Config {
+            min_tokens: 20,
+            similarity_threshold: 1.1,
+            ..Config::default()
+        };
+        let analysis = analyze_with(config, &[("a.go", BASE_FUNCTION), ("b.go", BASE_FUNCTION)]);
+        assert!(analysis.clones.is_empty());
+        assert_eq!(analysis.summary.duplicated_lines, 0);
+    }
+
+    /// At the threshold 0, each pair is a clone, also a pair with no shingle
+    /// in common.
+    #[test]
+    fn test_threshold_zero_finds_each_pair() {
+        let config = Config {
+            min_tokens: 20,
+            similarity_threshold: 0.0,
+            ..Config::default()
+        };
+        let analyzer = Analyzer::new().with_config(config.clone());
+        let left = analyzer.extract_fragments("a.go", BASE_FUNCTION.as_bytes());
+        let right = analyzer.extract_fragments("c.go", OTHER_FUNCTION.as_bytes());
+        assert_eq!(exact_jaccard(&left[0].shingles, &right[0].shingles), 0.0);
+        let analysis = analyze_with(config, &[("a.go", BASE_FUNCTION), ("c.go", OTHER_FUNCTION)]);
+        assert_eq!(analysis.clones.len(), 1, "{:?}", analysis.clones);
+    }
+
+    /// A file that the list gives two times does not make a pair with
+    /// itself.
+    #[test]
+    fn test_clone_pairs_are_the_verified_pairs() {
+        let tmp_dir = TempDir::new().unwrap();
+        fs::write(tmp_dir.path().join("a.go"), BASE_FUNCTION).unwrap();
+        fs::write(tmp_dir.path().join("b.go"), BASE_FUNCTION).unwrap();
+        let root = tmp_dir.path().to_path_buf();
+        let files = vec![root.join("a.go"), root.join("a.go"), root.join("b.go")];
+        let file_set = FileSet::from_files(root.clone(), files);
+        let core = CoreConfig::default();
+        let ctx = AnalysisContext::new(&file_set, &core, Some(tmp_dir.path()));
+        let analysis = Analyzer::new()
+            .with_min_tokens(20)
+            .with_similarity_threshold(0.6)
+            .analyze(&ctx)
+            .unwrap();
+        for clone in &analysis.clones {
+            assert!(
+                clone.file_a != clone.file_b || clone.start_line_a != clone.start_line_b,
+                "{clone:?}"
+            );
+        }
     }
 
     #[test]
@@ -1576,7 +1856,7 @@ mod tests {
 
     #[test]
     fn test_tokenize() {
-        let tokens = tokenize("func main() { x := 42 }");
+        let tokens = tokenize("func main() { x := 42 }", CommentSyntax::of("go"));
         assert!(tokens.contains(&"func".to_string()));
         assert!(tokens.contains(&"main".to_string()));
         assert!(tokens.contains(&"42".to_string()));
@@ -1586,7 +1866,7 @@ mod tests {
 
     #[test]
     fn test_tokenize_with_strings() {
-        let tokens = tokenize(r#"x := "hello world""#);
+        let tokens = tokenize(r#"x := "hello world""#, CommentSyntax::of("go"));
         assert!(tokens.contains(&"x".to_string()));
         assert!(tokens.contains(&r#""hello world""#.to_string()));
     }

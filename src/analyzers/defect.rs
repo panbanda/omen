@@ -323,7 +323,8 @@ impl Analyzer {
     /// Uses pre-computed data from other analyzers when available.
     fn get_file_metrics(
         &self,
-        root_path: &std::path::Path,
+        ctx: &AnalysisContext<'_>,
+        path: &std::path::Path,
         file_path: &str,
         inputs: &ScoringInputs<'_>,
     ) -> FileMetrics {
@@ -350,9 +351,10 @@ impl Analyzer {
             metrics.ownership_diffusion = contributor_count as f32;
         }
 
-        // Get file LOC for confidence calculation
-        if let Ok(content) = std::fs::read_to_string(root_path.join(file_path)) {
-            metrics.lines_of_code = content.lines().count();
+        // The line count comes from the same content as the clone ranges: the
+        // commit of `--ref`, or else the checkout.
+        if let Ok(content) = ctx.read_file(path) {
+            metrics.lines_of_code = String::from_utf8_lossy(&content).lines().count();
         }
 
         // Use pre-computed complexity data if available, otherwise estimate from LOC
@@ -541,7 +543,7 @@ impl AnalyzerTrait for Analyzer {
                 let file_path = path.strip_prefix(ctx.root).unwrap_or(path);
                 let file_str = file_path.to_string_lossy();
 
-                let metrics = self.get_file_metrics(ctx.root, &file_str, &scoring_inputs);
+                let metrics = self.get_file_metrics(ctx, path, &file_str, &scoring_inputs);
                 let prob = self.calculate_probability(&metrics);
                 let confidence = self.calculate_confidence(&metrics);
                 let risk = RiskLevel::from_probability(prob);
@@ -929,7 +931,11 @@ mod tests {
             git_metrics: &git_metrics,
             window_days: 30,
         };
-        let metrics = Analyzer::new().get_file_metrics(root.path(), "a.go", &inputs);
+        let config = crate::config::Config::default();
+        let files = crate::core::FileSet::from_path(root.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(root.path()));
+        let metrics =
+            Analyzer::new().get_file_metrics(&ctx, std::path::Path::new("a.go"), "a.go", &inputs);
         assert_eq!(metrics.complexity, 6.0);
         assert_eq!(metrics.cyclomatic_complexity, 12);
         assert_eq!(metrics.duplicate_ratio, 0.5);
@@ -1136,6 +1142,56 @@ mod tests {
         assert!(!advises(&many_small_functions));
         assert!(advises(&one_branching_function));
         assert!(!advises(&estimated));
+    }
+
+    /// With `--ref`, the line count of the duplication ratio comes from the
+    /// same commit as the clone ranges, not from the checkout.
+    #[test]
+    fn test_duplication_reads_the_line_count_at_the_selected_commit() {
+        let function = "package main\n\nfunc total(items []int) int {\n\tsum := 0\n\tfor _, item := range items {\n\t\tif item > 10 {\n\t\t\tsum += item * 2\n\t\t} else {\n\t\t\tsum += item\n\t\t}\n\t}\n\treturn sum\n}\n";
+        let padding: String = (0..40).map(|i| format!("\nvar v{i} = {i}\n")).collect();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path();
+        std::fs::write(path.join("a.go"), format!("{function}{padding}")).unwrap();
+        std::fs::write(path.join("b.go"), function.replace("total", "count")).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("run git");
+            assert!(output.status.success(), "git {args:?}: {output:?}");
+            String::from_utf8(output.stdout).unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test Author"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "add the functions"]);
+        let commit = git(&["rev-parse", "HEAD"]).trim().to_string();
+
+        let mut config = crate::config::Config::default();
+        config.duplicates.min_tokens = 20;
+        let duplication_of_a = || {
+            let tree = crate::core::TreeSource::new(path, &commit).unwrap();
+            let files = crate::core::FileSet::from_tree_source(&tree, &config).unwrap();
+            let ctx = AnalysisContext::new(&files, &config, Some(path))
+                .with_git_path(path)
+                .with_content_source(std::sync::Arc::new(tree));
+            let analysis = Analyzer::from_config(&config).analyze(&ctx).unwrap();
+            analysis
+                .files
+                .iter()
+                .find(|file| file.file == "a.go")
+                .map(|file| file.contributing_factors["duplication"])
+                .unwrap()
+        };
+        let with_checkout = duplication_of_a();
+        std::fs::remove_file(path.join("a.go")).unwrap();
+        let without_checkout = duplication_of_a();
+        assert!(with_checkout > 0.0);
+        assert_eq!(with_checkout, without_checkout);
     }
 
     #[test]

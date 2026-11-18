@@ -14,14 +14,16 @@ source code, and do not run other tools.
 
 - an entry point is a place where input enters the code, with its kind, its route, and its declared guards
 - a sink is a call, a member, or a literal that the table of omen names, with its category and its CWE number
-- a path is the shortest list of calls from an entry point to a sink, with the basis of each call
+- a path is the shortest list of steps from an entry point to a sink, with the basis of each step
+- a step with `"edge": "function_reference"` is not a call: the symbol before it uses the function as a value, and the function can run later
 - a choke point is a symbol that is on each known path to some sinks
 - `no_known_entry` lists the sinks that no known entry point reaches
 
 ## Rules (required)
 
 - Do not write "vulnerable", "exploitable", or "secure". The data does not show a vulnerability, and it does not show safety.
-- A sink with no known entry is not safe. The call graph has only the calls that the index resolves, and the table has only the frameworks in `coverage`. Say what is missing.
+- A sink with no known entry is not safe. The graph has only the calls and the function references that the index resolves, and the table has only the frameworks in `coverage`. Say what is missing.
+- A path with `function_references` says that the entry point can cause the sink to run. It does not say that the entry point calls the sink. Read the source before you say that the function runs.
 - A declared guard is a decorator, an annotation, a middleware name, or a declared dependency of FastAPI. It does not mean that the handler is authenticated. A dependency such as `get_db` does not authenticate.
 - A path with the weakest basis `name_only` or `same_package` is weaker evidence than a path with `imported_name`. Say which kind of evidence you have.
 - Start with the coverage: which languages and frameworks omen recognised, and which it did not.

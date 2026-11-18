@@ -1,0 +1,9 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tools.workspace = true
+kit = { package = "render-kit", path = "../render-kit" }
+num_cpus.workspace = true

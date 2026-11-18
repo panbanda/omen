@@ -128,8 +128,20 @@ pub fn is_default_branch(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
         (Language::C | Language::Cpp, "case_statement")
         | (Language::Java, "switch_label")
         | (Language::CSharp, "switch_section") => first_token() == Some("default"),
+        // `_` or `var name` with no `when` matches each remaining value.
         (Language::CSharp, "switch_expression_arm") => {
-            node.named_child(0).map(|child| child.kind()) == Some("discard")
+            let guarded = !named_children_of_kind(node, "when_clause").is_empty();
+            let catches_all = node.named_child(0).is_some_and(|pattern| {
+                pattern.kind() == "discard"
+                    || (pattern.kind() == "declaration_pattern"
+                        && pattern
+                            .child_by_field_name("type")
+                            .is_some_and(|kind| kind.kind() == "implicit_type")
+                        && pattern
+                            .child_by_field_name("name")
+                            .is_some_and(|name| name.kind() == "identifier"))
+            });
+            !guarded && catches_all
         }
         // A `match` is exhaustive, so the last arm is the default.
         (Language::Rust, "match_arm") => {
@@ -142,19 +154,30 @@ pub fn is_default_branch(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
             }
             true
         }
+        // `case _:` or a bare capture such as `case rest:`, with no guard. Two
+        // patterns, as in `case _, _:`, are a sequence pattern.
         (Language::Python, "case_clause") => {
+            let patterns = named_children_of_kind(node, "case_pattern");
             node.child_by_field_name("guard").is_none()
-                && named_children_of_kind(node, "case_pattern")
-                    .iter()
-                    .all(|pattern| text(*pattern) == "_")
+                && patterns.len() == 1
+                && (text(patterns[0]) == "_" || is_bare_capture(patterns[0]))
         }
         (Language::Bash, "case_item") => {
             let mut cursor = node.walk();
             let values: Vec<_> = node.children_by_field_name("value", &mut cursor).collect();
-            !values.is_empty() && values.iter().all(|value| text(*value) == "*")
+            values.iter().any(|value| text(*value) == "*")
         }
         _ => false,
     }
+}
+
+/// Whether a Python case pattern is one name, which captures any value.
+/// A dotted name such as `Color.RED` is a value pattern.
+fn is_bare_capture(pattern: tree_sitter::Node<'_>) -> bool {
+    pattern.named_child_count() == 1
+        && pattern
+            .named_child(0)
+            .is_some_and(|name| name.kind() == "dotted_name" && name.named_child_count() == 1)
 }
 
 fn named_children_of_kind<'tree>(

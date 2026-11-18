@@ -501,7 +501,9 @@ fn conventional_commit_type(message: &str) -> Option<String> {
 }
 
 /// A known Conventional Commit type in the subject decides. Other messages
-/// use the bug fix patterns of Mockus and Votta (2000). omen:ignore
+/// use the bug fix patterns of Mockus and Votta (2000) on the subject cut to
+/// 80 characters. `message` is the whole message, because the cut can remove
+/// the `): ` of a long scope. omen:ignore
 fn is_bug_fix_commit(message: &str) -> bool {
     match conventional_commit_type(message).as_deref() {
         Some("fix") => return true,
@@ -525,7 +527,8 @@ fn is_bug_fix_commit(message: &str) -> bool {
         ]
     });
 
-    patterns.iter().any(|p| p.is_match(message))
+    let subject = truncate_message(message);
+    patterns.iter().any(|p| p.is_match(&subject))
 }
 
 // Automated/trivial commit patterns
@@ -579,7 +582,7 @@ fn commits_to_raw_commits(commits: &[crate::git::Commit]) -> Result<Vec<RawCommi
                 author: commit.author.clone(),
                 message: message.clone(),
                 timestamp: timestamp.unwrap_or_else(Utc::now),
-                is_fix: is_bug_fix_commit(&message),
+                is_fix: is_bug_fix_commit(&commit.message),
                 is_automated: is_automated_commit(&message),
                 entropy,
                 lines_added,
@@ -632,7 +635,7 @@ fn parse_git_log(output: &str) -> Result<Vec<RawCommit>> {
                         author,
                         message: message.clone(),
                         timestamp,
-                        is_fix: is_bug_fix_commit(&message),
+                        is_fix: is_bug_fix_commit(parts[3]),
                         is_automated: is_automated_commit(&message),
                         ..Default::default()
                     },
@@ -1315,6 +1318,30 @@ mod tests {
         let file_risk = FileRiskSignals::default();
         let recs = generate_recommendations(&features, 0.1, &factors, &file_risk);
         assert!(recs.iter().any(|r| r.contains("Low risk")));
+    }
+
+    /// The commit type comes from the subject before it is cut to 80
+    /// characters. Here the cut removes `): ` of a long scope, and the rest
+    /// has the word "error".
+    #[test]
+    fn test_fix_detection_reads_the_whole_subject() {
+        let subject = format!("perf(error-{}): reduce the latency", "handling-".repeat(8));
+        assert!(subject.len() > 80);
+        assert!(!truncate_message(&subject).contains("): "));
+        let commit = crate::git::Commit {
+            sha: "abc".to_string(),
+            author: "A".to_string(),
+            email: "a@example.com".to_string(),
+            timestamp: 0,
+            commit_time: 0,
+            message: subject.clone(),
+            files: Vec::new(),
+        };
+        let from_history = commits_to_raw_commits(&[commit]).unwrap();
+        assert!(!from_history[0].features.is_fix);
+        let log = format!("abc|A|2024-01-15T10:30:00+00:00|{subject}\n1\t1\ta.rs\n");
+        let from_log = parse_git_log(&log).unwrap();
+        assert!(!from_log[0].features.is_fix);
     }
 
     #[test]

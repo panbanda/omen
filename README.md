@@ -412,10 +412,10 @@ Omen calculates the hotspot score as the product of two percentile ranks:
 hotspot = (churn_percentile / 100) * (complexity_percentile / 100)
 ```
 
-Each percentile is a rank in the files of the repository:
+Each percentile is a rank in a different set of files:
 
-- **Churn percentile** - The rank of the churn score of the file: 1 for each commit, and 1 more for each 100 changed lines.
-- **Complexity percentile** - The rank of the sum of the cyclomatic complexity of the functions of the file. As in Tornhill, this measure grows with the size of the file.
+- **Churn percentile** - The rank of the churn score of the file among the files that changed in the window. The churn score is 1 for each commit, and 1 more for each 100 changed lines. If one of ten files changed, its churn percentile is 50, not 95.
+- **Complexity percentile** - The rank of the sum of the cyclomatic complexity of the functions of the file, among the files that have a complexity result. As in Tornhill, this measure grows with the size of the file.
 
 | Hotspot Score | Severity | Action                 |
 | ------------- | -------- | ---------------------- |

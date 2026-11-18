@@ -9,8 +9,9 @@
 //! with the size of the file. The mean for one function is `avg_complexity`,
 //! and the score does not use it.
 //!
-//! The score is `churn_percentile / 100 * complexity_percentile / 100`. Each
-//! percentile is a rank in the files of the repository.
+//! The score is `churn_percentile / 100 * complexity_percentile / 100`. The
+//! churn percentile ranks the files that changed in the window. The complexity
+//! percentile ranks the files that have a complexity result.
 //!
 //! # References
 //!

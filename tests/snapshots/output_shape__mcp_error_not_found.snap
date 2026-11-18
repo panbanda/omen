@@ -6,7 +6,7 @@ expression: body
   "error": {
     "code": "not_found",
     "expected": null,
-    "message": "No definition agrees with the symbol `helpr`.",
+    "message": "No definition agrees with the symbol `helpr`. Near names: helper.",
     "next": "Use a name from `suggestions`.",
     "param": "name",
     "received": "helpr",
