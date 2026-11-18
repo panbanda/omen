@@ -17,6 +17,9 @@
 //!   guards of each route inside the function.
 //! - A combo method returns a value that keeps the pattern. Each method of the value sends the
 //!   pattern to a route method of the type.
+//! - A middleware method keeps its variadic argument in a field, or gives it to the framework
+//!   router. The walk does not read its middleware, so the guards of the routes of the router
+//!   are not complete.
 //!
 //! The walk reads each function of the repository one time. A router is a value that a literal of
 //! the type makes, a parameter of the type, or the result of a function that returns the type.
@@ -27,9 +30,14 @@
 //! prefix to the path, as the type does. A mount joins the paths with the rules of the framework.
 //! The files of tests give no routes and no links.
 //!
-//! These forms give no entry: a router in a package-level variable, a pattern that is not a
-//! string literal, a mount prefix that is not a string literal, and a router in a cycle of links.
-//! A middleware that a method other than a group method adds, as `Use`, is not a guard here.
+//! A router in a package-level variable gives no entry. A pattern or a prefix that is not a
+//! string literal, a router in a cycle of links, and a router with too many chains give one entry
+//! for each route. The path starts with `<unresolved>` in place of the part that the walk cannot
+//! read, and the guards are not complete.
+//!
+//! A slice of guards is known when it is a literal, an `append` of known slices, or a variadic
+//! parameter, whose guards come from each call. A slice that changes in an inner scope or at an
+//! index gives a placeholder guard, so the guard list is not complete.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
@@ -38,9 +46,9 @@ use tree_sitter::Node;
 
 use super::go_routes::{
     directory_of, is_http_token, package_names, parse_signature, path_parameters,
-    servemux_parameters, servemux_pattern, Framework,
+    servemux_parameters, servemux_pattern, Framework, UNNAMED_FUNCTION_GUARD, UNREAD_GUARD,
 };
-use super::{Context, Draft, EntryBasis, EntryKind, Route, TreeSource};
+use super::{Context, Draft, EntryBasis, EntryKind, GuardsUnknownReason, Route, TreeSource};
 use crate::core::{is_test_file, Language};
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ImportKind, ImportTarget, ResolutionStatus, Span, Symbol, SymbolKind};
@@ -67,8 +75,8 @@ const ROUTE_METHODS: [&str; 15] = [
 /// The depth of an expression that the walk reads.
 const EVAL_DEPTH_LIMIT: usize = 1000;
 
-/// The number of chains of links that a router can have. A router with more chains gives no
-/// entry, so that the cost stays in proportion to the size of the repository.
+/// The number of chains of links that a router can have. A router with more chains gets one
+/// chain whose path is not known, so that the cost stays in proportion to the size of the repository.
 const PLACEMENT_LIMIT: usize = 256;
 
 /// The router of a framework that a field of a router type holds.
@@ -150,11 +158,99 @@ enum Verb {
 /// The shape of a route method of a router type.
 #[derive(Clone, Debug)]
 enum Shape {
-    Route { pattern: usize, verbs: Vec<Verb> },
-    Mount { pattern: usize, mounted: usize },
-    Group { pattern: usize, body: usize },
-    Combo { pattern: usize, combo: usize },
+    Route {
+        pattern: usize,
+        verbs: Vec<Verb>,
+    },
+    Mount {
+        pattern: usize,
+        mounted: usize,
+    },
+    Group {
+        pattern: usize,
+        body: usize,
+    },
+    Combo {
+        pattern: usize,
+        combo: usize,
+    },
+    /// A method that keeps its variadic argument in a field, or gives it to the framework
+    /// router, as `Use`. The walk does not read when such a middleware runs.
+    Middleware,
 }
+
+/// A guard of a route: a name, or the arguments that each call of a function gives to its
+/// variadic parameter at a position.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Guard {
+    Name(String),
+    Spread { function: String, position: usize },
+}
+
+impl Guard {
+    fn unread() -> Self {
+        Self::Name(UNREAD_GUARD.to_string())
+    }
+}
+
+/// The guards of each argument of one call of a function.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Arguments {
+    function: String,
+    items: Vec<Vec<Guard>>,
+}
+
+/// The guards with each spread of the function of `arguments` replaced by the guards of the
+/// call.
+fn substitute(guards: &[Guard], arguments: Option<&Arguments>) -> Vec<Guard> {
+    let mut found = Vec::with_capacity(guards.len());
+    for guard in guards {
+        match (guard, arguments) {
+            (Guard::Spread { function, position }, Some(arguments))
+                if *function == arguments.function =>
+            {
+                for item in arguments.items.iter().skip(*position) {
+                    found.extend(item.iter().cloned());
+                }
+            }
+            _ => found.push(guard.clone()),
+        }
+    }
+    found
+}
+
+/// The guards of a slice value. A value that is not a known slice gives a placeholder.
+fn guards_of(value: Option<&Value>) -> Vec<Guard> {
+    match value {
+        Some(Value::Guards(guards)) => guards.to_vec(),
+        _ => vec![Guard::unread()],
+    }
+}
+
+/// A prefix of a path. When `unresolved` is true, a part before `text` is not a string literal.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct Prefix {
+    unresolved: bool,
+    text: String,
+}
+
+impl Prefix {
+    fn join(&self, part: Option<&str>) -> Self {
+        match part {
+            Some(part) => Self {
+                unresolved: self.unresolved,
+                text: format!("{}{part}", self.text),
+            },
+            None => Self {
+                unresolved: true,
+                text: String::new(),
+            },
+        }
+    }
+}
+
+/// The text in place of the part of a path that the walk cannot read.
+const UNRESOLVED_PREFIX: &str = "<unresolved>";
 
 struct RouterType {
     inner: Inner,
@@ -213,7 +309,7 @@ struct MethodFact {
 type Element = (Option<String>, ArgumentFact);
 
 /// An open group: its prefix, when the source gives it as a string literal, and its guards.
-type OpenGroup = (Option<String>, Vec<String>);
+type OpenGroup = (Option<String>, Vec<Guard>);
 
 enum FieldKind {
     Router(Inner),
@@ -240,6 +336,7 @@ struct Found {
     symbol: Option<String>,
     framework: &'static str,
     parameters: Vec<String>,
+    unknown: Option<GuardsUnknownReason>,
 }
 
 pub(super) fn collect(context: &Context<'_>, _root: Node<'_>, out: &mut Vec<Draft>) {
@@ -262,7 +359,7 @@ pub(super) fn collect(context: &Context<'_>, _root: Node<'_>, out: &mut Vec<Draf
             guards: found.guards.clone(),
             basis: EntryBasis::Registered,
             variant: None,
-            unknown: None,
+            unknown: found.unknown,
         });
     }
 }
@@ -356,10 +453,13 @@ fn parameter_list(context: &Context<'_>, list: Option<Node<'_>>) -> Vec<(String,
         ) {
             continue;
         }
-        let kind = declaration
+        let mut kind = declaration
             .child_by_field_name("type")
             .map(|kind| context.text(kind).to_string())
             .unwrap_or_default();
+        if declaration.kind() == "variadic_parameter_declaration" {
+            kind.insert_str(0, "...");
+        }
         let mut cursor = declaration.walk();
         let names: Vec<Node<'_>> = declaration
             .children_by_field_name("name", &mut cursor)
@@ -768,6 +868,11 @@ fn classify(
                 );
             }
         }
+        for method in &by_type[key] {
+            if !shapes.contains_key(&method.name) && is_middleware(method, fields) {
+                shapes.insert(method.name.clone(), Shape::Middleware);
+            }
+        }
         router_types.insert(
             key.clone(),
             RouterType {
@@ -777,6 +882,32 @@ fn classify(
         );
     }
     (router_types, combos, combo_types)
+}
+
+/// Tells if a method keeps its variadic argument in a field of the receiver, or gives it to a
+/// framework router that a field holds.
+fn is_middleware(method: &MethodFact, fields: &[(String, FieldKind)]) -> bool {
+    let Some(variadic) = method
+        .parameters
+        .iter()
+        .position(|kind| kind.starts_with("..."))
+    else {
+        return false;
+    };
+    method.stored.contains(&variadic)
+        || method.calls.iter().any(|call| {
+            let CallTarget::Field { field, .. } = &call.target else {
+                return false;
+            };
+            let to_router = fields
+                .iter()
+                .any(|(known, kind)| known == field && matches!(kind, FieldKind::Router(_)));
+            to_router
+                && call
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.parameters.contains(&variadic))
+        })
 }
 
 /// Tells if a parameter type is a string.
@@ -1079,14 +1210,21 @@ struct RouterNode {
     router_type: usize,
 }
 
+enum LinkKind {
+    /// A call gives the router to a parameter, with the guards of each argument of the call.
+    Alias(Rc<Arguments>),
+    /// A mount starts a new prefix with the rules of the framework.
+    Mount,
+    /// A call gets the router that the function returns.
+    Return,
+}
+
 struct Link {
     child: usize,
     parent: usize,
-    /// A mount starts a new prefix with the rules of the framework. Another link joins text.
-    mount: bool,
-    /// None when the source does not give the prefix as a string literal.
-    prefix: Option<String>,
-    guards: Vec<String>,
+    kind: LinkKind,
+    prefix: Prefix,
+    guards: Vec<Guard>,
 }
 
 struct Record {
@@ -1094,10 +1232,10 @@ struct Record {
     file: usize,
     range: Span,
     /// The prefixes of the groups and the path, joined.
-    segment: String,
+    segment: Prefix,
     methods: Vec<String>,
     symbol: Option<String>,
-    guards: Vec<String>,
+    guards: Vec<Guard>,
 }
 
 #[derive(Default)]
@@ -1111,6 +1249,10 @@ struct Graph {
     calls: Vec<(String, usize)>,
     /// The router that each function returns. None when the returns do not agree.
     returns: HashMap<String, Option<usize>>,
+    /// The routers that a middleware method gets.
+    layered: HashSet<usize>,
+    /// The functions whose variadic parameter gives guards to a route or to a link.
+    spread_functions: HashSet<String>,
 }
 
 impl Graph {
@@ -1130,6 +1272,16 @@ impl Graph {
         self.parameters.insert((function.to_string(), position), id);
         id
     }
+
+    fn note_spreads<'g>(&mut self, guards: impl IntoIterator<Item = &'g Guard>) {
+        for guard in guards {
+            if let Guard::Spread { function, .. } = guard {
+                if !self.spread_functions.contains(function) {
+                    self.spread_functions.insert(function.clone());
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1138,13 +1290,22 @@ enum Value {
     Combo(Rc<ComboValue>),
     /// A function literal, by its key.
     Function(String),
+    /// A slice of guards.
+    Guards(Rc<Vec<Guard>>),
 }
 
 struct ComboValue {
     router: usize,
     combo: usize,
-    pattern: String,
-    guards: Vec<String>,
+    /// None when the source does not give the pattern as a string literal.
+    pattern: Option<String>,
+    guards: Vec<Guard>,
+}
+
+/// An argument of a list of handlers: a node, or the guards of a spread of a slice.
+enum Item<'t> {
+    Argument(Node<'t>),
+    Guards(Vec<Guard>),
 }
 
 enum Step<'t> {
@@ -1159,7 +1320,7 @@ enum Step<'t> {
     PushGroup {
         router: usize,
         prefix: Option<String>,
-        guards: Vec<String>,
+        guards: Vec<Guard>,
     },
     PopGroup(usize),
 }
@@ -1250,12 +1411,19 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                         .into_iter()
                         .enumerate()
                     {
-                        let router = resolve_type(self.context.file, &kind)
-                            .and_then(|key| self.tables.by_type.get(&key).copied())
-                            .map(|router_type| {
-                                Value::Router(self.graph.parameter(&key, position, router_type))
-                            });
-                        self.bind(&name, router, true);
+                        let value = if kind.starts_with("...") {
+                            Some(Value::Guards(Rc::new(vec![Guard::Spread {
+                                function: key.clone(),
+                                position,
+                            }])))
+                        } else {
+                            resolve_type(self.context.file, &kind)
+                                .and_then(|key| self.tables.by_type.get(&key).copied())
+                                .map(|router_type| {
+                                    Value::Router(self.graph.parameter(&key, position, router_type))
+                                })
+                        };
+                        self.bind(&name, value, true);
                     }
                     stack.push(Step::EndFunction);
                     stack.push(Step::Read(body));
@@ -1331,7 +1499,18 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                     .child_by_field_name("value")
                     .map(named_children)
                     .unwrap_or_default();
-                self.bind_values(&names, &values, true);
+                let empty_slice = values.is_empty()
+                    && node
+                        .child_by_field_name("type")
+                        .is_some_and(|kind| kind.kind() == "slice_type");
+                if empty_slice {
+                    for name in names {
+                        let text = self.text(name).to_string();
+                        self.bind(&text, Some(Value::Guards(Rc::default())), true);
+                    }
+                } else {
+                    self.bind_values(&names, &values, true);
+                }
             }
             "return_statement" => {
                 let values = node.named_child(0).map(named_children).unwrap_or_default();
@@ -1390,6 +1569,15 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
     fn bind_values(&mut self, names: &[Node<'a>], values: &[Node<'a>], define: bool) {
         let results: Vec<Option<Value>> = values.iter().map(|value| self.eval(*value)).collect();
         for (position, name) in names.iter().enumerate() {
+            if name.kind() == "index_expression" {
+                if let Some(operand) = name
+                    .child_by_field_name("operand")
+                    .filter(|operand| operand.kind() == "identifier")
+                {
+                    self.taint(self.text(operand));
+                }
+                continue;
+            }
             if name.kind() != "identifier" {
                 continue;
             }
@@ -1410,18 +1598,42 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
             return;
         }
         if !define {
-            if let Some(scope) = self
+            let Some(depth) = self
                 .scopes
-                .iter_mut()
-                .rev()
-                .find(|scope| scope.contains_key(name))
-            {
-                scope.insert(name.to_string(), value);
+                .iter()
+                .rposition(|scope| scope.contains_key(name))
+            else {
+                return;
+            };
+            let is_guards = matches!(self.scopes[depth].get(name), Some(Some(Value::Guards(_))));
+            // An assignment in an inner scope, as in a condition or a loop, can run zero
+            // times or many times, so the list keeps its guards and is not complete.
+            if is_guards && depth + 1 != self.scopes.len() {
+                self.taint(name);
+                return;
             }
+            self.scopes[depth].insert(name.to_string(), value);
             return;
         }
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.to_string(), value);
+        }
+    }
+
+    /// Marks the guard list of a local name as not complete.
+    fn taint(&mut self, name: &str) {
+        let Some(scope) = self
+            .scopes
+            .iter_mut()
+            .rev()
+            .find(|scope| scope.contains_key(name))
+        else {
+            return;
+        };
+        if let Some(Some(Value::Guards(guards))) = scope.get_mut(name) {
+            if !guards.contains(&Guard::unread()) {
+                Rc::make_mut(guards).push(Guard::unread());
+            }
         }
     }
 
@@ -1464,6 +1676,21 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                     self.eval_elements(body);
                 }
                 let kind = node.child_by_field_name("type")?;
+                if kind.kind() == "slice_type" {
+                    let guards = node
+                        .child_by_field_name("body")
+                        .map(named_children)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|element| match element.kind() {
+                            "literal_element" => element
+                                .named_child(0)
+                                .map_or_else(Guard::unread, |value| self.guard_of(value)),
+                            _ => Guard::unread(),
+                        })
+                        .collect();
+                    return Some(Value::Guards(Rc::new(guards)));
+                }
                 let key = resolve_type(self.context.file, self.text(kind))?;
                 let router_type = *self.tables.by_type.get(&key)?;
                 Some(Value::Router(self.graph.add(Origin::Literal, router_type)))
@@ -1510,6 +1737,14 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
     fn eval_call(&mut self, call: Node<'a>) -> Option<Value> {
         let function = call.child_by_field_name("function")?;
         let arguments = call_arguments(call);
+        if self.is_append(function) {
+            let items = self.append_items(&arguments);
+            let guards = items
+                .into_iter()
+                .flat_map(|item| self.item_guards(item))
+                .collect();
+            return Some(Value::Guards(Rc::new(guards)));
+        }
         if function.kind() == "selector_expression" {
             let operand = function.child_by_field_name("operand")?;
             let name = self.text(function.child_by_field_name("field")?);
@@ -1537,18 +1772,39 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
             .map(|argument| self.eval(*argument))
             .collect();
         let (key, result) = callee?;
-        for (position, value) in values.into_iter().enumerate() {
-            if let Some(Value::Router(router)) = value {
-                let router_type = self.graph.routers[router].router_type;
-                let parameter = self.graph.parameter(&key, position, router_type);
-                let (prefix, guards) = self.group_of(router);
-                self.graph.links.push(Link {
-                    child: parameter,
-                    parent: router,
-                    mount: false,
-                    prefix,
-                    guards,
-                });
+        if values
+            .iter()
+            .any(|value| matches!(value, Some(Value::Router(_))))
+        {
+            let items: Vec<Vec<Guard>> = arguments
+                .iter()
+                .zip(&values)
+                .map(|(argument, value)| {
+                    if argument.kind() == "variadic_argument" {
+                        guards_of(value.as_ref())
+                    } else {
+                        vec![self.guard_of(*argument)]
+                    }
+                })
+                .collect();
+            self.graph.note_spreads(items.iter().flatten());
+            let call = Rc::new(Arguments {
+                function: key.clone(),
+                items,
+            });
+            for (position, value) in values.into_iter().enumerate() {
+                if let Some(Value::Router(router)) = value {
+                    let router_type = self.graph.routers[router].router_type;
+                    let parameter = self.graph.parameter(&key, position, router_type);
+                    let (prefix, guards) = self.group_of(router);
+                    self.link(
+                        parameter,
+                        router,
+                        LinkKind::Alias(Rc::clone(&call)),
+                        prefix,
+                        guards,
+                    );
+                }
             }
         }
         let router_type = result?;
@@ -1595,61 +1851,101 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
     }
 
     /// The prefix and the guards of the open groups of a router.
-    fn group_of(&self, router: usize) -> (Option<String>, Vec<String>) {
-        let mut prefix = Some(String::new());
+    fn group_of(&self, router: usize) -> (Prefix, Vec<Guard>) {
+        let mut prefix = Prefix::default();
         let mut guards = Vec::new();
         for (part, names) in self.groups.get(&router).into_iter().flatten() {
-            prefix = prefix
-                .zip(part.as_deref())
-                .map(|(known, part)| known + part);
+            prefix = prefix.join(part.as_deref());
             guards.extend(names.iter().cloned());
         }
         (prefix, guards)
+    }
+
+    fn link(
+        &mut self,
+        child: usize,
+        parent: usize,
+        kind: LinkKind,
+        prefix: Prefix,
+        guards: Vec<Guard>,
+    ) {
+        self.graph.note_spreads(&guards);
+        self.graph.links.push(Link {
+            child,
+            parent,
+            kind,
+            prefix,
+            guards,
+        });
     }
 
     fn string(&self, node: Option<&Node<'a>>) -> Option<String> {
         self.context.go_string(*node?)
     }
 
-    /// The arguments with a final spread of `append(list, a, b)` in place of `a, b`. The bool
-    /// is false when the arguments have a spread that the walk cannot read.
-    fn flatten(&self, arguments: Vec<Node<'a>>) -> (Vec<Node<'a>>, bool) {
-        let mut flat = arguments;
-        let Some(last) = flat.last().copied() else {
-            return (flat, true);
-        };
-        if last.kind() != "variadic_argument" {
-            return (flat, true);
-        }
-        flat.pop();
-        let Some(inner) = last.named_child(0) else {
-            return (flat, false);
-        };
-        let is_append = inner.kind() == "call_expression"
-            && inner
-                .child_by_field_name("function")
-                .is_some_and(|function| {
-                    function.kind() == "identifier"
-                        && self.text(function) == "append"
-                        && !self.context.is_go_shadowed(function)
-                });
-        if !is_append {
-            return (flat, false);
-        }
-        let mut items = call_arguments(inner);
-        if items.is_empty()
-            || items
-                .last()
-                .is_some_and(|item| item.kind() == "variadic_argument")
-        {
-            return (flat, false);
-        }
-        items.remove(0);
-        flat.extend(items);
-        (flat, true)
+    fn is_append(&self, function: Node<'a>) -> bool {
+        function.kind() == "identifier"
+            && self.text(function) == "append"
+            && !self.context.is_go_shadowed(function)
     }
 
-    /// The name of a guard, as `auth`, `context.ReqToken`, or the function of a call.
+    /// The items of a call of `append`: the guards of the slice, and each later argument.
+    fn append_items(&mut self, arguments: &[Node<'a>]) -> Vec<Item<'a>> {
+        let Some((first, rest)) = arguments.split_first() else {
+            return vec![Item::Guards(vec![Guard::unread()])];
+        };
+        let base = self.eval(*first);
+        let mut items = vec![Item::Guards(guards_of(base.as_ref()))];
+        items.extend(self.items(rest.to_vec()));
+        items
+    }
+
+    /// Evaluates each argument, and gives the items of the arguments. A final spread of
+    /// `append(list, a, b)` gives the guards of `list`, then `a` and `b`.
+    fn items(&mut self, arguments: Vec<Node<'a>>) -> Vec<Item<'a>> {
+        let mut items = Vec::with_capacity(arguments.len());
+        for argument in arguments {
+            if argument.kind() != "variadic_argument" {
+                self.eval(argument);
+                items.push(Item::Argument(argument));
+                continue;
+            }
+            let Some(inner) = argument.named_child(0) else {
+                items.push(Item::Guards(vec![Guard::unread()]));
+                continue;
+            };
+            let append = (inner.kind() == "call_expression")
+                .then(|| inner.child_by_field_name("function"))
+                .flatten()
+                .filter(|function| self.is_append(*function));
+            if append.is_some() {
+                let nested = call_arguments(inner);
+                items.extend(self.append_items(&nested));
+            } else {
+                let value = self.eval(inner);
+                items.push(Item::Guards(guards_of(value.as_ref())));
+            }
+        }
+        items
+    }
+
+    fn item_guards(&self, item: Item<'a>) -> Vec<Guard> {
+        match item {
+            Item::Argument(node) => vec![self.guard_of(node)],
+            Item::Guards(guards) => guards,
+        }
+    }
+
+    /// The guard of an argument, as `auth`, `context.ReqToken`, or the function of a call. An
+    /// argument that is not a name gives a placeholder, so the guard list is not complete.
+    fn guard_of(&self, node: Node<'a>) -> Guard {
+        if node.kind() == "func_literal" {
+            return Guard::Name(UNNAMED_FUNCTION_GUARD.to_string());
+        }
+        self.guard_name(node)
+            .map_or_else(Guard::unread, Guard::Name)
+    }
+
     fn guard_name(&self, node: Node<'a>) -> Option<String> {
         match node.kind() {
             "identifier" | "selector_expression" => Some(self.text(node).to_string()),
@@ -1661,34 +1957,28 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
     }
 
     /// The handler and the guards of a list of handler arguments: the last is the handler.
-    fn handler(&mut self, handlers: Vec<Node<'a>>) -> Option<(Option<String>, Vec<String>)> {
-        for handler in &handlers {
-            self.eval(*handler);
-        }
-        let (flat, complete) = self.flatten(handlers);
-        if !complete {
-            let guards = flat
-                .iter()
-                .filter_map(|node| self.guard_name(*node))
-                .collect();
-            return Some((None, guards));
-        }
-        let (last, before) = flat.split_last()?;
-        let guards = before
-            .iter()
-            .filter_map(|node| self.guard_name(*node))
+    fn handler(&mut self, handlers: Vec<Node<'a>>) -> Option<(Option<String>, Vec<Guard>)> {
+        let mut items = self.items(handlers);
+        let last = items.pop()?;
+        let mut guards: Vec<Guard> = items
+            .into_iter()
+            .flat_map(|item| self.item_guards(item))
             .collect();
-        Some((self.context.go_handler_symbol(*last), guards))
+        let symbol = match last {
+            Item::Argument(node) => self.context.go_handler_symbol(node),
+            Item::Guards(_) => {
+                guards.push(Guard::unread());
+                None
+            }
+        };
+        Some((symbol, guards))
     }
 
-    /// The names of the guards of a list of arguments.
-    fn guard_names(&mut self, nodes: Vec<Node<'a>>) -> Vec<String> {
-        for node in &nodes {
-            self.eval(*node);
-        }
-        let (flat, _) = self.flatten(nodes);
-        flat.into_iter()
-            .filter_map(|node| self.guard_name(node))
+    /// The guards of a list of arguments.
+    fn guard_names(&mut self, nodes: Vec<Node<'a>>) -> Vec<Guard> {
+        self.items(nodes)
+            .into_iter()
+            .flat_map(|item| self.item_guards(item))
             .collect()
     }
 
@@ -1740,11 +2030,17 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                 let path = self.string(arguments.get(*pattern));
                 let methods = self.expand(verbs, arguments);
                 let found = self.handler(handlers);
-                let (Some(path), Some(methods), Some((symbol, guards))) = (path, methods, found)
-                else {
+                let (Some(methods), Some((symbol, guards))) = (methods, found) else {
                     return None;
                 };
-                self.record(router, &path, methods, symbol, guards, Span::of(&call));
+                self.record(
+                    router,
+                    path.as_deref(),
+                    methods,
+                    symbol,
+                    guards,
+                    Span::of(&call),
+                );
                 None
             }
             Shape::Mount { pattern, mounted } => {
@@ -1752,13 +2048,8 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                 let prefix = self.string(arguments.get(*pattern));
                 if let Some(Value::Router(child)) = mounted_value {
                     let (open, guards) = self.group_of(router);
-                    self.graph.links.push(Link {
-                        child,
-                        parent: router,
-                        mount: true,
-                        prefix: open.zip(prefix).map(|(open, prefix)| open + &prefix),
-                        guards,
-                    });
+                    let prefix = open.join(prefix.as_deref());
+                    self.link(child, router, LinkKind::Mount, prefix, guards);
                 }
                 None
             }
@@ -1806,13 +2097,20 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                     .map(|(_, node)| *node)
                     .collect();
                 let guards = self.guard_names(others);
-                let pattern = self.string(arguments.get(*pattern))?;
+                let pattern = self.string(arguments.get(*pattern));
                 Some(Value::Combo(Rc::new(ComboValue {
                     router,
                     combo: *combo,
                     pattern,
                     guards,
                 })))
+            }
+            Shape::Middleware => {
+                for argument in arguments {
+                    self.eval(*argument);
+                }
+                self.graph.layered.insert(router);
+                None
             }
         }
     }
@@ -1835,29 +2133,33 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
             .child_by_field_name("function")
             .and_then(|function| function.child_by_field_name("field"))
             .map_or_else(|| Span::of(&call), |field| Span::between(&field, &call));
-        self.record(combo.router, &combo.pattern, methods, symbol, guards, range);
+        self.record(
+            combo.router,
+            combo.pattern.as_deref(),
+            methods,
+            symbol,
+            guards,
+            range,
+        );
     }
 
     fn record(
         &mut self,
         router: usize,
-        path: &str,
+        path: Option<&str>,
         methods: Vec<String>,
         symbol: Option<String>,
-        guards: Vec<String>,
+        guards: Vec<Guard>,
         range: Span,
     ) {
         let (prefix, mut all) = self.group_of(router);
-        // A group whose prefix the walk cannot read hides the path of the route.
-        let Some(prefix) = prefix else {
-            return;
-        };
         all.extend(guards);
+        self.graph.note_spreads(&all);
         self.graph.records.push(Record {
             router,
             file: self.file,
             range,
-            segment: prefix + path,
+            segment: prefix.join(path),
             methods,
             symbol,
             guards: all,
@@ -1866,18 +2168,29 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
 }
 
 /// One chain of links from a router up to a root.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct Placement {
+    /// A part of the path above `mounts` and `open` is not known: a prefix that is not a string
+    /// literal, a cycle of links, or a router with too many chains.
+    unresolved: bool,
     mounts: Vec<String>,
     open: String,
-    guards: Vec<String>,
+    guards: Vec<Guard>,
+    /// A middleware method can add guards that the walk does not read.
+    layered: bool,
+    /// The guards of the arguments of the call that gives the router to a parameter of a
+    /// function with a spread of its variadic parameter.
+    arguments: Option<Rc<Arguments>>,
 }
 
-#[derive(Clone)]
-enum Placements {
-    /// The router is in a cycle of links, or it has too many chains.
-    Refused,
-    Known(Rc<Vec<Placement>>),
+impl Placement {
+    fn unresolved(layered: bool) -> Self {
+        Self {
+            unresolved: true,
+            layered,
+            ..Self::default()
+        }
+    }
 }
 
 /// The text with a leading slash.
@@ -2032,8 +2345,8 @@ impl WrapperRoutes {
                 graph.links.push(Link {
                     child: *returned,
                     parent: call,
-                    mount: false,
-                    prefix: Some(String::new()),
+                    kind: LinkKind::Return,
+                    prefix: Prefix::default(),
                     guards: Vec::new(),
                 });
                 returned_as.entry(*returned).or_default().push(call);
@@ -2061,6 +2374,22 @@ impl WrapperRoutes {
         for (index, link) in graph.links.iter().enumerate() {
             parents[link.child].push(index);
         }
+        // A parameter and the result of a call are the same value as the router of the call, so a
+        // middleware of one is a middleware of the other.
+        let mut layered = vec![false; count];
+        let mut pending: Vec<usize> = graph.layered.iter().copied().collect();
+        for router in &pending {
+            layered[*router] = true;
+        }
+        while let Some(router) = pending.pop() {
+            for index in &parents[router] {
+                let link = &graph.links[*index];
+                if !matches!(link.kind, LinkKind::Mount) && !layered[link.parent] {
+                    layered[link.parent] = true;
+                    pending.push(link.parent);
+                }
+            }
+        }
         let mut network: petgraph::graph::DiGraph<(), ()> =
             petgraph::graph::DiGraph::with_capacity(count, graph.links.len());
         for _ in 0..count {
@@ -2073,7 +2402,7 @@ impl WrapperRoutes {
                 (),
             );
         }
-        let mut placements: Vec<Option<Placements>> = vec![None; count];
+        let mut placements: Vec<Option<Rc<Vec<Placement>>>> = vec![None; count];
         // The components come with each parent before its children.
         for component in petgraph::algo::tarjan_scc(&network) {
             let cyclic = component.len() > 1
@@ -2084,32 +2413,53 @@ impl WrapperRoutes {
                 });
             for node in component {
                 let router = node.index();
-                if cyclic {
-                    placements[router] = Some(Placements::Refused);
-                    continue;
-                }
-                placements[router] = Some(Self::place(
-                    &graph,
-                    &parents[router],
-                    &placements,
-                    can_be_root[router],
-                ));
+                placements[router] = Some(if cyclic {
+                    Rc::new(vec![Placement::unresolved(layered[router])])
+                } else {
+                    Self::place(
+                        &graph,
+                        &parents[router],
+                        &placements,
+                        can_be_root[router],
+                        layered[router],
+                    )
+                });
             }
         }
         let mut by_file: HashMap<String, Vec<Found>> = HashMap::new();
         for record in &graph.records {
-            let Some(Placements::Known(known)) = &placements[record.router] else {
+            let Some(known) = &placements[record.router] else {
                 continue;
             };
             let inner = tables.router_types[graph.routers[record.router].router_type].inner;
             let file = &tables.files[record.file].file;
             for placement in known.iter() {
-                let own = rooted(&format!("{}{}", placement.open, record.segment));
-                let Some(composed) = inner.compose(&placement.mounts, &own) else {
+                let unresolved = placement.unresolved || record.segment.unresolved;
+                let composed = if record.segment.unresolved {
+                    inner.compose(&[], &rooted(&record.segment.text))
+                } else {
+                    let own = rooted(&format!("{}{}", placement.open, record.segment.text));
+                    inner.compose(&placement.mounts, &own)
+                };
+                let Some(composed) = composed else {
                     continue;
                 };
                 let mut guards = placement.guards.clone();
-                guards.extend(record.guards.iter().cloned());
+                guards.extend(substitute(&record.guards, placement.arguments.as_deref()));
+                let guards: Vec<String> = guards
+                    .into_iter()
+                    .map(|guard| match guard {
+                        Guard::Name(name) => name,
+                        Guard::Spread { .. } => UNREAD_GUARD.to_string(),
+                    })
+                    .collect();
+                let unknown = if unresolved {
+                    Some(GuardsUnknownReason::UnresolvedRouter)
+                } else {
+                    placement
+                        .layered
+                        .then_some(GuardsUnknownReason::LayerNotRead)
+                };
                 for method in &record.methods {
                     let (method, path, parameters) = match inner {
                         Inner::Framework(framework) => (
@@ -2130,6 +2480,13 @@ impl WrapperRoutes {
                             (method, path, parameters)
                         }
                     };
+                    let path = if unresolved && path == "/" {
+                        UNRESOLVED_PREFIX.to_string()
+                    } else if unresolved {
+                        format!("{UNRESOLVED_PREFIX}{path}")
+                    } else {
+                        path
+                    };
                     by_file.entry(file.clone()).or_default().push(Found {
                         method,
                         path,
@@ -2138,6 +2495,7 @@ impl WrapperRoutes {
                         framework: inner.name(),
                         parameters,
                         range: record.range,
+                        unknown,
                     });
                 }
             }
@@ -2149,57 +2507,77 @@ impl WrapperRoutes {
         Self { by_file }
     }
 
-    /// The chains of a router, from the chains of its parents.
+    /// The chains of a router, from the chains of its parents. A router with too many chains
+    /// gets one chain whose path is not known.
     fn place(
         graph: &Graph,
         links: &[usize],
-        placements: &[Option<Placements>],
+        placements: &[Option<Rc<Vec<Placement>>>],
         can_be_root: bool,
-    ) -> Placements {
+        layered: bool,
+    ) -> Rc<Vec<Placement>> {
         if links.is_empty() {
-            return if can_be_root {
-                Placements::Known(Rc::new(vec![Placement {
-                    mounts: Vec::new(),
-                    open: String::new(),
-                    guards: Vec::new(),
-                }]))
+            return Rc::new(if can_be_root {
+                vec![Placement {
+                    layered,
+                    ..Placement::default()
+                }]
             } else {
-                Placements::Known(Rc::new(Vec::new()))
-            };
+                Vec::new()
+            });
         }
         let mut found: BTreeSet<Placement> = BTreeSet::new();
         for index in links {
             let link = &graph.links[*index];
-            let (Some(Placements::Known(above)), Some(prefix)) =
-                (&placements[link.parent], &link.prefix)
-            else {
-                return Placements::Refused;
+            let Some(above) = &placements[link.parent] else {
+                return Rc::new(vec![Placement::unresolved(layered)]);
             };
             for placement in above.iter() {
+                let outer = placement.arguments.as_deref();
                 let mut guards = placement.guards.clone();
-                guards.extend(link.guards.iter().cloned());
-                let next = if link.mount {
-                    let mut mounts = placement.mounts.clone();
-                    mounts.push(rooted(&format!("{}{prefix}", placement.open)));
-                    Placement {
-                        mounts,
-                        open: String::new(),
-                        guards,
+                guards.extend(substitute(&link.guards, outer));
+                let arguments = match &link.kind {
+                    LinkKind::Alias(call) if graph.spread_functions.contains(&call.function) => {
+                        Some(Rc::new(Arguments {
+                            function: call.function.clone(),
+                            items: call
+                                .items
+                                .iter()
+                                .map(|item| substitute(item, outer))
+                                .collect(),
+                        }))
                     }
-                } else {
-                    Placement {
-                        mounts: placement.mounts.clone(),
-                        open: format!("{}{prefix}", placement.open),
-                        guards,
-                    }
+                    LinkKind::Alias(_) | LinkKind::Return => None,
+                    LinkKind::Mount => placement.arguments.clone(),
                 };
-                found.insert(next);
+                let (unresolved, mut mounts, mut open) = if link.prefix.unresolved {
+                    (true, Vec::new(), String::new())
+                } else {
+                    (
+                        placement.unresolved,
+                        placement.mounts.clone(),
+                        placement.open.clone(),
+                    )
+                };
+                open.push_str(&link.prefix.text);
+                if matches!(link.kind, LinkKind::Mount) && !(unresolved && open.is_empty()) {
+                    mounts.push(rooted(&open));
+                    open.clear();
+                }
+                found.insert(Placement {
+                    unresolved,
+                    mounts,
+                    open,
+                    guards,
+                    layered: layered || placement.layered,
+                    arguments,
+                });
                 if found.len() > PLACEMENT_LIMIT {
-                    return Placements::Refused;
+                    return Rc::new(vec![Placement::unresolved(layered)]);
                 }
             }
         }
-        Placements::Known(Rc::new(found.into_iter().collect()))
+        Rc::new(found.into_iter().collect())
     }
 }
 
@@ -2589,7 +2967,7 @@ func TestRoutes(t *testing.T) {
     }
 
     #[test]
-    fn a_router_in_a_cycle_of_links_gives_no_entry() {
+    fn a_router_in_a_cycle_of_links_gives_one_entry_with_an_unresolved_prefix() {
         let main = r#"package main
 
 import (
@@ -2615,7 +2993,10 @@ func main() {
 	first(web.NewRouter())
 }
 "#;
-        assert!(routes(&[("main.go", main), ("web/router.go", ROUTER)]).is_empty());
+        assert_eq!(
+            states(&[("main.go", main), ("web/router.go", ROUTER)]),
+            ["GET <unresolved>/first [] unresolved_router"]
+        );
     }
 
     /// The routes and the time of the search for entry points, for files with the router type.
@@ -2747,7 +3128,7 @@ func main() {
     }
 
     #[test]
-    fn a_prefix_that_is_not_a_string_literal_hides_the_paths_below_it() {
+    fn a_prefix_that_is_not_a_string_literal_is_an_unresolved_part_of_the_path() {
         let main = r#"package main
 
 import (
@@ -2778,12 +3159,192 @@ func main() {
 	})
 	prefix := "/mounted"
 	m.Mount(prefix, sub())
+	m.Get(prefix, Home)
 	m.Get("/plain", Home)
 }
 "#;
         assert_eq!(
-            routes(&[("main.go", main), ("web/router.go", ROUTER)]),
-            ["chi GET /plain [] Home"]
+            states(&[("main.go", main), ("web/router.go", ROUTER)]),
+            [
+                "GET /plain [] complete",
+                "GET <unresolved> [] unresolved_router",
+                "GET <unresolved>/added [] unresolved_router",
+                "GET <unresolved>/grouped [] unresolved_router",
+                "GET <unresolved>/sub [] unresolved_router",
+            ]
+        );
+    }
+
+    /// Each route as `METHOD path [guards] state`, in order. The state is `complete` or the
+    /// reason why the guard list is not complete.
+    fn states(files: &[(&str, &str)]) -> Vec<String> {
+        let mut found: Vec<String> = entries(Language::Go, files)
+            .into_iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .map(|entry| {
+                let route = entry.route.expect("a route");
+                let state = match (entry.guards_complete, entry.guards_unknown_reason) {
+                    (true, None) => "complete",
+                    (_, reason) => reason.map_or("not known", |reason| reason.name()),
+                };
+                format!(
+                    "{} {} [{}] {state}",
+                    route.method,
+                    route.path,
+                    entry.guards.join(",")
+                )
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn a_guard_list_that_the_walk_cannot_read_is_not_complete() {
+        let main = r#"package main
+
+import (
+	"net/http"
+
+	"example.com/app/web"
+)
+
+var verbose bool
+
+func Home(w http.ResponseWriter, r *http.Request) {}
+
+func reqToken(w http.ResponseWriter, r *http.Request) {}
+
+func add(m *web.Router, checks ...any) {
+	m.Group("/g", func() {
+		m.Get("/c", Home)
+	}, checks...)
+}
+
+func main() {
+	m := web.NewRouter()
+	add(m, reqToken)
+	fixed := []any{reqToken}
+	m.Get("/fixed", append(fixed, Home)...)
+	var mid []any
+	if verbose {
+		mid = append(mid, reqToken)
+	}
+	m.Get("/mid", append(mid, Home)...)
+	m.Get("/literal", func(w http.ResponseWriter, r *http.Request) {}, Home)
+}
+"#;
+        assert_eq!(
+            states(&[("main.go", main), ("web/router.go", ROUTER)]),
+            [
+                "GET /fixed [reqToken] complete",
+                "GET /g/c [reqToken] complete",
+                "GET /literal [<function literal>] unread_middleware",
+                "GET /mid [<expression>] unread_middleware",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_middleware_method_of_a_router_type_makes_the_guards_not_complete() {
+        let router = format!(
+            "{ROUTER}\nfunc (r *Router) AfterRouting(middlewares ...any) {{\n\tr.curMiddlewares = append(r.curMiddlewares, middlewares...)\n}}\n"
+        );
+        let main = r#"package main
+
+import (
+	"net/http"
+
+	"example.com/app/web"
+)
+
+func Home(w http.ResponseWriter, r *http.Request) {}
+
+func reqToken(w http.ResponseWriter, r *http.Request) {}
+
+func sub() *web.Router {
+	s := web.NewRouter()
+	s.Get("/s", Home)
+	return s
+}
+
+func main() {
+	a := web.NewRouter()
+	a.AfterRouting(reqToken)
+	a.Get("/a", Home)
+	a.Mount("/m", sub())
+	c := web.NewRouter()
+	c.Get("/c", Home)
+}
+"#;
+        assert_eq!(
+            states(&[("main.go", main), ("web/router.go", &router)]),
+            [
+                "GET /a [] layer_not_read",
+                "GET /c [] complete",
+                "GET /m/s [] layer_not_read",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_router_with_too_many_chains_gives_one_entry_with_an_unresolved_prefix() {
+        let groups: String = (0..=super::PLACEMENT_LIMIT)
+            .map(|index| format!("\tm.Group(\"/g{index}\", func() {{\n\t\tleaf(m)\n\t}})\n"))
+            .collect();
+        let main = format!(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"example.com/app/web\"\n)\n\nfunc Home(w http.ResponseWriter, r *http.Request) {{}}\n\nfunc leaf(m *web.Router) {{\n\tm.Get(\"/leaf\", Home)\n}}\n\nfunc main() {{\n\tm := web.NewRouter()\n{groups}}}\n"
+        );
+        assert_eq!(
+            states(&[("main.go", &main), ("web/router.go", ROUTER)]),
+            ["GET <unresolved>/leaf [] unresolved_router"]
+        );
+    }
+
+    #[test]
+    fn a_spread_through_two_functions_and_a_slice_that_a_loop_changes() {
+        let main = r#"package main
+
+import (
+	"net/http"
+
+	"example.com/app/web"
+)
+
+func Home(w http.ResponseWriter, r *http.Request) {}
+
+func reqToken(w http.ResponseWriter, r *http.Request) {}
+
+func reqAdmin(w http.ResponseWriter, r *http.Request) {}
+
+func inner(m *web.Router, checks ...any) {
+	m.Get("/inner", append(checks, Home)...)
+}
+
+func outer(m *web.Router, checks ...any) {
+	inner(m, append([]any{reqAdmin}, checks...)...)
+}
+
+func main() {
+	m := web.NewRouter()
+	outer(m, reqToken)
+	list := []any{reqToken}
+	for range 2 {
+		list = append(list, reqAdmin)
+	}
+	m.Get("/loop", append(list, Home)...)
+	other := []any{reqToken}
+	other[0] = reqAdmin
+	m.Get("/index", append(other, Home)...)
+}
+"#;
+        assert_eq!(
+            states(&[("main.go", main), ("web/router.go", ROUTER)]),
+            [
+                "GET /index [reqToken,<expression>] unread_middleware",
+                "GET /inner [reqAdmin,reqToken] complete",
+                "GET /loop [reqToken,<expression>] unread_middleware",
+            ]
         );
     }
 }

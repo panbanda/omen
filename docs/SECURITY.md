@@ -121,12 +121,12 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 | `conditional_callback` | Rails | A callback for the action has `if:` or `unless:`, or it is in a branch that omen cannot evaluate. |
 | `around_callback` | Rails | A class of the chain has an `around_action` callback. Omen reads only the `before_action` callbacks. |
 | `imported_router` | FastAPI | An import binds the router of the route, or the router that includes it. |
-| `unresolved_router` | FastAPI | The router is not one name with one assignment of a `FastAPI` call or an `APIRouter` call. |
+| `unresolved_router` | FastAPI, Go router types | FastAPI: the router is not one name with one assignment of a `FastAPI` call or an `APIRouter` call. Go: a part of the path is not known. The path starts with `<unresolved>`. |
 | `included_elsewhere` | FastAPI | The file does not include the `APIRouter` in an application. A different file can include it with more dependencies. |
 | `unreadable_include` | FastAPI | The file includes the router two times, in a condition, after the route, or in a loop of routers. |
 | `unreadable_dependency` | FastAPI | A dependency is not a name, or the `dependencies` value is not a literal list. |
 | `wildcard_import` | FastAPI | The file has `from module import *`, which can bind a name again. |
-| `unread_middleware` | chi, echo, gin, gorilla/mux | A middleware argument is not a name. Its guard text is `<expression>` or `<function literal>`. |
+| `unread_middleware` | chi, echo, gin, gorilla/mux, Go router types | A middleware argument is not a name, or a spread of a slice that omen cannot read. Its guard text is `<expression>` or `<function literal>`. |
 | `layer_not_read` | See the next table | The framework has a place for guards that omen does not read. |
 
 Omen reads the full chain of the guards only for Rails, for FastAPI, and for the Go routers.
@@ -553,11 +553,22 @@ time. Omen gives the names only. It does not give the type or the source of a pa
 - Omen follows such a router through parameters, returned values, and mounts in the whole
   repository. A route gets one path for each chain of mounts and calls up to a root. A
   router that only a parameter gives, and that no call gives, has no path. A prefix that is
-  not a string literal hides the paths below it. Omen does not read the code of a method
-  that changes the path, for example a method that removes a slash at the end.
-- A middleware that a router type adds with a method other than a group method, as
-  `AfterRouting`, is not a guard. A guard that a variadic parameter carries, as
-  `writeChecks...`, is not a guard. A test file gives no route and no mount.
+  not a string literal, a cycle of calls, and a router with more than 256 chains give one
+  entry for each route. Its path starts with `<unresolved>` in place of the part that omen
+  cannot read, and its guards are not complete, with the reason `unresolved_router`.
+- Omen does not read the code of a method that changes the path. For example, Gitea removes
+  a slash at the end of a pattern, so 16 paths of Gitea that end with a slash have that
+  slash in the result of omen, but not in Gitea.
+- A slice of guards is read when it is a literal, an `append` of known slices, or a variadic
+  parameter. The guards of a variadic parameter come from each call of the function, also
+  through a chain of calls. A change of a slice in a condition, in a loop, in a function
+  literal, or at an index makes its guards not complete, with the reason
+  `unread_middleware`. The guards that omen read stay in the list.
+- A method of a router type that keeps its variadic argument in a field, or gives it to the
+  framework router, as `Use`, `BeforeRouting`, or `AfterRouting`, adds middleware that omen
+  does not read. The guards of each route of that router, and of each router that it mounts,
+  are not complete, with the reason `layer_not_read`. A test file gives no route and no
+  mount.
 - A router is a value that the import of the framework proves. It is a constructor
   call, a group or sub-router of a router, or a parameter that has a router type. A
   variable name alone does not prove a router.
