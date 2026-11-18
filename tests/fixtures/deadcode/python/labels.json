@@ -1,19 +1,29 @@
 {
   "language": "python",
-  "oracle": "Author-reviewed. python 3.12 accepts the files. The harness does not run the code.",
+  "oracle": "Author-reviewed. python 3.12 accepts `main.py` and `other.py`. CPython 3.14 parses `checks.py` and `stubs.pyi`. pytest is not in the case. The harness does not run the code.",
   "not_applicable": [],
   "dead": [
     {"label": "dead_plain", "file": "main.py", "name": "_dead_plain"},
     {"label": "dead_caller", "file": "main.py", "name": "_dead_caller"},
     {"label": "dead_callee", "file": "main.py", "name": "_dead_callee"},
     {"label": "dead_unresolved", "file": "main.py", "name": "_dead_unresolved"},
-    {"label": "dead_method", "file": "main.py", "name": "_dead_method"}
+    {"label": "dead_method", "file": "main.py", "name": "_dead_method"},
+    {"label": "dead_in_class_with_special_methods", "file": "checks.py", "name": "_dead_in_class"},
+    {"label": "test_like_name", "file": "checks.py", "name": "_test_like_name_in_production"}
   ],
   "alive": [
     {"label": "live_direct", "file": "main.py", "name": "_live_direct"},
     {"label": "live_value", "file": "main.py", "name": "_live_value"},
     {"label": "live_public", "file": "main.py", "name": "live_public"},
     {"label": "live_method", "file": "main.py", "name": "live_method"},
-    {"label": "main", "file": "main.py", "name": "main"}
+    {"label": "main", "file": "main.py", "name": "main"},
+    {"label": "special_method", "file": "checks.py", "name": "__eq__"},
+    {"label": "callee_of_special_method", "file": "checks.py", "name": "_live_from_special_method"},
+    {"label": "fixture", "file": "checks.py", "name": "_database"},
+    {"label": "callee_of_fixture", "file": "checks.py", "name": "_live_from_fixture"},
+    {"label": "test_case_method", "file": "checks.py", "name": "test_sizes"},
+    {"label": "helper_of_a_test", "file": "checks.py", "name": "_live_helper_of_a_test"},
+    {"label": "special_method_of_stub", "file": "stubs.pyi", "name": "__get__"},
+    {"label": "stub_declaration", "file": "stubs.pyi", "name": "_live_stub_declaration"}
   ]
 }

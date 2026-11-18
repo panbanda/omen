@@ -1,6 +1,6 @@
 {
   "language": "rust",
-  "oracle": "Author-reviewed. rustc 2021 would accept the files with a stub crate named external. The harness does not run the code.",
+  "oracle": "Author-reviewed. rustc 2021 would accept `main.rs` and `other.rs` with a stub crate named external. The attribute macros `ctor` and `testlog` of `checks.rs` are not in the case. The harness does not run the code.",
   "not_applicable": [],
   "dead": [
     {"label": "dead_plain", "file": "main.rs", "name": "dead_plain"},
@@ -8,7 +8,9 @@
     {"label": "dead_callee", "file": "main.rs", "name": "dead_callee"},
     {"label": "dead_unresolved", "file": "main.rs", "name": "dead_unresolved"},
     {"label": "dead_method", "file": "main.rs", "name": "dead_method"},
-    {"label": "serde_string_is_not_a_function", "file": "main.rs", "name": "serde_renamed"}
+    {"label": "serde_string_is_not_a_function", "file": "main.rs", "name": "serde_renamed"},
+    {"label": "test_like_name", "file": "checks.rs", "name": "test_like_name_in_production"},
+    {"label": "dead_helper_in_test_code", "file": "checks.rs", "name": "dead_helper_in_test_code"}
   ],
   "alive": [
     {"label": "live_direct", "file": "main.rs", "name": "live_direct"},
@@ -17,6 +19,14 @@
     {"label": "live_method", "file": "main.rs", "name": "live_method"},
     {"label": "main", "file": "main.rs", "name": "main"},
     {"label": "serde_default", "file": "main.rs", "name": "serde_fallback"},
-    {"label": "serde_skip_serializing_if", "file": "main.rs", "name": "serde_is_zero"}
+    {"label": "serde_skip_serializing_if", "file": "main.rs", "name": "serde_is_zero"},
+    {"label": "ctor", "file": "checks.rs", "name": "registered_at_load"},
+    {"label": "callee_of_ctor", "file": "checks.rs", "name": "live_from_ctor"},
+    {"label": "no_mangle", "file": "checks.rs", "name": "live_exported_symbol"},
+    {"label": "foreign_abi", "file": "checks.rs", "name": "live_foreign_callback"},
+    {"label": "allow_dead_code", "file": "checks.rs", "name": "live_kept_by_the_author"},
+    {"label": "test_with_doc_comment", "file": "checks.rs", "name": "documented_check"},
+    {"label": "test_with_wrapped_attribute", "file": "checks.rs", "name": "wrapped_check"},
+    {"label": "helper_of_a_test", "file": "checks.rs", "name": "live_helper_of_a_test"}
   ]
 }

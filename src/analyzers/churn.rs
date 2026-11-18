@@ -114,7 +114,10 @@ impl AnalyzerTrait for Analyzer {
         });
 
         // Build analysis from metrics
-        let analysis = build_analysis(file_metrics, analysis_root, self.days);
+        let mut analysis = build_analysis(file_metrics, analysis_root, self.days);
+        analysis.churn_window = ctx
+            .churn_window(self.days, commits.len())
+            .map(|window| window.for_rows(analysis.files.len()));
 
         tracing::info!(
             "Churn analysis completed in {:?}: {} files",
@@ -320,11 +323,12 @@ fn build_analysis(
         files.push(fm.clone());
     }
 
-    // Sort by churn score descending
+    // The highest churn score is first. The path breaks a tie, because the
+    // files come from a hash map.
     files.sort_by(|a, b| {
         b.churn_score
-            .partial_cmp(&a.churn_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&a.churn_score)
+            .then_with(|| a.file.cmp(&b.file))
     });
 
     // Build summary
@@ -354,10 +358,11 @@ fn build_analysis(
 
     Analysis {
         generated_at: now,
-        period_days: days,
+        period_days: (days != u32::MAX).then_some(days),
         repository_root: repo_root.to_string(),
         files,
         summary,
+        churn_window: None,
     }
 }
 
@@ -514,10 +519,14 @@ pub struct Summary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Analysis {
     pub generated_at: DateTime<Utc>,
-    pub period_days: u32,
+    /// The days of history that the analysis read. `None` is all the history.
+    pub period_days: Option<u32>,
     pub repository_root: String,
     pub files: Vec<FileMetrics>,
     pub summary: Summary,
+    /// The window that gave these numbers. See `crate::git::ChurnWindow`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub churn_window: Option<crate::git::ChurnWindow>,
 }
 
 #[cfg(test)]
@@ -570,6 +579,35 @@ mod tests {
 
         assert_eq!(result.files.len(), 1);
         assert_eq!(result.files[0].file, "report.rs");
+
+        // A window of all the history has no number of days.
+        assert_eq!(result.period_days, None);
+        let json = serde_json::to_value(&result).unwrap();
+        assert!(json["period_days"].is_null());
+        assert!(json["churn_window"]["days"].is_null());
+        assert_eq!(json["churn_window"]["commits_matched"], 1);
+        assert_eq!(json["churn_window"]["history_complete"], true);
+        assert!(json["churn_window"].get("next_since").is_none());
+
+        let windowed = Analyzer::new().with_days(30).analyze(&ctx).unwrap();
+        let json = serde_json::to_value(&windowed).unwrap();
+        assert_eq!(json["period_days"], 30);
+        assert_eq!(json["churn_window"]["days"], 30);
+    }
+
+    #[test]
+    fn test_files_with_the_same_churn_score_are_in_path_order() {
+        let mut metrics = HashMap::new();
+        for name in ["d.rs", "b.rs", "a.rs", "c.rs"] {
+            metrics.insert(name.to_string(), make_file_metrics(name, 2, 10, 5, 0.0));
+        }
+        let analysis = build_analysis(metrics, "/tmp/fake", 30);
+        let order: Vec<&str> = analysis
+            .files
+            .iter()
+            .map(|file| file.file.as_str())
+            .collect();
+        assert_eq!(order, ["a.rs", "b.rs", "c.rs", "d.rs"]);
     }
 
     #[test]

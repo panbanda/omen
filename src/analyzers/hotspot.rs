@@ -164,24 +164,30 @@ impl Analyzer {
         files: &[std::path::PathBuf],
         root: &Path,
     ) -> Result<Vec<FileChurn>> {
-        // Build file -> churn map
-        let mut file_churn: HashMap<String, FileChurn> = HashMap::new();
-
+        // The commits and the changed lines of each file. The score is one for
+        // each commit and one for each 100 lines. One division of the integer
+        // sums gives the exact decimal, and a sum of fractions does not.
+        let mut counts: HashMap<String, (u32, u64)> = HashMap::new();
         for commit in commits {
             for file_change in &commit.files {
-                let path_str = file_change.path.to_string_lossy().to_string();
-                let entry = file_churn
-                    .entry(path_str.clone())
-                    .or_insert_with(|| FileChurn {
-                        path: path_str.clone(),
-                        commits: 0,
-                        churn_score: 0.0,
-                    });
-                entry.commits += 1;
-                entry.churn_score +=
-                    1.0 + (file_change.additions + file_change.deletions) as f64 / 100.0;
+                let entry = counts
+                    .entry(file_change.path.to_string_lossy().to_string())
+                    .or_default();
+                entry.0 += 1;
+                entry.1 += u64::from(file_change.additions) + u64::from(file_change.deletions);
             }
         }
+        let file_churn = counts.into_iter().map(|(path, (commits, lines))| {
+            let score = (u64::from(commits) * 100 + lines) as f64 / 100.0;
+            (
+                path.clone(),
+                FileChurn {
+                    path,
+                    commits,
+                    churn_score: score,
+                },
+            )
+        });
 
         // Filter to only files that exist in our set
         let file_set: std::collections::HashSet<String> = files
@@ -284,16 +290,19 @@ impl Analyzer {
                         complexity_percentile: complexity_pct,
                         commits: file.commits,
                         avg_complexity: cx.avg_cyclomatic,
+                        churn_score: file.churn_score,
+                        total_complexity: cx.total_cyclomatic,
                     });
                 }
             }
         }
 
-        // Sort by score descending
+        // The highest score is first. The path breaks a tie, because the
+        // churn data comes from a hash map.
         hotspots.sort_by(|a, b| {
             b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&a.score)
+                .then_with(|| a.file.cmp(&b.file))
         });
 
         // Calculate summary
@@ -391,7 +400,9 @@ impl AnalyzerTrait for Analyzer {
         let complexity_data = self.collect_complexity_data(&files, ctx.root)?;
 
         let mut analysis = self.combine_analyses(&churn_data, &complexity_data)?;
-        analysis.churn_window = ctx.churn_window(self.config.days, commits.len());
+        analysis.churn_window = ctx
+            .churn_window(self.config.days, commits.len())
+            .map(|window| window.for_rows(analysis.hotspots.len()));
         Ok(analysis)
     }
 }
@@ -411,10 +422,22 @@ pub struct Hotspot {
     pub file: String,
     pub score: f64,
     pub severity: Severity,
+    /// The percentile rank of `churn_score` in the files of the window.
     pub churn_percentile: f64,
+    /// The percentile rank of `total_complexity` in the files of the repository.
     pub complexity_percentile: f64,
     pub commits: u32,
+    /// The mean cyclomatic complexity of a function of the file. The rank
+    /// does not use this value.
     pub avg_complexity: f64,
+    /// The value that `churn_percentile` ranks: one for each commit, and one
+    /// more for each 100 lines that the commit adds or removes.
+    #[serde(default)]
+    pub churn_score: f64,
+    /// The value that `complexity_percentile` ranks: the sum of the
+    /// cyclomatic complexity of the functions of the file.
+    #[serde(default)]
+    pub total_complexity: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -672,6 +695,8 @@ mod tests {
             complexity_percentile: 90.0,
             commits: 50,
             avg_complexity: 15.5,
+            churn_score: 60.0,
+            total_complexity: 310,
         };
 
         assert_eq!(hotspot.file, "test.rs");
@@ -698,6 +723,93 @@ mod tests {
         assert_eq!(summary.total_hotspots, 10);
         assert_eq!(summary.critical_count, 2);
         assert_eq!(summary.high_count, 3);
+    }
+
+    #[test]
+    fn test_hotspot_row_has_the_values_that_the_percentiles_rank() {
+        // `big.rs` has many small functions: a low mean and a high sum.
+        let churn = vec![
+            make_churn_file("big.rs", 10, 12.5),
+            make_churn_file("small.rs", 2, 2.0),
+        ];
+        let complexity = vec![
+            FileComplexity {
+                path: "big.rs".to_string(),
+                total_cyclomatic: 400,
+                avg_cyclomatic: 1.3,
+            },
+            FileComplexity {
+                path: "small.rs".to_string(),
+                total_cyclomatic: 30,
+                avg_cyclomatic: 15.0,
+            },
+        ];
+        let analysis = Analyzer::new()
+            .combine_analyses(&churn, &complexity)
+            .unwrap();
+        let big = &analysis.hotspots[0];
+        assert_eq!(big.file, "big.rs");
+        assert_eq!(big.total_complexity, 400);
+        assert!((big.churn_score - 12.5).abs() < f64::EPSILON);
+        assert!((big.avg_complexity - 1.3).abs() < f64::EPSILON);
+        let small = analysis.hotspots.iter().find(|row| row.file == "small.rs");
+        if let Some(small) = small {
+            assert!(big.complexity_percentile >= small.complexity_percentile);
+            assert!(big.total_complexity >= small.total_complexity);
+        }
+    }
+
+    #[test]
+    fn test_churn_score_is_the_exact_decimal_of_the_commits_and_the_lines() {
+        let change = |additions, deletions| crate::git::FileChange {
+            path: std::path::PathBuf::from("a.rs"),
+            additions,
+            deletions,
+            change_type: crate::git::ChangeType::Modified,
+        };
+        // A sum of `1.0 + lines / 100.0` for each commit gives 3.5700000000000003.
+        let commits: Vec<crate::git::Commit> = [(10, 7), (20, 0), (15, 5)]
+            .into_iter()
+            .map(|(additions, deletions)| crate::git::Commit {
+                sha: String::new(),
+                author: String::new(),
+                email: String::new(),
+                timestamp: 0,
+                commit_time: 0,
+                message: String::new(),
+                files: vec![change(additions, deletions)],
+            })
+            .collect();
+        let churn = Analyzer::new()
+            .collect_churn_from_commits(
+                &commits,
+                &[std::path::PathBuf::from("/repo/a.rs")],
+                Path::new("/repo"),
+            )
+            .unwrap();
+        assert_eq!(churn[0].commits, 3);
+        assert_eq!(serde_json::json!(churn[0].churn_score).to_string(), "3.57");
+    }
+
+    #[test]
+    fn test_hotspots_with_the_same_score_are_in_path_order() {
+        let churn: Vec<FileChurn> = ["d.rs", "b.rs", "c.rs", "a.rs"]
+            .iter()
+            .map(|path| make_churn_file(path, 5, 5.0))
+            .collect();
+        let complexity: Vec<FileComplexity> = ["a.rs", "b.rs", "c.rs", "d.rs"]
+            .iter()
+            .map(|path| make_complexity_file(path, 10))
+            .collect();
+        let analysis = Analyzer::new()
+            .combine_analyses(&churn, &complexity)
+            .unwrap();
+        let order: Vec<&str> = analysis
+            .hotspots
+            .iter()
+            .map(|row| row.file.as_str())
+            .collect();
+        assert_eq!(order, ["a.rs", "b.rs", "c.rs", "d.rs"]);
     }
 
     #[test]

@@ -137,6 +137,12 @@ impl Default for Weights {
 const HIGH_RISK_PERCENTILE: usize = 95;
 const MEDIUM_RISK_PERCENTILE: usize = 80;
 
+/// The smallest number of commits for which the 95th percentile is a
+/// different commit from the maximum. With fewer commits, the percentile
+/// thresholds are equal to the highest score, and the commit with that score
+/// would be a high risk whatever its score is.
+pub const MIN_COMMITS_FOR_PERCENTILE_LEVELS: usize = 20;
+
 /// Thresholds for file-level risk recommendations.
 const HIGH_COMPLEXITY_THRESHOLD: f64 = 10.0;
 const HIGH_CHURN_THRESHOLD: f64 = 0.7;
@@ -200,15 +206,20 @@ impl AnalyzerTrait for Analyzer {
         let commits = ctx.git_log_with_stats(Some(&since), None)?;
         let raw_commits = commits_to_raw_commits(&commits)?;
 
+        let churn_window = |rows: usize| {
+            ctx.churn_window(self.days, commits.len())
+                .map(|window| window.for_rows(rows).without_all_history())
+        };
         if raw_commits.is_empty() {
             return Ok(Analysis {
                 generated_at: Utc::now(),
-                period_days: self.days as i32,
+                period_days: self.days,
                 commits: Vec::new(),
                 summary: Summary::default(),
                 weights: self.weights.clone(),
                 normalization: NormalizationStats::default(),
                 risk_thresholds: RiskThresholds::default(),
+                churn_window: churn_window(0),
             });
         }
 
@@ -268,10 +279,7 @@ impl AnalyzerTrait for Analyzer {
         let mut sorted_scores = scores.clone();
         sorted_scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        let risk_thresholds = RiskThresholds {
-            high_threshold: percentile(&sorted_scores, HIGH_RISK_PERCENTILE as f64),
-            medium_threshold: percentile(&sorted_scores, MEDIUM_RISK_PERCENTILE as f64),
-        };
+        let risk_thresholds = risk_thresholds_of(&sorted_scores);
 
         // Second pass: build commit risks with risk levels
         let mut total_score = 0.0;
@@ -308,11 +316,13 @@ impl AnalyzerTrait for Analyzer {
             })
             .collect();
 
-        // Sort by risk score descending
+        // The highest risk score is first. Of two commits with the same
+        // score, the newer one is first. The hash breaks a tie.
         commit_risks.sort_by(|a, b| {
             b.risk_score
-                .partial_cmp(&a.risk_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&a.risk_score)
+                .then_with(|| b.timestamp.cmp(&a.timestamp))
+                .then_with(|| a.commit_hash.cmp(&b.commit_hash))
         });
 
         let total_commits = commits.len();
@@ -322,9 +332,10 @@ impl AnalyzerTrait for Analyzer {
             0.0
         };
 
+        let churn_window = churn_window(commit_risks.len());
         Ok(Analysis {
             generated_at: Utc::now(),
-            period_days: self.days as i32,
+            period_days: self.days,
             commits: commit_risks,
             summary: Summary {
                 total_commits,
@@ -339,7 +350,26 @@ impl AnalyzerTrait for Analyzer {
             weights: self.weights.clone(),
             normalization,
             risk_thresholds,
+            churn_window,
         })
+    }
+}
+
+/// The thresholds of the risk levels for the scores of one window, in
+/// ascending order.
+///
+/// A window with enough commits has percentile thresholds: the level tells
+/// how a commit compares with the other commits of the window. A window with
+/// fewer commits has the fixed thresholds, because a percentile of a few
+/// scores is one of those scores.
+fn risk_thresholds_of(sorted_scores: &[f64]) -> RiskThresholds {
+    if sorted_scores.len() < MIN_COMMITS_FOR_PERCENTILE_LEVELS {
+        return RiskThresholds::default();
+    }
+    RiskThresholds {
+        high_threshold: percentile(sorted_scores, HIGH_RISK_PERCENTILE as f64),
+        medium_threshold: percentile(sorted_scores, MEDIUM_RISK_PERCENTILE as f64),
+        basis: ThresholdBasis::Percentile,
     }
 }
 
@@ -397,12 +427,15 @@ pub struct FileRiskSignals {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Analysis {
     pub generated_at: DateTime<Utc>,
-    pub period_days: i32,
+    pub period_days: u32,
     pub commits: Vec<CommitRisk>,
     pub summary: Summary,
     pub weights: Weights,
     pub normalization: NormalizationStats,
     pub risk_thresholds: RiskThresholds,
+    /// The window that gave these numbers. See `crate::git::ChurnWindow`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub churn_window: Option<crate::git::ChurnWindow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -469,10 +502,23 @@ impl Default for NormalizationStats {
     }
 }
 
+/// How the thresholds of the risk levels got their values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThresholdBasis {
+    /// The fixed thresholds. The window has too few commits for a percentile.
+    #[default]
+    Absolute,
+    /// The 95th and the 80th percentile of the scores of the window.
+    Percentile,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskThresholds {
     pub high_threshold: f64,
     pub medium_threshold: f64,
+    #[serde(default)]
+    pub basis: ThresholdBasis,
 }
 
 impl Default for RiskThresholds {
@@ -480,6 +526,7 @@ impl Default for RiskThresholds {
         Self {
             high_threshold: 0.6,
             medium_threshold: 0.3,
+            basis: ThresholdBasis::Absolute,
         }
     }
 }
@@ -1109,6 +1156,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_one_commit_with_a_low_score_is_not_a_high_risk() {
+        let thresholds = risk_thresholds_of(&[0.05]);
+        assert_eq!(thresholds.basis, ThresholdBasis::Absolute);
+        assert_eq!(get_risk_level(0.05, &thresholds), RiskLevel::Low);
+        assert_eq!(get_risk_level(0.45, &thresholds), RiskLevel::Medium);
+        assert_eq!(get_risk_level(0.75, &thresholds), RiskLevel::High);
+    }
+
+    #[test]
+    fn test_window_with_enough_commits_has_percentile_thresholds() {
+        let few: Vec<f64> = (0..MIN_COMMITS_FOR_PERCENTILE_LEVELS - 1)
+            .map(|position| position as f64 / 100.0)
+            .collect();
+        assert_eq!(risk_thresholds_of(&few).basis, ThresholdBasis::Absolute);
+
+        let enough: Vec<f64> = (0..MIN_COMMITS_FOR_PERCENTILE_LEVELS)
+            .map(|position| position as f64 / 100.0)
+            .collect();
+        let thresholds = risk_thresholds_of(&enough);
+        assert_eq!(thresholds.basis, ThresholdBasis::Percentile);
+        assert!(thresholds.high_threshold > thresholds.medium_threshold);
+        // The 95th percentile of 20 scores is the score before the highest one.
+        let high: Vec<&f64> = enough
+            .iter()
+            .filter(|score| get_risk_level(**score, &thresholds) == RiskLevel::High)
+            .collect();
+        assert_eq!(high.len(), 2);
+    }
+
+    #[test]
     fn test_default_weights() {
         let weights = Weights::default();
         let total = weights.la
@@ -1233,6 +1310,7 @@ mod tests {
         let thresholds = RiskThresholds {
             high_threshold: 0.8,
             medium_threshold: 0.5,
+            basis: ThresholdBasis::Percentile,
         };
         assert_eq!(get_risk_level(0.9, &thresholds), RiskLevel::High);
         assert_eq!(get_risk_level(0.6, &thresholds), RiskLevel::Medium);
