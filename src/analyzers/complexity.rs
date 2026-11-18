@@ -544,6 +544,51 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
     }
 }
 
+const IF_KINDS: &[&str] = &["if_statement", "if_expression"];
+
+/// The part that a node has in an `if` chain. `field` is the field name of
+/// the node in its parent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChainBranch {
+    /// An `if` that is all of the `else` branch of another `if`.
+    ElseIf,
+    /// An `else` body that the grammar puts directly in the `alternative`
+    /// field of the `if`, without an `else` clause node (Go, Java, C#).
+    BareElse,
+    None,
+}
+
+fn chain_branch(
+    node: &tree_sitter::Node<'_>,
+    field: Option<&str>,
+    lang: Language,
+    flat_types: &[&str],
+) -> ChainBranch {
+    // These grammars have a clause kind for `else if`. An `if` in their
+    // `else` body is a nested `if`.
+    if matches!(lang, Language::Python | Language::Ruby | Language::Bash) {
+        return ChainBranch::None;
+    }
+    let Some(parent) = node.parent() else {
+        return ChainBranch::None;
+    };
+    let kind = node.kind();
+    let is_if = IF_KINDS.contains(&kind);
+    if is_if && parent.kind() == "else_clause" {
+        return ChainBranch::ElseIf;
+    }
+    if field != Some("alternative") || !IF_KINDS.contains(&parent.kind()) {
+        return ChainBranch::None;
+    }
+    if is_if {
+        ChainBranch::ElseIf
+    } else if flat_types.contains(&kind) {
+        ChainBranch::None
+    } else {
+        ChainBranch::BareElse
+    }
+}
+
 /// Calculate cognitive complexity with nesting penalties.
 /// Uses iterative cursor traversal with depth tracking for performance.
 ///
@@ -586,13 +631,29 @@ fn calculate_cognitive_complexity(
         }
 
         let current_depth = depth_at_level[level];
+        let branch = if current.is_named() && cursor_depth != start_depth {
+            chain_branch(&current, cursor.field_name(), lang, flat_types)
+        } else {
+            ChainBranch::None
+        };
 
         // Check if this is a complexity-adding construct. Requires
         // `is_named()`: in grammars where a statement kind is a bare
         // keyword (e.g. Ruby's "if"/"while"/"case"), the anonymous keyword
         // token itself shares that kind string with its parent statement
         // node, and must not be double-counted as a second construct.
-        if current.is_named() && nesting_types.contains(&kind) {
+        if branch != ChainBranch::None {
+            // SonarSource gives `else if` and `else` +1 each, with no nesting
+            // increment. An `else_clause` parent already added the +1.
+            let in_else_clause =
+                current.parent().map(|parent| parent.kind()) == Some("else_clause");
+            if !in_else_clause {
+                complexity += 1;
+            }
+            if level + 1 < depth_at_level.len() {
+                depth_at_level[level + 1] = current_depth;
+            }
+        } else if current.is_named() && nesting_types.contains(&kind) {
             // Nesting constructs: +1 base plus nesting penalty
             complexity += 1 + current_depth;
             // Children will have increased depth
@@ -675,6 +736,7 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
     ];
 
     let boundary_types = get_nested_scope_node_types(lang);
+    let flat_types = get_flat_node_types(lang);
     let mut max_depth = initial_depth;
     let mut cursor = node.walk();
     let start_depth = cursor.depth();
@@ -703,7 +765,12 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
         // as `count_decision_points`: Ruby's bare-keyword statement kinds
         // (e.g. "if") collide with their own anonymous keyword token, which
         // must not be treated as a second nesting construct.
-        let child_depth = if current.is_named() && NESTING_KINDS.contains(&kind) {
+        let is_else_if = current.is_named()
+            && cursor_depth != start_depth
+            && chain_branch(&current, cursor.field_name(), lang, flat_types) == ChainBranch::ElseIf;
+        let child_depth = if is_else_if {
+            current_depth
+        } else if current.is_named() && NESTING_KINDS.contains(&kind) {
             current_depth + 1
         } else {
             current_depth
@@ -1373,6 +1440,144 @@ fn third() { for i in 0..10 { println!("{}", i); } }
         assert!(names.contains(&"first"));
         assert!(names.contains(&"second"));
         assert!(names.contains(&"third"));
+    }
+
+    /// Each probe has `if`, two `else if` branches, an `if` in the body of
+    /// the second `else if`, and a last `else`. SonarSource gives the
+    /// cognitive complexity 1 + 1 + 1 + (1 + 1) + 1 = 6. The nested `if` is
+    /// at nesting level 1, so its body is at level 2.
+    fn assert_else_if_chain(code: &str, lang: Language, filename: &str) {
+        let result = parse_and_analyze(code.as_bytes(), lang, filename);
+        assert_eq!(result.functions.len(), 1, "{filename}");
+        let metrics = &result.functions[0].metrics;
+        assert_eq!(metrics.cyclomatic, 5, "cyclomatic of {filename}");
+        assert_eq!(metrics.cognitive, 6, "cognitive of {filename}");
+        assert_eq!(metrics.max_nesting, 2, "max_nesting of {filename}");
+    }
+
+    #[test]
+    fn test_else_if_chain_go() {
+        assert_else_if_chain(
+            "package p\nfunc f(x, y int) int {\n\tif x == 1 {\n\t\treturn 1\n\t} else if x == 2 {\n\t\treturn 2\n\t} else if x == 3 {\n\t\tif y == 1 {\n\t\t\treturn 4\n\t\t}\n\t\treturn 3\n\t} else {\n\t\treturn 0\n\t}\n}\n",
+            Language::Go,
+            "a.go",
+        );
+    }
+
+    #[test]
+    fn test_else_if_chain_rust() {
+        assert_else_if_chain(
+            "fn f(x: i32, y: i32) -> i32 {\n    if x == 1 { 1 } else if x == 2 { 2 } else if x == 3 { if y == 1 { return 4; } 3 } else { 0 }\n}\n",
+            Language::Rust,
+            "a.rs",
+        );
+    }
+
+    #[test]
+    fn test_else_if_chain_python() {
+        assert_else_if_chain(
+            "def f(x, y):\n    if x == 1:\n        return 1\n    elif x == 2:\n        return 2\n    elif x == 3:\n        if y == 1:\n            return 4\n        return 3\n    else:\n        return 0\n",
+            Language::Python,
+            "a.py",
+        );
+    }
+
+    const ECMASCRIPT_ELSE_IF_CHAIN: &str = "function f(x, y) {\n  if (x == 1) { return 1; } else if (x == 2) { return 2; } else if (x == 3) { if (y == 1) { return 4; } return 3; } else { return 0; }\n}\n";
+
+    #[test]
+    fn test_else_if_chain_typescript() {
+        assert_else_if_chain(ECMASCRIPT_ELSE_IF_CHAIN, Language::TypeScript, "a.ts");
+    }
+
+    #[test]
+    fn test_else_if_chain_tsx() {
+        assert_else_if_chain(ECMASCRIPT_ELSE_IF_CHAIN, Language::Tsx, "a.tsx");
+    }
+
+    #[test]
+    fn test_else_if_chain_javascript() {
+        assert_else_if_chain(ECMASCRIPT_ELSE_IF_CHAIN, Language::JavaScript, "a.js");
+    }
+
+    #[test]
+    fn test_else_if_chain_jsx() {
+        assert_else_if_chain(ECMASCRIPT_ELSE_IF_CHAIN, Language::Jsx, "a.jsx");
+    }
+
+    const BRACE_ELSE_IF_CHAIN: &str = "if (x == 1) { return 1; } else if (x == 2) { return 2; } else if (x == 3) { if (y == 1) { return 4; } return 3; } else { return 0; }";
+
+    #[test]
+    fn test_else_if_chain_java() {
+        let code =
+            format!("class A {{\n  int f(int x, int y) {{\n    {BRACE_ELSE_IF_CHAIN}\n  }}\n}}\n");
+        assert_else_if_chain(&code, Language::Java, "A.java");
+    }
+
+    #[test]
+    fn test_else_if_chain_csharp() {
+        let code =
+            format!("class A {{\n  int F(int x, int y) {{\n    {BRACE_ELSE_IF_CHAIN}\n  }}\n}}\n");
+        assert_else_if_chain(&code, Language::CSharp, "A.cs");
+    }
+
+    #[test]
+    fn test_else_if_chain_c() {
+        let code = format!("int f(int x, int y) {{\n  {BRACE_ELSE_IF_CHAIN}\n}}\n");
+        assert_else_if_chain(&code, Language::C, "a.c");
+    }
+
+    #[test]
+    fn test_else_if_chain_cpp() {
+        let code = format!("int f(int x, int y) {{\n  {BRACE_ELSE_IF_CHAIN}\n}}\n");
+        assert_else_if_chain(&code, Language::Cpp, "a.cpp");
+    }
+
+    #[test]
+    fn test_else_if_chain_ruby() {
+        assert_else_if_chain(
+            "def f(x, y)\n  if x == 1\n    1\n  elsif x == 2\n    2\n  elsif x == 3\n    if y == 1\n      return 4\n    end\n    3\n  else\n    0\n  end\nend\n",
+            Language::Ruby,
+            "a.rb",
+        );
+    }
+
+    #[test]
+    fn test_else_if_chain_php_elseif() {
+        assert_else_if_chain(
+            "<?php\nfunction f($x, $y) {\n  if ($x == 1) { return 1; } elseif ($x == 2) { return 2; } elseif ($x == 3) { if ($y == 1) { return 4; } return 3; } else { return 0; }\n}\n",
+            Language::Php,
+            "a.php",
+        );
+    }
+
+    #[test]
+    fn test_else_if_chain_php_else_if() {
+        assert_else_if_chain(
+            "<?php\nfunction f($x, $y) {\n  if ($x == 1) { return 1; } else if ($x == 2) { return 2; } else if ($x == 3) { if ($y == 1) { return 4; } return 3; } else { return 0; }\n}\n",
+            Language::Php,
+            "a.php",
+        );
+    }
+
+    #[test]
+    fn test_else_if_chain_bash() {
+        assert_else_if_chain(
+            "f() {\n  if [ \"$1\" = 1 ]; then\n    echo 1\n  elif [ \"$1\" = 2 ]; then\n    echo 2\n  elif [ \"$1\" = 3 ]; then\n    if [ \"$2\" = 1 ]; then\n      echo 4\n    fi\n    echo 3\n  else\n    echo 0\n  fi\n}\n",
+            Language::Bash,
+            "a.sh",
+        );
+    }
+
+    /// An `if` in a braced `else` block is a real nested `if`. It is not an
+    /// `else if`, so it gets the nesting increment.
+    #[test]
+    fn test_if_in_else_block_is_nested() {
+        let code = "function f(x) {\n  if (x == 1) { return 1; } else { if (x == 2) { return 2; } }\n  return 0;\n}\n";
+        let result = parse_and_analyze(code.as_bytes(), Language::TypeScript, "a.ts");
+        let metrics = &result.functions[0].metrics;
+        // if +1, else +1, nested if +1 +1 for nesting level 1.
+        assert_eq!(metrics.cognitive, 4);
+        assert_eq!(metrics.max_nesting, 2);
     }
 
     // SonarSource Cognitive Complexity specification tests

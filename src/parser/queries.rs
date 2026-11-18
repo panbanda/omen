@@ -100,7 +100,7 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "do_statement",
             "switch_statement",
             "catch_clause",
-            "elseif_clause",
+            "else_if_clause",
             "conditional_expression",
         ],
         Language::Bash => &[
@@ -201,7 +201,8 @@ pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
             "break_statement",
             "continue_statement",
         ],
-        Language::Go => &["else_clause"],
+        // Go keeps the `else` body in the `alternative` field of `if_statement`.
+        Language::Go => &[],
         Language::Rust => &[
             "else_clause",
             // match_arm contributes to flat complexity (each arm is +1 like case)
@@ -215,12 +216,9 @@ pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
             "break_statement",
             "continue_statement",
         ],
-        Language::Java | Language::CSharp => &[
-            "else_clause",
-            "catch_clause",
-            "break_statement",
-            "continue_statement",
-        ],
+        Language::Java | Language::CSharp => {
+            &["catch_clause", "break_statement", "continue_statement"]
+        }
         Language::C | Language::Cpp => &[
             "else_clause",
             "case_statement",
@@ -231,7 +229,7 @@ pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
         ],
         Language::Php => &[
             "else_clause",
-            "elseif_clause",
+            "else_if_clause",
             "catch_clause",
             "break_statement",
             "continue_statement",
@@ -434,11 +432,10 @@ mod tests {
         }
     }
 
-    /// Every language must have an explicit arm in get_flat_node_types (no catch-all).
+    /// Each language except Go has flat kinds. The Go `else` body is not a separate kind.
     #[test]
     fn test_flat_node_types_per_language() {
         let all_languages = [
-            Language::Go,
             Language::Rust,
             Language::Python,
             Language::TypeScript,
@@ -493,10 +490,8 @@ mod tests {
         assert!(rust_types.contains(&"continue_expression"));
         assert!(!rust_types.contains(&"break_statement"));
 
-        // Go only has else_clause (no break/continue as flat complexity)
-        let go_types = get_flat_node_types(Language::Go);
-        assert!(go_types.contains(&"else_clause"));
-        assert_eq!(go_types.len(), 1);
+        // The Go grammar has no `else_clause` kind.
+        assert!(get_flat_node_types(Language::Go).is_empty());
 
         // Ruby has elsif and rescue
         let ruby_types = get_flat_node_types(Language::Ruby);
@@ -507,9 +502,9 @@ mod tests {
         let c_types = get_flat_node_types(Language::C);
         assert!(c_types.contains(&"goto_statement"));
 
-        // PHP should include elseif_clause
+        // PHP should include else_if_clause
         let php_types = get_flat_node_types(Language::Php);
-        assert!(php_types.contains(&"elseif_clause"));
+        assert!(php_types.contains(&"else_if_clause"));
 
         // Bash should have elif_clause
         let bash_types = get_flat_node_types(Language::Bash);
