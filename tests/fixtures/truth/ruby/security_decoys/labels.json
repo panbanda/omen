@@ -15,6 +15,7 @@
     {"label": "sql_string_construction.same_name_symbol", "category": "sql_string_construction", "scenario": "same_name_symbol", "file": "decoys.rb", "line": 49, "flagged": false},
     {"label": "weak_hash.same_name_symbol", "category": "weak_hash", "scenario": "same_name_symbol", "file": "decoys.rb", "line": 50, "flagged": false},
     {"label": "weak_cipher.same_name_symbol", "category": "weak_cipher", "scenario": "same_name_symbol", "file": "decoys.rb", "line": 51, "flagged": false},
-    {"label": "tls_verification_disabled.same_name_symbol", "category": "tls_verification_disabled", "scenario": "same_name_symbol", "file": "decoys.rb", "line": 52, "flagged": false}
+    {"label": "tls_verification_disabled.same_name_symbol", "category": "tls_verification_disabled", "scenario": "same_name_symbol", "file": "decoys.rb", "line": 52, "flagged": false},
+    {"label": "unsafe_html_output.same_name_symbol", "category": "unsafe_html_output", "scenario": "same_name_symbol", "file": "html_decoys.rb", "line": 10, "flagged": false}
   ]
 }

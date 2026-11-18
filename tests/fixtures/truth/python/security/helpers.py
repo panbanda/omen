@@ -25,3 +25,7 @@ def get(url, verify=True):
 class Gateway:
     def execute(self, statement):
         return statement
+
+
+def mark_safe(text):
+    return text

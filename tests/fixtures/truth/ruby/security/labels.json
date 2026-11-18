@@ -6,6 +6,7 @@
   "closed_world": false,
   "sinks_closed_world": true,
   "not_applicable": [
+    {"dimension": "sinks", "category": "unsafe_html_output/aliased_import", "reason": "Ruby has no import alias syntax. The statement require binds no name."},
     {"dimension": "sinks", "category": "memory_unsafe", "reason": "Ruby is a memory-safe language."},
     {"dimension": "sinks", "category": "command_execution/aliased_import", "reason": "Ruby has no import alias syntax. The statement require binds no name."},
     {"dimension": "sinks", "category": "code_evaluation/aliased_import", "reason": "Ruby has no import alias syntax. The statement require binds no name."},
@@ -59,6 +60,12 @@
     {"label": "hardcoded_credential.name_in_comment", "category": "hardcoded_credential", "scenario": "name_in_comment", "file": "sinks.rb", "line": 65, "flagged": false},
     {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/sinks_test.rb", "line": 13, "basis": "builtin", "in_test": true},
     {"label": "code_evaluation.safe_variant.block_pass", "category": "code_evaluation", "scenario": "safe_variant", "file": "block_eval.rb", "line": 2, "flagged": false},
-    {"label": "code_evaluation.safe_variant.block_literal", "category": "code_evaluation", "scenario": "safe_variant", "file": "block_eval.rb", "line": 3, "flagged": false}
+    {"label": "code_evaluation.safe_variant.block_literal", "category": "code_evaluation", "scenario": "safe_variant", "file": "block_eval.rb", "line": 3, "flagged": false},
+    {"label": "unsafe_html_output.real_call", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.rb", "line": 3, "basis": "name_only", "constant_argument": false},
+    {"label": "unsafe_html_output.safe_variant", "category": "unsafe_html_output", "scenario": "safe_variant", "file": "html.rb", "line": 4, "flagged": false},
+    {"label": "unsafe_html_output.name_in_string", "category": "unsafe_html_output", "scenario": "name_in_string", "file": "html.rb", "line": 5, "flagged": false},
+    {"label": "unsafe_html_output.name_in_comment", "category": "unsafe_html_output", "scenario": "name_in_comment", "file": "html.rb", "line": 6, "flagged": false},
+    {"label": "unsafe_html_output.real_call.constant", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.rb", "line": 7, "basis": "name_only", "constant_argument": true},
+    {"label": "unsafe_html_output.in_test", "category": "unsafe_html_output", "scenario": "in_test", "file": "tests/html_test.rb", "line": 3, "basis": "name_only", "in_test": true}
   ]
 }

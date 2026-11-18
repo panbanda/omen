@@ -59,7 +59,7 @@ pub const IMPORT_CATEGORIES: [&str; 8] = [
 
 /// The sink categories. Each language labels each category in each scenario,
 /// or declares the category or the scenario not applicable.
-pub const SINK_CATEGORIES: [&str; 9] = [
+pub const SINK_CATEGORIES: [&str; 10] = [
     "command_execution",
     "code_evaluation",
     "unsafe_deserialization",
@@ -69,6 +69,7 @@ pub const SINK_CATEGORIES: [&str; 9] = [
     "tls_verification_disabled",
     "hardcoded_credential",
     "memory_unsafe",
+    "unsafe_html_output",
 ];
 pub const SINK_SCENARIOS: [&str; 7] = [
     "real_call",
@@ -333,6 +334,9 @@ pub struct SinkLabel {
     /// The sink is in test code.
     #[serde(default)]
     pub in_test: bool,
+    /// The sink is in a file with the header of generated code.
+    #[serde(default)]
+    pub in_generated: bool,
     /// All arguments of the call are literals. Only a label that states it gets the check.
     #[serde(default)]
     pub constant_argument: Option<bool>,
@@ -510,6 +514,7 @@ pub struct ObservedSink {
     pub category: String,
     pub basis: String,
     pub in_test: bool,
+    pub in_generated: bool,
     pub constant_argument: bool,
 }
 
@@ -695,7 +700,10 @@ fn symbol_locations(case: &str, labels: &Labels) -> Result<BTreeMap<String, Loca
             )));
         }
         if !sink.flagged
-            && (sink.basis.is_some() || sink.in_test || sink.constant_argument.is_some())
+            && (sink.basis.is_some()
+                || sink.in_test
+                || sink.in_generated
+                || sink.constant_argument.is_some())
         {
             return Err(invalid(format!(
                 "{case}: sink '{}' is not flagged, thus it has no basis and no flags",
@@ -1254,6 +1262,15 @@ fn compare_sinks(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec
         out.push(check(
             "in_test",
             found.and_then(|sink| mismatch(label.in_test.to_string(), sink.in_test.to_string())),
+        ));
+        out.push(check(
+            "in_generated",
+            found.and_then(|sink| {
+                mismatch(
+                    label.in_generated.to_string(),
+                    sink.in_generated.to_string(),
+                )
+            }),
         ));
         if let Some(constant) = label.constant_argument {
             out.push(check(
@@ -2204,6 +2221,7 @@ mod tests {
             category: category.to_string(),
             basis: "imported_symbol".to_string(),
             in_test: file.starts_with("tests/"),
+            in_generated: false,
             constant_argument: false,
         }
     }
@@ -2231,8 +2249,8 @@ mod tests {
     fn correct_sinks_pass_every_assertion() {
         let assertions = compare("python/security", &sink_labels(), &correct_sinks()).unwrap();
         assert_eq!(sink_failures(&correct_sinks()), Vec::<String>::new());
-        // The real call has four checks, the safe variant one, and the test call two.
-        assert_eq!(assertions.len(), 4 + 1 + 2);
+        // The real call has five checks, the safe variant one, and the test call three.
+        assert_eq!(assertions.len(), 5 + 1 + 3);
     }
 
     #[test]
@@ -2245,6 +2263,7 @@ mod tests {
                 "python/security/sinks/command_execution.real_call/found",
                 "python/security/sinks/command_execution.real_call/basis",
                 "python/security/sinks/command_execution.real_call/in_test",
+                "python/security/sinks/command_execution.real_call/in_generated",
                 "python/security/sinks/command_execution.real_call/constant_argument",
             ]
         );
@@ -2275,6 +2294,7 @@ mod tests {
         observed.sinks[0].in_test = true;
         observed.sinks[1].in_test = false;
         observed.sinks[0].constant_argument = true;
+        observed.sinks[1].in_generated = true;
         assert_eq!(
             sink_failures(&observed),
             [
@@ -2282,6 +2302,7 @@ mod tests {
                 "python/security/sinks/command_execution.real_call/in_test",
                 "python/security/sinks/command_execution.real_call/constant_argument",
                 "python/security/sinks/command_execution.in_test/in_test",
+                "python/security/sinks/command_execution.in_test/in_generated",
             ]
         );
     }
@@ -2562,6 +2583,7 @@ mod tests {
                 "python/security/sinks/command_execution.twin/found",
                 "python/security/sinks/command_execution.twin/basis",
                 "python/security/sinks/command_execution.twin/in_test",
+                "python/security/sinks/command_execution.twin/in_generated",
                 "python/security/sinks/command_execution.twin/constant_argument",
             ]
         );
