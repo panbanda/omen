@@ -137,6 +137,12 @@ impl Default for Weights {
 const HIGH_RISK_PERCENTILE: usize = 95;
 const MEDIUM_RISK_PERCENTILE: usize = 80;
 
+/// The smallest number of commits for which the 95th percentile is a
+/// different commit from the maximum. With fewer commits, the percentile
+/// thresholds are equal to the highest score, and the commit with that score
+/// would be a high risk whatever its score is.
+pub const MIN_COMMITS_FOR_PERCENTILE_LEVELS: usize = 20;
+
 /// Thresholds for file-level risk recommendations.
 const HIGH_COMPLEXITY_THRESHOLD: f64 = 10.0;
 const HIGH_CHURN_THRESHOLD: f64 = 0.7;
@@ -200,15 +206,20 @@ impl AnalyzerTrait for Analyzer {
         let commits = ctx.git_log_with_stats(Some(&since), None)?;
         let raw_commits = commits_to_raw_commits(&commits)?;
 
+        let churn_window = |rows: usize| {
+            ctx.churn_window(self.days, commits.len())
+                .map(|window| window.for_rows(rows).without_all_history())
+        };
         if raw_commits.is_empty() {
             return Ok(Analysis {
                 generated_at: Utc::now(),
-                period_days: self.days as i32,
+                period_days: self.days,
                 commits: Vec::new(),
                 summary: Summary::default(),
                 weights: self.weights.clone(),
                 normalization: NormalizationStats::default(),
                 risk_thresholds: RiskThresholds::default(),
+                churn_window: churn_window(0),
             });
         }
 
@@ -268,10 +279,7 @@ impl AnalyzerTrait for Analyzer {
         let mut sorted_scores = scores.clone();
         sorted_scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        let risk_thresholds = RiskThresholds {
-            high_threshold: percentile(&sorted_scores, HIGH_RISK_PERCENTILE as f64),
-            medium_threshold: percentile(&sorted_scores, MEDIUM_RISK_PERCENTILE as f64),
-        };
+        let risk_thresholds = risk_thresholds_of(&sorted_scores);
 
         // Second pass: build commit risks with risk levels
         let mut total_score = 0.0;
@@ -308,11 +316,13 @@ impl AnalyzerTrait for Analyzer {
             })
             .collect();
 
-        // Sort by risk score descending
+        // The highest risk score is first. Of two commits with the same
+        // score, the newer one is first. The hash breaks a tie.
         commit_risks.sort_by(|a, b| {
             b.risk_score
-                .partial_cmp(&a.risk_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&a.risk_score)
+                .then_with(|| b.timestamp.cmp(&a.timestamp))
+                .then_with(|| a.commit_hash.cmp(&b.commit_hash))
         });
 
         let total_commits = commits.len();
@@ -322,9 +332,10 @@ impl AnalyzerTrait for Analyzer {
             0.0
         };
 
+        let churn_window = churn_window(commit_risks.len());
         Ok(Analysis {
             generated_at: Utc::now(),
-            period_days: self.days as i32,
+            period_days: self.days,
             commits: commit_risks,
             summary: Summary {
                 total_commits,
@@ -339,7 +350,26 @@ impl AnalyzerTrait for Analyzer {
             weights: self.weights.clone(),
             normalization,
             risk_thresholds,
+            churn_window,
         })
+    }
+}
+
+/// The thresholds of the risk levels for the scores of one window, in
+/// ascending order.
+///
+/// A window with enough commits has percentile thresholds: the level tells
+/// how a commit compares with the other commits of the window. A window with
+/// fewer commits has the fixed thresholds, because a percentile of a few
+/// scores is one of those scores.
+fn risk_thresholds_of(sorted_scores: &[f64]) -> RiskThresholds {
+    if sorted_scores.len() < MIN_COMMITS_FOR_PERCENTILE_LEVELS {
+        return RiskThresholds::default();
+    }
+    RiskThresholds {
+        high_threshold: percentile(sorted_scores, HIGH_RISK_PERCENTILE as f64),
+        medium_threshold: percentile(sorted_scores, MEDIUM_RISK_PERCENTILE as f64),
+        basis: ThresholdBasis::Percentile,
     }
 }
 
@@ -397,12 +427,15 @@ pub struct FileRiskSignals {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Analysis {
     pub generated_at: DateTime<Utc>,
-    pub period_days: i32,
+    pub period_days: u32,
     pub commits: Vec<CommitRisk>,
     pub summary: Summary,
     pub weights: Weights,
     pub normalization: NormalizationStats,
     pub risk_thresholds: RiskThresholds,
+    /// The window that gave these numbers. See `crate::git::ChurnWindow`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub churn_window: Option<crate::git::ChurnWindow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -469,10 +502,23 @@ impl Default for NormalizationStats {
     }
 }
 
+/// How the thresholds of the risk levels got their values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThresholdBasis {
+    /// The fixed thresholds. The window has too few commits for a percentile.
+    #[default]
+    Absolute,
+    /// The 95th and the 80th percentile of the scores of the window.
+    Percentile,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskThresholds {
     pub high_threshold: f64,
     pub medium_threshold: f64,
+    #[serde(default)]
+    pub basis: ThresholdBasis,
 }
 
 impl Default for RiskThresholds {
@@ -480,12 +526,37 @@ impl Default for RiskThresholds {
         Self {
             high_threshold: 0.6,
             medium_threshold: 0.3,
+            basis: ThresholdBasis::Absolute,
         }
     }
 }
 
-// Bug fix patterns (Mockus & Votta 2000) omen:ignore
+/// The Conventional Commit types that are not a fix.
+const NOT_FIX_TYPES: &[&str] = &[
+    "feat", "refactor", "perf", "docs", "chore", "test", "ci", "build", "style",
+];
+
+/// The Conventional Commit type of the subject, as in `type(scope)!: text`.
+fn conventional_commit_type(message: &str) -> Option<String> {
+    static PATTERN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let pattern = PATTERN
+        .get_or_init(|| Regex::new(r"^\s*([A-Za-z]+)(\([^)]*\))?!?:\s").expect("valid regex"));
+    let subject = message.lines().next().unwrap_or("");
+    pattern
+        .captures(subject)
+        .map(|captures| captures[1].to_ascii_lowercase())
+}
+
+/// A known Conventional Commit type in the subject decides. Other messages
+/// use the bug fix patterns of Mockus and Votta (2000) on the subject cut to
+/// 80 characters. `message` is the whole message, because the cut can remove
+/// the `): ` of a long scope. omen:ignore
 fn is_bug_fix_commit(message: &str) -> bool {
+    match conventional_commit_type(message).as_deref() {
+        Some("fix") => return true,
+        Some(kind) if NOT_FIX_TYPES.contains(&kind) => return false,
+        _ => {}
+    }
     static PATTERNS: std::sync::OnceLock<Vec<Regex>> = std::sync::OnceLock::new();
     let patterns = PATTERNS.get_or_init(|| {
         vec![
@@ -503,7 +574,8 @@ fn is_bug_fix_commit(message: &str) -> bool {
         ]
     });
 
-    patterns.iter().any(|p| p.is_match(message))
+    let subject = truncate_message(message);
+    patterns.iter().any(|p| p.is_match(&subject))
 }
 
 // Automated/trivial commit patterns
@@ -557,7 +629,7 @@ fn commits_to_raw_commits(commits: &[crate::git::Commit]) -> Result<Vec<RawCommi
                 author: commit.author.clone(),
                 message: message.clone(),
                 timestamp: timestamp.unwrap_or_else(Utc::now),
-                is_fix: is_bug_fix_commit(&message),
+                is_fix: is_bug_fix_commit(&commit.message),
                 is_automated: is_automated_commit(&message),
                 entropy,
                 lines_added,
@@ -610,7 +682,7 @@ fn parse_git_log(output: &str) -> Result<Vec<RawCommit>> {
                         author,
                         message: message.clone(),
                         timestamp,
-                        is_fix: is_bug_fix_commit(&message),
+                        is_fix: is_bug_fix_commit(parts[3]),
                         is_automated: is_automated_commit(&message),
                         ..Default::default()
                     },
@@ -1084,6 +1156,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_one_commit_with_a_low_score_is_not_a_high_risk() {
+        let thresholds = risk_thresholds_of(&[0.05]);
+        assert_eq!(thresholds.basis, ThresholdBasis::Absolute);
+        assert_eq!(get_risk_level(0.05, &thresholds), RiskLevel::Low);
+        assert_eq!(get_risk_level(0.45, &thresholds), RiskLevel::Medium);
+        assert_eq!(get_risk_level(0.75, &thresholds), RiskLevel::High);
+    }
+
+    #[test]
+    fn test_window_with_enough_commits_has_percentile_thresholds() {
+        let few: Vec<f64> = (0..MIN_COMMITS_FOR_PERCENTILE_LEVELS - 1)
+            .map(|position| position as f64 / 100.0)
+            .collect();
+        assert_eq!(risk_thresholds_of(&few).basis, ThresholdBasis::Absolute);
+
+        let enough: Vec<f64> = (0..MIN_COMMITS_FOR_PERCENTILE_LEVELS)
+            .map(|position| position as f64 / 100.0)
+            .collect();
+        let thresholds = risk_thresholds_of(&enough);
+        assert_eq!(thresholds.basis, ThresholdBasis::Percentile);
+        assert!(thresholds.high_threshold > thresholds.medium_threshold);
+        // The 95th percentile of 20 scores is the score before the highest one.
+        let high: Vec<&f64> = enough
+            .iter()
+            .filter(|score| get_risk_level(**score, &thresholds) == RiskLevel::High)
+            .collect();
+        assert_eq!(high.len(), 2);
+    }
+
+    #[test]
     fn test_default_weights() {
         let weights = Weights::default();
         let total = weights.la
@@ -1115,6 +1217,37 @@ mod tests {
         assert!(is_bug_fix_commit("Patch security vulnerability"));
         assert!(!is_bug_fix_commit("Add new feature"));
         assert!(!is_bug_fix_commit("Update dependencies"));
+    }
+
+    /// A Conventional Commit type decides. The keyword rule applies only to a
+    /// subject without a known type.
+    #[test]
+    fn test_bug_fix_detection_with_conventional_commit_type() {
+        for message in [
+            "fix: handle the empty list",
+            "fix(api): restore the old field",
+            "fix!: drop the broken option",
+            "Fix: crash on startup",
+        ] {
+            assert!(is_bug_fix_commit(message), "{message}");
+        }
+        for message in [
+            "refactor: clean up error system",
+            "feat: restrict the issue list to members",
+            "perf: speed up the fix of the index",
+            "docs: explain the bug report form",
+            "chore(deps): patch lodash",
+            "test: cover the crash on startup",
+            "ci: resolve the cache key",
+            "build: fix the release script",
+            "style: fix the indentation",
+        ] {
+            assert!(!is_bug_fix_commit(message), "{message}");
+        }
+        assert!(is_bug_fix_commit("hotfix: resolve the login error"));
+        assert!(is_bug_fix_commit(
+            "Fix crash on startup\n\nfeat: is in the body"
+        ));
     }
 
     #[test]
@@ -1177,6 +1310,7 @@ mod tests {
         let thresholds = RiskThresholds {
             high_threshold: 0.8,
             medium_threshold: 0.5,
+            basis: ThresholdBasis::Percentile,
         };
         assert_eq!(get_risk_level(0.9, &thresholds), RiskLevel::High);
         assert_eq!(get_risk_level(0.6, &thresholds), RiskLevel::Medium);
@@ -1262,6 +1396,30 @@ mod tests {
         let file_risk = FileRiskSignals::default();
         let recs = generate_recommendations(&features, 0.1, &factors, &file_risk);
         assert!(recs.iter().any(|r| r.contains("Low risk")));
+    }
+
+    /// The commit type comes from the subject before it is cut to 80
+    /// characters. Here the cut removes `): ` of a long scope, and the rest
+    /// has the word "error".
+    #[test]
+    fn test_fix_detection_reads_the_whole_subject() {
+        let subject = format!("perf(error-{}): reduce the latency", "handling-".repeat(8));
+        assert!(subject.len() > 80);
+        assert!(!truncate_message(&subject).contains("): "));
+        let commit = crate::git::Commit {
+            sha: "abc".to_string(),
+            author: "A".to_string(),
+            email: "a@example.com".to_string(),
+            timestamp: 0,
+            commit_time: 0,
+            message: subject.clone(),
+            files: Vec::new(),
+        };
+        let from_history = commits_to_raw_commits(&[commit]).unwrap();
+        assert!(!from_history[0].features.is_fix);
+        let log = format!("abc|A|2024-01-15T10:30:00+00:00|{subject}\n1\t1\ta.rs\n");
+        let from_log = parse_git_log(&log).unwrap();
+        assert!(!from_log[0].features.is_fix);
     }
 
     #[test]

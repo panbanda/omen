@@ -74,6 +74,10 @@ pub struct Report {
     pub no_known_entry: Vec<String>,
     pub choke_points: Vec<ChokePoint>,
     pub coverage: Coverage,
+    /// Present only with `--exclude-tests`: the number of sinks in test code
+    /// that are not in `sinks`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests_excluded: Option<usize>,
 }
 
 impl Report {
@@ -128,6 +132,7 @@ impl Report {
             no_known_entry: reachability.no_known_entry,
             choke_points: reachability.choke_points,
             coverage: analysis.coverage,
+            tests_excluded: None,
         }
     }
 
@@ -158,6 +163,23 @@ impl Report {
         self
     }
 
+    /// The report without the sinks and the entry points that are in test
+    /// code. `tests_excluded` gives the number of removed sinks. The paths
+    /// do not change, because no path starts or ends in test code. The
+    /// summary keeps the totals.
+    pub fn without_tests(mut self) -> Self {
+        let before = self.sinks.len();
+        self.sinks.retain(|sink| !sink.flags.in_test);
+        self.suppressed.retain(|found| !found.sink.flags.in_test);
+        self.entry_points.retain(|entry| !entry.in_test);
+        let keys: std::collections::BTreeSet<&str> =
+            self.sinks.iter().map(|sink| sink.key.as_str()).collect();
+        self.no_known_entry
+            .retain(|key| keys.contains(key.as_str()));
+        self.tests_excluded = Some(before - self.sinks.len());
+        self
+    }
+
     /// The report as a JSON value, with the fields of one section.
     pub fn section(&self, section: Section) -> Value {
         let mut value = serde_json::to_value(self).unwrap_or(Value::Null);
@@ -169,14 +191,16 @@ impl Report {
                 "suppressed",
                 "invalid_suppressions",
                 "coverage",
+                "tests_excluded",
             ],
-            Section::Surface => &["summary", "entry_points", "coverage"],
+            Section::Surface => &["summary", "entry_points", "coverage", "tests_excluded"],
             Section::Paths => &[
                 "summary",
                 "paths",
                 "no_known_entry",
                 "choke_points",
                 "coverage",
+                "tests_excluded",
             ],
         };
         if let Some(map) = value.as_object_mut() {

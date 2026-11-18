@@ -109,6 +109,7 @@ fn run_with_source(
     }
 
     let security_analyzer = crate::analyzers::security::Analyzer::from_config(config)?;
+    let clones_analyzer = crate::analyzers::duplicates::Analyzer::from_config(config);
 
     // Run analyzers in parallel using std::thread::scope.
     //
@@ -130,7 +131,7 @@ fn run_with_source(
                 run_and_collect!(&ctx, crate::analyzers::smells::Analyzer, "smells"),
                 run_and_collect!(&ctx, crate::analyzers::flags::Analyzer, "flags"),
                 run_instance_and_collect!(&ctx, security_analyzer, "security"),
-                run_and_collect!(&ctx, crate::analyzers::duplicates::Analyzer, "clones"),
+                run_instance_and_collect!(&ctx, clones_analyzer, "clones"),
             ]
         });
 
@@ -215,6 +216,31 @@ fn run_with_source(
 
     if let Some(error) = changed_file.into_inner() {
         return Err(error);
+    }
+
+    // Each section has `is_test` in its rows, and `--exclude-tests` removes
+    // the test rows, as the single command does. This step is after each
+    // analyzer, because an analyzer reads the full result of a different one.
+    for entry in &mut results {
+        let name = entry
+            .get("analyzer")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let Some(result) = entry.get_mut("result") else {
+            continue;
+        };
+        if name == "security" {
+            if scope.exclude_tests {
+                let report: Option<crate::analyzers::security::Report> =
+                    serde_json::from_value(result.clone()).ok();
+                if let Some(report) = report {
+                    *result = serde_json::to_value(report.without_tests())?;
+                }
+            }
+            continue;
+        }
+        super::test_rows::mark(result, &name, &ctx, scope.exclude_tests);
     }
 
     // `--top` and `--offset` apply to each section as they apply to the

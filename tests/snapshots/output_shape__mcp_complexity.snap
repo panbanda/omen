@@ -23,6 +23,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                 "functions": [
                   {
                     "end_line": "number",
+                    "is_test": "bool",
                     "metrics": {
                       "cognitive": "number",
                       "cyclomatic": "number",
@@ -33,6 +34,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                     "start_line": "number"
                   }
                 ],
+                "is_test": "bool",
                 "language": "string",
                 "total_cognitive": "number",
                 "total_cyclomatic": "number"

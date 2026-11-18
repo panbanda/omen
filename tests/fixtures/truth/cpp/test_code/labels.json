@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "language": "cpp",
+  "split": "development",
+  "oracle": "Author-reviewed. `c++ -std=c++17 -fsyntax-only` (Apple clang) accepts `src/service.cpp` and `tests/shared.cpp`. GoogleTest is not in the case, thus the compiler did not read `checks.cpp`; tree-sitter gives no error node for it. The harness does not run the code.",
+  "closed_world": false,
+  "sinks_closed_world": false,
+  "not_applicable": [
+    {"dimension":"tests","category":"entry_by_name","reason":"GoogleTest, Catch2, and Boost.Test define a test with a macro. No test tool of C++ finds a test by the name of a function."}
+  ],
+  "tests": [
+    {"label":"test_macro","category":"entry_by_syntax","file":"src/checks.cpp","line":12,"role":"support"},
+    {"label":"fixture_macro","category":"entry_by_syntax","file":"src/checks.cpp","line":16,"role":"support"},
+    {"label":"helper_in_test_directory","category":"support","file":"tests/shared.cpp","line":3,"name":"shared","role":"support"},
+    {"label":"production","category":"not_test","file":"src/service.cpp","line":1,"name":"production","role":"none"},
+    {"label":"test_like_name","category":"not_test","file":"src/service.cpp","line":5,"name":"TEST_like","role":"none"},
+    {"label":"constructor_named_test","category":"not_test","file":"src/service.cpp","line":11,"role":"none"},
+    {"label":"helper_before_macro","category":"not_test","file":"src/checks.cpp","line":5,"name":"helper","role":"none"}
+  ]
+}

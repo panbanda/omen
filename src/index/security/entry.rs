@@ -9,18 +9,16 @@
 //! The public API is [`find_entry_points`]. A different analyzer can call it
 //! with the parsed files and the index of the same files.
 
-use std::ops::Range;
-
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
 
 use super::spec::syntax_of;
 use super::syntax;
-use crate::core::{is_test_file, Language};
+use crate::core::Language;
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ResolutionBasis, ResolutionStatus, Span, Symbol, SymbolKind};
-use crate::parser::{cfg_test_module_ranges, ParseResult};
+use crate::parser::ParseResult;
 
 mod fastapi;
 mod go_routes;
@@ -665,7 +663,6 @@ struct Context<'a> {
     all_parsed: &'a dyn TreeSource,
     rules: &'a [EntryRule],
     source: &'a [u8],
-    test_ranges: Vec<Range<usize>>,
     /// The start of the first statement of a list that jumps out of the block (`next`, `break`), by
     /// the id of the list node.
     rails_jumps: std::cell::RefCell<std::collections::HashMap<usize, Option<usize>>>,
@@ -728,12 +725,6 @@ impl<'a> Context<'a> {
         all_parsed: &'a dyn TreeSource,
         rules: &'a [EntryRule],
     ) -> Self {
-        let test_ranges = if file.language == Language::Rust {
-            let text = std::str::from_utf8(&parsed.source).unwrap_or("");
-            cfg_test_module_ranges(&parsed.root_node(), text)
-        } else {
-            Vec::new()
-        };
         Self {
             parsed,
             file,
@@ -741,7 +732,6 @@ impl<'a> Context<'a> {
             all_parsed,
             rules,
             source: &parsed.source,
-            test_ranges,
             rails_jumps: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_cases: std::cell::RefCell::new(std::collections::HashMap::new()),
             rails_handled: std::cell::RefCell::new(std::collections::HashMap::new()),
@@ -1052,11 +1042,7 @@ impl<'a> Context<'a> {
                     guards_complete: unknown.is_none(),
                     guards_unknown_reason: unknown,
                     basis: draft.basis,
-                    in_test: is_test_file(&self.file.file)
-                        || self
-                            .test_ranges
-                            .iter()
-                            .any(|range| range.contains(&draft.range.start_byte)),
+                    in_test: self.file.is_test_at(draft.range.start_byte),
                 }
             })
             .collect();
@@ -2291,6 +2277,7 @@ mod tests {
     use crate::index::extract::{extract_file, link_files};
     use crate::index::imports::{resolve_imports, Manifests};
     use crate::index::resolve::resolve_references;
+    pub(super) use crate::index::timing::assert_scales_linearly;
     use crate::parser::Parser;
 
     #[test]
@@ -2324,28 +2311,6 @@ mod tests {
         files: &[(&str, &str)],
     ) -> (Vec<EntryPoint>, std::time::Duration) {
         entries_timed(language, files, false)
-    }
-
-    /// Runs a timing case at `size` and at twice that size, and checks that the time grows in
-    /// proportion to the size. A quadratic search takes four times as long for twice the input. The
-    /// check uses the best of two runs for each size, and a floor for a time that is too short to
-    /// compare, so the speed of the machine does not change the result. The absolute bound is far
-    /// above any speed that a CI machine has.
-    pub(super) fn assert_scales_linearly(
-        label: &str,
-        size: usize,
-        run: impl Fn(usize) -> std::time::Duration,
-    ) {
-        let best = |size: usize| (0..2).map(|_| run(size)).min().expect("two runs");
-        let small = best(size);
-        let large = best(size * 2);
-        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
-        assert!(
-            large < allowed,
-            "{label}: {small:?} at {size}, {large:?} at {}",
-            size * 2
-        );
-        assert!(large.as_secs() < 60, "{label}: {large:?}");
     }
 
     /// The entry points, and the time of the search for entry points alone.

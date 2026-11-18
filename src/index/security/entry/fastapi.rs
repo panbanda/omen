@@ -76,14 +76,40 @@ struct Outer {
     /// The guards of the routers around the router that gets the routes. The link shares the
     /// lists of a chain of routers, so a chain costs the sum of its lists and not the square.
     above: Option<Rc<Outer>>,
+    /// The nearest link of `above` and the links above it that has guards. A route skips the
+    /// links without guards, so its list costs the guards and not the depth of the chain.
+    above_with_guards: Option<Rc<Outer>>,
 }
 
 impl Outer {
+    fn new(start: usize, scope: usize, guards: Vec<String>, above: Option<Rc<Outer>>) -> Self {
+        let above_with_guards = above.as_ref().and_then(|link| {
+            if link.guards.is_empty() {
+                link.above_with_guards.clone()
+            } else {
+                Some(Rc::clone(link))
+            }
+        });
+        Self {
+            start,
+            scope,
+            guards,
+            above,
+            above_with_guards,
+        }
+    }
+
     /// The guards of each router around the router, from the outer router to the inner one.
     fn guards(&self) -> Vec<String> {
-        let mut links = vec![self];
-        while let Some(above) = links[links.len() - 1].above.as_deref() {
-            links.push(above);
+        let mut links: Vec<&Outer> = Vec::new();
+        let mut current = if self.guards.is_empty() {
+            self.above_with_guards.as_deref()
+        } else {
+            Some(self)
+        };
+        while let Some(link) = current {
+            links.push(link);
+            current = link.above_with_guards.as_deref();
         }
         links
             .into_iter()
@@ -710,12 +736,7 @@ impl<'a> Context<'a> {
                 }
                 let mut guards = self.dependencies_of(owner.0, call);
                 guards.extend(self.dependencies_of(include.scope, include.call));
-                Some(Rc::new(Outer {
-                    start,
-                    scope: include.scope,
-                    guards,
-                    above,
-                }))
+                Some(Rc::new(Outer::new(start, include.scope, guards, above)))
             });
             scopes.outer.borrow_mut().insert(key, outer);
             let gap = self.guard_gap.replace(noted);
@@ -1344,6 +1365,43 @@ mod tests {
     fn a_chain_with_one_route_gives_the_guard_of_each_router() {
         a_chain_with_one_route_at(30, true);
         a_chain_with_one_route_at(30, false);
+    }
+
+    /// A chain of `count` routers without dependencies, and `count` routes on the innermost
+    /// router. Each route has no guard, so the work must not grow with the depth of the chain
+    /// for each route.
+    fn a_chain_without_dependencies_at(count: usize) -> std::time::Duration {
+        let mut source =
+            String::from("from fastapi import APIRouter, FastAPI\n\napp = FastAPI()\n");
+        for number in 0..count {
+            source.push_str(&format!("r{number} = APIRouter()\n"));
+        }
+        for number in 0..count {
+            source.push_str(&format!(
+                "\n@r0.get(\"/p{number}\")\nasync def h{number}():\n    return 1\n"
+            ));
+        }
+        for number in 1..count {
+            source.push_str(&format!("r{number}.include_router(r{})\n", number - 1));
+        }
+        source.push_str(&format!("app.include_router(r{})\n", count - 1));
+        let (found, elapsed) = entries_lean(Language::Python, &[("main.py", &source)]);
+        assert_eq!(found.len(), count);
+        assert!(found
+            .iter()
+            .all(|entry| entry.guards.is_empty() && entry.guards_complete));
+        elapsed
+    }
+
+    #[test]
+    fn a_chain_without_dependencies_gives_no_guard() {
+        a_chain_without_dependencies_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_chain_without_dependencies_resolves_in_linear_time() {
+        assert_scales_linearly("no dependency", 20_000, a_chain_without_dependencies_at);
     }
 
     #[test]

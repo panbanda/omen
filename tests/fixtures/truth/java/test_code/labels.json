@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "language": "java",
+  "split": "development",
+  "oracle": "Author-reviewed. javac 21 compiles `Service.java`. JUnit is not in the case, thus javac did not compile `Checks.java` and `LegacyTest.java`; tree-sitter gives no error node for them. The harness does not run the code.",
+  "closed_world": false,
+  "sinks_closed_world": false,
+  "not_applicable": [
+
+  ],
+  "tests": [
+    {"label":"test_annotation","category":"entry_by_syntax","file":"src/main/java/app/Checks.java","line":17,"name":"givesOne","role":"entry"},
+    {"label":"parameterized_test","category":"entry_by_syntax","file":"src/main/java/app/Checks.java","line":23,"name":"acceptsEachValue","role":"entry"},
+    {"label":"hook_annotation","category":"entry_by_syntax","file":"src/main/java/app/Checks.java","line":12,"name":"prepare","role":"entry"},
+    {"label":"junit3_method","category":"entry_by_name","file":"src/test/java/app/LegacyTest.java","line":4,"name":"testProduction","role":"entry"},
+    {"label":"helper_in_test_class","category":"support","file":"src/main/java/app/Checks.java","line":27,"name":"check","role":"support"},
+    {"label":"class_with_tests","category":"support","file":"src/main/java/app/Checks.java","line":8,"name":"Checks","role":"support"},
+    {"label":"helper_in_test_directory","category":"support","file":"src/test/java/app/LegacyTest.java","line":8,"name":"build","role":"support"},
+    {"label":"production","category":"not_test","file":"src/main/java/app/Service.java","line":4,"name":"production","role":"none"},
+    {"label":"test_like_name","category":"not_test","file":"src/main/java/app/Service.java","line":8,"name":"testConnection","role":"none"},
+    {"label":"other_annotation","category":"not_test","file":"src/main/java/app/Service.java","line":13,"name":"toString","role":"none"}
+  ]
+}
