@@ -280,8 +280,9 @@ struct Located {
     text: String,
 }
 
-/// The options of each config after `extends`, by the path of the config.
-pub type InheritedMemo = RwLock<HashMap<String, Arc<Inherited>>>;
+/// The options of each config after `extends`, by the path of the config,
+/// and if a cycle of `extends` can be reached from the config.
+pub type InheritedMemo = RwLock<HashMap<String, (Arc<Inherited>, bool)>>;
 
 /// The packages whose name is `module` or a prefix of `module` before a
 /// `/`, and the rest of `module` after the name. `packages` is sorted by
@@ -421,7 +422,7 @@ impl ProjectConfigs {
         packages: &[NodePackage],
         memo: &InheritedMemo,
     ) -> ProjectOptions {
-        let (inherited, _) = self.inherited(path, packages, memo, &mut HashSet::new());
+        let (inherited, _) = self.inherited(path, packages, memo);
         let leaf = directory(path);
         let located = |option: &Option<Located>| -> Option<String> {
             let Located { directory, text } = option.as_ref()?;
@@ -453,65 +454,89 @@ impl ProjectConfigs {
         }
     }
 
-    /// The options of the config at `path` after `extends`, and tells if
-    /// the chain had no cycle. Only the options of a chain without a cycle
-    /// go into `memo`, because the options in a cycle depend on the config
-    /// where the search starts.
+    /// The options of the config at `path` after `extends`, and tells if a
+    /// cycle of `extends` can be reached from the config. A cycle is an error
+    /// of `tsc`, thus a parent that reaches a cycle gives no options. Then
+    /// the result depends only on the config, not on the config where the
+    /// search starts, and `memo` keeps each result. The search visits each
+    /// config one time, and it does not use recursion, because a chain of
+    /// `extends` can be long.
     fn inherited(
         &self,
         path: &str,
         packages: &[NodePackage],
         memo: &InheritedMemo,
-        seen: &mut HashSet<String>,
     ) -> (Arc<Inherited>, bool) {
-        if let Some(found) = memo.read().get(path) {
-            return (Arc::clone(found), true);
+        struct Frame<'c> {
+            path: String,
+            config: &'c ProjectConfig,
+            parents: Vec<String>,
+            next: usize,
+            options: Inherited,
+            reaches_cycle: bool,
         }
-        let Some(config) = self.configs.get(path) else {
-            return (Arc::default(), true);
-        };
-        if !seen.insert(path.to_string()) {
-            return (Arc::default(), false);
-        }
-        let mut options = Inherited::default();
-        let mut complete = true;
-        for name in &config.extends {
-            let Some(parent) = self.extended(path, name, packages) else {
-                continue;
+        // The configs that the search has entered and not left.
+        let mut searching: HashSet<String> = HashSet::new();
+        let mut stack: Vec<Frame> = Vec::new();
+        let mut entering = Some(path.to_string());
+        let mut returned: Option<(Arc<Inherited>, bool)> = None;
+        loop {
+            if let Some(path) = entering.take() {
+                if let Some((found, cycle)) = memo.read().get(&path) {
+                    returned = Some((Arc::clone(found), *cycle));
+                } else if let Some(config) = self.configs.get(&path) {
+                    if searching.insert(path.clone()) {
+                        let parents = config
+                            .extends
+                            .iter()
+                            .filter_map(|name| self.extended(&path, name, packages))
+                            .collect();
+                        stack.push(Frame {
+                            path,
+                            config,
+                            parents,
+                            next: 0,
+                            options: Inherited::default(),
+                            reaches_cycle: false,
+                        });
+                    } else {
+                        // The config is in a cycle with the current config.
+                        returned = Some((Arc::default(), true));
+                    }
+                } else {
+                    returned = Some((Arc::default(), false));
+                }
+            }
+            if let Some((inherited, cycle)) = returned.take() {
+                let Some(frame) = stack.last_mut() else {
+                    return (inherited, cycle);
+                };
+                if cycle {
+                    frame.reaches_cycle = true;
+                } else {
+                    let inherited = Arc::unwrap_or_clone(inherited);
+                    let options = &mut frame.options;
+                    options.base_url = inherited.base_url.or(options.base_url.take());
+                    options.paths = inherited.paths.or(options.paths.take());
+                    options.out_dir = inherited.out_dir.or(options.out_dir.take());
+                    options.root_dir = inherited.root_dir.or(options.root_dir.take());
+                }
+            }
+            let Some(frame) = stack.last_mut() else {
+                unreachable!("the search returns when the stack is empty");
             };
-            let (inherited, whole) = self.inherited(&parent, packages, memo, seen);
-            complete &= whole;
-            let inherited = Arc::unwrap_or_clone(inherited);
-            options.base_url = inherited.base_url.or(options.base_url);
-            options.paths = inherited.paths.or(options.paths);
-            options.out_dir = inherited.out_dir.or(options.out_dir);
-            options.root_dir = inherited.root_dir.or(options.root_dir);
+            if frame.next < frame.parents.len() {
+                entering = Some(frame.parents[frame.next].clone());
+                frame.next += 1;
+                continue;
+            }
+            let frame = stack.pop().expect("a frame");
+            searching.remove(&frame.path);
+            let options = Arc::new(own_options(&frame.path, frame.config, frame.options));
+            memo.write()
+                .insert(frame.path, (Arc::clone(&options), frame.reaches_cycle));
+            returned = Some((options, frame.reaches_cycle));
         }
-        seen.remove(path);
-        let here = directory(path);
-        let located = |text: &Option<String>| {
-            text.as_ref().map(|text| Located {
-                directory: here.to_string(),
-                text: text.clone(),
-            })
-        };
-        if config.base_url.is_some() {
-            options.base_url = located(&config.base_url);
-        }
-        if let Some(paths) = &config.paths {
-            options.paths = Some((paths.clone(), here.to_string()));
-        }
-        if config.out_dir.is_some() {
-            options.out_dir = located(&config.out_dir);
-        }
-        if config.root_dir.is_some() {
-            options.root_dir = located(&config.root_dir);
-        }
-        let options = Arc::new(options);
-        if complete {
-            memo.write().insert(path.to_string(), Arc::clone(&options));
-        }
-        (options, complete)
     }
 
     /// The configs in the directory `directory`.
@@ -544,6 +569,30 @@ impl ProjectConfigs {
             here = directory(here);
         }
     }
+}
+
+/// The options of `config` at `path` over the options that it inherits.
+fn own_options(path: &str, config: &ProjectConfig, mut options: Inherited) -> Inherited {
+    let here = directory(path);
+    let located = |text: &Option<String>| {
+        text.as_ref().map(|text| Located {
+            directory: here.to_string(),
+            text: text.clone(),
+        })
+    };
+    if config.base_url.is_some() {
+        options.base_url = located(&config.base_url);
+    }
+    if let Some(paths) = &config.paths {
+        options.paths = Some((paths.clone(), here.to_string()));
+    }
+    if config.out_dir.is_some() {
+        options.out_dir = located(&config.out_dir);
+    }
+    if config.root_dir.is_some() {
+        options.root_dir = located(&config.root_dir);
+    }
+    options
 }
 
 /// The relative path from `from` to `to`. Both are directories relative to

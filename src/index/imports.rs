@@ -1928,6 +1928,72 @@ mod typescript_timing_tests {
         elapsed
     }
 
+    /// `size` layers of two configs. The config of the top directory and
+    /// each config of a layer extend both configs of the next layer, and the
+    /// two configs of the last layer extend each other. The number of paths
+    /// through the layers is `2^size`.
+    fn branching_extends_with_a_cycle_at(size: usize) -> std::time::Duration {
+        let mut owned = Vec::new();
+        let layer = |position: usize| {
+            format!("[\"../l{position}a/tsconfig.json\", \"../l{position}b/tsconfig.json\"]")
+        };
+        owned.push((
+            "top/tsconfig.json".to_string(),
+            format!(
+                "{{ \"extends\": {}, \"compilerOptions\": {{ \"paths\": {{ \"@x/*\": [\"./src/*\"] }} }} }}",
+                layer(0)
+            ),
+        ));
+        for position in 0..size {
+            for (side, other) in [("a", "b"), ("b", "a")] {
+                let extends = if position + 1 < size {
+                    layer(position + 1)
+                } else {
+                    format!("\"../l{position}{other}/tsconfig.json\"")
+                };
+                owned.push((
+                    format!("l{position}{side}/tsconfig.json"),
+                    format!("{{ \"extends\": {extends} }}"),
+                ));
+            }
+        }
+        owned.push((
+            "top/src/value.ts".to_string(),
+            "export const value = 1;\n".to_string(),
+        ));
+        owned.push((
+            "top/main.ts".to_string(),
+            "import { value } from '@x/value';\n".to_string(),
+        ));
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let found = rows(&files, "top/main.ts");
+        let elapsed = started.elapsed();
+        // A cycle of `extends` is an error of `tsc`. A parent that reaches
+        // the cycle gives no options, and the own pattern of the top config
+        // applies.
+        assert_eq!(found, ["1 Named @x/value value->value top/src/value.ts"]);
+        elapsed
+    }
+
+    #[test]
+    fn test_branching_extends_with_a_cycle_resolves() {
+        branching_extends_with_a_cycle_at(8);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_branching_extends_with_a_cycle_resolves_in_linear_time() {
+        assert_scales_linearly(
+            "branching extends",
+            1_000,
+            branching_extends_with_a_cycle_at,
+        );
+    }
+
     #[test]
     fn test_chain_of_extends_resolves() {
         chain_of_extends_at(20);
