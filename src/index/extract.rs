@@ -758,6 +758,13 @@ impl ValueSites {
         &self.text[range.0 as usize..range.1 as usize]
     }
 
+    /// The path before the name of each use that has one, as `jobs` in `jobs::worker`.
+    pub fn qualifiers(&self) -> impl Iterator<Item = &str> {
+        self.sites
+            .iter()
+            .filter_map(|site| site.qualifier.map(|qualifier| self.text_of(qualifier)))
+    }
+
     /// The name of the use at `position`.
     pub fn name(&self, position: usize) -> &str {
         self.text_of(self.sites[position].name)
