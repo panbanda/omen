@@ -8,7 +8,7 @@
 
 pub mod external;
 #[cfg(test)]
-pub(crate) mod function_references;
+mod function_references;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
@@ -4915,8 +4915,8 @@ mod ecma_decorator_tests {
 
 #[cfg(test)]
 mod ecma_timing_tests {
-    use super::function_references::assert_scales_linearly;
     use super::testing::rows;
+    use crate::index::timing::assert_scales_linearly;
 
     const DI: &str = "export type Constructable<T = unknown> = new (...args: any[]) => T;\nexport type ServiceIdentifier<T = unknown> = Constructable<T>;\n\nclass ContainerClass {\n  get<T>(type: ServiceIdentifier<T>): T {\n    return undefined as T;\n  }\n}\n\nexport const Container = new ContainerClass();\n";
 

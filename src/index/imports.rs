@@ -1840,7 +1840,7 @@ mod typescript_tests {
 #[cfg(test)]
 mod typescript_timing_tests {
     use super::testing::rows;
-    use crate::index::resolve::function_references::assert_scales_linearly;
+    use crate::index::timing::assert_scales_linearly;
 
     /// A config with `size` patterns, `size` packages whose configs extend
     /// it, and one file with `size` imports through the patterns.
