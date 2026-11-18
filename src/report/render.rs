@@ -567,7 +567,7 @@ fn build_security_json(report: &SecurityData) -> serde_json::Value {
             serde_json::json!({
                 "kind": entry.kind.name(),
                 "framework": entry.framework,
-                "route": entry.route.as_ref().map(|route| format!("{} {}", route.method, route.path)),
+                "route": entry.route.as_ref().map(|route| format!("{} {}", route.method, route.path_text())),
                 "handler": entry.symbol.as_deref().map(symbol_name),
                 "guards": entry.guards,
                 "guards_text": entry.guards_text(),
