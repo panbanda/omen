@@ -16,6 +16,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
       ],
       "file": "string",
       "is_silo": "bool",
+      "is_test": "bool",
       "ownership_percent": "number",
       "primary_owner": "string",
       "risk_level": "string",
@@ -23,9 +24,11 @@ expression: "shape(&output, case.dynamic_key_objects)"
     }
   ],
   "generated_at": "string",
+  "history_complete": "bool",
   "summary": {
     "avg_contributors": "number",
     "bus_factor": "number",
+    "files_without_history": "number",
     "high_risk_count": "number",
     "max_concentration": "number",
     "silo_count": "number",
@@ -35,6 +38,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
         "name": "string"
       }
     ],
-    "total_files": "number"
+    "total_files": "number",
+    "unattributed_lines": "number"
   }
 }

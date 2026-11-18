@@ -11,6 +11,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "file_a": "string",
       "file_b": "string",
       "group_id": "number",
+      "is_test": "bool",
       "lines_a": "number",
       "lines_b": "number",
       "similarity": "number",

@@ -80,6 +80,14 @@ pub const SINK_SCENARIOS: [&str; 7] = [
     "in_test",
 ];
 
+/// The categories of the test-code labels. `entry_by_syntax` is a definition
+/// or a block that a test runner calls because of an attribute, an
+/// annotation, a decorator, a macro, a superclass, or a test function.
+/// `entry_by_name` is a definition that a runner calls because of its name in
+/// a test file. `support` is other code in test code. `not_test` is
+/// production code that has a name or a shape of a test.
+pub const TEST_CATEGORIES: [&str; 4] = ["entry_by_syntax", "entry_by_name", "support", "not_test"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Dimension {
@@ -87,10 +95,17 @@ pub enum Dimension {
     Calls,
     Imports,
     Sinks,
+    Tests,
 }
 
 impl Dimension {
-    pub const ALL: [Self; 4] = [Self::Symbols, Self::Calls, Self::Imports, Self::Sinks];
+    pub const ALL: [Self; 5] = [
+        Self::Symbols,
+        Self::Calls,
+        Self::Imports,
+        Self::Sinks,
+        Self::Tests,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -98,6 +113,7 @@ impl Dimension {
             Self::Calls => "calls",
             Self::Imports => "imports",
             Self::Sinks => "sinks",
+            Self::Tests => "tests",
         }
     }
 
@@ -107,6 +123,7 @@ impl Dimension {
             Self::Calls => &CALL_CATEGORIES,
             Self::Imports => &IMPORT_CATEGORIES,
             Self::Sinks => &SINK_CATEGORIES,
+            Self::Tests => &TEST_CATEGORIES,
         }
     }
 }
@@ -158,7 +175,48 @@ pub struct Labels {
     #[serde(default)]
     pub paths: Vec<PathLabel>,
     #[serde(default)]
+    pub tests: Vec<TestLabel>,
+    #[serde(default)]
     pub references: Vec<ReferenceLabel>,
+}
+
+/// The relation of a definition or of a line to test code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TestRoleLabel {
+    /// A test runner calls the definition.
+    Entry,
+    /// The definition or the line is in test code, and no runner calls it by its syntax.
+    Support,
+    /// The definition or the line is not test code.
+    None,
+}
+
+impl TestRoleLabel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Entry => "entry",
+            Self::Support => "support",
+            Self::None => "none",
+        }
+    }
+}
+
+/// One definition or one line, with its relation to test code.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestLabel {
+    pub label: String,
+    /// One of `TEST_CATEGORIES`.
+    pub category: String,
+    pub file: String,
+    /// The start line of the definition. Without a `name`, a line of code.
+    pub line: u32,
+    /// The name of the definition. Without it, the label is for the line: a
+    /// block without a name, as the callback of `it` is, has no symbol.
+    #[serde(default)]
+    pub name: Option<String>,
+    pub role: TestRoleLabel,
 }
 
 /// One use of a function as a value, as the argument `worker` in
@@ -360,7 +418,25 @@ pub struct Observed {
     pub sinks: Vec<ObservedSink>,
     pub entry_points: Vec<ObservedEntryPoint>,
     pub paths: Vec<ObservedPath>,
+    pub test_symbols: Vec<ObservedTestSymbol>,
+    pub test_lines: Vec<ObservedTestLines>,
     pub references: Vec<ObservedReference>,
+}
+
+/// The relation to test code that omen reports for one definition.
+#[derive(Debug, Clone)]
+pub struct ObservedTestSymbol {
+    pub location: Location,
+    /// `entry`, `support`, or `none`.
+    pub role: String,
+}
+
+/// A range of lines that omen reports as test code.
+#[derive(Debug, Clone)]
+pub struct ObservedTestLines {
+    pub file: String,
+    pub start_line: u32,
+    pub end_line: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -562,6 +638,25 @@ fn symbol_locations(case: &str, labels: &Labels) -> Result<BTreeMap<String, Loca
         Dimension::Sinks,
         labels.sinks.iter().map(|s| s.label.as_str()),
     )?;
+    unique_labels(
+        case,
+        Dimension::Tests,
+        labels.tests.iter().map(|test| test.label.as_str()),
+    )?;
+    for test in &labels.tests {
+        if !TEST_CATEGORIES.contains(&test.category.as_str()) {
+            return Err(invalid(format!(
+                "{case}: test label '{}' has the unknown category '{}'",
+                test.label, test.category
+            )));
+        }
+        if test.name.is_none() && test.role == TestRoleLabel::Entry {
+            return Err(invalid(format!(
+                "{case}: test label '{}' is for a line, thus its role is `support` or `none`",
+                test.label
+            )));
+        }
+    }
     for sink in &labels.sinks {
         if !SINK_CATEGORIES.contains(&sink.category.as_str()) {
             return Err(invalid(format!(
@@ -1143,6 +1238,43 @@ fn compare_sinks(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec
     }
 }
 
+fn compare_tests(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec<Assertion>) {
+    for test in &labels.tests {
+        let actual = match &test.name {
+            Some(name) => {
+                let location = Location {
+                    file: test.file.clone(),
+                    name: name.clone(),
+                    start_line: test.line,
+                };
+                observed
+                    .test_symbols
+                    .iter()
+                    .find(|candidate| candidate.location == location)
+                    .map(|found| found.role.clone())
+                    .ok_or_else(|| format!("{location} was not extracted"))
+            }
+            None => {
+                let in_test_code = observed.test_lines.iter().any(|lines| {
+                    lines.file == test.file
+                        && lines.start_line <= test.line
+                        && test.line <= lines.end_line
+                });
+                Ok(if in_test_code { "support" } else { "none" }.to_string())
+            }
+        };
+        let failure = match actual {
+            Ok(actual) if actual == test.role.as_str() => None,
+            Ok(actual) => Some(format!("expected {}, got {actual}", test.role.as_str())),
+            Err(missing) => Some(missing),
+        };
+        out.push(assertion(
+            format!("{case}/tests/{}/role", test.label),
+            failure,
+        ));
+    }
+}
+
 /// Without a setting, the sinks follow `closed_world`. Thus an old case does not ignore a sink.
 fn sinks_closed_world(labels: &Labels) -> bool {
     labels.sinks_closed_world.unwrap_or(labels.closed_world)
@@ -1161,6 +1293,7 @@ pub fn compare(case: &str, labels: &Labels, observed: &Observed) -> Result<Vec<A
     compare_sinks(case, labels, observed, &mut assertions);
     compare_entry_points(case, labels, observed, &mut assertions);
     compare_paths(case, labels, observed, &mut assertions);
+    compare_tests(case, labels, observed, &mut assertions);
     compare_references(case, labels, observed, &mut assertions)?;
     Ok(assertions)
 }
@@ -1260,6 +1393,9 @@ pub fn coverage_gaps(cases: &[&Labels]) -> Vec<String> {
                         .iter()
                         .map(|sink| format!("{}/{}", sink.category, sink.scenario)),
                 ),
+                Dimension::Tests => {
+                    covered.extend(labels.tests.iter().map(|test| test.category.clone()))
+                }
             }
             covered.extend(
                 labels
@@ -1498,6 +1634,7 @@ mod tests {
                 }],
                 resolved_files: vec!["a.rs".to_string()],
             }],
+            ..Observed::default()
         }
     }
 
@@ -2414,6 +2551,110 @@ mod tests {
         assert!(
             gaps.contains(&"sinks/weak_hash/real_call".to_string()),
             "blank reason is no exemption"
+        );
+    }
+
+    fn test_labels() -> Labels {
+        serde_json::from_value(serde_json::json!({
+            "version": 1, "language": "rust", "split": "development", "oracle": "rustc",
+            "closed_world": false,
+            "tests": [
+                {"label": "attribute", "category": "entry_by_syntax", "file": "a.rs",
+                 "line": 4, "name": "checks", "role": "entry"},
+                {"label": "helper", "category": "support", "file": "a.rs",
+                 "line": 8, "name": "helper", "role": "support"},
+                {"label": "block", "category": "support", "file": "a.rs", "line": 9,
+                 "role": "support"},
+                {"label": "production", "category": "not_test", "file": "a.rs",
+                 "line": 1, "name": "test_like", "role": "none"},
+                {"label": "production_line", "category": "not_test", "file": "a.rs",
+                 "line": 2, "role": "none"}
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn observed_tests() -> Observed {
+        let symbol = |name: &str, line: u32, role: &str| ObservedTestSymbol {
+            location: location("a.rs", name, line),
+            role: role.to_string(),
+        };
+        Observed {
+            test_symbols: vec![
+                symbol("checks", 4, "entry"),
+                symbol("helper", 8, "support"),
+                symbol("test_like", 1, "none"),
+            ],
+            test_lines: vec![ObservedTestLines {
+                file: "a.rs".to_string(),
+                start_line: 4,
+                end_line: 10,
+            }],
+            ..Observed::default()
+        }
+    }
+
+    fn test_failures(observed: &Observed) -> Vec<String> {
+        compare("rust/test_code", &test_labels(), observed)
+            .unwrap()
+            .into_iter()
+            .filter(|assertion| !assertion.passed)
+            .map(|assertion| assertion.id)
+            .collect()
+    }
+
+    #[test]
+    fn correct_test_roles_pass_every_assertion() {
+        assert!(test_failures(&observed_tests()).is_empty());
+        assert_eq!(
+            compare("rust/test_code", &test_labels(), &observed_tests())
+                .unwrap()
+                .len(),
+            5
+        );
+    }
+
+    #[test]
+    fn a_wrong_or_missing_test_role_is_a_failure() {
+        let mut observed = observed_tests();
+        observed.test_symbols[0].role = "support".to_string();
+        observed.test_symbols.remove(1);
+        observed.test_lines[0].start_line = 1;
+        observed.test_lines[0].end_line = 5;
+        assert_eq!(
+            test_failures(&observed),
+            [
+                "rust/test_code/tests/attribute/role",
+                "rust/test_code/tests/helper/role",
+                "rust/test_code/tests/block/role",
+                "rust/test_code/tests/production_line/role",
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_test_labels_are_errors() {
+        let mut unknown = test_labels();
+        unknown.tests[0].category = "other".to_string();
+        assert!(compare("rust/test_code", &unknown, &observed_tests()).is_err());
+        let mut line_entry = test_labels();
+        line_entry.tests[2].role = TestRoleLabel::Entry;
+        assert!(compare("rust/test_code", &line_entry, &observed_tests()).is_err());
+    }
+
+    #[test]
+    fn test_coverage_requires_each_category() {
+        let mut labels = test_labels();
+        labels.tests.retain(|test| test.category != "support");
+        let gaps = coverage_gaps(&[&labels]);
+        assert!(gaps.contains(&"tests/support".to_string()), "{gaps:?}");
+        assert!(
+            gaps.contains(&"tests/entry_by_name".to_string()),
+            "{gaps:?}"
+        );
+        assert!(
+            !gaps.contains(&"tests/entry_by_syntax".to_string()),
+            "{gaps:?}"
         );
     }
 

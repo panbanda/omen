@@ -156,7 +156,7 @@ impl AnalyzerTrait for Analyzer {
                 acc
             });
 
-        stubs.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
+        rank_stubs(&mut stubs);
 
         // One increment per stub (already deduplicated to one finding per
         // site by `finalize`), keyed by its primary category, so counts here
@@ -265,6 +265,17 @@ impl Category {
             Category::EmptyBody => 2,
         }
     }
+}
+
+/// Puts the stub with the highest severity first. The file and the line
+/// break a tie.
+fn rank_stubs(stubs: &mut [Stub]) {
+    stubs.sort_by(|a, b| {
+        b.severity
+            .cmp(&a.severity)
+            .then_with(|| a.file.cmp(&b.file))
+            .then_with(|| a.line.cmp(&b.line))
+    });
 }
 
 /// Stub severity level.
@@ -1286,6 +1297,32 @@ fn empty_body_ruby(node: Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_stubs_are_in_the_order_of_the_severity_and_then_of_the_place() {
+        let stub = |file: &str, line: u32, severity: Severity| Stub {
+            file: file.to_string(),
+            line,
+            lines: vec![line],
+            category: Category::NotImplemented,
+            categories: vec![Category::NotImplemented],
+            severity,
+            snippet: String::new(),
+            language: Language::Rust,
+        };
+        let mut stubs = vec![
+            stub("a.rs", 5, Severity::Low),
+            stub("b.rs", 1, Severity::High),
+            stub("a.rs", 9, Severity::High),
+            stub("a.rs", 2, Severity::Medium),
+        ];
+        rank_stubs(&mut stubs);
+        let order: Vec<(&str, u32)> = stubs
+            .iter()
+            .map(|stub| (stub.file.as_str(), stub.line))
+            .collect();
+        assert_eq!(order, [("a.rs", 9), ("b.rs", 1), ("a.rs", 2), ("a.rs", 5)]);
+    }
     use crate::core::Language as CoreLang;
 
     fn stubs_for(path: &str, lang: CoreLang, src: &str) -> Vec<Stub> {

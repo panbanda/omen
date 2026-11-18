@@ -18,6 +18,8 @@ pub struct Scope {
     pub offset: Option<usize>,
     /// Read the files of this commit and not the working tree.
     pub git_ref: Option<String>,
+    /// Do not list the rows that are test code.
+    pub exclude_tests: bool,
 }
 
 impl Scope {
@@ -37,6 +39,7 @@ impl From<&AnalyzerArgs> for Scope {
             top: args.pagination.top,
             offset: args.pagination.offset,
             git_ref: None,
+            exclude_tests: args.exclude_tests,
         }
     }
 }

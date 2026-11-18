@@ -48,8 +48,27 @@ pub fn churn_analyzer(days: u32) -> analyzers::churn::Analyzer {
     analyzers::churn::Analyzer::new().with_days(days)
 }
 
-pub fn changes_analyzer(config: &Config) -> analyzers::changes::Analyzer {
-    analyzers::changes::Analyzer::new().with_days(config.changes.since.days())
+pub fn changes_analyzer(days: u32) -> analyzers::changes::Analyzer {
+    analyzers::changes::Analyzer::new().with_days(days)
+}
+
+/// The message for a `changes` window of all the history. The configuration
+/// gives the same message for `changes.since`.
+pub const CHANGES_ALL_MESSAGE: &str =
+    "\"all\" is not a window of `changes`. Use a duration such as 30d.";
+
+/// The days of the `changes` window: the `--since` value, or `changes.since`
+/// of the configuration. The value `all` is an error.
+pub fn changes_window(since: Option<&str>, config: &Config) -> Result<u32> {
+    let Some(since) = since else {
+        return Ok(config.changes.since.days());
+    };
+    match since_flag_days(since)? {
+        u32::MAX => Err(Error::InvalidArgument(format!(
+            "--since: {CHANGES_ALL_MESSAGE}"
+        ))),
+        days => Ok(days),
+    }
 }
 
 pub fn score_analyzer(config: &Config) -> crate::score::Analyzer {
@@ -155,7 +174,9 @@ pub fn run_analyzer_instance<A: Analyzer>(
         .and_then(|scope| scope.top)
         .or_else(|| (analyzer_name == "hotspot").then_some(DEFAULT_TOP));
     let offset = scope.and_then(|scope| scope.offset);
-    let value = serde_json::to_value(&result)?;
+    let mut value = serde_json::to_value(&result)?;
+    let exclude_tests = scope.is_some_and(|scope| scope.exclude_tests);
+    super::test_rows::mark(&mut value, analyzer_name, &ctx, exclude_tests);
     let mut out = out;
     format_with_limits(value, format, top, offset, &mut out)?;
     Ok(result)
@@ -386,9 +407,11 @@ pub fn run_churn(
     let file_set = scoped_file_set(path, config, scope)?;
     let ctx = build_context(path, &file_set, config);
     let result = churn_analyzer(days).analyze(&ctx)?;
+    let mut value = serde_json::to_value(&result)?;
+    super::test_rows::mark(&mut value, "churn", &ctx, scope.exclude_tests);
     let mut out = out;
     format_with_limits(
-        serde_json::to_value(&result)?,
+        value,
         format,
         scope.top.or(Some(DEFAULT_TOP)),
         scope.offset,
@@ -400,12 +423,14 @@ pub fn run_changes(
     path: &PathBuf,
     config: &Config,
     format: Format,
-    scope: &Scope,
+    request: &WindowedRequest,
     out: &mut dyn Write,
 ) -> Result<()> {
+    let days = changes_window(request.window.since.as_deref(), config)?;
+    let scope = &request.scope;
     let file_set = scoped_file_set(path, config, scope)?;
     let ctx = build_context(path, &file_set, config);
-    let result = changes_analyzer(config).analyze(&ctx)?;
+    let result = changes_analyzer(days).analyze(&ctx)?;
     let mut out = out;
     format_with_limits(
         serde_json::to_value(&result)?,
@@ -467,6 +492,18 @@ mod tests {
         assert_eq!(churn_window(Some("30d"), 90).unwrap(), 30);
         assert_eq!(churn_window(None, 90).unwrap(), 90);
         assert!(churn_window(Some("garbage"), 90).is_err());
+    }
+
+    #[test]
+    fn test_changes_window_uses_since_over_the_configuration_and_rejects_all() {
+        let config = Config::default();
+        assert_eq!(changes_window(None, &config).unwrap(), 30);
+        assert_eq!(changes_window(Some("3m"), &config).unwrap(), 90);
+        let error = changes_window(Some("all"), &config)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not a window of `changes`"), "{error}");
+        assert!(changes_window(Some("garbage"), &config).is_err());
     }
 
     #[test]
