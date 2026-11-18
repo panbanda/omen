@@ -76,6 +76,10 @@
     {"label": "unsafe_html_output.real_call.constant", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.ts", "line": 7, "basis": "name_only", "constant_argument": true},
     {"label": "unsafe_html_output.real_call.insert_adjacent_html", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.ts", "line": 6, "basis": "name_only", "constant_argument": false},
     {"label": "unsafe_html_output.same_name_symbol", "category": "unsafe_html_output", "scenario": "same_name_symbol", "file": "html_decoys.ts", "line": 5, "flagged": false},
-    {"label": "unsafe_html_output.in_test", "category": "unsafe_html_output", "scenario": "in_test", "file": "tests/html.test.ts", "line": 2, "basis": "name_only", "in_test": true}
+    {"label": "unsafe_html_output.in_test", "category": "unsafe_html_output", "scenario": "in_test", "file": "tests/html.test.ts", "line": 2, "basis": "name_only", "in_test": true},
+    {"label": "command_execution.real_call.shell_option_c", "category": "command_execution", "scenario": "real_call", "file": "shell.ts", "line": 7, "basis": "imported_symbol", "constant_argument": false},
+    {"label": "command_execution.safe_variant.git_option_c", "category": "command_execution", "scenario": "safe_variant", "file": "shell.ts", "line": 8, "flagged": false},
+    {"label": "command_execution.real_call.promisified_exec", "category": "command_execution", "scenario": "real_call", "file": "shell.ts", "line": 9, "basis": "imported_symbol"},
+    {"label": "command_execution.safe_variant.spawn_without_shell", "category": "command_execution", "scenario": "safe_variant", "file": "shell.ts", "line": 10, "flagged": false}
   ]
 }

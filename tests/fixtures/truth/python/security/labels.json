@@ -94,6 +94,8 @@
     {"label": "unsafe_html_output.name_in_comment", "category": "unsafe_html_output", "scenario": "name_in_comment", "file": "html.py", "line": 11, "flagged": false},
     {"label": "unsafe_html_output.real_call.constant", "category": "unsafe_html_output", "scenario": "real_call", "file": "html.py", "line": 12, "basis": "imported_symbol", "constant_argument": true},
     {"label": "unsafe_html_output.same_name_symbol", "category": "unsafe_html_output", "scenario": "same_name_symbol", "file": "html_decoys.py", "line": 5, "flagged": false},
-    {"label": "unsafe_html_output.in_test", "category": "unsafe_html_output", "scenario": "in_test", "file": "tests/test_html.py", "line": 5, "basis": "imported_symbol", "in_test": true}
+    {"label": "unsafe_html_output.in_test", "category": "unsafe_html_output", "scenario": "in_test", "file": "tests/test_html.py", "line": 5, "basis": "imported_symbol", "in_test": true},
+    {"label": "command_execution.real_call.shell_option_c", "category": "command_execution", "scenario": "real_call", "file": "shell.py", "line": 5, "basis": "imported_symbol", "constant_argument": false},
+    {"label": "command_execution.safe_variant.ls_option_c", "category": "command_execution", "scenario": "safe_variant", "file": "shell.py", "line": 6, "flagged": false}
   ]
 }

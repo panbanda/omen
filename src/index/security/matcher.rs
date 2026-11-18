@@ -615,6 +615,17 @@ impl FileContext<'_> {
                     .imports
                     .iter()
                     .any(|binding| Self::binds(binding, &reference.name));
+            let chain = self.owner_chain(facts.owner);
+            // `const run = promisify(exec)` makes `run(command)` a call of `exec`.
+            let promisified = if aliased {
+                None
+            } else {
+                self.promisified(reference, &chain, facts.start_byte)
+            };
+            let callee_name = promisified
+                .as_ref()
+                .and_then(|(path, _)| path.last())
+                .map_or(reference.name.as_str(), String::as_str);
             let named: Vec<&SinkSpec> = rows
                 .iter()
                 .copied()
@@ -622,7 +633,7 @@ impl FileContext<'_> {
                     Target::Path { callee, .. } | Target::Method { callee } => {
                         aliased
                             || callee == "*"
-                            || callee.split('|').any(|name| name == reference.name)
+                            || callee.split('|').any(|name| name == callee_name)
                     }
                     _ => false,
                 })
@@ -634,13 +645,18 @@ impl FileContext<'_> {
                 .receiver
                 .and_then(|(start, end)| self.source.get(start..end))
                 .and_then(|bytes| std::str::from_utf8(bytes).ok());
-            let Some(written) = Self::written_path(reference, receiver_text) else {
-                continue;
-            };
-            let chain = self.owner_chain(facts.owner);
-            let owner = match &written {
-                Some(path) => self.resolve(path, &chain, facts.start_byte),
-                None => Owner::Unknown,
+            let (written, owner) = match &promisified {
+                Some((path, at)) => (Some(path.clone()), self.resolve(path, &chain, *at)),
+                None => {
+                    let Some(written) = Self::written_path(reference, receiver_text) else {
+                        continue;
+                    };
+                    let owner = match &written {
+                        Some(path) => self.resolve(path, &chain, facts.start_byte),
+                        None => Owner::Unknown,
+                    };
+                    (written, owner)
+                }
             };
             let written_length = written.as_ref().map_or(0, Vec::len);
             let call = syntax::call_node(root, facts.start_byte, facts.end_byte, &self.call_kinds);
@@ -717,6 +733,63 @@ impl FileContext<'_> {
                 sinks.push(sink);
             }
         }
+    }
+
+    /// The function that a bare name holds when a `const` declaration binds the name to
+    /// `promisify(function)` of `util`. The result is the written path of the function and the
+    /// byte at which the imports resolve it.
+    fn promisified(
+        &self,
+        reference: &Reference,
+        chain: &[usize],
+        at: usize,
+    ) -> Option<(Vec<String>, usize)> {
+        if reference.receiver.is_some() || reference.qualifier.is_some() {
+            return None;
+        }
+        let local = self.find_local(&reference.name, chain, at)?;
+        let start = local.name.value_start?;
+        let mut node = self
+            .parsed
+            .root_node()
+            .descendant_for_byte_range(start, start)?;
+        while node.kind() != "call_expression" {
+            node = node
+                .parent()
+                .filter(|parent| parent.start_byte() == start)?;
+        }
+        let declarator = node
+            .parent()
+            .filter(|parent| parent.kind() == "variable_declarator")?;
+        let declaration = declarator
+            .parent()
+            .filter(|parent| parent.kind() == "lexical_declaration")?;
+        if declaration.child(0).map(|keyword| keyword.kind()) != Some("const") {
+            return None;
+        }
+        let function_text: String = node
+            .child_by_field_name("function")
+            .map(|function| syntax::text(function, self.source))?
+            .split_whitespace()
+            .collect();
+        let function = chain_segments(&function_text)?;
+        let is_promisify = match self.resolve(&function, chain, start) {
+            Owner::Paths { paths, imported } => paths.iter().any(|path| {
+                self.path_match("util|node:util", "promisify", path, imported)
+                    .is_some()
+            }),
+            Owner::Repository | Owner::Unknown => false,
+        };
+        let arguments = syntax::arguments(node, self.file.language);
+        let [argument] = arguments.as_slice() else {
+            return None;
+        };
+        let argument_text: String = syntax::text(*argument, self.source)
+            .split_whitespace()
+            .collect();
+        let path = chain_segments(&argument_text)?;
+        (is_promisify && path.iter().all(|segment| !segment.ends_with(')')))
+            .then_some((path, start))
     }
 
     /// The arguments that make the call a sink are all literals. A call without such

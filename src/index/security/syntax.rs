@@ -367,6 +367,40 @@ fn is_disabled_setting(value: Node<'_>, disabled: &[&str], source: &[u8]) -> boo
     disabled.contains(&found.as_str()) || !is_literal(value)
 }
 
+/// The shells that read a command from the argument after `-c`.
+const SHELLS: [&str; 5] = ["sh", "bash", "zsh", "dash", "ksh"];
+
+/// The node after `-c` in a call that runs a shell, or the array when nothing follows `-c`.
+/// `None` means that the call does not run a shell with `-c`.
+fn shell_command<'tree>(
+    arguments: &[Node<'tree>],
+    program: usize,
+    list: usize,
+    source: &[u8],
+) -> Option<Node<'tree>> {
+    let array = arguments
+        .get(list)
+        .filter(|node| matches!(node.kind(), "array" | "list"))?;
+    let mut cursor = array.walk();
+    let elements: Vec<Node<'tree>> = array
+        .named_children(&mut cursor)
+        .filter(|node| !node.kind().contains("comment"))
+        .collect();
+    let (shell, rest) = if program == list {
+        let (shell, rest) = elements.split_first()?;
+        (*shell, rest)
+    } else {
+        (*arguments.get(program)?, elements.as_slice())
+    };
+    let is_text = |node: Node<'_>, wanted: &dyn Fn(&str) -> bool| {
+        node.kind().contains("string") && is_literal(node) && wanted(unquote(text(node, source)))
+    };
+    let is_shell = |name: &str| SHELLS.contains(&name.rsplit('/').next().unwrap_or(name));
+    let (flag, after) = rest.split_first()?;
+    (is_text(shell, &is_shell) && is_text(*flag, &|name| name == "-c"))
+        .then(|| after.first().copied().unwrap_or(*array))
+}
+
 /// The arguments that make the call a sink, when the predicate names them: the SQL text, or
 /// the value of a setting. `None` means that the predicate names no argument, and then each
 /// argument counts.
@@ -388,6 +422,9 @@ pub fn subject<'tree>(
         }
         // The matcher gives the receiver as the only argument.
         Predicate::Receiver => Some(arguments.to_vec()),
+        Predicate::ShellArgv { program, list } => {
+            shell_command(arguments, *program, *list, source).map(|command| vec![command])
+        }
         Predicate::All(all) => {
             let named: Vec<Node<'tree>> = all
                 .iter()
@@ -446,6 +483,9 @@ pub fn holds(
         Predicate::HasArgument { index } => arguments.get(*index).is_some(),
         Predicate::BlockPass => arguments.iter().any(|node| node.kind() == "block_argument"),
         Predicate::Receiver => true,
+        Predicate::ShellArgv { program, list } => {
+            shell_command(arguments, *program, *list, source).is_some()
+        }
         Predicate::AnyArgStartsWith(prefixes) => arguments.iter().any(|node| {
             let found = argument_text(node);
             prefixes.iter().any(|prefix| found.starts_with(prefix))

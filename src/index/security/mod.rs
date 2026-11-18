@@ -1027,6 +1027,59 @@ mod tests {
     }
 
     #[test]
+    fn a_shell_with_the_option_c_is_a_command_sink_ecma() {
+        let source = "import { execFile, spawn, spawnSync, execFileSync } from \"node:child_process\";\n\nexport function run(command, program) {\n  execFile(\"sh\", [\"-c\", command]);\n  spawn(\"/bin/bash\", [\"-c\", command]);\n  spawnSync(\"zsh\", [\"-c\", \"ls\"]);\n  execFileSync(\"sh\", [\"-c\", command], { cwd: \"/\" });\n  spawn(\"sh\", [\"script.sh\", command]);\n  spawn(program, [\"-c\", command]);\n  spawn(\"git\", [\"-c\", command]);\n  execFile(program, []);\n  spawn(program, [\"-x\"]);\n  spawn(program, { shell: true });\n}\n";
+        assert_eq!(
+            constants(Language::TypeScript, &[("a.ts", source)]),
+            [
+                (4, "command_execution", false),
+                (5, "command_execution", false),
+                (6, "command_execution", true),
+                (7, "command_execution", false),
+                (13, "command_execution", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_shell_with_the_option_c_is_a_command_sink_python() {
+        let source = "import subprocess\n\ndef run(command):\n    subprocess.run([\"sh\", \"-c\", command])\n    subprocess.check_output([\"/bin/bash\", \"-c\", \"ls\"])\n    subprocess.run([\"ls\", \"-c\", command])\n    subprocess.run([\"sh\", \"script.sh\"])\n";
+        assert_eq!(
+            constants(Language::Python, &[("a.py", source)]),
+            [
+                (4, "command_execution", false),
+                (5, "command_execution", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_promisified_command_function_is_the_command_sink_ecma() {
+        let source = "import { exec, execFile } from \"node:child_process\";\nimport * as childProcess from \"child_process\";\nimport { promisify } from \"node:util\";\nimport util from \"util\";\n\nconst asyncExec = promisify(exec);\nconst asyncExecFile = promisify(execFile);\nconst other = util.promisify(childProcess.exec);\nlet changed = promisify(exec);\n\nexport async function run(command) {\n  await asyncExec(command);\n  await asyncExecFile(command, []);\n  await asyncExecFile(\"sh\", [\"-c\", command]);\n  await other(command);\n  await changed(command);\n}\n";
+        assert_eq!(
+            found(Language::TypeScript, &[("a.ts", source)]),
+            [
+                one("a.ts", 12, "command_execution", "imported_symbol"),
+                one("a.ts", 14, "command_execution", "imported_symbol"),
+                one("a.ts", 15, "command_execution", "imported_symbol"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_promisified_function_of_the_repository_is_not_a_sink_ecma() {
+        let helpers = "export function exec(command) {\n  return command;\n}\n";
+        let main = "import { exec } from \"./helpers\";\nimport { promisify } from \"node:util\";\n\nconst asyncExec = promisify(exec);\n\nexport async function run(command) {\n  await asyncExec(command);\n}\n";
+        assert_eq!(
+            found(
+                Language::TypeScript,
+                &[("helpers.ts", helpers), ("main.ts", main)]
+            ),
+            []
+        );
+    }
+
+    #[test]
     fn a_trusted_html_string_is_unsafe_html_output_csharp_and_rust() {
         let csharp = "using Microsoft.AspNetCore.Html;\n\npublic class A {\n    public object Run(string text) {\n        new HtmlString(text);\n        return new HtmlString(\"<br>\");\n    }\n}\n";
         assert_eq!(

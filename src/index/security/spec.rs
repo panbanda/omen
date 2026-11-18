@@ -74,6 +74,14 @@ pub enum Predicate {
     },
     /// An argument passes a block, as `&block` does in Ruby.
     BlockPass,
+    /// The call runs a shell with the option `-c`. The argument `list` is an array literal. When
+    /// `program` and `list` are the same index, the array holds the shell, then `-c`, then the
+    /// command, as Python `["sh", "-c", command]` does. Otherwise the argument `program` is the
+    /// shell and the array starts with `-c`, as Node `spawn("sh", ["-c", command])` does.
+    ShellArgv {
+        program: usize,
+        list: usize,
+    },
     /// The receiver of the method is the value of the sink, as in `text.html_safe`. The
     /// predicate always holds. The receiver tells if the sink is constant.
     Receiver,
@@ -290,6 +298,16 @@ pub const SPECS: &[SinkSpec] = &[
         "run|call|check_call|check_output|Popen",
         keyword("shell", "true"),
     ),
+    path(
+        CommandExecution,
+        PYTHON,
+        "subprocess",
+        "run|call|check_call|check_output|Popen",
+        Predicate::ShellArgv {
+            program: 0,
+            list: 0,
+        },
+    ),
     path(CommandExecution, PYTHON, "subprocess", "getoutput|getstatusoutput", Always),
     path(CodeEvaluation, PYTHON, "", "eval|exec", Always),
     path(UnsafeDeserialization, PYTHON, "pickle|_pickle|cPickle", "loads|load", Always),
@@ -364,6 +382,16 @@ pub const SPECS: &[SinkSpec] = &[
         "child_process|node:child_process",
         "spawn|spawnSync|execFile|execFileSync",
         keyword("shell", "true"),
+    ),
+    path(
+        CommandExecution,
+        ECMA,
+        "child_process|node:child_process",
+        "spawn|spawnSync|execFile|execFileSync",
+        Predicate::ShellArgv {
+            program: 0,
+            list: 1,
+        },
     ),
     path(CodeEvaluation, ECMA, "", "eval|Function", Always),
     path(

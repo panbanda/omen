@@ -88,6 +88,21 @@ as an ERB file or a JSX file that omen does not parse, is not in the analysis. T
 of an assignment to `innerHTML` can have any type. Thus such a sink has the basis
 `name_only`, and a repository class with a member `innerHTML` also gives a sink.
 
+In Node and Python, a call that starts a program is a command sink only when a shell reads
+the command. These are the forms:
+
+- Node `exec` and `execSync`.
+- Node `spawn`, `spawnSync`, `execFile`, and `execFileSync` with `shell: true`.
+- The same Node functions with a shell and the option `-c`, as in
+  `spawn("sh", ["-c", command])`. The shells are `sh`, `bash`, `zsh`, `dash`, and `ksh`,
+  with or without a directory.
+- Python `subprocess` with `shell=True`, or with a list such as `["sh", "-c", command]`.
+
+A call that starts a program without a shell, as `execFile(program, args)`, is not a sink.
+Node `fork` is not a sink: it runs a module of Node, not a command of a shell. A name that a
+`const` declaration binds to `promisify(exec)` of `util` is the function `exec`. Thus a call of
+the name is a sink when a call of `exec` is.
+
 The Go SQL sinks are methods: omen does not know the type of the receiver. The names are
 `Query`, `QueryRow`, `Exec`, `Prepare` (`database/sql`), `Queryx`, `QueryRowx`, `MustExec`,
 `NamedExec`, `NamedQuery` (sqlx), `Raw` (gorm), and `SQL` (xorm), with the SQL text first,
