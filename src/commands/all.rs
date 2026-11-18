@@ -109,6 +109,7 @@ fn run_with_source(
     }
 
     let security_analyzer = crate::analyzers::security::Analyzer::from_config(config)?;
+    let clones_analyzer = crate::analyzers::duplicates::Analyzer::from_config(config);
 
     // Run analyzers in parallel using std::thread::scope.
     //
@@ -130,7 +131,7 @@ fn run_with_source(
                 run_and_collect!(&ctx, crate::analyzers::smells::Analyzer, "smells"),
                 run_and_collect!(&ctx, crate::analyzers::flags::Analyzer, "flags"),
                 run_instance_and_collect!(&ctx, security_analyzer, "security"),
-                run_and_collect!(&ctx, crate::analyzers::duplicates::Analyzer, "clones"),
+                run_instance_and_collect!(&ctx, clones_analyzer, "clones"),
             ]
         });
 

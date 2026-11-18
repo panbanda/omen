@@ -12,7 +12,8 @@
 //!
 //! # Configuration
 //!
-//! Default: 200 hashes, 20 bands x 10 rows, 0.70 similarity threshold.
+//! Default: 200 hashes, 20 bands x 10 rows, and the similarity threshold of
+//! `[duplicates]` in the configuration (0.9).
 //! These parameters provide good precision/recall balance for code clones.
 
 use std::collections::{HashMap, HashSet};
@@ -82,9 +83,10 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
+        let configured = crate::config::DuplicatesConfig::default();
         Self {
-            min_tokens: 50,
-            similarity_threshold: 0.70,
+            min_tokens: configured.min_tokens,
+            similarity_threshold: configured.min_similarity,
             shingle_size: 5,
             num_hash_functions: 200,
             num_bands: 20,
@@ -118,9 +120,22 @@ impl Analyzer {
         }
     }
 
+    /// The analyzer of `[duplicates]` and `exclude_tests` of the configuration.
+    /// Each command that finds clones uses it, so all of them agree.
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        Self::new()
+            .with_min_tokens(config.duplicates.min_tokens)
+            .with_similarity_threshold(config.duplicates.min_similarity)
+            .with_exclude_tests(config.exclude_tests)
+    }
+
     pub fn with_config(mut self, config: Config) -> Self {
         self.config = config;
         self
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     pub fn with_min_tokens(mut self, min_tokens: usize) -> Self {
@@ -1480,7 +1495,28 @@ mod tests {
         let analyzer = Analyzer::new();
         assert_eq!(analyzer.name(), "duplicates");
         assert_eq!(analyzer.config.min_tokens, 50);
-        assert!((analyzer.config.similarity_threshold - 0.70).abs() < 0.001);
+    }
+
+    /// Each analyzer that finds clones has the defaults of `[duplicates]`, so
+    /// `all`, `report`, `score`, and `defect` agree with `clones`.
+    #[test]
+    fn test_default_is_the_configuration_default() {
+        let configured = crate::config::DuplicatesConfig::default();
+        let analyzer = Analyzer::new();
+        assert_eq!(analyzer.config.min_tokens, configured.min_tokens);
+        assert_eq!(
+            analyzer.config.similarity_threshold,
+            configured.min_similarity
+        );
+
+        let mut config = CoreConfig::default();
+        config.duplicates.min_tokens = 77;
+        config.duplicates.min_similarity = 0.95;
+        config.exclude_tests = false;
+        let analyzer = Analyzer::from_config(&config);
+        assert_eq!(analyzer.config.min_tokens, 77);
+        assert_eq!(analyzer.config.similarity_threshold, 0.95);
+        assert!(!analyzer.config.exclude_tests);
     }
 
     #[test]

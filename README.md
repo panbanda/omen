@@ -162,7 +162,7 @@ Omen combines multiple signals to predict defect probability using PMAT-weighted
 - **Age** (code age and stability)
 - **Total** size (lines of code)
 
-Each file gets a risk score from 0% to 100%.
+Each file gets a risk score from 0% to 100%. The complexity factor uses the largest cyclomatic complexity of a function in the file, on a percentile scale for one function. The duplication factor is the part of the lines of the file that are in a clone pair of `omen clones`, with the same configuration.
 
 **Why it matters:** You can't review everything equally. [Menzies et al. (2007)](https://ieeexplore.ieee.org/document/4027145) showed that defect prediction helps teams focus testing and code review on the files most likely to have problems. [Rahman et al. (2014)](https://dl.acm.org/doi/10.1145/2568225.2568269) found that even simple models outperform random file selection for finding bugs.
 

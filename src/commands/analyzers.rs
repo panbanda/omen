@@ -30,14 +30,14 @@ pub fn clones_analyzer(
     include_tests: bool,
 ) -> analyzers::duplicates::Analyzer {
     let configured = &config.duplicates;
-    analyzers::duplicates::Analyzer::new()
+    analyzers::duplicates::Analyzer::from_config(config)
         .with_min_tokens(min_tokens.unwrap_or(configured.min_tokens))
         .with_similarity_threshold(similarity.unwrap_or(configured.min_similarity))
         .with_exclude_tests(!include_tests && config.exclude_tests)
 }
 
-pub fn defect_analyzer(days: u32) -> analyzers::defect::Analyzer {
-    analyzers::defect::Analyzer::new().with_churn_days(days)
+pub fn defect_analyzer(config: &Config, days: u32) -> analyzers::defect::Analyzer {
+    analyzers::defect::Analyzer::from_config(config).with_churn_days(days)
 }
 
 pub fn hotspot_analyzer(days: u32) -> analyzers::hotspot::Analyzer {
@@ -270,7 +270,7 @@ pub fn run_defect(
         config,
         format,
         Some(&request.scope),
-        defect_analyzer(window),
+        defect_analyzer(config, window),
         out,
     )
     .map(drop)
