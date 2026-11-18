@@ -29,7 +29,8 @@ follows a test convention: a directory `test`, `tests`, `spec`, `specs`,
 `__tests__`, `__mocks__`, `test_helpers`, `testdata`, or `fixtures`, or a file
 name such as `test_a.py`, `a_test.go`, `a_spec.rb`, `a.test.ts`, or `a.spec.ts`.
 For Rust, the directory `benches` is in the list. For Python, the file
-`conftest.py` is in the list.
+`conftest.py` is in the list. A Rust file name such as `tests.rs` is not in
+the list: a file with that name can be production code.
 
 The syntax is the second source. It applies to each file, also to a file whose
 path follows no test convention.
@@ -40,7 +41,7 @@ path follows no test convention.
 | Python | The body of a class whose superclass name ends in `TestCase`. | A function with `@pytest.fixture`, `@pytest_asyncio.fixture`, `@fixture`, or `@pytest.mark.*`. A class whose superclass name ends in `TestCase`, and its `test*` methods and hook methods such as `setUp`. In a test file: a `test*` function, a `Test*` class, a hook such as `setup_method`, and a `pytest_*` function. |
 | JavaScript, JSX, TypeScript, TSX | A call of `describe`, `it`, `test`, `fdescribe`, `fit`, `xdescribe`, `xit`, or `xtest` that has a title and a callback. The forms `.only`, `.skip`, and `.each` are included. A call of `beforeEach`, `afterEach`, `beforeAll`, or `afterAll` that has a callback. | A callback of these calls, when it has a name. |
 | Go | No syntax. | In a file whose name ends in `_test.go`: a function `Test`, `Benchmark`, `Fuzz`, or `Example`, with no lowercase letter after the prefix. |
-| Java | The class of a method that is a test entry. | A method with an annotation of JUnit 4, JUnit 5, or TestNG, such as `@Test`, `@ParameterizedTest`, `@BeforeEach`, and `@DataProvider`. In a test file: a method whose name starts with `test` (JUnit 3). |
+| Java | The class of a method that is a test entry. | A method with an annotation of JUnit 4, JUnit 5, or TestNG, such as `@Test`, `@ParameterizedTest`, `@BeforeEach`, and `@DataProvider`. `@Before` and `@After` are hooks only without an argument: AspectJ advice has a pointcut argument. In a test file: a method whose name starts with `test` (JUnit 3). |
 | C# | The class of a method that is a test entry. | A method with an attribute of NUnit, xUnit, or MSTest, such as `[Test]`, `[Fact]`, `[Theory]`, and `[TestMethod]`. A class with `[TestFixture]` or `[TestClass]`. |
 | Ruby | The body of a class whose superclass is `Minitest::Test`, `Minitest::Spec`, or a name that ends in `TestCase` or `IntegrationTest`. A block of `describe`, `it`, `specify`, `shared_examples`, `shared_examples_for`, or `shared_context`, also with the receiver `RSpec`. | Such a class, and its `test_*`, `setup`, and `teardown` methods. In a test file: a `test_*` method. |
 | PHP | The body of a class that extends a class whose name ends in `TestCase`. The class of a method that is a test entry. | Such a class, and its `test*` methods and hook methods such as `setUp`. A method with `#[Test]` or a related PHPUnit attribute. A method whose documentation comment has `@test`, `@before`, `@after`, or `@dataProvider`. |
@@ -66,6 +67,7 @@ These conditions are not test code:
 | `impact`, `symbol` | Each caller and each callee has `is_test`. |
 | `task_context` | A symbol that is test code has the role hint `test_candidate`, with the basis `test_syntax_or_path`. |
 | `tdg`, `clones` | The critical defects and the clones of Rust test code are not in the result. |
+| Each list of files or of symbols | Each row has `is_test`, and `--exclude-tests` removes the test rows. See `docs/LISTS_AND_WINDOWS.md`. |
 
 ## Dead code
 
@@ -96,6 +98,10 @@ Other rules for Rust:
 - A call without a receiver and without a path cannot call a method. When the
   index gives only a method for such a call, a function with the same name can
   be the callee.
+- A call of an import alias, as `use a::run as go` gives, names the function
+  by its real name.
+- A name in the tokens of a macro call can be each definition with that name,
+  because the tokens do not show a receiver.
 - The string of `#[serde(default = "path")]` and of
   `#[schemars(schema_with = "path")]` names a function.
 
@@ -122,3 +128,5 @@ or of one line. `cargo test --test truth` compares the labels with the index.
   does, is not a test entry.
 - A Rust attribute macro that makes a test, and that omen does not know, is a
   test entry only in test code.
+- The path rules of Rust give the file of `#[cfg(test)] mod name;`. Omen does
+  not read the attribute `#[path]`.

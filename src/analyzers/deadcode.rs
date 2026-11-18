@@ -216,11 +216,21 @@ impl AnalyzerTrait for Analyzer {
         let mut candidate_keys: HashSet<SharedStr> = HashSet::new();
         let mut unresolved_names: HashSet<String> = HashSet::new();
         let manifests = crate::index::imports::Manifests::default();
-        let rust_modules = RustModules::new(&index.files, &manifests);
-        let mut rust_ancestors = RustAncestors {
-            modules: &rust_modules,
-            of_file: HashMap::new(),
-        };
+        let mut rust_ancestors = RustAncestors::new(&index.files);
+        // The name that an import alias has in its module: `use a::run as go`
+        // gives `run` for `go` in that file.
+        let import_aliases: HashMap<(&str, &str), &str> = index
+            .files
+            .iter()
+            .flat_map(|facts| {
+                facts.imports.iter().filter_map(|binding| {
+                    let local = binding.local_name.as_deref()?;
+                    let imported = binding.imported_name.as_deref()?;
+                    (local != imported && imported != "*" && imported != "default")
+                        .then_some(((facts.file.as_str(), local), imported))
+                })
+            })
+            .collect();
         for reference in index.files.iter().flat_map(|facts| &facts.references) {
             let resolution = &reference.resolution;
             let ancestors = rust_ancestors.of(reference.file.as_str());
@@ -246,7 +256,15 @@ impl AnalyzerTrait for Analyzer {
             candidate_keys.extend(targets.iter().cloned());
             if names_nothing {
                 unresolved_names.insert(reference.name.clone());
-                if let Some(keys) = keys_by_name.get(&reference.name) {
+                // A call of an import alias names the definition by its real name.
+                let real_name = import_aliases
+                    .get(&(reference.file.as_str(), reference.name.as_str()))
+                    .copied();
+                if let Some(real_name) = real_name {
+                    unresolved_names.insert(real_name.to_string());
+                }
+                let named = std::iter::once(reference.name.as_str()).chain(real_name);
+                for keys in named.filter_map(|name| keys_by_name.get(name)) {
                     targets.extend(
                         keys.iter()
                             .filter(|key| {
@@ -337,7 +355,9 @@ impl AnalyzerTrait for Analyzer {
                         })
                         .cloned()
                         .collect();
-                    if local.is_empty() {
+                    // The tokens of a macro do not show the receiver of a
+                    // name. Each definition with the name can be the one.
+                    if local.is_empty() || call.in_macro_tokens {
                         keys.clone()
                     } else {
                         local
@@ -1159,7 +1179,11 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
     // restore the enclosing one, otherwise every call made after a nested
     // function in the same body loses its caller.
     let mut scopes: Vec<(u32, Option<String>)> = Vec::new();
-    let mut value_uses: BTreeSet<(String, String, bool)> = BTreeSet::new();
+    // The depths of the token trees of the Rust macro calls around the node.
+    // The walk keeps them, because a question to the tree for the parent of
+    // each identifier costs a search from the root.
+    let mut token_tree_depths: Vec<u32> = Vec::new();
+    let mut value_uses: BTreeSet<(String, String, bool, bool)> = BTreeSet::new();
     let mut path_uses: Vec<PathUse> = Vec::new();
 
     // Iterative pre-order traversal
@@ -1174,6 +1198,15 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             .is_some_and(|(depth, _)| *depth >= cursor.depth())
         {
             scopes.pop();
+        }
+        while token_tree_depths
+            .last()
+            .is_some_and(|depth| *depth >= cursor.depth())
+        {
+            token_tree_depths.pop();
+        }
+        if lang == Language::Rust && kind == "token_tree" {
+            token_tree_depths.push(cursor.depth());
         }
 
         // Track function context. The name may live on the binding rather
@@ -1208,7 +1241,8 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                         Some(caller) => (caller.clone(), from_module_scope),
                         None => (MODULE_SCOPE.to_string(), true),
                     };
-                    value_uses.insert((caller, name.to_string(), module_scope));
+                    let in_macro_tokens = !token_tree_depths.is_empty();
+                    value_uses.insert((caller, name.to_string(), module_scope, in_macro_tokens));
                 }
             }
         }
@@ -1241,7 +1275,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                     Some(caller) => (caller.clone(), from_module_scope),
                     None => (MODULE_SCOPE.to_string(), true),
                 };
-                value_uses.insert((caller, name.to_string(), module_scope));
+                value_uses.insert((caller, name.to_string(), module_scope, false));
             }
         }
 
@@ -1253,7 +1287,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                     Some(caller) => (caller.clone(), from_module_scope),
                     None => (MODULE_SCOPE.to_string(), true),
                 };
-                value_uses.insert((caller, name.to_string(), module_scope));
+                value_uses.insert((caller, name.to_string(), module_scope, false));
             }
         }
 
@@ -1270,12 +1304,15 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             if !cursor.goto_parent() {
                 fdc.calls = value_uses
                     .into_iter()
-                    .map(|(caller, callee, from_module_scope)| CallReference {
-                        caller,
-                        callee,
-                        file: fdc.path.clone(),
-                        from_module_scope,
-                    })
+                    .map(
+                        |(caller, callee, from_module_scope, in_macro_tokens)| CallReference {
+                            caller,
+                            callee,
+                            file: fdc.path.clone(),
+                            from_module_scope,
+                            in_macro_tokens,
+                        },
+                    )
                     .collect();
                 fdc.path_uses = path_uses;
                 return; // Done traversing
@@ -1855,11 +1892,48 @@ fn can_be_named_by(def: &Definition, call: &Reference, ancestors_of_call: &[Stri
 
 /// The files of the modules above the module of a Rust file, by file.
 struct RustAncestors<'a> {
-    modules: &'a RustModules<'a>,
+    /// The file that declares the module of a file with `mod name;`. The
+    /// path rules of Rust give it, thus a crate root with any name has its
+    /// children.
+    parents: HashMap<&'a str, &'a str>,
     of_file: HashMap<String, std::rc::Rc<[String]>>,
 }
 
-impl RustAncestors<'_> {
+impl<'a> RustAncestors<'a> {
+    fn new(files: &'a [FileSymbols]) -> Self {
+        use crate::index::model::ImportKind;
+        let is_rust = |facts: &&FileSymbols| facts.language == Language::Rust;
+        let rust_files: HashMap<&str, &str> = files
+            .iter()
+            .filter(is_rust)
+            .map(|facts| (facts.file.as_str(), facts.file.as_str()))
+            .collect();
+        let mut parents: HashMap<&str, &str> = HashMap::new();
+        for facts in files.iter().filter(is_rust) {
+            for binding in &facts.imports {
+                if binding.kind != ImportKind::ModuleDeclaration {
+                    continue;
+                }
+                // The path rules of Rust give the module file. They also
+                // apply to a crate root that the index does not know.
+                let child = crate::index::test_code::rust_module_file(
+                    &facts.file,
+                    &binding.module_path,
+                    |path| rust_files.get(path).copied(),
+                );
+                if let Some(child) = child {
+                    // The files are in path order, thus the first declaration
+                    // is the same in each run.
+                    parents.entry(child).or_insert(facts.file.as_str());
+                }
+            }
+        }
+        Self {
+            parents,
+            of_file: HashMap::new(),
+        }
+    }
+
     /// The file of each module above the module of `file`, from the parent to
     /// the root of the crate. A file that is not Rust has none.
     fn of(&mut self, file: &str) -> std::rc::Rc<[String]> {
@@ -1867,15 +1941,13 @@ impl RustAncestors<'_> {
             return std::rc::Rc::clone(found);
         }
         let mut chain: Vec<String> = Vec::new();
-        if file.ends_with(".rs") {
-            let mut current = self.modules.parent(file);
-            while let Some(parent) = current {
-                if parent == file || chain.contains(&parent) {
-                    break;
-                }
-                current = self.modules.parent(&parent);
-                chain.push(parent);
+        let mut current = self.parents.get(file).copied();
+        while let Some(parent) = current {
+            if parent == file || chain.iter().any(|seen| seen == parent) {
+                break;
             }
+            chain.push(parent.to_string());
+            current = self.parents.get(parent).copied();
         }
         let chain: std::rc::Rc<[String]> = chain.into();
         self.of_file
@@ -2053,6 +2125,9 @@ struct CallReference {
     /// function. Structural rather than a reserved caller name, which a
     /// property binding could otherwise collide with.
     from_module_scope: bool,
+    /// The name is a token of a Rust macro call. The syntax does not show if
+    /// a receiver or a path comes before it.
+    in_macro_tokens: bool,
 }
 
 // Public output types
@@ -4432,7 +4507,12 @@ mod tests {
 
     #[test]
     fn test_a_test_is_never_dead_in_each_language() {
-        let cases: [(&[(&str, &str)], &[&str]); 9] = [
+        // The files of one case, and the names that the analysis reports for them.
+        type Case = (
+            &'static [(&'static str, &'static str)],
+            &'static [&'static str],
+        );
+        let cases: [Case; 9] = [
             (
                 &[(
                     "tests/test_service.py",
@@ -4610,6 +4690,98 @@ fn plain_dead() {}
             ),
         ];
         assert_eq!(dead_names(&files), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_rust_private_function_is_alive_below_a_crate_root_with_a_different_name() {
+        let files = [
+            (
+                "Cargo.toml",
+                "[package]\nname = \"editor\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"src/editor.rs\"\n",
+            ),
+            (
+                "src/editor.rs",
+                "mod completions;\nmod panel;\nmod term;\nuse term::{other_mode, toggle_mode as toggle_term_mode};\npub struct Editor;\nimpl Editor {\n    pub fn toggle_mode(&self) -> u32 {\n        other_mode(toggle_term_mode(1))\n    }\n}\nfn process(value: u32) -> u32 {\n    value\n}\nfn render_button(label: &str) -> usize {\n    label.len()\n}\n",
+            ),
+            (
+                "src/term.rs",
+                "pub(super) fn toggle_mode(value: u32) -> u32 {\n    value\n}\npub(super) fn other_mode(value: u32) -> u32 {\n    value\n}\n",
+            ),
+            (
+                "src/completions.rs",
+                "use super::*;\n\nimpl Editor {\n    pub fn complete(&self) -> u32 {\n        process(1)\n    }\n}\n",
+            ),
+            (
+                "src/panel.rs",
+                "use crate::render_button;\n\npub struct Panel;\n\nimpl Panel {\n    pub fn render_button(&self) -> usize {\n        render_button(\"push\")\n    }\n}\n",
+            ),
+        ];
+        assert_eq!(dead_names(&files), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_call_of_an_import_alias_reaches_the_function() {
+        let cases: [&[(&str, &str)]; 3] = [
+            &[
+                ("src/main.rs", "mod term;\nmod view;\nfn main() {}\n"),
+                (
+                    "src/term.rs",
+                    "pub(super) fn toggle_mode(value: u32) -> u32 {\n    value\n}\n\npub(super) fn unused_one() {}\n",
+                ),
+                (
+                    "src/view.rs",
+                    "use crate::term::toggle_mode as toggle_term_mode;\n\npub struct View;\n\nimpl View {\n    pub fn toggle_mode(&self) -> u32 {\n        toggle_term_mode(1)\n    }\n}\n",
+                ),
+            ],
+            &[
+                (
+                    "app/term.py",
+                    "def _toggle_mode(value):\n    return value\n\n\ndef _unused_one():\n    return 1\n",
+                ),
+                (
+                    "app/view.py",
+                    "from app.term import _toggle_mode as toggle_term_mode\n\n\ndef main():\n    return toggle_term_mode(1)\n",
+                ),
+            ],
+            &[
+                (
+                    "src/term.ts",
+                    "function toggleMode(value: number): number {\n  return value;\n}\nfunction unusedOne(): number {\n  return 1;\n}\nexport { toggleMode as toggleTermMode };\n",
+                ),
+                (
+                    "src/view.ts",
+                    "import { toggleTermMode as toggle } from \"./term\";\n\nexport function main(): number {\n  return toggle(1);\n}\n",
+                ),
+            ],
+        ];
+        let mut failures = Vec::new();
+        for files in cases {
+            let found = dead_names(files);
+            let unused: Vec<&String> = found
+                .iter()
+                .filter(|name| name.to_lowercase().contains("unused"))
+                .collect();
+            if found.len() != 1 || unused.len() != 1 {
+                failures.push(format!("{}: {found:?}", files[0].0));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn test_rust_method_name_in_a_macro_reaches_each_method_with_the_name() {
+        let files = [
+            ("src/main.rs", "mod engine;\nmod file;\nfn main() {}\n"),
+            (
+                "src/engine.rs",
+                "pub struct Engine;\n\npub fn get() -> Engine {\n    Engine\n}\n\nimpl Engine {\n    pub(super) fn write_at(&self, offset: u64) -> u64 {\n        offset\n    }\n\n    fn unused_one(&self) {}\n}\n",
+            ),
+            (
+                "src/file.rs",
+                "use crate::engine;\n\npub struct File;\n\nimpl File {\n    pub fn write_all(&self) -> u64 {\n        self.write_at(1)\n    }\n\n    fn write_at(&self, offset: u64) -> u64 {\n        observe!(Write, { engine::get().write_at(offset) })\n    }\n}\n",
+            ),
+        ];
+        assert_eq!(dead_names(&files), ["unused_one"]);
     }
 
     #[test]

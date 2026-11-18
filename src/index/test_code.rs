@@ -25,7 +25,7 @@ use std::ops::Range;
 use tree_sitter::Node;
 
 use super::extract::FileSymbols;
-use super::model::{ImportKind, ImportTarget, TestRole};
+use super::model::{ImportKind, TestRole};
 use crate::core::{is_test_file, Language};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +42,8 @@ pub enum MarkKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestMark {
     pub range: Range<usize>,
+    /// The first line and the last line of the range. Lines start at 1.
+    pub lines: (u32, u32),
     pub kind: MarkKind,
 }
 
@@ -51,9 +53,13 @@ pub fn is_test_path(file: &str, language: Language) -> bool {
         return true;
     }
     let normalized = file.replace('\\', "/");
+    let name = normalized.rsplit('/').next().unwrap_or(&normalized);
     match language {
+        // The name of a file such as `tests.rs` is not a rule: a file with
+        // that name can be production code. `link_files` finds the file of a
+        // `#[cfg(test)] mod tests;` declaration.
         Language::Rust => normalized.split('/').any(|part| part == "benches"),
-        Language::Python => normalized.rsplit('/').next() == Some("conftest.py"),
+        Language::Python => name == "conftest.py",
         _ => false,
     }
 }
@@ -107,6 +113,10 @@ impl MarkContext<'_, '_> {
 fn mark(node: Node<'_>, kind: MarkKind) -> TestMark {
     TestMark {
         range: node.byte_range(),
+        lines: (
+            node.start_position().row as u32 + 1,
+            node.end_position().row as u32 + 1,
+        ),
         kind,
     }
 }
@@ -565,8 +575,15 @@ fn java_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestM
     let is_test = modifiers
         .children(&mut cursor)
         .filter(|child| matches!(child.kind(), "marker_annotation" | "annotation"))
-        .filter_map(|annotation| annotation.child_by_field_name("name"))
-        .any(|name| JAVA_TEST_ANNOTATIONS.contains(&last_segment(context.text(name))));
+        .any(|annotation| {
+            let name = annotation
+                .child_by_field_name("name")
+                .map_or("", |name| last_segment(context.text(name)));
+            // AspectJ has `@Before` and `@After` with a pointcut argument.
+            // The JUnit 4 hooks have no argument.
+            let is_advice = matches!(name, "Before" | "After") && annotation.kind() == "annotation";
+            JAVA_TEST_ANNOTATIONS.contains(&name) && !is_advice
+        });
     if !is_test {
         return;
     }
@@ -856,6 +873,8 @@ fn c_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark
 pub struct MarkTable {
     /// The ranges of test code, in order, without a range in a different range.
     pub ranges: Vec<Range<usize>>,
+    /// The first line and the last line of each range of `ranges`.
+    pub lines: Vec<(u32, u32)>,
     entries: HashMap<(usize, usize), MarkKind>,
 }
 
@@ -876,15 +895,21 @@ impl MarkTable {
         marks.retain(|mark| mark.kind != MarkKind::EntryInTestCode);
         marks.sort_by_key(|mark| (mark.range.start, std::cmp::Reverse(mark.range.end)));
         let mut ranges: Vec<Range<usize>> = Vec::new();
+        let mut lines = Vec::new();
         for mark in marks {
             if ranges
                 .last()
                 .is_none_or(|last| mark.range.start >= last.end)
             {
                 ranges.push(mark.range);
+                lines.push(mark.lines);
             }
         }
-        Self { ranges, entries }
+        Self {
+            ranges,
+            lines,
+            entries,
+        }
     }
 
     /// The role of the definition with this byte range, and the answer to the
@@ -916,9 +941,24 @@ pub fn is_in_ranges(ranges: &[Range<usize>], byte: usize) -> bool {
     position > 0 && byte < ranges[position - 1].end
 }
 
+/// The line ranges of `lines` contain the line. Lines start at 1.
+pub fn is_in_lines(lines: &[(u32, u32)], line: u32) -> bool {
+    let position = lines.partition_point(|(start, _)| *start <= line);
+    position > 0 && line <= lines[position - 1].1
+}
+
 /// The ranges of test code in a tree, for a consumer that has a tree and no
 /// index. The path of the file is not a part of this answer.
 pub fn test_ranges_of_tree(root: Node<'_>, source: &[u8], language: Language) -> Vec<Range<usize>> {
+    marks_of_tree(root, source, language).ranges
+}
+
+/// The line ranges of test code in a tree. See [`test_ranges_of_tree`].
+pub fn test_lines_of_tree(root: Node<'_>, source: &[u8], language: Language) -> Vec<(u32, u32)> {
+    marks_of_tree(root, source, language).lines
+}
+
+fn marks_of_tree(root: Node<'_>, source: &[u8], language: Language) -> MarkTable {
     let kinds = mark_kinds(language);
     let mut found = Vec::new();
     let mut ancestors: Vec<Node<'_>> = Vec::new();
@@ -943,19 +983,55 @@ pub fn test_ranges_of_tree(root: Node<'_>, source: &[u8], language: Language) ->
                 break;
             }
             if !cursor.goto_parent() {
-                return MarkTable::new(found).ranges;
+                return MarkTable::new(found);
             }
             ancestors.pop();
         }
     }
 }
 
+/// The file of the module that `mod name;` in the Rust file `declaring`
+/// declares. `find` gives the path of a file of the repository.
+///
+/// The path rules of Rust give the answer, and the import resolution does
+/// not: a wrong import target must not make a file test code. In `lib.rs`,
+/// `main.rs`, and `mod.rs`, the module file is next to the file. In a
+/// different file, it is in the directory with the name of that file. Such
+/// a file can also be the root of a crate, as a file with the `[lib] path`
+/// of a manifest and each file of `tests/` are. Then the module file is next
+/// to it. The attribute `#[path]` is not read.
+pub fn rust_module_file<T>(
+    declaring: &str,
+    name: &str,
+    find: impl Fn(&str) -> Option<T>,
+) -> Option<T> {
+    let (directory, file_name) = declaring.rsplit_once('/').unwrap_or(("", declaring));
+    let join = |parts: &[&str]| {
+        parts
+            .iter()
+            .filter(|part| !part.is_empty())
+            .copied()
+            .collect::<Vec<&str>>()
+            .join("/")
+    };
+    let stem = file_name.strip_suffix(".rs").unwrap_or(file_name);
+    let source = format!("{name}.rs");
+    let mut candidates = Vec::new();
+    if !matches!(file_name, "lib.rs" | "main.rs" | "mod.rs") {
+        candidates.push(join(&[directory, stem, &source]));
+        candidates.push(join(&[directory, stem, name, "mod.rs"]));
+    }
+    candidates.push(join(&[directory, &source]));
+    candidates.push(join(&[directory, name, "mod.rs"]));
+    candidates.iter().find_map(|path| find(path))
+}
+
 /// Completes the facts that need a different file.
 ///
 /// A Rust module file has no mark of its own when `#[cfg(test)] mod name;`
 /// declares it in a different file. This step makes such a file, and each
-/// module file that it declares, test code. Call it after the resolution of
-/// the imports. The result does not depend on the order of `files`.
+/// module file that it declares, test code. The result does not depend on
+/// the order of `files`.
 pub fn link_files(files: &mut [FileSymbols]) {
     let positions: HashMap<String, usize> = files
         .iter()
@@ -968,9 +1044,10 @@ pub fn link_files(files: &mut [FileSymbols]) {
             .iter()
             .filter(|binding| binding.kind == ImportKind::ModuleDeclaration)
             .filter(|binding| !only_in_test_code || file.is_test_at(binding.range.start_byte))
-            .filter_map(|binding| match &binding.target_file {
-                ImportTarget::Resolved(target) => positions.get(target).copied(),
-                _ => None,
+            .filter_map(|binding| {
+                rust_module_file(&file.file, &binding.module_path, |path| {
+                    positions.get(path).copied()
+                })
             })
             .collect()
     };
@@ -1194,6 +1271,15 @@ impl Thing {
     }
 
     #[test]
+    fn test_rust_file_name_with_tests_is_not_test_code_without_a_declaration() {
+        // `xtask/src/tasks/sandbox_tests.rs` can be the command that runs tests.
+        for file in ["src/tasks/sandbox_tests.rs", "src/tasks/tests.rs"] {
+            let found = roles(Language::Rust, file, "pub fn run_sandbox_tests() {}\n");
+            assert_roles(&found, &[("run_sandbox_tests", NotTest)]);
+        }
+    }
+
+    #[test]
     fn test_rust_module_file_of_a_cfg_test_declaration_is_test_code() {
         let mut files = vec![
             facts(
@@ -1232,6 +1318,87 @@ impl Thing {
         assert_eq!(role("src/lib.rs", "production"), Some(NotTest));
         let checks = files.iter().find(|facts| facts.file == "src/checks.rs");
         assert!(checks.is_some_and(|facts| facts.is_test_at(0)));
+    }
+
+    #[test]
+    fn test_module_file_of_a_declaration_follows_the_path_rules_of_rust() {
+        let files = [
+            "crate/src/lib.rs",
+            "crate/src/a.rs",
+            "crate/src/a/b.rs",
+            "crate/src/a/c/mod.rs",
+            "crate/src/editor.rs",
+            "crate/src/panel.rs",
+            "crate/tests/api.rs",
+            "crate/tests/common/mod.rs",
+            "other/src/a.rs",
+        ];
+        let find = |declaring: &str, name: &str| {
+            rust_module_file(declaring, name, |path| {
+                files.iter().copied().find(|file| *file == path)
+            })
+        };
+        assert_eq!(find("crate/src/lib.rs", "a"), Some("crate/src/a.rs"));
+        assert_eq!(find("crate/src/a.rs", "b"), Some("crate/src/a/b.rs"));
+        assert_eq!(find("crate/src/a.rs", "c"), Some("crate/src/a/c/mod.rs"));
+        // A crate root can have a different name, and a test file is a crate root.
+        assert_eq!(
+            find("crate/src/editor.rs", "panel"),
+            Some("crate/src/panel.rs")
+        );
+        assert_eq!(
+            find("crate/tests/api.rs", "common"),
+            Some("crate/tests/common/mod.rs")
+        );
+        assert_eq!(find("crate/src/lib.rs", "missing"), None);
+        assert_eq!(find("crate/tests/common/mod.rs", "a"), None);
+    }
+
+    #[test]
+    fn test_module_declaration_in_test_code_does_not_follow_a_wrong_import_target() {
+        let mut files = vec![
+            facts(
+                Language::Rust,
+                "service/tests/sim/mod.rs",
+                "pub mod service;\npub mod helper;\n",
+            ),
+            facts(
+                Language::Rust,
+                "service/tests/sim/helper.rs",
+                "pub fn helper() {}\n",
+            ),
+            facts(
+                Language::Rust,
+                "service/src/lib.rs",
+                "pub mod manager;\npub fn production() {}\n",
+            ),
+            facts(
+                Language::Rust,
+                "service/src/manager.rs",
+                "pub fn manage() {}\n",
+            ),
+        ];
+        files.sort_by(|left, right| left.file.cmp(&right.file));
+        // The import resolution can give the crate root for the name `service`.
+        for file in &mut files {
+            for binding in &mut file.imports {
+                if binding.module_path == "service" {
+                    binding.target_file = crate::index::model::ImportTarget::Resolved(
+                        "service/src/lib.rs".to_string(),
+                    );
+                }
+            }
+        }
+        link_files(&mut files);
+        let is_test_file = |name: &str| {
+            files
+                .iter()
+                .find(|facts| facts.file == name)
+                .map(|facts| facts.test_file)
+        };
+        assert_eq!(is_test_file("service/src/lib.rs"), Some(false));
+        assert_eq!(is_test_file("service/src/manager.rs"), Some(false));
+        assert_eq!(is_test_file("service/tests/sim/helper.rs"), Some(true));
     }
 
     #[test]
@@ -1386,6 +1553,27 @@ test(function withoutTitle() {});
     }
 
     #[test]
+    fn test_line_ranges_agree_with_the_byte_ranges() {
+        let source = "fn production() {}\n\n#[cfg(test)]\nmod tests {\n    fn helper() {}\n}\n\n#[test]\nfn check() {}\n";
+        let found = facts(Language::Rust, "src/lib.rs", source);
+        assert_eq!(found.test_lines, [(4, 6), (9, 9)]);
+        for (line, expected) in [(1, false), (3, false), (4, true), (5, true), (6, true)] {
+            assert_eq!(found.is_test_at_line(line), expected, "line {line}");
+        }
+        assert!(!found.is_test_at_line(7));
+        assert!(found.is_test_at_line(9));
+        let parsed = Parser::new()
+            .parse(source.as_bytes(), Language::Rust, Path::new("src/lib.rs"))
+            .unwrap();
+        assert_eq!(
+            test_lines_of_tree(parsed.root_node(), source.as_bytes(), Language::Rust),
+            found.test_lines
+        );
+        let in_test_file = facts(Language::Rust, "tests/api.rs", "fn helper() {}\n");
+        assert!(in_test_file.is_test_at_line(1));
+    }
+
+    #[test]
     fn test_go_test_functions_of_a_test_file() {
         let source = "package a\n\nfunc TestRun(t *testing.T) {}\nfunc BenchmarkRun(b *testing.B) {}\nfunc FuzzRun(f *testing.F) {}\nfunc ExampleRun() {}\nfunc Testify() {}\nfunc helper() {}\nfunc TestMain(m *testing.M) {}\n";
         let test_file = roles(Language::Go, "a_test.go", source);
@@ -1444,6 +1632,45 @@ class Service {
                 ("Service", NotTest),
                 ("toString", NotTest),
                 ("testConnection", NotTest),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_java_aspect_advice_is_not_a_test_hook() {
+        // AspectJ has `@Before` and `@After` with a pointcut. JUnit 4 has
+        // them without an argument.
+        let found = roles(
+            Language::Java,
+            "src/main/java/Audit.java",
+            r#"
+@Aspect
+class Audit {
+    @Before("execution(* app.Service.*(..))")
+    void record() {}
+
+    @After(value = "execution(* app.Service.*(..))")
+    void close() {}
+}
+
+class Legacy {
+    @Before
+    public void prepare() {}
+
+    @After
+    public void clean() {}
+}
+"#,
+        );
+        assert_roles(
+            &found,
+            &[
+                ("Audit", NotTest),
+                ("record", NotTest),
+                ("close", NotTest),
+                ("Legacy", Support),
+                ("prepare", Entry),
+                ("clean", Entry),
             ],
         );
     }

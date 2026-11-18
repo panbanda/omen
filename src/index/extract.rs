@@ -1065,6 +1065,8 @@ pub struct FileSymbols {
     /// The byte ranges that the syntax makes test code, in order. No range is
     /// in a different range. See `crate::index::test_code`.
     pub test_ranges: Vec<std::ops::Range<usize>>,
+    /// The first line and the last line of each range of `test_ranges`.
+    pub test_lines: Vec<(u32, u32)>,
     /// The whole file is test code: its path follows a test convention, or a
     /// `#[cfg(test)]` declaration of a different file names it.
     pub test_file: bool,
@@ -1075,6 +1077,11 @@ impl FileSymbols {
     /// that has a position and no symbol, as a sink has.
     pub fn is_test_at(&self, byte: usize) -> bool {
         self.test_file || test_code::is_in_ranges(&self.test_ranges, byte)
+    }
+
+    /// The line is in test code. Lines start at 1.
+    pub fn is_test_at_line(&self, line: u32) -> bool {
+        self.test_file || test_code::is_in_lines(&self.test_lines, line)
     }
 
     /// The bytes are the bytes that gave these facts.
@@ -1686,6 +1693,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         members: member_facts,
         content_hash: *blake3::hash(&parsed.source).as_bytes(),
         test_ranges: mark_table.ranges,
+        test_lines: mark_table.lines,
         test_file,
     }
 }
