@@ -27,7 +27,7 @@ fn rows_of(found: &[EntryPoint]) -> Vec<String> {
             format!(
                 "{} {} {} [{}]",
                 route.method,
-                route.path,
+                route.path_text(),
                 handler,
                 entry.guards.join(", ")
             )
@@ -409,16 +409,16 @@ fn a_long_loop_around(size: usize) -> String {
 fn assert_unexpanded(found: &[EntryPoint], path: &str) {
     for entry in found {
         let route = entry.route.as_ref().expect("a Rails entry has a route");
-        if route.path.contains('[') {
-            assert!(!entry.guards_complete, "{}", route.path);
+        if route.path_text().contains('[') {
+            assert!(!entry.guards_complete, "{}", route.path_text());
             assert_eq!(
                 entry.guards_unknown_reason,
                 Some(super::GuardsUnknownReason::UnexpandedLoop),
                 "{}",
-                route.path
+                route.path_text()
             );
         } else {
-            assert_eq!(route.path, path);
+            assert_eq!(route.path_text(), path);
             assert_ne!(
                 entry.guards_unknown_reason,
                 Some(super::GuardsUnknownReason::UnexpandedLoop)
@@ -972,7 +972,7 @@ fn guard_rows(routes: &str, others: &[(&str, &str)]) -> Vec<String> {
             );
             format!(
                 "{} [{}] {}",
-                entry.route.as_ref().expect("a route").path,
+                entry.route.as_ref().expect("a route").path_text(),
                 entry.guards.join(", "),
                 entry
                     .guards_unknown_reason

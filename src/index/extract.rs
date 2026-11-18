@@ -341,9 +341,6 @@ pub struct ReturnOwner<'tree> {
 /// many children once, and not for each child.
 pub type Memo = RefCell<HashMap<(usize, u8), Rc<dyn Any>>>;
 
-/// How many of the nearest ancestors `Context::parent` examines.
-const NEAR_ANCESTORS: usize = 8;
-
 pub struct Context<'a, 'tree> {
     /// The path of the file, as the keys have it.
     pub file: &'a str,
@@ -363,24 +360,42 @@ pub struct Context<'a, 'tree> {
 
 impl<'tree> Context<'_, 'tree> {
     /// The parent of `node`. The walk knows the parent of its current node
-    /// and the nearest ancestors. For a different node, the tree searches
-    /// from the root, which costs the depth of the node.
+    /// and of each ancestor. For a different node, the tree searches from the
+    /// root, which costs the depth of the node.
     pub fn parent(&self, node: Node<'tree>) -> Option<Node<'tree>> {
         if let Some((current, parent)) = self.current {
             if current == node.id() {
                 return parent;
             }
         }
-        let nearest = self.ancestors.len().saturating_sub(NEAR_ANCESTORS);
-        match self.ancestors[nearest..]
-            .iter()
-            .rposition(|ancestor| ancestor.id() == node.id())
-        {
-            Some(0) if nearest == 0 => None,
-            Some(0) => node.parent(),
-            Some(position) => Some(self.ancestors[nearest + position - 1]),
+        match self.ancestor_position(node) {
+            Some(0) => None,
+            Some(position) => Some(self.ancestors[position - 1]),
             None => node.parent(),
         }
+    }
+
+    /// The position of `node` in `ancestors`. Each ancestor contains the next
+    /// one, so the ancestors are in the order of their start, and then in the
+    /// reverse order of their end. A binary search finds the ancestors with
+    /// the range of the node. Only a few nodes can have the same range,
+    /// because a grammar cannot nest nodes without text without limit.
+    fn ancestor_position(&self, node: Node<'tree>) -> Option<usize> {
+        let range = |ancestor: &Node<'_>| {
+            (
+                ancestor.start_byte(),
+                std::cmp::Reverse(ancestor.end_byte()),
+            )
+        };
+        let wanted = range(&node);
+        let first = self
+            .ancestors
+            .partition_point(|ancestor| range(ancestor) < wanted);
+        self.ancestors[first..]
+            .iter()
+            .take_while(|ancestor| range(ancestor) == wanted)
+            .position(|ancestor| ancestor.id() == node.id())
+            .map(|offset| first + offset)
     }
 
     pub fn text(&self, node: Node<'_>) -> String {

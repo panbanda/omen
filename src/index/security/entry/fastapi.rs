@@ -972,7 +972,7 @@ mod tests {
     fn guards(source: &str) -> Vec<(String, Vec<String>)> {
         routes(source)
             .into_iter()
-            .map(|entry| (entry.route.unwrap().path, entry.guards))
+            .map(|entry| (entry.route.unwrap().path_text().to_string(), entry.guards))
             .collect()
     }
 
@@ -982,7 +982,7 @@ mod tests {
             .into_iter()
             .map(|entry| {
                 let route = entry.route.unwrap();
-                (route.path, route.parameters)
+                (route.path_text().to_string(), route.parameters)
             })
             .collect()
     }
@@ -1237,7 +1237,7 @@ mod tests {
         let found = entries(Language::Python, &[("urls.py", urls), ("views.py", views)]);
         let rows: Vec<(String, Vec<String>)> = found
             .into_iter()
-            .map(|entry| (entry.route.unwrap().path, entry.guards))
+            .map(|entry| (entry.route.unwrap().path_text().to_string(), entry.guards))
             .collect();
         assert_eq!(
             rows,
@@ -1283,7 +1283,13 @@ mod tests {
         let found = entries(Language::Python, &[("urls.py", urls), ("views.py", views)]);
         let rows: Vec<(String, Option<String>, Vec<String>)> = found
             .into_iter()
-            .map(|entry| (entry.route.unwrap().path, entry.symbol, entry.guards))
+            .map(|entry| {
+                (
+                    entry.route.unwrap().path_text().to_string(),
+                    entry.symbol,
+                    entry.guards,
+                )
+            })
             .collect();
         assert_eq!(
             rows,
@@ -1469,7 +1475,7 @@ mod tests {
             .map(|entry| {
                 assert_eq!(entry.guards_complete, entry.guards_unknown_reason.is_none());
                 (
-                    entry.route.unwrap().path,
+                    entry.route.unwrap().path_text().to_string(),
                     entry
                         .guards_unknown_reason
                         .map_or("complete", |reason| reason.name())

@@ -20,6 +20,7 @@ use crate::index::extract::FileSymbols;
 use crate::index::model::{ResolutionBasis, ResolutionStatus, Span, Symbol, SymbolKind};
 use crate::parser::ParseResult;
 
+mod ecma;
 mod fastapi;
 mod go_routes;
 mod persistent;
@@ -176,19 +177,49 @@ fn first_reason(
 /// Spring, the filters and the policies of ASP.NET, the layers and the extractors of axum, the
 /// wrappers and the guards of actix, the fairings and the request guards of rocket, the route
 /// groups of Laravel, and the middleware file of Next.
-const FRAMEWORKS_WITH_UNREAD_LAYERS: [&str; 10] = [
-    "express", "flask", "django", "spring", "aspnet", "axum", "actix", "rocket", "laravel", "next",
+const FRAMEWORKS_WITH_UNREAD_LAYERS: [&str; 16] = [
+    "express",
+    "fastify",
+    "koa",
+    "nestjs",
+    "routing-controllers",
+    "tsoa",
+    "repository_decorators",
+    "flask",
+    "django",
+    "spring",
+    "aspnet",
+    "axum",
+    "actix",
+    "rocket",
+    "laravel",
+    "next",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Route {
     /// The method that the framework registers, or `ANY`. gin and echo keep a custom method as the source writes it.
     pub method: String,
-    /// The path as the source writes it, with a leading `/`.
-    pub path: String,
+    /// The path as the source writes it, with a leading `/`. `None` when omen cannot resolve a
+    /// part of the path, as a variable that is not a constant.
+    pub path: Option<String>,
+    /// The path with each part that omen cannot resolve as `${expression}`, when `path` is
+    /// `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_template: Option<String>,
     /// The names of the parameters in the path, in order. For FastAPI, the names of the request
     /// parameters of the handler follow them.
     pub parameters: Vec<String>,
+}
+
+impl Route {
+    /// The path, or the template when omen cannot resolve the path.
+    pub fn path_text(&self) -> &str {
+        self.path
+            .as_deref()
+            .or(self.path_template.as_deref())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,7 +230,8 @@ pub struct EntryPoint {
     pub kind: EntryKind,
     /// The range of the declaration, the registration call, or the file.
     pub range: Span,
-    /// The key of the handler symbol, when the index has it.
+    /// The key of the handler symbol, when the index has it. For an inline handler, the key
+    /// names the function value: see `inline_handler`.
     pub symbol: Option<String>,
     pub framework: String,
     pub route: Option<Route>,
@@ -216,6 +248,20 @@ pub struct EntryPoint {
     pub guards_unknown_reason: Option<GuardsUnknownReason>,
     pub basis: EntryBasis,
     pub in_test: bool,
+    /// The function value without a name that is the handler, as an arrow function. The index
+    /// has no symbol for it, so `symbol` is a key that only the security analysis knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_handler: Option<InlineHandler>,
+}
+
+/// A handler that is a function value without a name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InlineHandler {
+    /// The range of the function value.
+    pub range: Span,
+    /// The key of the nearest symbol that contains the function value. The index gives each call
+    /// in the function value to this symbol.
+    pub enclosing: Option<String>,
 }
 
 impl EntryPoint {
@@ -320,6 +366,7 @@ pub struct EntryShared {
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
     go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
     go_packages: std::sync::OnceLock<go_routes::PackageNames>,
+    ecma: ecma::Shared,
 }
 
 /// The syntax trees that the entry point rules ask for in other files. The source
@@ -413,7 +460,7 @@ pub fn entry_points_of_file(
     trees: &dyn TreeSource,
     rules: &[EntryRule],
 ) -> Vec<EntryPoint> {
-    let context = Context::new(own, &files[position], files, trees, rules);
+    let context = Context::new(position, own, &files[position], files, trees, rules);
     let mut found = context.detect();
     found.sort_by(|left, right| {
         (left.range.start_byte, &left.key).cmp(&(right.range.start_byte, &right.key))
@@ -538,7 +585,8 @@ fn route(method: &str, path: String) -> Route {
     Route {
         method: method.to_uppercase(),
         parameters: route_parameters(&path),
-        path,
+        path: Some(path),
+        path_template: None,
     }
 }
 
@@ -652,6 +700,8 @@ type GoLocals = std::collections::HashMap<String, (Vec<usize>, Vec<usize>)>;
 
 struct Context<'a> {
     parsed: &'a ParseResult,
+    /// The position of the file in `all`.
+    position: usize,
     file: &'a FileSymbols,
     all: &'a [FileSymbols],
     all_parsed: &'a dyn TreeSource,
@@ -695,6 +745,7 @@ struct Context<'a> {
     guard_gap: std::cell::Cell<Option<GuardsUnknownReason>>,
     /// Tells for the text of the receiver of a Python route decorator if it is a framework value.
     python_receivers: std::cell::RefCell<std::collections::HashMap<&'a str, bool>>,
+    ecma: ecma::State,
 }
 
 struct Draft {
@@ -707,12 +758,14 @@ struct Draft {
     basis: EntryBasis,
     /// Tells apart the entry points that one call registers, as the action of a Rails `resources` call.
     variant: Option<String>,
+    inline_handler: Option<InlineHandler>,
     /// Why the reader of the framework cannot give the full list of the guards.
     unknown: Option<GuardsUnknownReason>,
 }
 
 impl<'a> Context<'a> {
     fn new(
+        position: usize,
         parsed: &'a ParseResult,
         file: &'a FileSymbols,
         all: &'a [FileSymbols],
@@ -720,6 +773,7 @@ impl<'a> Context<'a> {
         rules: &'a [EntryRule],
     ) -> Self {
         Self {
+            position,
             parsed,
             file,
             all,
@@ -743,6 +797,7 @@ impl<'a> Context<'a> {
             python_scopes: std::cell::OnceCell::new(),
             guard_gap: std::cell::Cell::new(None),
             python_receivers: std::cell::RefCell::new(std::collections::HashMap::new()),
+            ecma: ecma::State::default(),
         }
     }
 
@@ -937,7 +992,7 @@ impl<'a> Context<'a> {
             return Some(symbol);
         }
         let name = match handler.kind() {
-            "identifier" => self.text(handler),
+            "identifier" | "shorthand_property_identifier" => self.text(handler),
             "attribute" | "member_expression" | "selector_expression" | "field_expression" => {
                 self.text(handler).rsplit(['.', ':']).next().unwrap_or("")
             }
@@ -978,6 +1033,7 @@ impl<'a> Context<'a> {
         let nodes: Vec<Node<'_>> = list.named_children(&mut cursor).collect();
         nodes
             .into_iter()
+            .filter(|node| !node.is_extra())
             .map(|node| {
                 if node.kind() == "argument" {
                     node.named_child(0).unwrap_or(node)
@@ -1036,6 +1092,7 @@ impl<'a> Context<'a> {
                     guards_complete: unknown.is_none(),
                     guards_unknown_reason: unknown,
                     basis: draft.basis,
+                    inline_handler: draft.inline_handler,
                     in_test: self.file.is_test_at(draft.range.start_byte),
                 }
             })
@@ -1050,8 +1107,8 @@ impl<'a> Context<'a> {
         }
         for entry in &mut entries {
             if counts[&entry.key] > 1 {
-                if let Some(route) = &entry.route {
-                    entry.key = format!("{}:{}", entry.key, route.path);
+                if let Some(path) = entry.route.as_ref().map(Route::path_text) {
+                    entry.key = format!("{}:{}", entry.key, path);
                 }
             }
         }
@@ -1182,6 +1239,7 @@ impl<'a> Context<'a> {
                         guards: Vec::new(),
                         basis: EntryBasis::Convention,
                         variant: None,
+                        inline_handler: None,
                         unknown: None,
                     });
                 }
@@ -1198,6 +1256,7 @@ impl<'a> Context<'a> {
                     guards: Vec::new(),
                     basis: EntryBasis::Convention,
                     variant: None,
+                    inline_handler: None,
                     unknown: None,
                 });
             }
@@ -1253,6 +1312,7 @@ impl<'a> Context<'a> {
                     guards: Vec::new(),
                     basis: EntryBasis::Convention,
                     variant: None,
+                    inline_handler: None,
                     unknown: None,
                 });
             }
@@ -1303,6 +1363,7 @@ impl<'a> Context<'a> {
                     guards: Vec::new(),
                     basis: EntryBasis::Convention,
                     variant: None,
+                    inline_handler: None,
                     unknown: None,
                 });
             }
@@ -1328,6 +1389,7 @@ impl<'a> Context<'a> {
                         guards: Vec::new(),
                         basis: EntryBasis::Convention,
                         variant: None,
+                        inline_handler: None,
                         unknown: None,
                     });
                 }
@@ -1372,6 +1434,7 @@ impl<'a> Context<'a> {
                     guards: Vec::new(),
                     basis: EntryBasis::Declared,
                     variant: None,
+                    inline_handler: None,
                     unknown: None,
                 });
                 continue;
@@ -1477,6 +1540,7 @@ impl<'a> Context<'a> {
                 guards,
                 basis: EntryBasis::Declared,
                 variant: None,
+                inline_handler: None,
                 unknown: self.guard_gap.take(),
             });
         }
@@ -1583,65 +1647,7 @@ impl<'a> Context<'a> {
             guards: self.python_view_guards(target),
             basis: EntryBasis::Registered,
             variant: None,
-            unknown: None,
-        });
-    }
-
-    fn ecma(&self, node: Node<'_>, out: &mut Vec<Draft>) {
-        if node.kind() != "call_expression" {
-            return;
-        }
-        let Some(callee) = node.child_by_field_name("function") else {
-            return;
-        };
-        if callee.kind() != "member_expression" {
-            return;
-        }
-        let Some(property) = callee.child_by_field_name("property") else {
-            return;
-        };
-        let verb = self.text(property);
-        if !HTTP_VERBS.contains(&verb) || !self.mentions("express") {
-            return;
-        }
-        let Some(receiver) = callee.child_by_field_name("object") else {
-            return;
-        };
-        if !self.is_framework_value(
-            receiver,
-            &["express(", "express.Router(", "Router("],
-            &[("express", &["Router"])],
-        ) {
-            return;
-        }
-        let arguments = Self::arguments_of(node);
-        let Some(first) = arguments.first() else {
-            return;
-        };
-        if !self.is_string(*first) {
-            return;
-        }
-        let path = self.string_of(*first);
-        if !path.starts_with('/') {
-            return;
-        }
-        let Some(handler) = arguments.last().filter(|_| arguments.len() > 1) else {
-            return;
-        };
-        let guards: Vec<String> = arguments[1..arguments.len() - 1]
-            .iter()
-            .filter(|argument| matches!(argument.kind(), "identifier" | "member_expression"))
-            .map(|argument| self.text(*argument).to_string())
-            .collect();
-        out.push(Draft {
-            range: Span::of(&node),
-            kind: EntryKind::HttpHandler,
-            symbol: self.handler_symbol(*handler),
-            framework: "express",
-            route: Some(route(if verb == "all" { "ANY" } else { verb }, path)),
-            guards,
-            basis: EntryBasis::Registered,
-            variant: None,
+            inline_handler: None,
             unknown: None,
         });
     }
@@ -1771,6 +1777,7 @@ impl<'a> Context<'a> {
                     guards: guards.clone(),
                     basis: EntryBasis::Declared,
                     variant: None,
+                    inline_handler: None,
                     unknown: None,
                 });
             } else if JAVA_CONSUMERS.contains(&name) || name == "Scheduled" {
@@ -1787,6 +1794,7 @@ impl<'a> Context<'a> {
                     guards: guards.clone(),
                     basis: EntryBasis::Declared,
                     variant: None,
+                    inline_handler: None,
                     unknown: None,
                 });
             }
@@ -1870,6 +1878,7 @@ impl<'a> Context<'a> {
                 guards: guards.clone(),
                 basis: EntryBasis::Declared,
                 variant: None,
+                inline_handler: None,
                 unknown: None,
             });
         }
@@ -1908,6 +1917,7 @@ impl<'a> Context<'a> {
             guards: Vec::new(),
             basis: EntryBasis::Registered,
             variant: None,
+            inline_handler: None,
             unknown: None,
         });
     }
@@ -1964,11 +1974,13 @@ impl<'a> Context<'a> {
             route: Some(Route {
                 method,
                 parameters: go_routes::servemux_parameters(&path),
-                path,
+                path: Some(path),
+                path_template: None,
             }),
             guards: wrapped.guards,
             basis: EntryBasis::Registered,
             variant: None,
+            inline_handler: None,
             unknown: wrapped
                 .unread_wrapper
                 .then_some(GuardsUnknownReason::UnreadMiddleware),
@@ -2018,6 +2030,7 @@ impl<'a> Context<'a> {
                 guards: Vec::new(),
                 basis: EntryBasis::Declared,
                 variant: None,
+                inline_handler: None,
                 unknown: None,
             });
         }
@@ -2054,6 +2067,7 @@ impl<'a> Context<'a> {
                 guards: Vec::new(),
                 basis: EntryBasis::Declared,
                 variant: None,
+                inline_handler: None,
                 unknown: None,
             });
         }
@@ -2102,6 +2116,7 @@ impl<'a> Context<'a> {
                 guards: Vec::new(),
                 basis: EntryBasis::Registered,
                 variant: None,
+                inline_handler: None,
                 unknown: None,
             });
         }
@@ -2230,6 +2245,7 @@ impl<'a> Context<'a> {
             guards,
             basis: EntryBasis::Registered,
             variant: None,
+            inline_handler: None,
             unknown: None,
         });
     }
@@ -2262,7 +2278,7 @@ fn collect_strings(node: Node<'_>, context: &Context<'_>, out: &mut Vec<String>)
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::path::Path;
 
     use super::*;
@@ -2307,7 +2323,7 @@ mod tests {
     }
 
     /// The entry points, and the time of the search for entry points alone.
-    fn entries_timed(
+    pub(super) fn entries_timed(
         language: Language,
         files: &[(&str, &str)],
         resolve: bool,
@@ -2371,10 +2387,17 @@ mod tests {
         let trees = Trees(&parsed, EntryShared::default());
         (0..parsed.len())
             .flat_map(|position| {
-                Context::new(&parsed[position], &index[position], &index, &trees, &[])
-                    .detect()
-                    .into_iter()
-                    .map(|entry| entry.key)
+                Context::new(
+                    position,
+                    &parsed[position],
+                    &index[position],
+                    &index,
+                    &trees,
+                    &[],
+                )
+                .detect()
+                .into_iter()
+                .map(|entry| entry.key)
             })
             .collect()
     }
@@ -2382,7 +2405,8 @@ mod tests {
     fn route(method: &str, path: &str, parameters: &[&str]) -> Option<Route> {
         Some(Route {
             method: method.to_string(),
-            path: path.to_string(),
+            path: Some(path.to_string()),
+            path_template: None,
             parameters: parameters.iter().map(|name| name.to_string()).collect(),
         })
     }
@@ -2444,8 +2468,9 @@ mod tests {
             1,
             "the module exports an Express application"
         );
+        // `Router` makes a router. It is not a router.
         let from_express = "import { Router } from \"express\";\n\nRouter.get(\"/x\", handler);\n";
-        assert!(entries(Language::JavaScript, &[("a.js", from_express)])
+        assert!(!entries(Language::JavaScript, &[("a.js", from_express)])
             .iter()
             .any(|entry| entry.kind == EntryKind::HttpHandler));
     }
@@ -2653,7 +2678,7 @@ mod tests {
         let state = |path: &str| {
             let entry = found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .unwrap();
             (entry.guards.join(","), entry.guards_unknown_reason)
         };
@@ -2765,7 +2790,7 @@ mod tests {
                     "{} {} {} [{}] {}",
                     entry.framework,
                     route.method,
-                    route.path,
+                    route.path_text(),
                     entry.guards.join(","),
                     entry
                         .symbol
@@ -3684,7 +3709,12 @@ func outside() {
             .filter(|entry| entry.kind == EntryKind::HttpHandler)
             .map(|entry| {
                 let route = entry.route.unwrap();
-                format!("{} {} {:?}", route.method, route.path, route.parameters)
+                format!(
+                    "{} {} {:?}",
+                    route.method,
+                    route.path_text(),
+                    route.parameters
+                )
             })
             .collect()
     }
@@ -5710,7 +5740,10 @@ func routes() {
         assert!(found.iter().all(|entry| {
             entry.framework == "gin"
                 && entry.guards.is_empty()
-                && entry.route.as_ref().is_some_and(|route| route.path == "/x")
+                && entry
+                    .route
+                    .as_ref()
+                    .is_some_and(|route| route.path_text() == "/x")
         }));
         (found.len(), took)
     }
@@ -6419,7 +6452,7 @@ func helper(count int) {}
             .filter(|entry| entry.kind == EntryKind::HttpHandler)
             .map(|entry| {
                 (
-                    entry.route.unwrap().path,
+                    entry.route.unwrap().path_text().to_string(),
                     entry
                         .symbol
                         .map(|symbol| symbol.rsplit('#').next().unwrap().to_string()),
@@ -6534,7 +6567,7 @@ func routes() {
             .iter()
             .filter_map(|entry| {
                 let route = entry.route.as_ref()?;
-                Some((route.path.clone(), entry.symbol.clone()))
+                Some((route.path_text().to_string(), entry.symbol.clone()))
             })
             .collect();
         handlers.sort();
@@ -6753,7 +6786,7 @@ func routes() {
             .iter()
             .map(|entry| {
                 let route = entry.route.as_ref().unwrap();
-                format!("{} {}", route.method, route.path)
+                format!("{} {}", route.method, route.path_text())
             })
             .collect()
     }
@@ -6785,7 +6818,7 @@ func routes() {
             .iter()
             .find(|entry| {
                 let route = entry.route.as_ref().unwrap();
-                route.method == "GET" && route.path == "/users/:id"
+                route.method == "GET" && route.path_text() == "/users/:id"
             })
             .unwrap();
         assert_eq!(
@@ -6863,7 +6896,14 @@ func routes() {
         );
         let preview = found
             .iter()
-            .find(|entry| entry.route.as_ref().unwrap().path.ends_with("/preview"))
+            .find(|entry| {
+                entry
+                    .route
+                    .as_ref()
+                    .unwrap()
+                    .path_text()
+                    .ends_with("/preview")
+            })
             .unwrap();
         assert_eq!(
             preview.symbol.as_deref(),
@@ -6902,7 +6942,7 @@ func routes() {
         assert_eq!(routes, ["GET /api/items", "GET /api/ping", "GET /pong"]);
         let pong = found
             .iter()
-            .find(|entry| entry.route.as_ref().unwrap().path == "/pong")
+            .find(|entry| entry.route.as_ref().unwrap().path_text() == "/pong")
             .unwrap();
         assert_eq!(
             pong.symbol.as_deref(),
@@ -6910,7 +6950,7 @@ func routes() {
         );
         let ping = found
             .iter()
-            .find(|entry| entry.route.as_ref().unwrap().path == "/api/ping")
+            .find(|entry| entry.route.as_ref().unwrap().path_text() == "/api/ping")
             .unwrap();
         assert_eq!(
             ping.symbol.as_deref(),
@@ -6930,8 +6970,8 @@ func routes() {
             ["ANY /w", "GET /", "GET /x", "GET /y", "GET /z", "POST /x"]
         );
         for entry in &found {
-            let path = &entry.route.as_ref().unwrap().path;
-            let wanted = match path.as_str() {
+            let path = &entry.route.as_ref().unwrap().path_text();
+            let wanted = match *path {
                 "/" => "home",
                 other => other.trim_start_matches('/'),
             };
@@ -6957,7 +6997,7 @@ func routes() {
             .map(|entry| {
                 let route = entry.route.as_ref().unwrap();
                 (
-                    format!("{} {}", route.method, route.path),
+                    format!("{} {}", route.method, route.path_text()),
                     entry.guards.clone(),
                 )
             })
@@ -7071,7 +7111,7 @@ func routes() {
         let by_path = |path: &str| {
             let entry = found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .unwrap();
             (entry.symbol.clone(), entry.guards.clone())
         };
@@ -7341,7 +7381,7 @@ func routes() {
         assert!(found.iter().all(|entry| entry.symbol.is_some()));
         let users = found
             .iter()
-            .find(|entry| entry.route.as_ref().unwrap().path == "/u")
+            .find(|entry| entry.route.as_ref().unwrap().path_text() == "/u")
             .unwrap();
         assert_eq!(users.guards.len(), 2 * opening_count);
         elapsed
@@ -7517,7 +7557,7 @@ func routes() {
         let symbol_of = |action: &str| {
             found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == format!("/{action}"))
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == format!("/{action}"))
                 .unwrap()
                 .symbol
                 .clone()
@@ -7668,7 +7708,7 @@ func routes() {
         let by_path = |path: &str| {
             let entry = found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .unwrap();
             (entry.symbol.is_some(), entry.guards.clone())
         };
@@ -7698,7 +7738,7 @@ func routes() {
         let by_path = |path: &str| {
             let entry = found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .unwrap();
             (entry.symbol.is_some(), entry.guards.clone())
         };
@@ -7913,7 +7953,7 @@ func routes() {
         let by_path = |path: &str| {
             let entry = found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .unwrap();
             (entry.symbol.is_some(), entry.guards.clone())
         };
@@ -8371,7 +8411,7 @@ func routes() {
         let by_path = |path: &str| {
             let entry = found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .unwrap();
             (entry.symbol.is_some(), entry.guards.clone())
         };
@@ -8548,7 +8588,7 @@ func routes() {
         let files = [("config/routes.rb", routes.as_str())];
         let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), 1);
-        let path = &found[0].route.as_ref().unwrap().path;
+        let path = &found[0].route.as_ref().unwrap().path_text();
         assert_eq!(path.len(), 2 * depth + 2);
         assert!(path.ends_with("/a/x"));
         elapsed
@@ -8615,7 +8655,7 @@ func routes() {
         let by_path = |path: &str| {
             found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .unwrap()
         };
         for path in ["/a", "/c", "/d"] {
@@ -8641,7 +8681,7 @@ func routes() {
         let by_path = |path: &str| {
             let entry = found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .unwrap();
             (entry.symbol.is_some(), entry.guards.clone())
         };
@@ -8892,7 +8932,7 @@ func routes() {
         let by_path = |path: &str| {
             found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .unwrap()
         };
         let module = Some(GuardsUnknownReason::IncludedModule);
@@ -8970,7 +9010,7 @@ func routes() {
         let by_path = |path: &str| {
             found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .unwrap()
                 .guards
                 .clone()
@@ -8982,7 +9022,7 @@ func routes() {
         let by_path = |path: &str| {
             found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .unwrap()
                 .guards
                 .clone()
@@ -9233,7 +9273,12 @@ func routes() {
             );
             let found = rails_routes(&routes, &[("controllers/chain.rb", classes.as_str())]);
             for entry in &found {
-                let action = entry.route.as_ref().unwrap().path.trim_start_matches('/');
+                let action = entry
+                    .route
+                    .as_ref()
+                    .unwrap()
+                    .path_text()
+                    .trim_start_matches('/');
                 let mut expected: Vec<&str> = Vec::new();
                 for (kind, list, name) in &replay {
                     let (_, only, except) = lists[*list];
@@ -9514,7 +9559,7 @@ func routes() {
         let by_path = |path: &str| {
             found
                 .iter()
-                .find(|entry| entry.route.as_ref().unwrap().path == path)
+                .find(|entry| entry.route.as_ref().unwrap().path_text() == path)
                 .map(|entry| entry.guards.clone())
         };
         assert_eq!(by_path("/x"), Some(strings(&["posts"])));
