@@ -109,6 +109,8 @@ pub struct Draft<'tree> {
     pub owner: Option<usize>,
     /// The declared type of the result, as the source has it.
     pub return_type: Option<String>,
+    /// The names of the type parameters of a generic definition, in order.
+    pub type_parameters: Vec<String>,
     /// The definition implements a member of a trait or an interface in a
     /// block that is not the body of its type, as a Rust `impl Trait for Type` does.
     pub trait_implementation: bool,
@@ -161,6 +163,8 @@ pub struct LinkFacts {
     /// contains the symbol.
     pub parent: Option<usize>,
     pub return_type: Option<String>,
+    /// The names of the type parameters of a generic definition, in order.
+    pub type_parameters: Vec<String>,
     pub trait_implementation: bool,
     pub default_export: bool,
     pub function_value: bool,
@@ -995,6 +999,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 .then(|| node.child_by_field_name(self.return_type_field))
                 .flatten()
                 .map(|result| context.text(result)),
+            type_parameters: Vec::new(),
             trait_implementation: false,
             default_export: false,
             function_value: false,
@@ -1815,6 +1820,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             parameter_types: draft.parameter_types,
             parent,
             return_type: draft.return_type,
+            type_parameters: draft.type_parameters,
             trait_implementation: draft.trait_implementation,
             default_export: draft.default_export,
             function_value: draft.function_value,

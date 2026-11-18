@@ -175,6 +175,29 @@ fn is_union(text: &str) -> bool {
     })
 }
 
+/// The parts of the text of a type at each `|` that is not in brackets. The
+/// `>` of an arrow `=>` does not close a bracket.
+fn top_level_union(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start, mut previous) = (0usize, 0usize, ' ');
+    for (position, character) in text.char_indices() {
+        match character {
+            '(' | '[' | '{' | '<' => depth += 1,
+            '>' if previous == '=' => {}
+            ')' | ']' | '}' | '>' => depth = depth.saturating_sub(1),
+            '|' if depth == 0 => {
+                parts.push(text[start..position].trim());
+                start = position + 1;
+            }
+            _ => {}
+        }
+        previous = character;
+    }
+    parts.push(text[start..].trim());
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
 fn is_callable(symbol: &Symbol) -> bool {
     matches!(
         symbol.kind,
@@ -1397,6 +1420,21 @@ impl<'a> Resolver<'a> {
             };
         }
         let declared = self.facts(*callee).return_type.as_deref()?;
+        // A type parameter of a TypeScript function is not a type of the
+        // repository. Only an argument that is a class gives its value.
+        let result_name = required_type(declared);
+        if self
+            .facts(*callee)
+            .type_parameters
+            .iter()
+            .any(|parameter| parameter == result_name)
+        {
+            if !whole {
+                return None;
+            }
+            let site = &facts.reference_facts[position];
+            return self.class_of_constructor_argument(file, site, *callee, result_name);
+        }
         let mut declared = one_result(declared, index)?;
         // Rust `call()?` gives the value of a `Result` or of an `Option`.
         // The other ways to get the value give no type.
@@ -1416,6 +1454,119 @@ impl<'a> Resolver<'a> {
             return if element { None } else { own_type() };
         }
         Some(self.types_of_text(declared, callee.0, element))
+    }
+
+    /// The class that a call of a generic function gives, when the result
+    /// type is the type parameter `parameter` and one parameter of the
+    /// function is a constructor of `parameter`. The argument at that
+    /// position must be the name of a class, as `Container.get(Service)` has.
+    fn class_of_constructor_argument(
+        &self,
+        file: usize,
+        site: &ReferenceFacts,
+        callee: Id,
+        parameter: &str,
+    ) -> Option<Vec<Id>> {
+        let declared = self.facts(callee).parameter_types.as_ref()?;
+        let positions: Vec<usize> = declared
+            .iter()
+            .enumerate()
+            .filter(|(_, text)| self.constructs(text, parameter, callee.0, 0))
+            .map(|(position, _)| position)
+            .collect();
+        let [position] = positions.as_slice() else {
+            return None;
+        };
+        let Some(Argument::Name(argument)) = site.arguments.get(*position) else {
+            return None;
+        };
+        // A local value can hold a different class.
+        let chain = self.chain(file, site.owner);
+        if self
+            .local(&chain, file, argument, Some(site.start_byte))
+            .is_some()
+        {
+            return None;
+        }
+        let classes: Vec<Id> = self
+            .types(argument, None, file)
+            .into_iter()
+            .filter(|id| self.symbol(*id).kind == SymbolKind::Class)
+            .collect();
+        (!classes.is_empty()).then_some(classes)
+    }
+
+    /// The type aliases that `name` names in `file`: a type alias of the file,
+    /// else the type alias that an import of the name gives.
+    fn type_aliases(&self, name: &str, file: usize) -> Vec<Id> {
+        let is_alias = |id: &Id| self.symbol(*id).kind == SymbolKind::TypeAlias;
+        let own: Vec<Id> = self
+            .top_level(name, &[file])
+            .into_iter()
+            .filter(is_alias)
+            .collect();
+        if !own.is_empty() {
+            return own;
+        }
+        self.files[file]
+            .imports
+            .iter()
+            .filter(|binding| binding.local_name.as_deref() == Some(name))
+            .flat_map(|binding| {
+                let imported = binding.imported_name.as_deref().unwrap_or(name);
+                self.target_files(binding)
+                    .into_iter()
+                    .flat_map(move |target| self.exported(target, imported).to_vec())
+            })
+            .filter(is_alias)
+            .collect()
+    }
+
+    /// Tells if the declared type `text` in `file` is a constructor of the
+    /// type parameter `parameter`: `new (...) => T`, `abstract new (...) => T`,
+    /// a type alias of a constructor, or a union of these.
+    fn constructs(&self, text: &str, parameter: &str, file: usize, depth: usize) -> bool {
+        if depth > 4 {
+            return false;
+        }
+        let text: String = required_type(text).split_whitespace().collect();
+        let parts = top_level_union(&text);
+        !parts.is_empty()
+            && parts.iter().all(|part| {
+                let part = part.strip_prefix("abstract").unwrap_or(part);
+                if part.starts_with("new(") {
+                    return part
+                        .rsplit_once("=>")
+                        .is_some_and(|(_, result)| result == parameter);
+                }
+                // An alias with type arguments, as `ServiceIdentifier<T>`.
+                let Some((alias, arguments)) =
+                    part.strip_suffix('>').and_then(|part| part.split_once('<'))
+                else {
+                    return false;
+                };
+                let arguments = split_list(arguments);
+                let at: Vec<usize> = arguments
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, argument)| **argument == parameter)
+                    .map(|(position, _)| position)
+                    .collect();
+                let [at] = at.as_slice() else {
+                    return false;
+                };
+                let aliases = self.type_aliases(alias, file);
+                let [alias] = aliases.as_slice() else {
+                    return false;
+                };
+                let facts = self.facts(*alias);
+                let (Some(aliased), Some(inner)) =
+                    (facts.return_type.as_deref(), facts.type_parameters.get(*at))
+                else {
+                    return false;
+                };
+                self.constructs(aliased, inner, alias.0, depth + 1)
+            })
     }
 
     /// The members with the name `name` of the types, when they are `cfg`
@@ -1940,6 +2091,27 @@ impl<'a> Resolver<'a> {
                     .collect();
                 return Outcome::of(Basis::ImportedModule, self.preferred(found, arity))
                     .unwrap_or_else(|| Outcome::none(Status::Unresolved));
+            }
+            // The import can name a variable at the top level of the module, as
+            // `export const container = new Container()` is. The declared type
+            // or the first value of the variable gives its type.
+            let imported = imported.unwrap_or(x);
+            let variables: Vec<(usize, &Local)> = self
+                .target_files(binding)
+                .into_iter()
+                .flat_map(|target| {
+                    self.locals_of(target, None, imported)
+                        .filter(|local| local.block.is_none())
+                        .map(move |local| (target, local))
+                })
+                .collect();
+            if let [(target, variable)] = variables.as_slice() {
+                let types = self
+                    .local_types(variable, *target, depth)
+                    .filter(|types| !types.is_empty());
+                if let Some(types) = types {
+                    return self.on_types(&types, name, arity, Basis::ReceiverDeclaredType, file);
+                }
             }
         }
         let types = self.types(x, None, file);
@@ -4613,6 +4785,70 @@ mod ecma_overload_tests {
                 )),
                 "{found:?}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod ecma_generic_tests {
+    use super::testing::rows;
+
+    const DI: &str = "export type Constructable<T = unknown> = new (...args: any[]) => T;\nexport type AbstractConstructable<T = unknown> = abstract new (...args: any[]) => T;\nexport type ServiceIdentifier<T = unknown> = Constructable<T> | AbstractConstructable<T>;\n\nclass ContainerClass {\n  get<T>(type: ServiceIdentifier<T>): T {\n    return undefined as T;\n  }\n\n  make<T>(factory: () => T): T {\n    return factory();\n  }\n\n  first<T>(items: T[]): T {\n    return items[0];\n  }\n\n  build<T>(type: new () => T): T {\n    return new type();\n  }\n}\n\nexport const Container = new ContainerClass();\n";
+    const SERVICES: &str = "export class Repo {\n  plain(): number {\n    return 1;\n  }\n}\n\nexport class T {\n  plain(): number {\n    return 2;\n  }\n}\n";
+    const MAIN: &str = "import { Container } from './di';\nimport { Repo } from './services';\n\nexport function run(): number {\n  const a = Container.get(Repo).plain();\n  const b = Container.make(() => new Repo()).plain();\n  const c = Container.first([new Repo()]).plain();\n  const d = Container.build(Repo).plain();\n  return a + b + c + d;\n}\n";
+
+    #[test]
+    fn test_generic_result_of_a_constructor_argument_typescript() {
+        for extension in ["ts", "tsx"] {
+            let di = format!("di.{extension}");
+            let services = format!("services.{extension}");
+            let main = format!("main.{extension}");
+            let files = [
+                (di.as_str(), DI),
+                (services.as_str(), SERVICES),
+                (main.as_str(), MAIN),
+            ];
+            let found: Vec<String> = rows(&files, &main)
+                .into_iter()
+                .filter(|row| row.contains(">(..).plain ") || row.contains(">Container."))
+                .collect();
+            let repo = format!("[services.{extension}#Repo.plain]");
+            let get = format!("[di.{extension}#ContainerClass.get]");
+            let build = format!("[di.{extension}#ContainerClass.build]");
+            assert!(
+                found.contains(&format!(
+                    "5 run>Container.get UniqueCandidate ReceiverDeclaredType {get}"
+                )),
+                "{found:?}"
+            );
+            assert!(
+                found.contains(&format!(
+                    "5 run>(..).plain UniqueCandidate ReceiverDeclaredType {repo}"
+                )),
+                "{found:?}"
+            );
+            assert!(
+                found.contains(&format!(
+                    "8 run>Container.build UniqueCandidate ReceiverDeclaredType {build}"
+                )),
+                "{found:?}"
+            );
+            assert!(
+                found.contains(&format!(
+                    "8 run>(..).plain UniqueCandidate ReceiverDeclaredType {repo}"
+                )),
+                "{found:?}"
+            );
+            // The type parameter `T` is not the class `T`, and a value argument gives no type.
+            for line in ["6", "7"] {
+                assert!(
+                    found
+                        .iter()
+                        .any(|row| row.starts_with(&format!("{line} run>(..).plain "))
+                            && !row.contains("UniqueCandidate")),
+                    "{line}: {found:?}"
+                );
+            }
         }
     }
 }

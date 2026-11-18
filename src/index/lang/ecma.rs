@@ -860,6 +860,20 @@ impl LanguageSpec for Ecma {
                 }),
             };
         }
+        if let Some(parameters) = node.child_by_field_name("type_parameters") {
+            let mut cursor = parameters.walk();
+            draft.type_parameters = parameters
+                .named_children(&mut cursor)
+                .filter_map(|parameter| parameter.child_by_field_name("name"))
+                .map(|name| context.text(name))
+                .collect();
+        }
+        // The aliased type of `type Name = ...` is in the place of a result type.
+        if draft.kind == SymbolKind::TypeAlias {
+            draft.return_type = node
+                .child_by_field_name("value")
+                .map(|value| context.text(value));
+        }
         draft.default_export = context.parent(node).is_some_and(|parent| {
             parent.kind() == EXPORT_STATEMENT && context.text(parent).starts_with("export default")
         });
