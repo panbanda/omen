@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "language": "typescript",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid TypeScript. The imports need packages that the case does not include. `cleanup` is a declared constant of `app.ts`, and `app.ts` does not import `other.ts`. The harness does not run the code.",
+  "closed_world": false,
+  "references": [
+    {
+      "label": "callback_by_name",
+      "user": "app.ts#createJob",
+      "line": 27,
+      "name": "audit",
+      "expected": ["app.ts#audit"]
+    },
+    {
+      "label": "nested_function_as_callback",
+      "user": "app.ts#createJob",
+      "line": 26,
+      "name": "loadModule",
+      "expected": ["app.ts#createJob.loadModule"]
+    },
+    {
+      "label": "method_of_the_object",
+      "user": "app.ts#JobRunner.start",
+      "line": 18,
+      "name": "step",
+      "expected": ["app.ts#JobRunner.step"]
+    },
+    {
+      "label": "shadowed_name",
+      "user": "app.ts#shadowed",
+      "line": 34,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "same_name_in_file_without_import",
+      "user": "app.ts#otherFile",
+      "line": 39,
+      "name": "cleanup",
+      "expected": []
+    },
+    {
+      "label": "name_in_comment",
+      "user": "app.ts#textOnly",
+      "line": 44,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "name_in_string",
+      "user": "app.ts#textOnly",
+      "line": 45,
+      "name": "audit",
+      "expected": []
+    }
+  ],
+  "paths": [
+    {
+      "label": "handler_to_nested_callback",
+      "entry_file": "app.ts",
+      "entry_line": 49,
+      "sink_file": "app.ts",
+      "sink_line": 24,
+      "steps": ["app.ts#createJob", "app.ts#createJob.loadModule"],
+      "weakest_basis": "lexical_scope",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "handler_to_callback",
+      "entry_file": "app.ts",
+      "entry_line": 49,
+      "sink_file": "app.ts",
+      "sink_line": 9,
+      "steps": ["app.ts#createJob", "app.ts#audit"],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "handler_to_method_value",
+      "entry_file": "app.ts",
+      "entry_line": 49,
+      "sink_file": "app.ts",
+      "sink_line": 14,
+      "steps": ["app.ts#createJob", "app.ts#JobRunner.start", "app.ts#JobRunner.step"],
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "shadowed_name_has_no_path",
+      "entry_file": "app.ts",
+      "entry_line": 50,
+      "sink_file": "app.ts",
+      "sink_line": 9,
+      "flagged": false
+    },
+    {
+      "label": "file_without_import_has_no_path",
+      "entry_file": "app.ts",
+      "entry_line": 51,
+      "sink_file": "other.ts",
+      "sink_line": 4,
+      "flagged": false
+    },
+    {
+      "label": "text_has_no_path",
+      "entry_file": "app.ts",
+      "entry_line": 52,
+      "sink_file": "app.ts",
+      "sink_line": 9,
+      "flagged": false
+    }
+  ]
+}

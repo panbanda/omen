@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "language": "c",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid C. `cleanup` in `main.c` is a pointer variable that a different translation unit defines, and the function `cleanup` of `other.c` is static. C has no function in a function, thus the case has no nested function. The harness does not run the code.",
+  "closed_world": false,
+  "references": [
+    {
+      "label": "function_pointer_by_name",
+      "user": "main.c#main",
+      "line": 25,
+      "name": "audit",
+      "expected": ["main.c#audit"]
+    },
+    {
+      "label": "address_of_function",
+      "user": "main.c#main",
+      "line": 26,
+      "name": "on_signal",
+      "expected": ["main.c#on_signal"]
+    },
+    {
+      "label": "shadowed_name",
+      "user": "main.c#shadowed",
+      "line": 16,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "same_name_in_file_without_declaration",
+      "user": "main.c#main",
+      "line": 27,
+      "name": "cleanup",
+      "expected": []
+    },
+    {
+      "label": "name_in_comment",
+      "user": "main.c#text_only",
+      "line": 20,
+      "name": "audit",
+      "expected": []
+    },
+    {
+      "label": "name_in_string",
+      "user": "main.c#text_only",
+      "line": 21,
+      "name": "audit",
+      "expected": []
+    }
+  ],
+  "paths": [
+    {
+      "label": "main_to_callback",
+      "entry_file": "main.c",
+      "entry_line": 24,
+      "sink_file": "main.c",
+      "sink_line": 8,
+      "steps": ["main.c#main", "main.c#audit"],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "main_to_signal_handler",
+      "entry_file": "main.c",
+      "entry_line": 24,
+      "sink_file": "main.c",
+      "sink_line": 12,
+      "steps": ["main.c#main", "main.c#on_signal"],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "function_references": 1
+    },
+    {
+      "label": "file_without_declaration_has_no_path",
+      "entry_file": "main.c",
+      "entry_line": 24,
+      "sink_file": "other.c",
+      "sink_line": 4,
+      "flagged": false
+    }
+  ]
+}

@@ -15,7 +15,7 @@ use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Error, Language, R
 use crate::index::model::ResolutionBasis;
 use crate::index::security::analysis::{analyze_with_index, Analysis, Options};
 use crate::index::security::entry::{EntryKind, EntryPoint, EntryRule};
-use crate::index::security::reach::{ChokePoint, Coverage, SinkPath};
+use crate::index::security::reach::{ChokePoint, Coverage, EdgeKind, SinkPath};
 use crate::index::security::spec::{Predicate, SinkSpec, Target};
 use crate::index::security::suppress::{InvalidSuppression, Suppressed};
 use crate::index::security::{Sink, SinkBasis, SinkCategory};
@@ -457,7 +457,19 @@ pub fn mermaid(report: &Report, limit: usize) -> String {
         .collect();
     let mut ids: BTreeMap<String, String> = BTreeMap::new();
     let mut text = String::from("flowchart LR\n");
-    let mut edges: Vec<(String, String)> = Vec::new();
+    // An edge is a call when a path has a call between the two nodes.
+    let mut edges: BTreeMap<(String, String), EdgeKind> = BTreeMap::new();
+    let mut order: Vec<(String, String)> = Vec::new();
+    let mut add = |from: String, to: String, kind: EdgeKind| {
+        let edge = (from, to);
+        match edges.get_mut(&edge) {
+            Some(known) => *known = (*known).min(kind),
+            None => {
+                edges.insert(edge.clone(), kind);
+                order.push(edge);
+            }
+        }
+    };
     let mut node = |key: String, label: String, text: &mut String| -> String {
         let next = ids.len();
         ids.entry(key)
@@ -489,7 +501,7 @@ pub fn mermaid(report: &Report, limit: usize) -> String {
                 name_of(&step.symbol).to_string(),
                 &mut text,
             );
-            edges.push((previous, current.clone()));
+            add(previous, current.clone(), step.edge);
             previous = current;
         }
         let last = node(
@@ -497,14 +509,15 @@ pub fn mermaid(report: &Report, limit: usize) -> String {
             format!("{} (CWE-{})", sink.category.name(), sink.cwe),
             &mut text,
         );
-        edges.push((previous, last));
+        add(previous, last, EdgeKind::Call);
     }
-    edges.dedup();
-    let mut seen = std::collections::BTreeSet::new();
-    for (from, to) in edges {
-        if seen.insert((from.clone(), to.clone())) {
-            text.push_str(&format!("  {from} --> {to}\n"));
-        }
+    for edge in order {
+        // A dotted arrow is a function reference: the symbol does not call the next symbol.
+        let arrow = match edges[&edge] {
+            EdgeKind::Call => "-->",
+            EdgeKind::FunctionReference => "-.->",
+        };
+        text.push_str(&format!("  {} {arrow} {}\n", edge.0, edge.1));
     }
     text
 }
@@ -674,6 +687,16 @@ mod tests {
             properties["experimental_off"],
             json!(["hardcoded_credential"])
         );
+    }
+
+    #[test]
+    fn the_mermaid_chart_has_a_dotted_arrow_for_a_function_reference() {
+        let source = "from flask import Flask\n\napp = Flask(__name__)\n\n@app.route(\"/run\", methods=[\"POST\"])\ndef run_command(pool):\n    def load():\n        eval(pool.code)\n\n    pool.submit(load)\n";
+        let report =
+            Report::from_analysis(analyze_sources(&[("app.py", source)], DEFAULT_MIN_BASIS));
+        let text = mermaid(&report, 10);
+        assert_eq!(text.matches(" -.-> ").count(), 1, "{text}");
+        assert_eq!(text.matches(" --> ").count(), 2, "{text}");
     }
 
     #[test]
