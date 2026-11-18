@@ -123,7 +123,7 @@ pub enum GuardsUnknownReason {
     /// The file includes the router two times, in a condition, or in a loop of routers.
     UnreadableInclude,
     /// A dependency is not a name that omen can read, or the `dependencies` value is not a
-    /// literal list.
+    /// literal list, or the file uses the `dependencies` attribute of an object.
     UnreadableDependency,
     /// The file has a wildcard import, which can bind a name again.
     WildcardImport,

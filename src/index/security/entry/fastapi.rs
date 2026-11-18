@@ -135,6 +135,10 @@ pub(super) struct Scopes<'a> {
     /// The file calls `add_middleware` or `middleware`, or it gives `FastAPI` a middleware
     /// argument. Omen does not read a middleware.
     middleware: bool,
+    /// The file uses the `dependencies` attribute of an object, as `router.dependencies.clear()`.
+    /// FastAPI copies the dependencies of a router at each registration, so a change makes
+    /// the dependencies of the constructor not known.
+    dependencies_changed: bool,
 }
 
 /// What a parameter of a handler is for FastAPI.
@@ -303,6 +307,11 @@ impl<'a> Context<'a> {
                             matches!(self.text(attribute), "add_middleware" | "middleware")
                         });
                     scopes.middleware |= self.has_middleware_argument(node);
+                }
+                "attribute" => {
+                    scopes.dependencies_changed |= node
+                        .child_by_field_name("attribute")
+                        .is_some_and(|attribute| self.text(attribute) == "dependencies");
                 }
                 _ => {}
             }
@@ -857,6 +866,9 @@ impl<'a> Context<'a> {
         };
         if scopes.middleware {
             self.note_guard_gap(GuardsUnknownReason::LayerNotRead);
+        }
+        if scopes.dependencies_changed {
+            self.note_guard_gap(GuardsUnknownReason::UnreadableDependency);
         }
         if self
             .file
@@ -1513,6 +1525,27 @@ mod tests {
                 states(&source),
                 expected_states(&[("/a", "layer_not_read")]),
                 "{middleware}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_change_of_the_dependencies_attribute_makes_the_guards_not_complete() {
+        for change in [
+            "router.dependencies.clear()",
+            "router.dependencies = []",
+            "router.dependencies.append(Depends(other))",
+            "router.dependencies += [Depends(other)]",
+            "app.router.dependencies.clear()",
+        ] {
+            let source = format!(
+                "from fastapi import APIRouter, Depends, FastAPI\n\napp = FastAPI()\nrouter = APIRouter(dependencies=[Depends(verify)])\n\n@router.get(\"/first\")\nasync def first():\n    return 1\n\n{change}\n\n@router.get(\"/second\")\nasync def second():\n    return 2\n\napp.include_router(router)\n"
+            );
+            let found = states(&source);
+            assert_eq!(found.len(), 2, "{change}");
+            assert!(
+                found.iter().all(|(_, state)| state != "complete"),
+                "{change}: {found:?}"
             );
         }
     }

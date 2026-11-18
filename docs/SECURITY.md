@@ -125,7 +125,7 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 | `unresolved_router` | FastAPI | The router is not one name with one assignment of a `FastAPI` call or an `APIRouter` call. |
 | `included_elsewhere` | FastAPI | The file does not include the `APIRouter` in an application. A different file can include it with more dependencies. |
 | `unreadable_include` | FastAPI | The file includes the router two times, in a condition, after the route, or in a loop of routers. |
-| `unreadable_dependency` | FastAPI | A dependency is not a name, or the `dependencies` value is not a literal list. |
+| `unreadable_dependency` | FastAPI | A dependency is not a name, or the `dependencies` value is not a literal list. Or the file uses the `dependencies` attribute of an object, as `router.dependencies.clear()`, which can change the dependencies that a later route gets. |
 | `wildcard_import` | FastAPI | The file has `from module import *`, which can bind a name again. |
 | `unread_middleware` | chi, echo, gin, gorilla/mux, `net/http` | A middleware argument is not a name. Its guard text is `<expression>` or `<function literal>`. Or a call around the handler is not a conversion, as `http.HandlerFunc(show)`, and not a middleware of the repository, as `middleware.Auth(cfg)(...)`. The handler and the known guards stay. |
 | `layer_not_read` | See the next table | The framework has a place for guards that omen does not read. |
