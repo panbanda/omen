@@ -7,6 +7,8 @@
 //! for a bare name.
 
 pub mod external;
+#[cfg(test)]
+mod function_references;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, OnceLock};
@@ -15,7 +17,7 @@ use parking_lot::RwLock;
 use rayon::prelude::*;
 
 use super::calls::{element_type, one_result, required_type, split_list, split_type, Argument};
-use super::extract::{name_path, FileSymbols, LinkFacts, Local};
+use super::extract::{name_path, FileSymbols, LinkFacts, Local, ReferenceFacts, ValueSites};
 use super::imports::Manifests;
 use super::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ReferenceKind, Resolution,
@@ -208,6 +210,10 @@ struct Resolver<'a> {
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
     locals_by_name: Vec<HashMap<&'a str, Vec<usize>>>,
+    /// For each file, the positions of the local names by owner and name, in
+    /// source order. Many functions of a file can bind one name, and a lookup
+    /// reads only the names of one function.
+    locals_by_owner: Vec<HashMap<&'a str, PositionsByOwner>>,
     /// For each file, the positions of the references by start byte, in source order.
     references_by_start: Vec<HashMap<usize, Vec<usize>>>,
     /// For each Ruby type, the types that have it as a direct parent type.
@@ -222,6 +228,9 @@ struct Resolver<'a> {
 /// The file, the name, and the qualifier of one type lookup.
 type TypeQuery = (usize, String, Option<String>);
 
+/// The positions of the local names of one name, by the definition that binds them.
+type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
+
 impl<'a> Resolver<'a> {
     fn new(files: &'a [FileSymbols], manifests: &'a Manifests) -> Self {
         let mut by_name: HashMap<&str, Vec<Id>> = HashMap::new();
@@ -235,6 +244,21 @@ impl<'a> Resolver<'a> {
                     .push((file, position));
             }
         }
+        let locals_by_owner = files
+            .iter()
+            .map(|facts| {
+                let mut positions: HashMap<&str, PositionsByOwner> = HashMap::new();
+                for (position, local) in facts.locals.iter().enumerate() {
+                    positions
+                        .entry(local.name.name.as_str())
+                        .or_default()
+                        .entry(local.owner)
+                        .or_default()
+                        .push(position);
+                }
+                positions
+            })
+            .collect();
         let locals_by_name = files
             .iter()
             .map(|facts| {
@@ -306,6 +330,7 @@ impl<'a> Resolver<'a> {
             by_name,
             by_file,
             locals_by_name,
+            locals_by_owner,
             references_by_start,
             ruby_children: OnceLock::new(),
             types_cache: RwLock::new(HashMap::new()),
@@ -929,12 +954,9 @@ impl<'a> Resolver<'a> {
         let owners = chain.iter().map(|id| Some(id.1)).chain([None]);
         for owner in owners {
             let found = self
-                .locals_named(file, name)
+                .locals_of(file, owner, name)
                 .filter(|local| {
-                    local.owner == owner
-                        && at.is_none_or(|at| {
-                            local.block.as_ref().is_none_or(|block| block.contains(&at))
-                        })
+                    at.is_none_or(|at| local.block.as_ref().is_none_or(|block| block.contains(&at)))
                 })
                 .min_by_key(|local| local.block.as_ref().map_or(usize::MAX, |block| block.len()));
             if found.is_some() {
@@ -942,6 +964,38 @@ impl<'a> Resolver<'a> {
             }
         }
         None
+    }
+
+    /// The local names `name` that the definition `owner` of `file` binds, in source order.
+    fn locals_of(
+        &self,
+        file: usize,
+        owner: Option<usize>,
+        name: &str,
+    ) -> impl Iterator<Item = &'a Local> + '_ {
+        let locals = &self.files[file].locals;
+        self.locals_by_owner[file]
+            .get(name)
+            .and_then(|owners| owners.get(&owner))
+            .into_iter()
+            .flatten()
+            .map(move |position| &locals[*position])
+    }
+
+    /// Tells if a definition of `chain` binds the local name `name` so that a
+    /// bare name at the byte `start` is that local name. The name is not in
+    /// scope in its own first value or before it, and a name of a block is
+    /// not in scope after the block.
+    fn is_local_value(&self, chain: &[Id], file: usize, name: &str, start: usize) -> bool {
+        chain.iter().any(|id| {
+            self.locals_of(file, Some(id.1), name).any(|local| {
+                local.name.value_start.is_none_or(|value| value < start)
+                    && local
+                        .block
+                        .as_ref()
+                        .is_none_or(|block| block.contains(&start))
+            })
+        })
     }
 
     /// The methods with this name in the language family. The rules offer
@@ -1585,8 +1639,6 @@ impl<'a> Resolver<'a> {
     /// Resolves a call of a bare name. `start` is the start byte of the call.
     fn bare(&self, file: usize, reference: &Reference, chain: &[Id], start: usize) -> Outcome {
         let name = reference.name.as_str();
-        // A local name is not in scope in its own first value or before it.
-        let in_scope = |local: &Local| local.name.value_start.is_none_or(|value| value < start);
         let arity = reference.arity;
         let family = self.family(file);
         let callable = |id: &Id| {
@@ -1615,13 +1667,10 @@ impl<'a> Resolver<'a> {
         if family == Family::Ruby {
             // A Ruby name without parentheses is a value when the method
             // binds the name. A function value needs `.call`.
-            let bound = self.locals_named(file, name).any(|local| {
-                in_scope(local)
-                    && local
-                        .owner
-                        .is_some_and(|owner| chain.contains(&(file, owner)))
-            });
-            if bound {
+            let bound = self.is_local_value(chain, file, name, start);
+            // The name in `method(:name)` is not a variable, and a variable
+            // can hold a function value. The lexical rule tells them apart.
+            if bound && reference.kind != ReferenceKind::FunctionReference {
                 return Outcome::none(Status::Unresolved);
             }
             // `new` in a class method makes an object of the class.
@@ -1630,8 +1679,9 @@ impl<'a> Resolver<'a> {
                     .unwrap_or_else(|| Outcome::none(Status::Unresolved));
             }
         }
-        // Java cannot call a local variable with the syntax of a function call.
-        if family != Family::Java {
+        // Java cannot call a local variable with the syntax of a function
+        // call. A local variable as a value can hold a lambda.
+        if family != Family::Java || reference.kind == ReferenceKind::FunctionReference {
             let lexical: Vec<Id> = self
                 .named_in(name, file)
                 .filter(|id| {
@@ -1661,13 +1711,7 @@ impl<'a> Resolver<'a> {
             if let Some(outcome) = Outcome::of(Basis::LexicalScope, lexical) {
                 return outcome;
             }
-            let value = self.locals_named(file, name).any(|local| {
-                in_scope(local)
-                    && local
-                        .owner
-                        .is_some_and(|owner| chain.contains(&(file, owner)))
-            });
-            if value {
+            if self.is_local_value(chain, file, name, start) {
                 return Outcome::none(Status::Unresolved);
             }
         }
@@ -2025,10 +2069,64 @@ impl<'a> Resolver<'a> {
         outcome
     }
 
+    /// Resolves one use of a name as a value in `file`. The rules are the
+    /// rules of a call. The result has a candidate only when each candidate
+    /// is a function or a method: a type, a constructor, and a local value
+    /// give no candidate.
+    fn resolve_function_reference(
+        &self,
+        file: usize,
+        reference: &Reference,
+        site: &ReferenceFacts,
+    ) -> Outcome {
+        let outcome = self.resolve_site(file, reference, site, 0);
+        let is_function = |id: &Id| {
+            let symbol = self.symbol(*id);
+            matches!(symbol.kind, SymbolKind::Function | SymbolKind::Method)
+                // A member of a function value, as `handler.name` is, is not the function.
+                && (reference.receiver.is_none() || symbol.name == reference.name)
+        };
+        if outcome.candidates.is_empty() || !outcome.candidates.iter().all(is_function) {
+            return Outcome::none(Status::Unresolved);
+        }
+        // A name at a value position is a variable or a field much more
+        // frequently than it is a function. The name alone is thus no
+        // evidence, also when only one function has it.
+        if outcome.basis == Some(Basis::NameOnly) {
+            return Outcome::none(Status::Unresolved);
+        }
+        // A variable is a function only when it holds a function value.
+        let held = outcome.basis == Some(Basis::LexicalScope)
+            && outcome.candidates.iter().all(|id| {
+                let facts = self.facts(*id);
+                facts.named_by_binding || facts.function_value
+            });
+        if site.variable && !held {
+            return Outcome::none(Status::Unresolved);
+        }
+        outcome
+    }
+
     fn resolve_by_rules(&self, file: usize, position: usize, depth: usize) -> Outcome {
         let facts = &self.files[file];
-        let reference = &facts.references[position];
-        let chain = self.chain(file, facts.reference_facts[position].owner);
+        self.resolve_site(
+            file,
+            &facts.references[position],
+            &facts.reference_facts[position],
+            depth,
+        )
+    }
+
+    /// Resolves one reference by the rules. `site` has the facts of the reference.
+    fn resolve_site(
+        &self,
+        file: usize,
+        reference: &Reference,
+        site: &ReferenceFacts,
+        depth: usize,
+    ) -> Outcome {
+        let facts = &self.files[file];
+        let chain = self.chain(file, site.owner);
         let name = reference.name.as_str();
         let arity = reference.arity;
         if reference.kind == ReferenceKind::Construct {
@@ -2038,7 +2136,7 @@ impl<'a> Resolver<'a> {
             } else {
                 self.types(name, reference.qualifier.as_deref(), file)
             };
-            let nullable = facts.reference_facts[position].nullable_target;
+            let nullable = site.nullable_target;
             let only_classes = !types.is_empty()
                 && types
                     .iter()
@@ -2113,17 +2211,12 @@ impl<'a> Resolver<'a> {
                 Outcome::of(Basis::EnclosingType, found)
                     .unwrap_or_else(|| Outcome::none(Status::Unresolved))
             }
-            Some(Receiver::Name(receiver)) => self.with_receiver(
-                file,
-                reference,
-                &chain,
-                receiver,
-                facts.reference_facts[position].start_byte,
-                depth,
-            ),
+            Some(Receiver::Name(receiver)) => {
+                self.with_receiver(file, reference, &chain, receiver, site.start_byte, depth)
+            }
             Some(Receiver::Expression) => {
                 // A receiver that is a call has the type of the result of that call.
-                let receiver = facts.reference_facts[position].receiver;
+                let receiver = site.receiver;
                 let call = receiver.and_then(|(start, end)| {
                     self.references_at(file, start)
                         .iter()
@@ -2136,15 +2229,11 @@ impl<'a> Resolver<'a> {
                     Some(call) => self.result_types(file, call, depth + 1),
                     // `values[i]` is one element of a declared slice, array,
                     // or list. A map gives no type.
-                    None if facts.reference_facts[position].receiver_indexed => facts
-                        .reference_facts[position]
-                        .receiver_path
-                        .as_ref()
-                        .and_then(|path| {
-                            let at = Some(facts.reference_facts[position].start_byte);
-                            self.path_types(file, &chain, path, true, at, depth + 1)
-                        }),
-                    None => match facts.reference_facts[position].receiver_path.as_deref() {
+                    None if site.receiver_indexed => site.receiver_path.as_ref().and_then(|path| {
+                        let at = Some(site.start_byte);
+                        self.path_types(file, &chain, path, true, at, depth + 1)
+                    }),
+                    None => match site.receiver_path.as_deref() {
                         // C++ `name.reset()` can call a smart pointer, and the
                         // extraction gives no name for the receiver. A member
                         // with a declared type that is not a pointer is an
@@ -2156,12 +2245,12 @@ impl<'a> Resolver<'a> {
                                 self.types_of_text(declared, text_file, false)
                             }),
                         Some(path) => {
-                            let at = Some(facts.reference_facts[position].start_byte);
+                            let at = Some(site.start_byte);
                             // In C and C++ the member after `.` of a field that
                             // has a pointer type belongs to the pointer, which
                             // can be a smart pointer. It is not a member of the pointee.
                             let pointer = self.family(file) == Family::C
-                                && !facts.reference_facts[position].arrow
+                                && !site.arrow
                                 && self.ends_in_pointer(file, &chain, path, at, depth);
                             if pointer {
                                 None
@@ -2183,7 +2272,7 @@ impl<'a> Resolver<'a> {
                 Some(qualifier) => {
                     // A chain of names that starts at a local name or at the
                     // object is a value, not a path of a module.
-                    let at = Some(facts.reference_facts[position].start_byte);
+                    let at = Some(site.start_byte);
                     let path = name_path(qualifier).filter(|path| {
                         path.len() > 1
                             && (SELF_WORDS.contains(&path[0].as_str())
@@ -2206,17 +2295,13 @@ impl<'a> Resolver<'a> {
                                 ),
                             }
                         }
-                        None => self.with_qualifier(
-                            file,
-                            reference,
-                            qualifier,
-                            &chain,
-                            facts.reference_facts[position].start_byte,
-                        ),
+                        None => {
+                            self.with_qualifier(file, reference, qualifier, &chain, site.start_byte)
+                        }
                     }
                 }
                 None => {
-                    let start = facts.reference_facts[position].start_byte;
+                    let start = site.start_byte;
                     self.bare(file, reference, &chain, start)
                 }
             },
@@ -2231,45 +2316,160 @@ pub fn resolve_references(files: &mut [FileSymbols]) {
     resolve_references_with(files, &Manifests::default());
 }
 
+/// Removes each use of a name as a value that cannot name a function, before
+/// the resolution. A candidate of a use is a function or a method. It has the
+/// name of the use, or an export or an import gives it a different name.
+/// Most uses name a field or a variable, and their facts use much memory.
+fn drop_values_that_name_no_function(files: &mut [FileSymbols]) {
+    let kept: Vec<Option<Vec<bool>>> = {
+        // The names that a function or a method can have in some file: its
+        // own name, a name that its module exports it under, and the local
+        // name of an import of such a name.
+        let mut functions: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for facts in files.iter() {
+            for (symbol, link) in facts.symbols.iter().zip(&facts.link_facts) {
+                if matches!(symbol.kind, SymbolKind::Function | SymbolKind::Method) {
+                    functions.insert(symbol.name.as_str());
+                    functions.extend(link.export_aliases.iter().map(String::as_str));
+                }
+            }
+        }
+        // An import can give a new name to a name that a different import
+        // gave. The search goes from each name to the local names that the
+        // imports give it, and it reads each name one time, thus a long chain
+        // of such imports costs linear time. The default export of a module
+        // has no name of its own, thus an import or an export that gives it a
+        // name starts a chain.
+        let mut renames: HashMap<&str, Vec<&str>> = HashMap::new();
+        let mut pending: Vec<&str> = functions.iter().copied().collect();
+        for binding in files.iter().flat_map(|facts| &facts.imports) {
+            let names = (
+                binding.imported_name.as_deref(),
+                binding.local_name.as_deref(),
+            );
+            let (Some(source), Some(local)) = names else {
+                continue;
+            };
+            if source == "default" {
+                if functions.insert(local) {
+                    pending.push(local);
+                }
+            } else if source != local {
+                renames.entry(source).or_default().push(local);
+            }
+        }
+        while let Some(name) = pending.pop() {
+            for local in renames.get(name).into_iter().flatten() {
+                if functions.insert(local) {
+                    pending.push(local);
+                }
+            }
+        }
+        files
+            .par_iter()
+            .map(|facts| {
+                if facts.value_sites.is_empty() {
+                    return None;
+                }
+                // The local names of the imports that bind a module of the
+                // repository or its default export. The value of such a name
+                // can be a function, and its name is not known here.
+                let imported: std::collections::HashSet<&str> = facts
+                    .imports
+                    .iter()
+                    .filter(|binding| {
+                        let in_repository = !matches!(
+                            binding.target_file,
+                            ImportTarget::External | ImportTarget::Unresolved
+                        );
+                        let source = binding.imported_name.as_deref();
+                        in_repository
+                            && source.is_none_or(|source| ["default", "*"].contains(&source))
+                    })
+                    .filter_map(|binding| binding.local_name.as_deref())
+                    .collect();
+                let sites = &facts.value_sites;
+                let can_name_a_function = |position: usize| {
+                    // A PHP variable has `$` before the name of the function value that it holds.
+                    let name = sites.name(position).trim_start_matches('$');
+                    functions.contains(name) || (sites.is_bare(position) && imported.contains(name))
+                };
+                Some((0..sites.len()).map(can_name_a_function).collect())
+            })
+            .collect()
+    };
+    for (file, kept) in files.iter_mut().zip(kept) {
+        if let Some(kept) = kept {
+            file.value_sites.retain(|position| kept[position]);
+        }
+    }
+}
+
 /// Like `resolve_references`. The manifests give the dependencies that Rust
 /// source can name without an import.
 pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests) {
     files.sort_by(|left, right| left.file.cmp(&right.file));
-    let resolutions: Vec<Vec<Resolution>> = {
+    drop_values_that_name_no_function(files);
+    // The function references of a file. `None` means that this is a second
+    // resolution: the uses are not there, and the list of the file stays.
+    type Resolutions = (Vec<Resolution>, Option<Vec<Reference>>);
+    let resolutions: Vec<Resolutions> = {
         let resolver = Resolver::new(files, manifests);
+        let resolution = |outcome: Outcome| {
+            let keys = |ids: &[Id]| {
+                let mut keys: Vec<SharedStr> = ids
+                    .iter()
+                    .map(|id| resolver.symbol(*id).key.clone())
+                    .collect();
+                keys.sort();
+                keys
+            };
+            Resolution {
+                superseded: keys(&outcome.superseded),
+                status: outcome.status,
+                basis: outcome.basis,
+                candidates: keys(&outcome.candidates),
+            }
+        };
         (0..files.len())
             .into_par_iter()
             .map(|file| {
-                (0..files[file].references.len())
-                    .map(|position| {
-                        let outcome = resolver.resolve(file, position, 0);
-                        let mut candidates: Vec<SharedStr> = outcome
-                            .candidates
-                            .iter()
-                            .map(|id| resolver.symbol(*id).key.clone())
-                            .collect();
-                        candidates.sort();
-                        let mut superseded: Vec<SharedStr> = outcome
-                            .superseded
-                            .iter()
-                            .map(|id| resolver.symbol(*id).key.clone())
-                            .collect();
-                        superseded.sort();
-                        Resolution {
-                            superseded,
-                            status: outcome.status,
-                            basis: outcome.basis,
-                            candidates,
-                        }
-                    })
-                    .collect()
+                let calls = (0..files[file].references.len())
+                    .map(|position| resolution(resolver.resolve(file, position, 0)))
+                    .collect();
+                let facts = &files[file];
+                let sites = &facts.value_sites;
+                let has_sites = !sites.is_empty() || facts.function_references.is_empty();
+                let values = has_sites.then(|| {
+                    let path = SharedStr::from(facts.file.as_str());
+                    (0..sites.len())
+                        .filter_map(|position| {
+                            let (mut reference, site) =
+                                sites.reference(position, &path, &facts.symbols);
+                            let outcome =
+                                resolver.resolve_function_reference(file, &reference, &site);
+                            // A use of a name that is not a function has no
+                            // candidate. The index does not keep it.
+                            if outcome.candidates.is_empty() {
+                                return None;
+                            }
+                            reference.resolution = resolution(outcome);
+                            Some(reference)
+                        })
+                        .collect()
+                });
+                (calls, values)
             })
             .collect()
     };
-    for (file, resolutions) in files.iter_mut().zip(resolutions) {
-        for (reference, resolution) in file.references.iter_mut().zip(resolutions) {
+    for (file, (calls, values)) in files.iter_mut().zip(resolutions) {
+        for (reference, resolution) in file.references.iter_mut().zip(calls) {
             reference.resolution = resolution;
         }
+        if let Some(values) = values {
+            file.function_references = values;
+        }
+        file.value_sites = ValueSites::default();
     }
 }
 
@@ -2815,8 +3015,20 @@ pub(crate) mod testing {
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(files);
         resolve_references_with(&mut facts, &manifests);
         let facts = facts.iter().find(|facts| facts.file == file).unwrap();
-        facts
-            .references
+        rows_of_references(&facts.references)
+    }
+
+    /// One line for each use of a function as a value in `file`, in the
+    /// format of `rows`.
+    pub(crate) fn function_reference_rows(files: &[(&str, &str)], file: &str) -> Vec<String> {
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(files);
+        resolve_references_with(&mut facts, &manifests);
+        let facts = facts.iter().find(|facts| facts.file == file).unwrap();
+        rows_of_references(&facts.function_references)
+    }
+
+    fn rows_of_references(references: &[Reference]) -> Vec<String> {
+        references
             .iter()
             .map(|reference| {
                 let caller = reference
