@@ -16,7 +16,7 @@ use crate::core::{ContentSource, FileSet, Result, TreeSource};
 use crate::git::GitRepo;
 use crate::index::build::CodeIndex;
 use crate::index::security::analysis::{analyze_with_index, Analysis, Options};
-use crate::index::security::entry::EntryPoint;
+use crate::index::security::entry::{EntryPoint, Route};
 use crate::index::security::reach::SinkPath;
 use crate::index::security::Sink;
 
@@ -84,12 +84,17 @@ fn sink_id(sink: &Sink, renames: &BTreeMap<String, String>) -> String {
     )
 }
 
+/// The method and the path of a route. A template that omen did not resolve can have the text of
+/// a resolved path, so the identity tells the two apart.
+fn route_id(route: &Route) -> String {
+    match &route.path {
+        Some(path) => format!("{} {path}", route.method),
+        None => format!("{} template:{}", route.method, route.path_text()),
+    }
+}
+
 fn entry_id(entry: &EntryPoint, renames: &BTreeMap<String, String>) -> String {
-    let route = entry
-        .route
-        .as_ref()
-        .map(|route| format!("{} {}", route.method, route.path_text()))
-        .unwrap_or_default();
+    let route = entry.route.as_ref().map(route_id).unwrap_or_default();
     // The key of an inline handler has its line and column, which change when lines move. The
     // symbol around the handler identifies it instead.
     let handler = match &entry.inline_handler {
@@ -609,6 +614,29 @@ mod tests {
         assert_eq!(head.reachability.paths.len(), 1);
         let found = diff(&base, &head, &BTreeSet::new());
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_resolved_path_and_a_template_with_the_same_text_are_two_entries() {
+        let source = |path: &str| {
+            format!(
+                "const express = require('express');\nconst {{ exec }} = require('child_process');\nconst app = express();\nlet id = process.env.ID;\napp.post({path}, (req, res) => {{ exec(req.body.c); }});\n"
+            )
+        };
+        let base = analyze_sources(&[("server.js", &source("'/${id}'"))], DEFAULT_MIN_BASIS);
+        let head = analyze_sources(&[("server.js", &source("`/${id}`"))], DEFAULT_MIN_BASIS);
+        assert_eq!(
+            base.entry_points[0].route.as_ref().unwrap().path_text(),
+            "/${id}"
+        );
+        assert_eq!(
+            head.entry_points[0].route.as_ref().unwrap().path_text(),
+            "/${id}"
+        );
+        let found = diff(&base, &head, &BTreeSet::new());
+        assert_eq!(found.entry_points_added.len(), 1, "{found:?}");
+        assert_eq!(found.entry_points_removed.len(), 1, "{found:?}");
+        assert_eq!(found.paths_added.len(), 1, "{found:?}");
     }
 
     #[test]
