@@ -265,6 +265,11 @@ impl AnalyzerTrait for Analyzer {
                 None => roots.extend(targets),
             }
         }
+        // A Go method that a type needs to implement an interface can run
+        // through the interface, also when no call names it.
+        let interface_methods = go_interface_methods(&index.files);
+        candidate_keys.extend(interface_methods.iter().cloned());
+        roots.extend(interface_methods);
         let manifests = crate::index::imports::Manifests::default();
         let rust_paths = RustPaths {
             modules: RustModules::new(&index.files, &manifests),
@@ -1756,6 +1761,83 @@ fn is_nameable_from_other_files(
     !private_by_keyword
 }
 
+/// The keys of the Go methods whose type has each method name of one
+/// interface of the repository, when the interface has the name of the
+/// method. The rule reads the own methods of the interface and of the type.
+/// It does not read the embedded types or the signatures. Thus it can find
+/// more methods than the compiler would need.
+fn go_interface_methods(files: &[FileSymbols]) -> Vec<SharedStr> {
+    let go_files = || files.iter().filter(|facts| facts.language == Language::Go);
+    // The method names of each interface.
+    let mut interfaces: Vec<BTreeSet<&str>> = Vec::new();
+    for facts in go_files() {
+        let mut by_interface: HashMap<&str, BTreeSet<&str>> = HashMap::new();
+        let interface_names: HashSet<&str> = facts
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.kind == SymbolKind::Interface)
+            .map(|symbol| symbol.name.as_str())
+            .collect();
+        for symbol in &facts.symbols {
+            if let (SymbolKind::Method, None, Some(container)) = (
+                symbol.kind,
+                &symbol.receiver_type,
+                symbol.container.as_deref(),
+            ) {
+                if interface_names.contains(container) {
+                    by_interface
+                        .entry(container)
+                        .or_default()
+                        .insert(symbol.name.as_str());
+                }
+            }
+        }
+        interfaces.extend(by_interface.into_values());
+    }
+    let mut by_method: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (position, names) in interfaces.iter().enumerate() {
+        for name in names {
+            by_method.entry(name).or_default().push(position);
+        }
+    }
+    // The methods of each type, by the directory of the package and the type.
+    let mut types: HashMap<(&str, &str), Vec<&Symbol>> = HashMap::new();
+    for facts in go_files() {
+        let package = Path::new(&facts.file)
+            .parent()
+            .and_then(Path::to_str)
+            .unwrap_or_default();
+        for symbol in &facts.symbols {
+            if let (SymbolKind::Method, Some(owner)) =
+                (symbol.kind, symbol.receiver_type.as_deref())
+            {
+                types.entry((package, owner)).or_default().push(symbol);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for methods in types.values() {
+        let names: BTreeSet<&str> = methods.iter().map(|method| method.name.as_str()).collect();
+        let implemented: HashSet<usize> = names
+            .iter()
+            .flat_map(|name| by_method.get(name).into_iter().flatten().copied())
+            .filter(|position| interfaces[*position].is_subset(&names))
+            .collect();
+        let needed: HashSet<&str> = implemented
+            .iter()
+            .flat_map(|position| interfaces[*position].iter().copied())
+            .collect();
+        found.extend(
+            methods
+                .iter()
+                .filter(|method| needed.contains(method.name.as_str()))
+                .map(|method| method.key.clone()),
+        );
+    }
+    found.sort();
+    found
+}
+
 /// Whether a call that the index cannot resolve can name the definition.
 ///
 /// The definition must be in the same group of languages. A syntax that keeps
@@ -1771,7 +1853,10 @@ fn can_be_named_by(def: &Definition, call: &Reference) -> bool {
     if language_group(def_language) != language_group(call_language) {
         return false;
     }
-    if def.file != call.file && !def.nameable_from_other_files {
+    // A Go name that is not exported is visible in each file of its package.
+    let same_go_package = def_language == Language::Go
+        && Path::new(&def.file).parent() == Path::new(call.file.as_str()).parent();
+    if def.file != call.file && !def.nameable_from_other_files && !same_go_package {
         return false;
     }
     let receiver_calls_a_member = matches!(
@@ -4338,5 +4423,70 @@ mod index_tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+}
+
+#[cfg(test)]
+mod go_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::core::FileSet;
+
+    fn dead_names(files: &[(&str, &str)]) -> Vec<String> {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, text) in files {
+            let path = directory.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+        }
+        let config = Config::default();
+        let file_set = FileSet::from_path(directory.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(directory.path()));
+        let mut names: Vec<String> = Analyzer::new()
+            .with_confidence(0.0)
+            .analyze(&ctx)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| format!("{}:{}:{}", item.file, item.line, item.name))
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A Go file can call a function that is not exported in each file of
+    /// its package. Two files with build constraints can each define it.
+    #[test]
+    fn test_unexported_function_of_a_different_file_of_the_package_is_alive() {
+        let dead = dead_names(&[
+            ("go.mod", "module example.com/shop\n"),
+            (
+                "process/command.go",
+                "package process\n\nfunc Start() {\n\tsetAttributes()\n}\n",
+            ),
+            (
+                "process/command_unix.go",
+                "//go:build unix\n\npackage process\n\nfunc setAttributes() {}\n\nfunc unusedUnix() {}\n",
+            ),
+            (
+                "process/command_windows.go",
+                "package process\n\nfunc setAttributes() {}\n",
+            ),
+        ]);
+        assert_eq!(dead, ["process/command_unix.go:7:unusedUnix"]);
+    }
+
+    /// A method that a type needs to implement an interface of the
+    /// repository is alive, also when no call names it.
+    #[test]
+    fn test_method_that_implements_an_interface_is_alive() {
+        let dead = dead_names(&[
+            ("go.mod", "module example.com/shop\n"),
+            (
+                "check/check.go",
+                "package check\n\ntype Check interface {\n\tinternalOnly()\n}\n\ntype Prefix string\n\nfunc (Prefix) internalOnly() {}\n\nfunc (Prefix) unused() {}\n\nfunc Run(check Check) {}\n",
+            ),
+        ]);
+        assert_eq!(dead, ["check/check.go:11:unused"]);
     }
 }
