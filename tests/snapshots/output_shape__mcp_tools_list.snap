@@ -802,6 +802,7 @@ expression: "responses[0]"
               "description": "The weakest basis of a call that gives a caller or a callee. The value `name_only` adds each call whose one candidate has only the name.",
               "enum": [
                 "name_only",
+                "implementation",
                 "same_package",
                 "imported_module",
                 "qualified_path",
@@ -929,6 +930,7 @@ expression: "responses[0]"
               "description": "The weakest basis of a call that gives a caller or a callee. The value `name_only` adds each call whose one candidate has only the name.",
               "enum": [
                 "name_only",
+                "implementation",
                 "same_package",
                 "imported_module",
                 "qualified_path",
@@ -1004,6 +1006,7 @@ expression: "responses[0]"
               "description": "The weakest basis of an edge of a path. The default is the value of `security.min_basis` in the configuration.",
               "enum": [
                 "name_only",
+                "implementation",
                 "same_package",
                 "imported_module",
                 "qualified_path",
