@@ -39,7 +39,9 @@ use std::sync::Arc;
 
 use tree_sitter::Node;
 
-use super::{syntax, Context, Draft, EntryBasis, EntryKind, Route, TreeSource};
+use super::{
+    syntax, Context, Draft, EntryBasis, EntryKind, GuardsUnknownReason, Route, TreeSource,
+};
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ImportKind, ImportTarget, Reference, Span, Symbol, SymbolKind};
@@ -518,6 +520,8 @@ struct Record {
     method: String,
     path: String,
     guards: Vec<String>,
+    /// A call around the handler can add a guard that omen does not read.
+    unread_wrapper: bool,
 }
 
 /// The router that a pure function returns.
@@ -556,6 +560,9 @@ struct Frame {
 pub(super) struct Handler {
     pub symbol: Option<String>,
     pub guards: Vec<String>,
+    /// A call around the handler is not a conversion and not a middleware that omen reads. It can
+    /// add a guard.
+    pub unread_wrapper: bool,
     function_like: bool,
 }
 
@@ -845,7 +852,7 @@ impl<'a> Context<'a> {
                 Handler {
                     function_like: symbol.is_some(),
                     symbol,
-                    guards: Vec::new(),
+                    ..Handler::default()
                 }
             }
             "func_literal" => Handler {
@@ -867,26 +874,32 @@ impl<'a> Context<'a> {
                         _ => Handler::default(),
                     };
                 }
+                let middleware = self.is_go_middleware(function, kind);
                 let mut inner: Vec<Handler> = arguments
                     .into_iter()
                     .map(|argument| self.go_handler_at(argument, kind, false))
                     .filter(|handler| handler.function_like)
                     .collect();
                 if inner.is_empty() {
-                    return Handler::default();
+                    return Handler {
+                        unread_wrapper: !middleware,
+                        ..Handler::default()
+                    };
                 }
+                let nested_unread = inner.iter().any(|handler| handler.unread_wrapper);
                 let (symbol, nested) = match inner.pop() {
                     Some(only) if inner.is_empty() => (only.symbol, only.guards),
                     _ => (None, Vec::new()),
                 };
                 let mut guards = Vec::new();
-                if self.is_go_middleware(function, kind) {
+                if middleware {
                     guards.extend(self.go_guard_name(function));
                 }
                 guards.extend(nested);
                 Handler {
                     symbol,
                     guards,
+                    unread_wrapper: !middleware || nested_unread,
                     function_like: true,
                 }
             }
@@ -4258,6 +4271,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             .filter(|_| !omitted)
             .map(|node| self.context.go_handler(node, kind));
         let mut guards = self.guard_names(guard_arguments);
+        let unread_wrapper = handler
+            .as_ref()
+            .is_some_and(|handler| handler.unread_wrapper);
         let symbol = handler.map(|handler| {
             guards.extend(handler.guards);
             handler.symbol
@@ -4278,6 +4294,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 method: method.to_string(),
                 path: path.to_string(),
                 guards: guards.clone(),
+                unread_wrapper,
             });
         }
     }
@@ -4300,6 +4317,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             method: "ANY".to_string(),
             path: String::new(),
             guards: Vec::new(),
+            unread_wrapper: false,
         });
     }
 
@@ -4618,7 +4636,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 guards,
                 basis: EntryBasis::Registered,
                 variant: None,
-                unknown: None,
+                unknown: record
+                    .unread_wrapper
+                    .then_some(GuardsUnknownReason::UnreadMiddleware),
             };
             let last = drafts.len() - 1;
             drafts[last] = Some((draft, duplicate));

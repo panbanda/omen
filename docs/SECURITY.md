@@ -127,7 +127,7 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 | `unreadable_include` | FastAPI | The file includes the router two times, in a condition, after the route, or in a loop of routers. |
 | `unreadable_dependency` | FastAPI | A dependency is not a name, or the `dependencies` value is not a literal list. |
 | `wildcard_import` | FastAPI | The file has `from module import *`, which can bind a name again. |
-| `unread_middleware` | chi, echo, gin, gorilla/mux | A middleware argument is not a name. Its guard text is `<expression>` or `<function literal>`. |
+| `unread_middleware` | chi, echo, gin, gorilla/mux, `net/http` | A middleware argument is not a name. Its guard text is `<expression>` or `<function literal>`. Or a call around the handler is not a conversion, as `http.HandlerFunc(show)`, and not a middleware of the repository, as `middleware.Auth(cfg)(...)`. The handler and the known guards stay. |
 | `layer_not_read` | See the next table | The framework has a place for guards that omen does not read. |
 
 Omen reads the full chain of the guards only for Rails, for FastAPI, and for the Go routers.
