@@ -284,7 +284,22 @@ mod tests {
         link_files(&mut index);
         resolve_imports(&mut index, &Manifests::default());
         resolve_references(&mut index);
-        find_sinks(&parsed, &index)
+        // The index can have another order than `files`. Each tree goes with the facts of
+        // the same path.
+        let mut by_path: std::collections::HashMap<String, ParseResult> = files
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .zip(parsed)
+            .collect();
+        let trees: Vec<ParseResult> = index
+            .iter()
+            .map(|file| {
+                by_path
+                    .remove(&*file.file)
+                    .expect("each file of the index has a tree")
+            })
+            .collect();
+        find_sinks(&trees, &index)
     }
 
     fn found(language: Language, files: &[(&str, &str)]) -> Vec<Found> {
@@ -1183,7 +1198,7 @@ mod tests {
         assert_eq!(
             found(
                 Language::TypeScript,
-                &[("main.ts", main), ("repository.ts", repository)]
+                &[("repository.ts", repository), ("main.ts", main)]
             ),
             [one("main.ts", 4, "sql_string_construction", "name_only")]
         );
