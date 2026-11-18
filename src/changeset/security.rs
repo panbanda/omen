@@ -90,12 +90,21 @@ fn entry_id(entry: &EntryPoint, renames: &BTreeMap<String, String>) -> String {
         .as_ref()
         .map(|route| format!("{} {}", route.method, route.path_text()))
         .unwrap_or_default();
+    // The key of an inline handler has its line and column, which change when lines move. The
+    // symbol around the handler identifies it instead.
+    let handler = match &entry.inline_handler {
+        Some(inline) => format!(
+            "{}.<inline>",
+            renamed(inline.enclosing.as_deref().unwrap_or(&entry.file), renames)
+        ),
+        None => renamed(entry.symbol.as_deref().unwrap_or(&entry.file), renames),
+    };
     format!(
         "{}|{}|{}|{}",
         entry.kind.name(),
         entry.framework,
         route,
-        renamed(entry.symbol.as_deref().unwrap_or(&entry.file), renames)
+        handler
     )
 }
 
@@ -584,6 +593,22 @@ mod tests {
         assert_eq!(found.paths_removed.len(), 2);
         assert_eq!(found.entry_points_removed.len(), 1);
         assert!(found.sinks_added.is_empty());
+    }
+
+    #[test]
+    fn an_inline_handler_that_moves_is_not_added_or_removed() {
+        let route = "app.post('/run', (req, res) => { exec(req.body.c); });\n";
+        let source = |blank_lines: usize| {
+            format!(
+                "const express = require('express');\nconst {{ exec }} = require('child_process');\nconst app = express();\n{}{route}",
+                "\n".repeat(blank_lines)
+            )
+        };
+        let base = analyze_sources(&[("server.js", &source(0))], DEFAULT_MIN_BASIS);
+        let head = analyze_sources(&[("server.js", &source(3))], DEFAULT_MIN_BASIS);
+        assert_eq!(head.reachability.paths.len(), 1);
+        let found = diff(&base, &head, &BTreeSet::new());
+        assert!(found.is_empty(), "{found:?}");
     }
 
     #[test]
