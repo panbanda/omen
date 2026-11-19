@@ -335,7 +335,7 @@ fn package_calls_resolve_at(files: usize) -> std::time::Duration {
             .iter()
             .map(|(path, source)| (path.as_str(), source.as_str())),
     );
-    let started = std::time::Instant::now();
+    let started = crate::index::timing::Stopwatch::start();
     let found = rows(&inputs, "shop/f0.go");
     let elapsed = started.elapsed();
     assert_eq!(
@@ -351,5 +351,5 @@ fn package_calls_resolve_at(files: usize) -> std::time::Duration {
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_builtin_calls_in_a_large_package_resolve_in_linear_time() {
-    super::function_references::assert_scales_linearly("files", 8_000, package_calls_resolve_at);
+    crate::index::timing::assert_scales_linearly("files", 8_000, package_calls_resolve_at);
 }

@@ -5278,7 +5278,7 @@ mod false_edge_tests {
             .map(|(path, source)| (path.as_str(), source.as_str()))
             .collect();
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
         let unique = facts
@@ -5383,10 +5383,10 @@ mod false_edge_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_calls_between_the_files_of_many_packages_resolve_in_linear_time() {
-        assert_doubles_at_most("go", 8_000, |size| {
+        crate::index::timing::assert_scales_linearly("go", 8_000, |size| {
             calls_between_the_files_of_packages_resolve_at(size, false)
         });
-        assert_doubles_at_most("java", 8_000, |size| {
+        crate::index::timing::assert_scales_linearly("java", 8_000, |size| {
             calls_between_the_files_of_packages_resolve_at(size, true)
         });
     }
@@ -5402,7 +5402,7 @@ mod false_edge_tests {
         }
         let files = [("src/P.java", source.as_str())];
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
         let unique = facts
@@ -5419,7 +5419,7 @@ mod false_edge_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_one_method_name_in_many_classes_resolves_in_linear_time() {
-        assert_doubles_at_most(
+        crate::index::timing::assert_scales_linearly(
             "classes",
             8_000,
             calls_of_one_method_name_in_many_classes_resolve_at,
@@ -5456,7 +5456,7 @@ mod false_edge_tests {
             .map(|(path, source)| (path.as_str(), source.as_str()))
             .collect();
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&inputs);
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
         let unique = facts
@@ -5473,7 +5473,11 @@ mod false_edge_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_calls_in_one_large_package_resolve_in_linear_time() {
-        assert_doubles_at_most("files", 16_000, calls_in_one_large_package_resolve_at);
+        crate::index::timing::assert_scales_linearly(
+            "files",
+            16_000,
+            calls_in_one_large_package_resolve_at,
+        );
     }
 }
 
