@@ -2728,9 +2728,11 @@ export default function anon(a) { if (a) {} return a; }
     /// The measures of a function with `depth` nested parentheses and `depth` nested blocks.
     fn deeply_nested_function_at(depth: usize) -> std::time::Duration {
         let code = format!(
-            "package p\nfunc f(x bool) int {{\n{}\nreturn {}\n}}\n",
-            format!("{}{}", "if x {".repeat(depth), "}".repeat(depth)),
-            format!("{}1{}", "(".repeat(depth), ")".repeat(depth))
+            "package p\nfunc f(x bool) int {{\n{}{}\nreturn {}1{}\n}}\n",
+            "if x {".repeat(depth),
+            "}".repeat(depth),
+            "(".repeat(depth),
+            ")".repeat(depth)
         );
         let started = std::time::Instant::now();
         let result = std::thread::Builder::new()
