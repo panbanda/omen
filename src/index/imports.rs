@@ -387,6 +387,22 @@ impl Manifests {
     }
 
     pub fn add(&mut self, path: &str, text: &str) {
+        self.add_each([(path, text)]);
+    }
+
+    /// Reads each file as `add` does. The packages are sorted one time, after
+    /// the last file.
+    pub fn add_each<'t>(&mut self, files: impl IntoIterator<Item = (&'t str, &'t str)>) {
+        for (path, text) in files {
+            self.add_without_order(path, text);
+        }
+        self.node_packages.sort_by(|left, right| {
+            (&left.name, &left.directory).cmp(&(&right.name, &right.directory))
+        });
+    }
+
+    /// Reads one file as `add` does, but does not sort the packages.
+    fn add_without_order(&mut self, path: &str, text: &str) {
         let here = directory(path);
         if typescript::is_project_file(file_name(path)) {
             if let Some(config) = typescript::project_config(text) {
@@ -394,9 +410,6 @@ impl Manifests {
             }
         } else if file_name(path) == "package.json" {
             self.node_packages.extend(node_package(here, text));
-            self.node_packages.sort_by(|left, right| {
-                (&left.name, &left.directory).cmp(&(&right.name, &right.directory))
-            });
         } else if file_name(path) == "go.mod" {
             self.go_modules
                 .extend(go_module_path(text).map(|module| (here.to_string(), module)));
