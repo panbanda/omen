@@ -842,7 +842,7 @@ mod tests {
                 })
                 .collect();
             let mut report = json!({ "files": files });
-            let started = std::time::Instant::now();
+            let started = crate::index::timing::Stopwatch::start();
             let page =
                 page_ranked_children(&mut report, "files", "functions", &COMPLEXITY_RANK, 0, 0)
                     .unwrap();

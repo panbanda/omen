@@ -17,4 +17,6 @@ pub mod security;
 pub mod test_code;
 #[cfg(test)]
 pub(crate) mod timing;
+#[cfg(test)]
+mod timing_tests;
 pub mod view;
