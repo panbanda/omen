@@ -517,7 +517,9 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
     let boundary_types = get_nested_scope_node_types(lang);
     let mut count = 0;
     let mut cursor = node.walk();
-    let start_depth = cursor.depth();
+    // The level of the cursor below `node`. `TreeCursor::depth` counts the levels each time,
+    // so a call for each node takes quadratic time in a deep tree.
+    let mut level = 0usize;
 
     loop {
         let current = cursor.node();
@@ -541,9 +543,9 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
         }
 
         // Traverse tree, stopping at nested function-scope boundaries.
-        let is_nested_scope_boundary =
-            cursor.depth() != start_depth && boundary_types.contains(&kind);
+        let is_nested_scope_boundary = level != 0 && boundary_types.contains(&kind);
         if !is_nested_scope_boundary && cursor.goto_first_child() {
+            level += 1;
             continue;
         }
 
@@ -551,9 +553,10 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
             if cursor.goto_next_sibling() {
                 break;
             }
-            if !cursor.goto_parent() || cursor.depth() < start_depth {
+            if !cursor.goto_parent() {
                 return count;
             }
+            level -= 1;
         }
     }
 }
@@ -674,7 +677,9 @@ fn calculate_cognitive_complexity(
 
     let mut complexity = 0;
     let mut cursor = node.walk();
-    let start_depth = cursor.depth();
+    // The level of the cursor below `node`. `TreeCursor::depth` counts the levels each time,
+    // so a call for each node takes quadratic time in a deep tree.
+    let mut level = 0usize;
 
     // Track nesting depth separately from cursor depth
     // Use a small stack to track depth changes at each cursor level
@@ -686,8 +691,6 @@ fn calculate_cognitive_complexity(
     loop {
         let current = cursor.node();
         let kind = current.kind();
-        let cursor_depth = cursor.depth();
-        let level = (cursor_depth - start_depth) as usize;
 
         // Ensure we have space for this level
         if level >= depth_at_level.len() {
@@ -702,7 +705,7 @@ fn calculate_cognitive_complexity(
         };
 
         let current_depth = depth_at_level[level];
-        let branch = if current.is_named() && cursor_depth != start_depth {
+        let branch = if current.is_named() && level != 0 {
             chain_branch(kind, parent_kind, cursor.field_name(), lang)
         } else {
             ChainBranch::None
@@ -766,11 +769,11 @@ fn calculate_cognitive_complexity(
         }
 
         // Traverse tree, stopping at nested function-scope boundaries. The
-        // starting node (cursor_depth == start_depth) is exempt so the
+        // starting node (level 0) is exempt so the
         // function's own top node is always descended into.
-        let is_nested_scope_boundary =
-            cursor_depth != start_depth && boundary_types.contains(&kind);
+        let is_nested_scope_boundary = level != 0 && boundary_types.contains(&kind);
         if !is_nested_scope_boundary && cursor.goto_first_child() {
+            level += 1;
             continue;
         }
 
@@ -778,9 +781,10 @@ fn calculate_cognitive_complexity(
             if cursor.goto_next_sibling() {
                 break;
             }
-            if !cursor.goto_parent() || cursor.depth() < start_depth {
+            if !cursor.goto_parent() {
                 return complexity;
             }
+            level -= 1;
         }
     }
 }
@@ -816,7 +820,9 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
     let boundary_types = get_nested_scope_node_types(lang);
     let mut max_depth = initial_depth;
     let mut cursor = node.walk();
-    let start_depth = cursor.depth();
+    // The level of the cursor below `node`. `TreeCursor::depth` counts the levels each time,
+    // so a call for each node takes quadratic time in a deep tree.
+    let mut level = 0usize;
 
     // Track nesting depth at each cursor level
     let mut depth_at_level: Vec<u32> = vec![initial_depth; 64];
@@ -825,8 +831,6 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
     loop {
         let current = cursor.node();
         let kind = current.kind();
-        let cursor_depth = cursor.depth();
-        let level = (cursor_depth - start_depth) as usize;
 
         if level >= depth_at_level.len() {
             depth_at_level.resize(level + 16, initial_depth);
@@ -851,7 +855,7 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
         // (e.g. "if") collide with their own anonymous keyword token, which
         // must not be treated as a second nesting construct.
         let is_else_if = current.is_named()
-            && cursor_depth != start_depth
+            && level != 0
             && chain_branch(kind, parent_kind, cursor.field_name(), lang) == ChainBranch::ElseIf;
         let child_depth = if is_else_if {
             current_depth
@@ -866,11 +870,11 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
         }
 
         // Traverse tree, stopping at nested function-scope boundaries. The
-        // starting node (cursor_depth == start_depth) is exempt so the
+        // starting node (level 0) is exempt so the
         // function's own top node is always descended into.
-        let is_nested_scope_boundary =
-            cursor_depth != start_depth && boundary_types.contains(&kind);
+        let is_nested_scope_boundary = level != 0 && boundary_types.contains(&kind);
         if !is_nested_scope_boundary && cursor.goto_first_child() {
+            level += 1;
             continue;
         }
 
@@ -878,9 +882,10 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
             if cursor.goto_next_sibling() {
                 break;
             }
-            if !cursor.goto_parent() || cursor.depth() < start_depth {
+            if !cursor.goto_parent() {
                 return max_depth;
             }
+            level -= 1;
         }
     }
 }
@@ -2718,6 +2723,35 @@ export default function anon(a) { if (a) {} return a; }
             assert_eq!(result.functions[0].name, "f", "{lang:?}");
             assert_eq!(result.total_cognitive, 1, "{lang:?}");
         }
+    }
+
+    /// The measures of a function with `depth` nested parentheses and `depth` nested blocks.
+    fn deeply_nested_function_at(depth: usize) -> std::time::Duration {
+        let code = format!(
+            "package p\nfunc f(x bool) int {{\n{}\nreturn {}\n}}\n",
+            format!("{}{}", "if x {".repeat(depth), "}".repeat(depth)),
+            format!("{}1{}", "(".repeat(depth), ")".repeat(depth))
+        );
+        let started = std::time::Instant::now();
+        let result = std::thread::Builder::new()
+            .stack_size(1 << 30)
+            .spawn(move || parse_and_analyze(code.as_bytes(), Language::Go, "a.go"))
+            .expect("spawn")
+            .join()
+            .expect("analysis");
+        let elapsed = started.elapsed();
+        assert_eq!(result.functions.len(), 1);
+        elapsed
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deeply_nested_functions_are_measured_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "deeply nested function",
+            2_500,
+            deeply_nested_function_at,
+        );
     }
 }
 
