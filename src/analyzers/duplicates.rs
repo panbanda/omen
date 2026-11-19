@@ -139,8 +139,8 @@ impl Analyzer {
     }
 
     /// The analyzer of `[duplicates]` and `exclude_tests` of the configuration.
-    /// `clones`, `defect`, `all`, and `report` use it, so they agree. `score`
-    /// uses the default values.
+    /// Each command that finds clones uses it, so all of them agree: `clones`,
+    /// `defect`, `score`, `all`, and `report`.
     pub fn from_config(config: &crate::config::Config) -> Self {
         Self::new()
             .with_min_tokens(config.duplicates.min_tokens)
