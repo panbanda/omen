@@ -43,11 +43,15 @@ def main
   puts Bot.greet
   speaker = Speaker.new
   puts speaker.say
-  point = Point.new(3, 4)
+  point = make_point
   puts point.norm
   flags = Flags.new
   puts flags.ready?
   Report.new.fill
+end
+
+def make_point
+  Point.new(3, 4)
 end
 
 main

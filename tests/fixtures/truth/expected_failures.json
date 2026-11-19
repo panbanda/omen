@@ -60,11 +60,6 @@
     "tracking": "the Ruby resolver does not bind `super` in a prepended module to the method of the class"
   },
   {
-    "id": "ruby/idioms/calls/struct_constructor/no_false_edge",
-    "reason": "false edge to main.rb:Flags:28, main.rb:Speaker:14, main.rb:initialize:33",
-    "tracking": "the Ruby resolver binds `X.new` of a class without `initialize` to unrelated classes and constructors"
-  },
-  {
     "id": "ruby/idioms/calls/struct_method/no_missed_edge",
     "reason": "no edge to main.rb:norm:23",
     "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"

@@ -279,6 +279,17 @@
       "start_line": 42,
       "end_line": 51,
       "exported": true
+    },
+    {
+      "label": "make_point",
+      "category": "free_function",
+      "file": "main.rb",
+      "name": "make_point",
+      "kind": "function",
+      "container": null,
+      "start_line": 53,
+      "end_line": 55,
+      "exported": true
     }
   ],
   "calls": [
@@ -365,8 +376,8 @@
     {
       "label": "struct_constructor",
       "category": "constructor",
-      "caller": "main",
-      "line": 46,
+      "caller": "make_point",
+      "line": 54,
       "callee_text": "Point.new",
       "expected": []
     },
