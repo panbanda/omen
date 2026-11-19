@@ -2190,20 +2190,16 @@ fn drain(v: &mut Vec<i32>) {
     /// The parentheses around a PHP jump level can be nested to any depth.
     #[test]
     fn test_php_jump_level_in_deeply_nested_parentheses() {
-        let depth = 100_000;
+        use crate::parser::deep;
         let code = format!(
-            "<?php\nfunction f() {{ while (1) {{ while (1) {{ break {}2{}; }} }} }}\n",
-            "(".repeat(depth),
-            ")".repeat(depth)
+            "<?php\nfunction f() {{ while (1) {{ while (1) {{ break {}; }} }} }}\n",
+            deep::nest("(", "2", ")")
         );
-        let handle = std::thread::Builder::new()
-            .stack_size(256 * 1024)
-            .spawn(move || {
-                let result = parse_and_analyze(code.as_bytes(), Language::Php, "a.php");
-                result.functions[0].metrics.cognitive
-            })
-            .unwrap();
-        assert_eq!(handle.join().expect("no stack overflow"), 4);
+        let cognitive = deep::on_small_stack(move || {
+            let result = parse_and_analyze(code.as_bytes(), Language::Php, "a.php");
+            result.functions[0].metrics.cognitive
+        });
+        assert_eq!(cognitive, 4);
     }
 
     fn assert_two_case_switch(code: &str, lang: Language, filename: &str) {

@@ -10,9 +10,15 @@ use crate::core::Language;
 
 use super::{ParseResult, Parser};
 
-/// The nesting depth of each source. A walk with one stack frame for each
-/// level overflows the stack of `on_small_stack` at this depth.
-pub const DEPTH: usize = 100_000;
+/// The nesting depth of each source of the debug tests. Each stack frame keeps at least a
+/// return address and a frame pointer, 16 bytes, so a walk with one frame for each level
+/// needs more than 80,000 bytes and overflows the 64 KiB stack of `on_small_stack`. The
+/// depth is small, so that each source parses in milliseconds.
+pub const DEPTH: usize = 5_000;
+
+/// The nesting depth of the release tests that run the whole analysis on a thread with the
+/// default stack.
+pub const LARGE_DEPTH: usize = 100_000;
 
 /// A source file with deep nesting.
 pub struct DeepSource {
@@ -21,8 +27,8 @@ pub struct DeepSource {
     pub source: String,
     /// Code outside the walks takes time in proportion to the depth for each
     /// level of this source: `Node::parent` or `Node::prev_sibling` for each
-    /// nested scope, block, or declarator, or the text of each call of a chain. The shared sources of
-    /// the tests leave out these sources.
+    /// nested scope, block, or declarator, or the text of each call of a chain. The release
+    /// tests at `LARGE_DEPTH` leave out these sources.
     pub slow: bool,
 }
 
@@ -34,10 +40,13 @@ impl DeepSource {
     }
 }
 
-/// Run `work` on a thread with a stack of 256 KiB.
+/// The size of the stack of `on_small_stack`.
+pub const SMALL_STACK: usize = 64 * 1024;
+
+/// Run `work` on a thread with a stack of `SMALL_STACK` bytes.
 pub fn on_small_stack<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::Builder::new()
-        .stack_size(256 * 1024)
+        .stack_size(SMALL_STACK)
         .spawn(work)
         .expect("spawn")
         .join()
@@ -46,15 +55,20 @@ pub fn on_small_stack<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'stat
 
 /// `open` `DEPTH` times, then `middle`, then `close` `DEPTH` times.
 pub fn nest(open: &str, middle: &str, close: &str) -> String {
-    let mut text = open.repeat(DEPTH);
+    nest_to(DEPTH, open, middle, close)
+}
+
+/// `open` `depth` times, then `middle`, then `close` `depth` times.
+pub fn nest_to(depth: usize, open: &str, middle: &str, close: &str) -> String {
+    let mut text = open.repeat(depth);
     text.push_str(middle);
-    text.push_str(&close.repeat(DEPTH));
+    text.push_str(&close.repeat(depth));
     text
 }
 
-/// `DEPTH` copies of `item` with `separator` between them.
-pub fn chain(item: &str, separator: &str) -> String {
-    vec![item; DEPTH].join(separator)
+/// `depth` copies of `item` with `separator` between them.
+fn chain_to(depth: usize, item: &str, separator: &str) -> String {
+    vec![item; depth].join(separator)
 }
 
 fn deep(language: Language, file: &str, source: String) -> DeepSource {
@@ -73,14 +87,16 @@ fn slow(language: Language, file: &str, source: String) -> DeepSource {
     }
 }
 
-/// The deep sources of `language`: parentheses, blocks, nested functions,
+/// The deep sources of `language` at `depth`: parentheses, blocks, nested functions,
 /// literals, and long chains of operators and calls, as the grammar permits.
-pub fn deep_sources(language: Language) -> Vec<DeepSource> {
+pub fn deep_sources_at(language: Language, depth: usize) -> Vec<DeepSource> {
+    let nest = |open: &str, middle: &str, close: &str| nest_to(depth, open, middle, close);
+    let chain = |item: &str, separator: &str| chain_to(depth, item, separator);
     let parentheses = nest("(", "1", ")");
     let sum = chain("1", "+");
-    let calls = format!("a{}", ".b()".repeat(DEPTH));
-    let members = format!("a{}()", ".b".repeat(DEPTH));
-    let paths = format!("a{}()", "::b".repeat(DEPTH));
+    let calls = format!("a{}", ".b()".repeat(depth));
+    let members = format!("a{}()", ".b".repeat(depth));
+    let paths = format!("a{}()", "::b".repeat(depth));
     let l = language;
     match language {
         Language::Go => vec![
@@ -299,7 +315,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
             slow(
                 l,
                 "pointers.c",
-                format!("int {}f(void) {{ return 0; }}\n", "*".repeat(DEPTH)),
+                format!("int {}f(void) {{ return 0; }}\n", "*".repeat(depth)),
             ),
             deep(
                 l,
@@ -314,7 +330,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
             deep(
                 l,
                 "fields.c",
-                format!("void f(void) {{ a{}; }}\n", "->b".repeat(DEPTH)),
+                format!("void f(void) {{ a{}; }}\n", "->b".repeat(depth)),
             ),
             deep(l, "members.c", format!("void f(void) {{ {members}; }}\n")),
         ],
@@ -349,7 +365,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
             slow(
                 l,
                 "pointers.cpp",
-                format!("int {}f() {{ return 0; }}\n", "*".repeat(DEPTH)),
+                format!("int {}f() {{ return 0; }}\n", "*".repeat(depth)),
             ),
             deep(
                 l,
@@ -420,7 +436,7 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
             slow(
                 l,
                 "paths.rb",
-                format!("def f\n  A{}\nend\n", "::B".repeat(DEPTH)),
+                format!("def f\n  A{}\nend\n", "::B".repeat(depth)),
             ),
             deep(l, "hashes.rb", format!("X = {}\n", nest("{a: ", "1", "}"))),
         ],
@@ -456,12 +472,12 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
             slow(
                 l,
                 "calls.php",
-                format!("<?php\nfunction f() {{ $a{}; }}\n", "->b()".repeat(DEPTH)),
+                format!("<?php\nfunction f() {{ $a{}; }}\n", "->b()".repeat(depth)),
             ),
             deep(
                 l,
                 "members.php",
-                format!("<?php\nfunction f() {{ $a{}(); }}\n", "->b".repeat(DEPTH)),
+                format!("<?php\nfunction f() {{ $a{}(); }}\n", "->b".repeat(depth)),
             ),
         ],
         Language::Bash => vec![
@@ -494,14 +510,13 @@ pub fn deep_sources(language: Language) -> Vec<DeepSource> {
     }
 }
 
-/// The deep sources of every language with their syntax trees, without the
-/// slow sources. The trees are parsed one time for all tests.
+/// The deep sources of every language with their syntax trees. The trees are parsed one time
+/// for all tests.
 pub fn parsed_deep_sources() -> &'static [(DeepSource, ParseResult)] {
     static PARSED: OnceLock<Vec<(DeepSource, ParseResult)>> = OnceLock::new();
     PARSED.get_or_init(|| {
         all_deep_sources()
             .into_par_iter()
-            .filter(|source| !source.slow)
             .map(|source| {
                 let parsed = source.parse();
                 (source, parsed)
@@ -519,25 +534,30 @@ pub fn parsed_deep_sources_of(
         .filter(move |(source, _)| source.language == language)
 }
 
+/// The deep sources of `language` at `DEPTH`.
+pub fn deep_sources(language: Language) -> Vec<DeepSource> {
+    deep_sources_at(language, DEPTH)
+}
+
+/// The languages of the deep sources.
+pub const LANGUAGES: [Language; 14] = [
+    Language::Go,
+    Language::Rust,
+    Language::Python,
+    Language::TypeScript,
+    Language::JavaScript,
+    Language::Tsx,
+    Language::Jsx,
+    Language::Java,
+    Language::C,
+    Language::Cpp,
+    Language::CSharp,
+    Language::Ruby,
+    Language::Php,
+    Language::Bash,
+];
+
 /// The deep sources of every language.
 pub fn all_deep_sources() -> Vec<DeepSource> {
-    [
-        Language::Go,
-        Language::Rust,
-        Language::Python,
-        Language::TypeScript,
-        Language::JavaScript,
-        Language::Tsx,
-        Language::Jsx,
-        Language::Java,
-        Language::C,
-        Language::Cpp,
-        Language::CSharp,
-        Language::Ruby,
-        Language::Php,
-        Language::Bash,
-    ]
-    .into_iter()
-    .flat_map(deep_sources)
-    .collect()
+    LANGUAGES.into_iter().flat_map(deep_sources).collect()
 }
