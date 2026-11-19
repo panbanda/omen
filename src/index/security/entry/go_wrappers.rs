@@ -411,12 +411,14 @@ pub(super) fn collect(context: &Context<'_>, _root: Node<'_>, out: &mut Vec<Draf
             framework: found.framework,
             route: Some(Route {
                 method: found.method.clone(),
-                path: found.path.clone(),
+                path: Some(found.path.clone()),
+                path_template: None,
                 parameters: found.parameters.clone(),
             }),
             guards: found.guards.clone(),
             basis: EntryBasis::Registered,
             variant: None,
+            inline_handler: None,
             unknown: found.unknown,
         });
     }
@@ -2439,7 +2441,7 @@ impl WrapperRoutes {
             let Some(tree) = trees.tree(position) else {
                 continue;
             };
-            let context = Context::new(&tree, file, files, trees, &[]);
+            let context = Context::new(position, &tree, file, files, trees, &[]);
             let facts = file_facts(&context, tree.root_node());
             structs.extend(facts.structs);
             methods.extend(facts.methods);
@@ -2523,7 +2525,7 @@ impl WrapperRoutes {
             let Some(tree) = trees.tree(position) else {
                 continue;
             };
-            let context = Context::new(&tree, file, files, trees, &[]);
+            let context = Context::new(position, &tree, file, files, trees, &[]);
             let references = file
                 .references
                 .iter()
@@ -2901,7 +2903,7 @@ mod tests {
                     "{} {} {} [{}] {}",
                     entry.framework,
                     route.method,
-                    route.path,
+                    route.path.as_deref().unwrap_or_default(),
                     entry.guards.join(","),
                     entry
                         .symbol
@@ -3493,7 +3495,7 @@ func main() {
                 format!(
                     "{} {} [{}] {state}",
                     route.method,
-                    route.path,
+                    route.path.as_deref().unwrap_or_default(),
                     entry.guards.join(",")
                 )
             })
@@ -3951,7 +3953,7 @@ func main() {
         );
         let paths: Vec<String> = found
             .iter()
-            .filter_map(|entry| entry.route.as_ref().map(|route| route.path.clone()))
+            .filter_map(|entry| entry.route.as_ref().and_then(|route| route.path.clone()))
             .collect();
         assert_eq!(paths.len(), 1);
         assert!(paths[0].starts_with("<unresolved>"), "{paths:?}");
