@@ -1238,7 +1238,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         if is_function_node(kind) {
             scopes.push((
                 cursor_depth,
-                parser::function_binding_name(&node, source, lang),
+                parser::function_binding_name(&node, ancestors.iter().rev().copied(), source, lang),
             ));
         }
 

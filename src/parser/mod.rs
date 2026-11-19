@@ -151,26 +151,32 @@ pub fn extract_functions(result: &ParseResult) -> Vec<FunctionNode> {
 
     let function_types = get_function_node_types(result.language);
 
-    fn visit(
-        node: tree_sitter::Node<'_>,
+    /// `ancestors` holds the ancestors of `node`, the nearest last.
+    fn visit<'tree>(
+        node: tree_sitter::Node<'tree>,
+        ancestors: &mut Vec<tree_sitter::Node<'tree>>,
         source: &[u8],
         lang: Language,
         function_types: &[&str],
         functions: &mut Vec<FunctionNode>,
     ) {
         if function_types.contains(&node.kind()) {
-            if let Some(func) = extract_function_info(&node, source, lang) {
+            let parents = ancestors.iter().rev().copied();
+            if let Some(func) = extract_function_info(&node, parents, source, lang) {
                 functions.push(func);
             }
         }
 
+        ancestors.push(node);
         for child in node.children(&mut node.walk()) {
-            visit(child, source, lang, function_types, functions);
+            visit(child, ancestors, source, lang, function_types, functions);
         }
+        ancestors.pop();
     }
 
     visit(
         root,
+        &mut Vec::new(),
         &result.source,
         result.language,
         &function_types,
@@ -253,19 +259,27 @@ fn occupies_field(
 /// inspects exactly one parent, requiring that the function occupies that
 /// parent's value slot. Searching further up would name the callback in
 /// `const f = xs.map(x => x)` after `f`.
-fn resolve_js_binding(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<JsBinding> {
+///
+/// `ancestors` gives the parent of the node, then the parent of the parent,
+/// and so on. `Node::parent` searches from the root, so a walk gives the
+/// ancestors that it knows.
+fn resolve_js_binding<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    ancestors: impl IntoIterator<Item = tree_sitter::Node<'tree>>,
+    source: &[u8],
+) -> Option<JsBinding> {
     let mut current = *node;
-    while let Some(parent) = current.parent() {
+    let mut ancestors = ancestors.into_iter();
+    let parent = loop {
+        let parent = ancestors.next()?;
         match parent.kind() {
             "parenthesized_expression"
             | "as_expression"
             | "satisfies_expression"
             | "non_null_expression" => current = parent,
-            _ => break,
+            _ => break parent,
         }
-    }
-
-    let parent = current.parent()?;
+    };
     let name = match parent.kind() {
         "variable_declarator" if occupies_field(&parent, "value", &current) => {
             let name_node = parent.child_by_field_name("name")?;
@@ -329,13 +343,17 @@ fn node_text(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
 /// Exposed so consumers that track a call graph can name the function a call
 /// was made from, which for `const f = () => { ... }` lives on the binding
 /// rather than on the function node.
-pub fn function_binding_name(
-    node: &tree_sitter::Node<'_>,
+///
+/// `ancestors` gives the parent of the node, then the parent of the parent,
+/// and so on. Only a JavaScript or TypeScript node reads them.
+pub fn function_binding_name<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    ancestors: impl IntoIterator<Item = tree_sitter::Node<'tree>>,
     source: &[u8],
     lang: Language,
 ) -> Option<String> {
     if is_js_family(lang) {
-        resolve_js_binding(node, source)
+        resolve_js_binding(node, ancestors, source)
             .map(|binding| binding.name)
             .or_else(|| {
                 JS_DECLARATION_KINDS
@@ -347,8 +365,9 @@ pub fn function_binding_name(
     }
 }
 
-fn extract_function_info(
-    node: &tree_sitter::Node<'_>,
+fn extract_function_info<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    ancestors: impl IntoIterator<Item = tree_sitter::Node<'tree>>,
     source: &[u8],
     lang: Language,
 ) -> Option<FunctionNode> {
@@ -361,7 +380,7 @@ fn extract_function_info(
         // is exactly such a child, and matching it names the function after
         // its own parameter.
         let intrinsic = find_child_by_field(node, "name", source);
-        let binding = resolve_js_binding(node, source);
+        let binding = resolve_js_binding(node, ancestors, source);
 
         let binding_name = binding.as_ref().map(|b| b.name.clone()).or_else(|| {
             if !JS_DECLARATION_KINDS.contains(&node.kind()) {
@@ -494,6 +513,37 @@ fn find_node_child<'a>(node: &tree_sitter::Node<'a>, kind: &str) -> Option<tree_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The time of `extract_functions` on `size` nested arrow functions, without the parse.
+    fn functions_of_nested_arrows_at(size: usize) -> std::time::Duration {
+        std::thread::Builder::new()
+            .stack_size(1 << 30)
+            .spawn(move || {
+                let source = format!("const f = {}1;\n", "() => ".repeat(size));
+                let result = Parser::new()
+                    .parse(source.as_bytes(), Language::TypeScript, Path::new("a.ts"))
+                    .unwrap();
+                let started = std::time::Instant::now();
+                let functions = extract_functions(&result);
+                let elapsed = started.elapsed();
+                assert_eq!(functions.len(), size);
+                assert_eq!(functions[0].name, "f");
+                elapsed
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_arrow_functions_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "nested arrow functions",
+            5_000,
+            functions_of_nested_arrows_at,
+        );
+    }
 
     #[test]
     fn test_parser_default() {

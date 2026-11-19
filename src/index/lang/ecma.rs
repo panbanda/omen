@@ -917,7 +917,10 @@ impl LanguageSpec for Ecma {
                 // A pair in an object literal is a name here. `function_binding_name`
                 // gives no name for it, because dead code detection cannot follow it.
                 if binding.holder.kind() != PAIR {
-                    function_binding_name(&node, context.source, self.language())?;
+                    let ancestors = std::iter::successors(context.parent(node), |ancestor| {
+                        context.parent(*ancestor)
+                    });
+                    function_binding_name(&node, ancestors, context.source, self.language())?;
                 }
                 Some(binding.name.unwrap_or(node))
             }
