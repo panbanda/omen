@@ -97,19 +97,19 @@ pub(crate) fn function_name<'tree>(
     declarator: Node<'tree>,
     name_kinds: &[&str],
 ) -> Option<Node<'tree>> {
-    match declarator.kind() {
-        FUNCTION_DECLARATOR => {
-            let inner = declarator.child_by_field_name("declarator")?;
-            if name_kinds.contains(&inner.kind()) {
-                Some(inner)
-            } else {
-                function_name(inner, name_kinds)
+    let mut declarator = declarator;
+    loop {
+        declarator = match declarator.kind() {
+            FUNCTION_DECLARATOR => {
+                let inner = declarator.child_by_field_name("declarator")?;
+                if name_kinds.contains(&inner.kind()) {
+                    return Some(inner);
+                }
+                inner
             }
-        }
-        kind if WRAPPER_DECLARATORS.contains(&kind) => {
-            function_name(inner_declarator(declarator)?, name_kinds)
-        }
-        _ => None,
+            kind if WRAPPER_DECLARATORS.contains(&kind) => inner_declarator(declarator)?,
+            _ => return None,
+        };
     }
 }
 

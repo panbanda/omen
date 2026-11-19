@@ -700,11 +700,24 @@ fn joined(prefix: &str, path: &str) -> String {
     }
 }
 
+/// Adds `path` to `prefix` as `joined` does, without a copy of `prefix`.
+fn push_joined(prefix: &mut String, path: &str) {
+    let path: String = path.split_whitespace().collect();
+    if !prefix.is_empty() && !path.is_empty() {
+        prefix.push_str("::");
+    }
+    prefix.push_str(&path);
+}
+
 fn last_segment(path: &str) -> String {
     path.rsplit("::").next().unwrap_or(path).to_string()
 }
 
 /// Adds the bindings of one node of a `use` tree. `prefix` is the path of the lists that contain it.
+///
+/// The walk keeps its own stack, because a `use` tree can nest to any depth.
+/// It adds the path of each list to one prefix and removes the path again
+/// after the list, so a deep tree does not copy each prefix.
 fn use_tree(
     statement: Node<'_>,
     node: Node<'_>,
@@ -713,72 +726,88 @@ fn use_tree(
     context: &Context<'_, '_>,
     out: &mut Vec<ImportBinding>,
 ) {
+    enum Step<'tree> {
+        Read(Node<'tree>),
+        /// Remove the path of a list from the prefix: keep this many bytes.
+        Leave(usize),
+    }
     let named = if exported {
         ImportKind::ReExportNamed
     } else {
         ImportKind::Named
     };
-    match node.kind() {
-        USE_LIST => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                use_tree(statement, child, prefix, exported, context, out);
+    let mut prefix = prefix.to_string();
+    let mut pending = vec![Step::Read(node)];
+    while let Some(step) = pending.pop() {
+        let node = match step {
+            Step::Read(node) => node,
+            Step::Leave(length) => {
+                prefix.truncate(length);
+                continue;
             }
-        }
-        SCOPED_USE_LIST => {
-            let path = node
-                .child_by_field_name("path")
-                .map(|path| context.text(path))
-                .unwrap_or_default();
-            if let Some(list) = node.child_by_field_name("list") {
-                use_tree(
+        };
+        match node.kind() {
+            USE_LIST => {
+                let mut cursor = node.walk();
+                let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+                pending.extend(children.into_iter().rev().map(Step::Read));
+            }
+            SCOPED_USE_LIST => {
+                let path = node
+                    .child_by_field_name("path")
+                    .map(|path| context.text(path))
+                    .unwrap_or_default();
+                if let Some(list) = node.child_by_field_name("list") {
+                    pending.push(Step::Leave(prefix.len()));
+                    push_joined(&mut prefix, &path);
+                    pending.push(Step::Read(list));
+                }
+            }
+            USE_WILDCARD => {
+                let path = node
+                    .named_child(0)
+                    .map(|path| context.text(path))
+                    .unwrap_or_default();
+                let kind = if exported {
+                    ImportKind::ReExportWildcard
+                } else {
+                    ImportKind::Wildcard
+                };
+                out.push(context.import(statement, joined(&prefix, &path), kind, None, None));
+            }
+            USE_AS_CLAUSE => {
+                let (Some(path), Some(alias)) = (
+                    node.child_by_field_name("path"),
+                    node.child_by_field_name("alias"),
+                ) else {
+                    continue;
+                };
+                let path = joined(&prefix, &context.text(path));
+                let name = last_segment(&path);
+                out.push(context.import(
                     statement,
-                    list,
-                    &joined(prefix, &path),
-                    exported,
-                    context,
-                    out,
-                );
+                    path,
+                    named,
+                    Some(name),
+                    Some(context.text(alias)),
+                ));
             }
-        }
-        USE_WILDCARD => {
-            let path = node
-                .named_child(0)
-                .map(|path| context.text(path))
-                .unwrap_or_default();
-            let kind = if exported {
-                ImportKind::ReExportWildcard
-            } else {
-                ImportKind::Wildcard
-            };
-            out.push(context.import(statement, joined(prefix, &path), kind, None, None));
-        }
-        USE_AS_CLAUSE => {
-            let (Some(path), Some(alias)) = (
-                node.child_by_field_name("path"),
-                node.child_by_field_name("alias"),
-            ) else {
-                return;
-            };
-            let path = joined(prefix, &context.text(path));
-            let name = last_segment(&path);
-            out.push(context.import(
-                statement,
-                path,
-                named,
-                Some(name),
-                Some(context.text(alias)),
-            ));
-        }
-        // `use a::{self}` binds the module `a`.
-        SELF if !prefix.is_empty() => {
-            let name = last_segment(prefix);
-            out.push(context.import(statement, prefix, named, Some(name.clone()), Some(name)));
-        }
-        _ => {
-            let path = joined(prefix, &context.text(node));
-            let name = last_segment(&path);
-            out.push(context.import(statement, path, named, Some(name.clone()), Some(name)));
+            // `use a::{self}` binds the module `a`.
+            SELF if !prefix.is_empty() => {
+                let name = last_segment(&prefix);
+                out.push(context.import(
+                    statement,
+                    prefix.clone(),
+                    named,
+                    Some(name.clone()),
+                    Some(name),
+                ));
+            }
+            _ => {
+                let path = joined(&prefix, &context.text(node));
+                let name = last_segment(&path);
+                out.push(context.import(statement, path, named, Some(name.clone()), Some(name)));
+            }
         }
     }
 }
