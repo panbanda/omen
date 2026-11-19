@@ -110,7 +110,14 @@ pub struct MarkContext<'a, 'tree> {
     /// search all the ancestors.
     pub owners: &'a [Owner<'tree>],
     pub in_test_file: bool,
+    /// The callee roots that the walk found, by the id of the call. One search down a chain of
+    /// calls gives the root of each call of the chain, so the walk reads each chain one time.
+    pub callee_roots: &'a CalleeRoots<'tree>,
 }
+
+/// The root of the callee of each call that the walk read, as `ecma_callee_root` gives it.
+pub type CalleeRoots<'tree> =
+    std::cell::RefCell<std::collections::HashMap<usize, Option<(Node<'tree>, bool)>>>;
 
 /// An ancestor that has a kind of [`owner_kinds`].
 #[derive(Debug, Clone, Copy)]
@@ -169,7 +176,7 @@ fn mark(node: Node<'_>, kind: MarkKind) -> TestMark {
 }
 
 /// Adds the marks that `node` gives.
-pub fn marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
+pub fn marks<'tree>(node: Node<'tree>, context: &MarkContext<'_, 'tree>, out: &mut Vec<TestMark>) {
     match context.language {
         Language::Rust => rust_marks(node, context, out),
         Language::Python => python_marks(node, context, out),
@@ -616,22 +623,51 @@ const ECMA_SUITES: [&str; 8] = [
 const ECMA_HOOKS: [&str; 4] = ["beforeEach", "afterEach", "beforeAll", "afterAll"];
 
 /// The first name of the callee: `describe` in `describe.each(table)(name, run)`.
-fn ecma_callee_root<'tree>(call: Node<'tree>) -> Option<(Node<'tree>, bool)> {
-    let mut current = call.child_by_field_name("function")?;
-    let mut qualified = false;
-    loop {
-        current = match current.kind() {
-            "identifier" => return Some((current, qualified)),
-            "member_expression" => current.child_by_field_name("object")?,
-            "call_expression" => current.child_by_field_name("function")?,
-            _ => return None,
-        };
-        qualified = true;
+fn ecma_callee_root<'tree>(
+    call: Node<'tree>,
+    roots: &CalleeRoots<'tree>,
+) -> Option<(Node<'tree>, bool)> {
+    if let Some(known) = roots.borrow().get(&call.id()) {
+        return *known;
     }
+    // Each call on the way down has the same root. Its callee is qualified unless the callee
+    // is the root itself.
+    let mut calls = vec![call];
+    let mut current = call.child_by_field_name("function");
+    let root = loop {
+        let Some(node) = current else {
+            break None;
+        };
+        current = match node.kind() {
+            "identifier" => break Some(node),
+            "member_expression" => node.child_by_field_name("object"),
+            "call_expression" => {
+                if let Some(known) = roots.borrow().get(&node.id()) {
+                    break known.map(|(root, _)| root);
+                }
+                calls.push(node);
+                node.child_by_field_name("function")
+            }
+            _ => break None,
+        };
+    };
+    let mut roots = roots.borrow_mut();
+    for each in &calls {
+        let qualified = each
+            .child_by_field_name("function")
+            .is_some_and(|function| function.kind() != "identifier");
+        roots.insert(each.id(), root.map(|root| (root, qualified)));
+    }
+    root.map(|root| {
+        let qualified = call
+            .child_by_field_name("function")
+            .is_some_and(|function| function.kind() != "identifier");
+        (root, qualified)
+    })
 }
 
-fn ecma_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark>) {
-    let Some((root, qualified)) = ecma_callee_root(node) else {
+fn ecma_marks<'tree>(node: Node<'tree>, context: &MarkContext<'_, 'tree>, out: &mut Vec<TestMark>) {
+    let Some((root, qualified)) = ecma_callee_root(node, context.callee_roots) else {
         return;
     };
     let name = context.text(root);
@@ -986,9 +1022,10 @@ fn c_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestMark
             .ancestors
             .last()
             .is_some_and(|parent| parent.kind() == "translation_unit");
-        let macro_name = node
-            .prev_sibling()
-            .filter(|_| at_top)
+        // `Node::prev_sibling` searches from the root, so the test of the place comes first.
+        let macro_name = at_top
+            .then(|| node.prev_sibling())
+            .flatten()
             .filter(|previous| previous.kind() == "expression_statement")
             .and_then(|statement| statement.named_child(0))
             .filter(|call| call.kind() == "call_expression")
@@ -1115,6 +1152,7 @@ fn marks_of_tree(root: Node<'_>, source: &[u8], language: Language) -> MarkTable
     let mut found = Vec::new();
     let mut ancestors: Vec<Node<'_>> = Vec::new();
     let mut owners: Vec<Owner<'_>> = Vec::new();
+    let callee_roots = CalleeRoots::default();
     let mut cursor = root.walk();
     loop {
         let node = cursor.node();
@@ -1125,6 +1163,7 @@ fn marks_of_tree(root: Node<'_>, source: &[u8], language: Language) -> MarkTable
                 ancestors: &ancestors,
                 owners: &owners,
                 in_test_file: false,
+                callee_roots: &callee_roots,
             };
             marks(node, &context, &mut found);
         }
@@ -2288,6 +2327,31 @@ mod timing_tests {
                 .map(|position| format!("#[test]\nfn check_{position}() {{}}\n"))
                 .collect();
             time_of_marks(Language::Rust, "src/lib.rs", &source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deeply_nested_c_blocks_in_a_test_are_read_in_linear_time() {
+        assert_scales_linearly("nested blocks", 5_000, |size| {
+            let source = format!(
+                "TEST(suite, name)\n{{\n{}{}}}\n",
+                "if (x) {".repeat(size),
+                "}".repeat(size)
+            );
+            time_of_marks(Language::C, "test.c", &source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_long_chain_of_calls_in_a_test_is_read_in_linear_time() {
+        assert_scales_linearly("chain of calls", 5_000, |size| {
+            let source = format!(
+                "describe('suite', () => {{\n  a{};\n}});\n",
+                ".b()".repeat(size)
+            );
+            time_of_marks(Language::TypeScript, "a.test.ts", &source)
         });
     }
 

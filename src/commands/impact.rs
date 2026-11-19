@@ -61,11 +61,11 @@ pub fn run(
         }
         other => other?,
     };
-    let analysis = crate::analyzers::security::analyze_context(&ctx)?;
-    report.security = Some(crate::index::security::symbol_security(
-        &analysis,
+    report.security = Some(crate::analyzers::security::symbol_security_of_context(
+        &ctx,
+        &view,
         &report.resolved[0],
-    ));
+    )?);
     let mut out = out;
     format_with_limits(
         serde_json::to_value(&report)?,
@@ -190,5 +190,84 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&out).expect("json");
         assert_eq!(value["error"]["code"], "not_found");
         assert_eq!(value["error"]["suggestions"], serde_json::json!(["helper"]));
+    }
+}
+
+#[cfg(test)]
+mod scope_equivalence {
+    use super::*;
+    use rayon::prelude::*;
+    use std::collections::BTreeSet;
+
+    /// The symbols that a check of a repository compares: each symbol on a path of the full
+    /// analysis, and 300 other symbols that a fixed seed selects.
+    fn selected_keys(
+        view: &CallView,
+        analysis: &crate::index::security::analysis::Analysis,
+    ) -> Vec<String> {
+        let mut on_paths: BTreeSet<String> = BTreeSet::new();
+        for path in &analysis.reachability.paths {
+            on_paths.extend(path.members.iter().cloned());
+            on_paths.extend(path.steps.iter().map(|step| step.symbol.clone()));
+        }
+        on_paths.retain(|key| view.position_of(key).is_some());
+        let others: Vec<&str> = view
+            .symbols
+            .iter()
+            .map(|symbol| symbol.qualified_name.as_str())
+            .filter(|key| !on_paths.contains(*key))
+            .collect::<BTreeSet<&str>>()
+            .into_iter()
+            .collect();
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut sample: BTreeSet<String> = BTreeSet::new();
+        while sample.len() < 300.min(others.len()) {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            sample.insert(others[(state >> 33) as usize % others.len()].to_string());
+        }
+        on_paths.into_iter().chain(sample).collect()
+    }
+
+    /// Compares the scoped security of each selected symbol with the security that the full
+    /// analysis gives. `SCOPE_EQUIVALENCE_REPOSITORY` names the repository, and
+    /// `SCOPE_EQUIVALENCE_KEYS`, if set, is a file that receives the selected keys.
+    #[test]
+    #[ignore = "reads a repository from SCOPE_EQUIVALENCE_REPOSITORY"]
+    fn scoped_symbol_security_is_the_security_of_the_full_analysis() {
+        let path = PathBuf::from(std::env::var("SCOPE_EQUIVALENCE_REPOSITORY").unwrap());
+        let config = Config::default();
+        let (file_set, _) = index_scope(&path, &config, &Scope::default(), None).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(&path));
+        let view = CallView::from_index(&ctx.code_index().unwrap());
+        let full = crate::analyzers::security::analyze_context(&ctx).unwrap();
+        let keys = selected_keys(&view, &full);
+        if let Ok(output) = std::env::var("SCOPE_EQUIVALENCE_KEYS") {
+            std::fs::write(output, keys.join("\n")).unwrap();
+        }
+        let different: Vec<&String> = keys
+            .par_iter()
+            .filter(|key| {
+                let scoped =
+                    crate::analyzers::security::symbol_security_of_context(&ctx, &view, key)
+                        .unwrap();
+                scoped != crate::index::security::symbol_security(&full, key)
+            })
+            .collect();
+        let nonempty = keys
+            .iter()
+            .filter(|key| {
+                crate::index::security::symbol_security(&full, key)
+                    != crate::index::security::SymbolSecurity::default()
+            })
+            .count();
+        eprintln!(
+            "SCOPE compared {} symbols, {} with security facts, {} different",
+            keys.len(),
+            nonempty,
+            different.len()
+        );
+        assert!(different.is_empty(), "{different:?}");
     }
 }
