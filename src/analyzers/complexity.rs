@@ -27,6 +27,7 @@
 //! println!("Analyzed {} functions", result.summary.total_functions);
 //! ```
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -331,8 +332,10 @@ fn analyze_parse_result(result: &ParseResult) -> FileResult {
         &result.source,
         result.language,
     );
+    let nodes = FunctionNodes::of(result);
     for func in functions {
-        let metrics = analyze_function_complexity(&func, result);
+        let node = nodes.find(result, func.start_line, func.body_byte_range);
+        let metrics = measure_node(node, func.start_line, func.end_line, result);
         file_result.total_cyclomatic += metrics.cyclomatic;
         file_result.total_cognitive += metrics.cognitive;
 
@@ -380,21 +383,34 @@ pub fn analyze_symbol_complexity(symbol: &Symbol, result: &ParseResult) -> Metri
     )
 }
 
+/// The metrics of each symbol, in the order of `symbols`. It finds the nodes
+/// of all symbols in one walk; see [`analyze_symbol_complexity`].
+pub fn analyze_symbols_complexity<'symbol>(
+    symbols: impl IntoIterator<Item = &'symbol Symbol>,
+    result: &ParseResult,
+) -> Vec<Metrics> {
+    let nodes = FunctionNodes::of(result);
+    symbols
+        .into_iter()
+        .map(|symbol| {
+            let line = symbol.range.start_line;
+            let body = symbol
+                .body_range
+                .map(|body| (body.start_byte, body.end_byte));
+            let node = nodes.find(result, line, body);
+            measure_node(node, line, symbol.range.end_line, result)
+        })
+        .collect()
+}
+
 /// The maximum nesting depth of a file: the code outside the functions, and
 /// each function from its own body, as `Metrics::max_nesting` measures it.
 pub fn max_nesting_of_file(result: &ParseResult) -> u32 {
-    let root = result.root_node();
-    let outside = calculate_max_nesting(&root, result.language, 0);
+    let outside = calculate_max_nesting(&result.root_node(), result.language, 0);
+    let nodes = FunctionNodes::of(result);
     parser::extract_functions(result)
         .iter()
-        .filter_map(|func| {
-            find_function_node(
-                &root,
-                func.start_line,
-                func.body_byte_range,
-                result.language,
-            )
-        })
+        .filter_map(|func| nodes.find(result, func.start_line, func.body_byte_range))
         .filter(|node| !body_is_a_nested_function(node, result.language))
         .map(|node| {
             let body = node.child_by_field_name("body").unwrap_or(node);
@@ -409,11 +425,21 @@ fn measure_function(
     body_byte_range: Option<(usize, usize)>,
     result: &ParseResult,
 ) -> Metrics {
-    let root = result.root_node();
+    let node = find_function_node(
+        &result.root_node(),
+        start_line,
+        body_byte_range,
+        result.language,
+    );
+    measure_node(node, start_line, end_line, result)
+}
 
-    // Find the function node in the tree
-    let func_node = find_function_node(&root, start_line, body_byte_range, result.language);
-
+fn measure_node(
+    func_node: Option<tree_sitter::Node<'_>>,
+    start_line: u32,
+    end_line: u32,
+    result: &ParseResult,
+) -> Metrics {
     let (cyclomatic, cognitive, max_nesting) = match func_node {
         // A concise arrow body can itself be another function, as in
         // `a => b => ...`. The walkers exempt their own starting node from
@@ -437,6 +463,70 @@ fn measure_function(
         cognitive,
         max_nesting,
         lines: end_line.saturating_sub(start_line) + 1,
+    }
+}
+
+/// The function nodes of a file, from one walk. A search from the root for
+/// each function costs time in proportion to the number of functions, so a
+/// file with many functions took quadratic time.
+struct FunctionNodes<'tree> {
+    /// The first node in pre-order for each body byte range.
+    by_body: HashMap<(usize, usize), tree_sitter::Node<'tree>>,
+    /// The last node in pre-order, thus the innermost, for each start row.
+    by_start_row: HashMap<usize, tree_sitter::Node<'tree>>,
+}
+
+impl<'tree> FunctionNodes<'tree> {
+    fn of(result: &'tree ParseResult) -> Self {
+        let function_kinds = parser::get_function_node_types(result.language);
+        let mut nodes = Self {
+            by_body: HashMap::new(),
+            by_start_row: HashMap::new(),
+        };
+        let mut cursor = result.root_node().walk();
+        loop {
+            let node = cursor.node();
+            if function_kinds.contains(&node.kind()) {
+                if let Some(body) = parser::function_body_byte_range(&node) {
+                    nodes.by_body.entry(body).or_insert(node);
+                }
+                nodes.by_start_row.insert(node.start_position().row, node);
+            }
+            if cursor.goto_first_child() {
+                continue;
+            }
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    return nodes;
+                }
+            }
+        }
+    }
+
+    /// The node that `find_function_node` gives, from the index. A function
+    /// with no node that starts on its line uses the search.
+    fn find(
+        &self,
+        result: &'tree ParseResult,
+        start_line: u32,
+        body_byte_range: Option<(usize, usize)>,
+    ) -> Option<tree_sitter::Node<'tree>> {
+        let row = start_line.saturating_sub(1) as usize;
+        let contains_row = |node: &tree_sitter::Node<'_>| {
+            node.start_position().row <= row && row <= node.end_position().row
+        };
+        body_byte_range
+            .and_then(|body| self.by_body.get(&body).copied())
+            .filter(contains_row)
+            .or_else(|| self.by_start_row.get(&row).copied())
+            .or_else(|| {
+                find_function_node(
+                    &result.root_node(),
+                    start_line,
+                    body_byte_range,
+                    result.language,
+                )
+            })
     }
 }
 
@@ -1122,6 +1212,47 @@ mod tests {
     }
 
     // Language-specific complexity calculation tests
+
+    fn parse_many_functions(count: usize) -> ParseResult {
+        let code: String = (0..count)
+            .map(|index| format!("function f{index}(x) {{ if (x) {{ g(); }} }}\n"))
+            .collect();
+        crate::parser::Parser::new()
+            .parse(
+                code.as_bytes(),
+                Language::JavaScript,
+                std::path::Path::new("a.js"),
+            )
+            .expect("Parse failed")
+    }
+
+    /// The node of each function comes from one walk of the file, not from a
+    /// search from the root for each function.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_functions_in_one_file_are_measured_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("functions", 5_000, |size| {
+            let result = parse_many_functions(size);
+            let started = std::time::Instant::now();
+            let file = analyze_parse_result(&result);
+            let elapsed = started.elapsed();
+            assert_eq!(file.functions.len(), size);
+            elapsed
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_the_nesting_of_a_file_with_many_functions_is_linear() {
+        crate::index::timing::assert_scales_linearly("functions", 5_000, |size| {
+            let result = parse_many_functions(size);
+            let started = std::time::Instant::now();
+            let nesting = max_nesting_of_file(&result);
+            let elapsed = started.elapsed();
+            assert_eq!(nesting, 1);
+            elapsed
+        });
+    }
 
     fn parse_and_analyze(code: &[u8], lang: Language, filename: &str) -> FileResult {
         let parser = crate::parser::Parser::new();
@@ -2861,6 +2992,49 @@ mod symbol_tests {
 
             assert_eq!(metrics.cyclomatic, 2, "{language:?}");
         }
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_symbols_in_one_file_are_measured_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("symbols", 5_000, |size| {
+            let source: String = (0..size)
+                .map(|index| format!("function f{index}(x) {{ if (x) {{ g(); }} }}\n"))
+                .collect();
+            let result = crate::index::headers::parse(
+                Path::new("a.js"),
+                Language::JavaScript,
+                source.as_bytes(),
+            )
+            .unwrap();
+            let facts = extract_file(&result, "a.js");
+            let started = std::time::Instant::now();
+            let metrics = analyze_symbols_complexity(&facts.symbols, &result);
+            let elapsed = started.elapsed();
+            assert!(metrics.iter().all(|metrics| metrics.cyclomatic == 2));
+            elapsed
+        });
+    }
+
+    #[test]
+    fn test_symbols_get_the_metrics_of_one_symbol() {
+        let name = "t.js";
+        let source = "function a() {} function b(x) { if (x) {} }\nconst c = (y) => y && g();\n";
+        let parsed =
+            crate::index::headers::parse(Path::new(name), Language::JavaScript, source.as_bytes())
+                .unwrap();
+        let facts = extract_file(&parsed, name);
+        let each: Vec<(u32, u32, u32)> = facts
+            .symbols
+            .iter()
+            .map(|symbol| analyze_symbol_complexity(symbol, &parsed))
+            .map(|metrics| (metrics.cyclomatic, metrics.cognitive, metrics.max_nesting))
+            .collect();
+        let all: Vec<(u32, u32, u32)> = analyze_symbols_complexity(&facts.symbols, &parsed)
+            .iter()
+            .map(|metrics| (metrics.cyclomatic, metrics.cognitive, metrics.max_nesting))
+            .collect();
+        assert_eq!(all, each);
     }
 
     #[test]
