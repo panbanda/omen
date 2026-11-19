@@ -352,6 +352,22 @@ struct Packages<'a> {
     groups: Vec<Vec<usize>>,
     /// The symbols of the files of each group, by the group and the name.
     named: HashMap<(usize, &'a str), Vec<Id>>,
+    /// The symbols of the files that are in more than one group of
+    /// namespaces, by the name. These symbols are not in `named` for those
+    /// groups: one entry for each namespace would make the index grow with
+    /// the product of the namespaces and the symbols of a file.
+    spread: HashMap<&'a str, Vec<Id>>,
+}
+
+#[cfg(test)]
+impl Packages<'_> {
+    fn entries(&self) -> usize {
+        self.named
+            .values()
+            .chain(self.spread.values())
+            .map(Vec::len)
+            .sum()
+    }
 }
 
 impl<'a> Resolver<'a> {
@@ -605,14 +621,35 @@ impl<'a> Resolver<'a> {
     /// of the files and of the symbols, without a look at each file.
     fn package_named(&self, file: usize, name: &str) -> Vec<Id> {
         let packages = self.packages();
-        let mut found: Vec<Id> = packages.groups[file]
-            .iter()
-            .flat_map(|group| packages.named.get(&(*group, name)).into_iter().flatten())
+        let in_package = |id: &&Id| self.in_package(file, id.0);
+        let group = match packages.groups[file].as_slice() {
+            [] => return Vec::new(),
+            [group] => *group,
+            // A file with many namespaces does not read each of its groups:
+            // the cost is the number of definitions of the name.
+            _ => {
+                let all = self.by_name.get(name).into_iter().flatten();
+                return all.filter(in_package).copied().collect();
+            }
+        };
+        let mut found: Vec<Id> = packages
+            .named
+            .get(&(group, name))
+            .into_iter()
+            .flatten()
             .copied()
             .collect();
-        if packages.groups[file].len() > 1 {
+        let length = found.len();
+        found.extend(
+            packages
+                .spread
+                .get(name)
+                .into_iter()
+                .flatten()
+                .filter(in_package),
+        );
+        if found.len() > length {
             found.sort_unstable();
-            found.dedup();
         }
         found
     }
@@ -682,11 +719,25 @@ impl<'a> Resolver<'a> {
         let mut named: HashMap<(usize, &'a str), Vec<Id>> = HashMap::new();
         for (group, files) in members.iter().enumerate() {
             for file in files {
+                if module_groups[*file].len() > 1 && module_groups[*file].contains(&group) {
+                    continue;
+                }
                 for (position, symbol) in self.files[*file].symbols.iter().enumerate() {
                     named
                         .entry((group, symbol.name.as_str()))
                         .or_default()
                         .push((*file, position));
+                }
+            }
+        }
+        let mut spread: HashMap<&'a str, Vec<Id>> = HashMap::new();
+        for (file, groups) in module_groups.iter().enumerate() {
+            if groups.len() > 1 {
+                for (position, symbol) in self.files[file].symbols.iter().enumerate() {
+                    spread
+                        .entry(symbol.name.as_str())
+                        .or_default()
+                        .push((file, position));
                 }
             }
         }
@@ -719,6 +770,7 @@ impl<'a> Resolver<'a> {
             files,
             groups,
             named,
+            spread,
         }
     }
 
@@ -5310,6 +5362,7 @@ mod false_edge_tests {
             ("src/F.cs", "namespace Q { class F {} }\n"),
             ("src/G.cs", "namespace P { class G {} }\n"),
             ("src/H.php", "<?php\nnamespace P;\nclass H {}\n"),
+            ("src/J.cs", "namespace P { class D {} }\n"),
             ("src/i.py", "def i():\n    pass\n"),
             ("src/k.rb", "def k; end\n"),
         ];
@@ -5347,6 +5400,30 @@ mod false_edge_tests {
             }
         }
         assert!(facts.iter().any(|file| file.modules.len() > 1));
+    }
+
+    /// A file with many namespaces is in many groups. The index of the names
+    /// of the packages has a constant number of entries for each symbol, not
+    /// one entry for each namespace of the file.
+    #[test]
+    fn test_package_name_index_is_linear_in_the_symbols_of_a_file_with_many_namespaces() {
+        let namespaces = 200;
+        let mut source = String::new();
+        for namespace in 0..namespaces {
+            source.push_str(&format!(
+                "namespace N{namespace} {{ class C{namespace} {{}} }}\n"
+            ));
+        }
+        let files = [("src/Many.cs", source.as_str())];
+        let (facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        let resolver = super::Resolver::new(&facts, &manifests);
+        let symbols: usize = facts.iter().map(|file| file.symbols.len()).sum();
+        assert_eq!(facts[0].modules.len(), namespaces);
+        assert!(
+            resolver.packages().entries() <= 3 * symbols,
+            "{} entries for {symbols} symbols",
+            resolver.packages().entries()
+        );
     }
 
     /// The files of a package are found without a comparison of each file of
