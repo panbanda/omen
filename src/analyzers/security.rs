@@ -13,12 +13,15 @@ use serde_json::{json, Value};
 use crate::config::{Config, SecurityConfig};
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Error, Language, Result};
 use crate::index::model::ResolutionBasis;
-use crate::index::security::analysis::{analyze_with_index, Analysis, Options};
+use crate::index::security::analysis::{
+    analyze_with_index, symbol_security_with_index, Analysis, Options,
+};
 use crate::index::security::entry::{EntryKind, EntryPoint, EntryRule};
 use crate::index::security::reach::{ChokePoint, Coverage, EdgeKind, SinkPath};
 use crate::index::security::spec::{Predicate, SinkSpec, Target};
 use crate::index::security::suppress::{InvalidSuppression, Suppressed};
-use crate::index::security::{Sink, SinkBasis, SinkCategory};
+use crate::index::security::{Sink, SinkBasis, SinkCategory, SymbolSecurity};
+use crate::index::view::CallView;
 
 /// The sections of the report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,6 +239,48 @@ pub fn analyze_context(ctx: &AnalysisContext<'_>) -> Result<Analysis> {
         &|path| ctx.read_file(path),
         &options,
     )
+}
+
+/// What the analysis of the files of a context says about the symbol `key`. It finds the
+/// sinks of the files that the symbol reaches only, and the result is the same as
+/// `symbol_security` of `analyze_context`. `view` is the view of `ctx.code_index()`.
+pub fn symbol_security_of_context(
+    ctx: &AnalysisContext<'_>,
+    view: &CallView,
+    key: &str,
+) -> Result<SymbolSecurity> {
+    let files: Vec<PathBuf> = ctx.files.iter().cloned().collect();
+    let index = ctx.code_index()?;
+    let options = options_of(&ctx.config.security)?;
+    symbol_security_with_index(
+        &index,
+        ctx.root,
+        &files,
+        &|path| ctx.read_file(path),
+        &options,
+        view,
+        key,
+    )
+}
+
+/// What the analysis of files of the file system says about the symbol `key`, as
+/// `symbol_security` of `analyze_paths` gives it.
+pub fn symbol_security_of_paths(
+    root: &std::path::Path,
+    files: &[PathBuf],
+    config: &Config,
+    key: &str,
+) -> Result<SymbolSecurity> {
+    let options = options_of(&config.security)?;
+    let read = |path: &std::path::Path| Ok(std::fs::read(path)?);
+    let index = crate::index::build::CodeIndex::build(
+        root,
+        files,
+        &read,
+        &crate::index::build::list_directory,
+    );
+    let view = CallView::from_index(&index);
+    symbol_security_with_index(&index, root, files, &read, &options, &view, key)
 }
 
 /// The analysis of files of the file system. The paths are absolute or relative to the
