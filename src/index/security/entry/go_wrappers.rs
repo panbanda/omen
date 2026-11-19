@@ -1798,7 +1798,7 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
             return None;
         }
         self.depth += 1;
-        let value = self.eval_inner(node);
+        let value = super::go_routes::on_grown_stack(|| self.eval_inner(node));
         self.depth -= 1;
         value
     }
@@ -2137,12 +2137,15 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
     }
 
     fn guard_name(&self, node: Node<'a>) -> Option<String> {
-        match node.kind() {
-            "identifier" | "selector_expression" => Some(self.text(node).to_string()),
-            "call_expression" => self.guard_name(node.child_by_field_name("function")?),
-            "index_expression" => self.guard_name(node.child_by_field_name("operand")?),
-            "parenthesized_expression" => self.guard_name(node.named_child(0)?),
-            _ => None,
+        let mut node = node;
+        loop {
+            node = match node.kind() {
+                "identifier" | "selector_expression" => return Some(self.text(node).to_string()),
+                "call_expression" => node.child_by_field_name("function")?,
+                "index_expression" => node.child_by_field_name("operand")?,
+                "parenthesized_expression" => node.named_child(0)?,
+                _ => return None,
+            };
         }
     }
 
@@ -2967,6 +2970,50 @@ func main() {
                 "chi GET /direct [mw] Home",
                 "chi GET /wrapped [reqSignIn] Home",
             ]
+        );
+    }
+
+    #[test]
+    fn a_guard_from_a_long_chain_of_calls_on_a_small_stack() {
+        let main = PROBE_MAIN.replace(
+            "reqSignIn, Home",
+            &format!("reqSignIn{}, Home", "()".repeat(crate::parser::deep::DEPTH)),
+        );
+        let found = crate::parser::deep::on_small_stack(move || {
+            routes(&[("main.go", &main), ("web/router.go", PROBE_ROUTER)])
+        });
+        assert!(
+            found.contains(&"chi GET /wrapped [reqSignIn] Home".to_string()),
+            "{found:?}"
+        );
+    }
+
+    /// `eval` reads each level of a deep expression in a function that registers routes, up
+    /// to `EVAL_DEPTH_LIMIT` levels. The result on a small stack is the result on a large stack.
+    #[test]
+    fn an_expression_deeper_than_the_limit_on_a_small_stack() {
+        let depth = super::EVAL_DEPTH_LIMIT + 100;
+        let main = PROBE_MAIN.replace(
+            "\tm := web.NewRouter()\n",
+            &format!(
+                "\tm := web.NewRouter()\n\t_ = {}\n",
+                crate::parser::deep::nest_to(depth, "(", "1", ")")
+            ),
+        );
+        let copy = main.clone();
+        let small = crate::parser::deep::on_small_stack(move || {
+            routes(&[("main.go", &copy), ("web/router.go", PROBE_ROUTER)])
+        });
+        let large = std::thread::Builder::new()
+            .stack_size(1 << 30)
+            .spawn(move || routes(&[("main.go", &main), ("web/router.go", PROBE_ROUTER)]))
+            .expect("spawn")
+            .join()
+            .expect("no stack overflow");
+        assert_eq!(small, large);
+        assert!(
+            small.contains(&"chi GET /wrapped [reqSignIn] Home".to_string()),
+            "{small:?}"
         );
     }
 
@@ -3912,6 +3959,29 @@ func main() {
             count - 1
         ));
         timed(main)
+    }
+
+    /// The walk of groups and of a chain of factories needs no stack in proportion to the depth.
+    #[test]
+    fn deep_groups_and_a_long_chain_of_factories_on_a_small_stack() {
+        let depth = crate::parser::deep::DEPTH;
+        let mut groups = String::from(HEADER);
+        groups.push_str("func main() {\n\tm := web.NewRouter()\n");
+        groups.push_str(&"\tm.Group(\"/g\", func() {\n".repeat(depth));
+        groups.push_str("\tm.Get(\"/deep\", Home)\n");
+        groups.push_str(&"\t})\n".repeat(depth));
+        groups.push_str("}\n");
+        let found = crate::parser::deep::on_small_stack(move || {
+            states(&[("main.go", &groups), ("web/router.go", ROUTER)])
+        });
+        assert_eq!(
+            found,
+            ["GET <unresolved>/deep [<expression>] unresolved_router"]
+        );
+        let (routes, _) = crate::parser::deep::on_small_stack(|| {
+            a_chain_of_mounting_factories(super::EVAL_DEPTH_LIMIT + 100)
+        });
+        assert_eq!(routes, 1);
     }
 
     #[test]
