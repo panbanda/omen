@@ -565,6 +565,7 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
     // A declaration without a body, as a trait method or a prototype does, has no
     // code to remove, and a call can reach it through a different definition.
     let is_stub_file = facts.file.ends_with(".pyi");
+    let object_members = object_member_ranges(result);
     let functions: Vec<&Symbol> = facts
         .symbols
         .iter()
@@ -572,7 +573,7 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
             symbol.is_callable()
                 && symbol.kind != SymbolKind::Constructor
                 && (symbol.body_range.is_some() || facts.language == Language::Ruby)
-                && !is_member_of_an_object(result, symbol)
+                && !object_members.contains(&(symbol.range.start_byte, symbol.range.end_byte))
                 // A stub file declares the functions of a different file. It has no code to remove.
                 && !is_stub_file
         })
@@ -1832,27 +1833,21 @@ fn is_generated_file(path: &str) -> bool {
     false
 }
 
-/// Whether the definition is a function that an object literal or an assignment
-/// to a property holds, in the JavaScript family. A framework or a caller
-/// outside of the analysis reaches it by its name on an object, thus the
-/// analysis cannot call it dead.
-fn is_member_of_an_object(result: &parser::ParseResult, symbol: &Symbol) -> bool {
+/// The ranges of the functions that an object literal or an assignment to a
+/// property holds, in the JavaScript family. A framework or a caller outside
+/// of the analysis reaches such a function by its name on an object, thus the
+/// analysis cannot call it dead. Each node with the range of a symbol is a node
+/// of the symbol, thus a symbol whose range is in the set is such a function.
+fn object_member_ranges(result: &parser::ParseResult) -> HashSet<(usize, usize)> {
+    let mut ranges = HashSet::new();
     if !matches!(
         result.language,
         Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx
     ) {
-        return false;
+        return ranges;
     }
-    let Some(mut node) = result
-        .tree
-        .root_node()
-        .descendant_for_byte_range(symbol.range.start_byte, symbol.range.end_byte)
-    else {
-        return false;
-    };
-    while node.start_byte() == symbol.range.start_byte && node.end_byte() == symbol.range.end_byte {
-        let parent = node.parent();
-        let holds_a_property = match node.kind() {
+    let holds_a_property =
+        |node: tree_sitter::Node<'_>, parent: Option<tree_sitter::Node<'_>>| match node.kind() {
             "pair" => true,
             "assignment_expression" => node
                 .child_by_field_name("left")
@@ -1869,15 +1864,29 @@ fn is_member_of_an_object(result: &parser::ParseResult, symbol: &Symbol) -> bool
             }
             _ => false,
         };
-        if holds_a_property {
-            return true;
+    // The ancestors of the node of the cursor, the nearest last. `Node::parent` searches from
+    // the root, so a call for each node takes quadratic time in a deep tree.
+    let mut ancestors: Vec<tree_sitter::Node<'_>> = Vec::new();
+    let mut cursor = result.tree.root_node().walk();
+    loop {
+        let node = cursor.node();
+        if holds_a_property(node, ancestors.last().copied()) {
+            ranges.insert((node.start_byte(), node.end_byte()));
         }
-        match parent {
-            Some(p) => node = p,
-            None => return false,
+        if cursor.goto_first_child() {
+            ancestors.push(node);
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return ranges;
+            }
+            ancestors.pop();
         }
     }
-    false
 }
 
 /// Whether the syntax lets a file other than the file of the definition name it.
@@ -2334,6 +2343,34 @@ pub struct AnalysisSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The time of `collect_file_data` on `depth` nested TypeScript functions, each a symbol.
+    fn file_data_of_nested_functions_at(depth: usize) -> std::time::Duration {
+        let source = format!("{}{}\n", "function f() {".repeat(depth), "}".repeat(depth));
+        let result = parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::TypeScript,
+                std::path::Path::new("a.ts"),
+            )
+            .expect("parse");
+        let facts = crate::index::extract::extract_file(&result, "a.ts");
+        let started = crate::index::timing::Stopwatch::start();
+        let data = collect_file_data(&result, &facts);
+        let elapsed = started.elapsed();
+        assert_eq!(data.definitions.len(), depth);
+        elapsed
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_definitions_of_nested_functions_are_read_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "nested functions",
+            2_500,
+            file_data_of_nested_functions_at,
+        );
+    }
 
     /// The time of `extract_rust_function_attributes` on `depth` nested modules.
     fn attributes_of_nested_modules_at(depth: usize) -> std::time::Duration {
