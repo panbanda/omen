@@ -1199,11 +1199,19 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
     // The depth of the cursor. `TreeCursor::depth` counts the levels each time, so a call
     // for each node takes quadratic time in a deep tree.
     let mut cursor_depth: u32 = 0;
+    // The ancestors of the node of the cursor, from the root. `Node::parent` searches from the
+    // root, so a call for each identifier takes quadratic time in a deep tree.
+    let mut ancestors: Vec<tree_sitter::Node<'_>> = Vec::new();
 
     // Iterative pre-order traversal
     loop {
         let node = cursor.node();
         let kind = node.kind();
+        let parent = ancestors.last().copied();
+        let grandparent = ancestors
+            .len()
+            .checked_sub(2)
+            .map(|position| ancestors[position]);
 
         // Arriving at depth d means every scope opened at depth >= d has been
         // left behind.
@@ -1247,10 +1255,12 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         };
 
         // Collect usages from identifiers (excluding definitions)
-        if (kind == "identifier" || kind == "type_identifier") && !is_definition_context(&node) {
+        if (kind == "identifier" || kind == "type_identifier")
+            && !is_definition_context(&node, parent)
+        {
             if let Ok(name) = node.utf8_text(source) {
                 fdc.usages.insert(name.to_string());
-                if kind == "identifier" && !is_call_target(&node) {
+                if kind == "identifier" && !is_call_target(&node, parent, grandparent) {
                     let (caller, module_scope) = match &current_function {
                         Some(caller) => (caller.clone(), from_module_scope),
                         None => (MODULE_SCOPE.to_string(), true),
@@ -1294,7 +1304,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         }
 
         // `Util.replacer` reads the function `replacer` as a property.
-        if kind == "property_identifier" && is_read_as_property(&node) {
+        if kind == "property_identifier" && is_read_as_property(&node, parent, grandparent) {
             if let Ok(name) = node.utf8_text(source) {
                 fdc.usages.insert(name.to_string());
                 let (caller, module_scope) = match &current_function {
@@ -1308,6 +1318,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         // Move to next node in pre-order traversal
         if cursor.goto_first_child() {
             cursor_depth += 1;
+            ancestors.push(node);
             continue;
         }
 
@@ -1333,6 +1344,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                 return; // Done traversing
             }
             cursor_depth -= 1;
+            ancestors.pop();
         }
     }
 }
@@ -1590,8 +1602,12 @@ fn rust_module_chain(node: &tree_sitter::Node<'_>, source: &[u8]) -> Vec<String>
 
 /// Whether a property name is read as a value: it is the member of a member
 /// expression, and the expression is not the callee of a call.
-fn is_read_as_property(node: &tree_sitter::Node<'_>) -> bool {
-    let Some(access) = node.parent().filter(|p| p.kind() == "member_expression") else {
+fn is_read_as_property<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    parent: Option<tree_sitter::Node<'tree>>,
+    grandparent: Option<tree_sitter::Node<'tree>>,
+) -> bool {
+    let Some(access) = parent.filter(|p| p.kind() == "member_expression") else {
         return false;
     };
     if access
@@ -1600,7 +1616,7 @@ fn is_read_as_property(node: &tree_sitter::Node<'_>) -> bool {
     {
         return false;
     }
-    !access.parent().is_some_and(|call| {
+    !grandparent.is_some_and(|call| {
         call.kind() == "call_expression"
             && call
                 .child_by_field_name("function")
@@ -1611,8 +1627,12 @@ fn is_read_as_property(node: &tree_sitter::Node<'_>) -> bool {
 /// Whether the identifier names the callee of a call, or a member of an object,
 /// and not a value. The call or the member access has its own reference in
 /// the index.
-fn is_call_target(node: &tree_sitter::Node<'_>) -> bool {
-    let Some(parent) = node.parent() else {
+fn is_call_target<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    parent: Option<tree_sitter::Node<'tree>>,
+    grandparent: Option<tree_sitter::Node<'tree>>,
+) -> bool {
+    let Some(parent) = parent else {
         return false;
     };
     let kind = parent.kind();
@@ -1624,7 +1644,7 @@ fn is_call_target(node: &tree_sitter::Node<'_>) -> bool {
             .named_child(0)
             .is_some_and(|object| object.id() != node.id())
     {
-        let calls_the_access = parent.parent().is_some_and(|call| {
+        let calls_the_access = grandparent.is_some_and(|call| {
             let call_kind = call.kind();
             (call_kind.contains("call") || call_kind.contains("invocation"))
                 && call
@@ -1661,8 +1681,11 @@ fn is_function_node(kind: &str) -> bool {
     )
 }
 
-fn is_definition_context(node: &tree_sitter::Node<'_>) -> bool {
-    if let Some(parent) = node.parent() {
+fn is_definition_context<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    parent: Option<tree_sitter::Node<'tree>>,
+) -> bool {
+    if let Some(parent) = parent {
         let parent_kind = parent.kind();
         // C and C++ put the name of a function in a declarator.
         if parent_kind == "function_declarator"
@@ -2288,13 +2311,8 @@ pub struct AnalysisSummary {
 mod tests {
     use super::*;
 
-    /// The time of `collect_usages_and_calls` on a function with `depth` nested parentheses.
-    fn usages_of_deep_parentheses_at(depth: usize) -> std::time::Duration {
-        let source = format!(
-            "package p\nfunc f() int {{ return {}x{} }}\n",
-            "(".repeat(depth),
-            ")".repeat(depth)
-        );
+    /// The time of `collect_usages_and_calls` on the Go `source`, which uses `x`.
+    fn usages_of_go_source(source: String) -> std::time::Duration {
         std::thread::Builder::new()
             .stack_size(1 << 30)
             .spawn(move || {
@@ -2321,6 +2339,33 @@ mod tests {
             .expect("spawn")
             .join()
             .expect("collect")
+    }
+
+    fn usages_of_deep_parentheses_at(depth: usize) -> std::time::Duration {
+        usages_of_go_source(format!(
+            "package p\nfunc f() int {{ return {}x{} }}\n",
+            "(".repeat(depth),
+            ")".repeat(depth)
+        ))
+    }
+
+    /// Each level reads `x`, so the predicates of each identifier read its parent.
+    fn usages_of_deep_blocks_at(depth: usize) -> std::time::Duration {
+        usages_of_go_source(format!(
+            "package p\nfunc f(x bool) {{ {}{} }}\n",
+            "if x {".repeat(depth),
+            "}".repeat(depth)
+        ))
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_usages_in_deep_blocks_are_collected_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "usages in deep blocks",
+            5_000,
+            usages_of_deep_blocks_at,
+        );
     }
 
     #[test]
