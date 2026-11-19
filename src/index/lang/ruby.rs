@@ -346,6 +346,7 @@ impl LanguageSpec for Ruby {
                     element: false,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
         }

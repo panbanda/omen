@@ -122,6 +122,7 @@ impl LanguageSpec for Go {
                     element: true,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
             return;
@@ -169,6 +170,7 @@ impl LanguageSpec for Go {
                 element: false,
                 result_index: call.map(|_| position),
                 visible: None,
+                constant: false,
             });
         }
     }

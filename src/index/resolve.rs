@@ -11,6 +11,7 @@ pub mod external;
 mod function_references;
 #[cfg(test)]
 mod go_calls;
+mod stores;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
@@ -304,6 +305,10 @@ struct Resolver<'a> {
     /// The results of `alias_constructs`, by the alias, the position of the
     /// type parameter, and the depth.
     alias_constructs_cache: RwLock<HashMap<(Id, usize, usize), bool>>,
+    /// For each file, its stores by the names under which it exports them.
+    store_names: OnceLock<stores::StoreNames<'a>>,
+    /// The results of `store_named` for an imported name, by the file and the name.
+    stores_cache: RwLock<HashMap<(usize, String), Option<stores::StoreId>>>,
 }
 
 /// The traits whose methods `Arc` and `Rc` have only when the trait is in
@@ -509,6 +514,8 @@ impl<'a> Resolver<'a> {
             module_scopes_cache: RwLock::new(HashMap::new()),
             constructor_position_cache: RwLock::new(HashMap::new()),
             alias_constructs_cache: RwLock::new(HashMap::new()),
+            store_names: OnceLock::new(),
+            stores_cache: RwLock::new(HashMap::new()),
             exported_cache: RwLock::new(HashMap::new()),
             packages: OnceLock::new(),
             visible_cache: RwLock::new(HashMap::new()),
@@ -2407,6 +2414,9 @@ impl<'a> Resolver<'a> {
             if let Some(outcome) = Outcome::of(Basis::LexicalScope, literal) {
                 return outcome;
             }
+            if let Some(store) = self.store_of_local(local, file) {
+                return self.store_member(store, name);
+            }
             return match self.local_types(local, file, depth) {
                 Some(types) => {
                     self.on_types(&types, name, arity, Basis::ReceiverDeclaredType, file)
@@ -3222,6 +3232,9 @@ impl<'a> Resolver<'a> {
         // The other rules found no candidate. The source can still show a
         // definition outside the repository.
         if outcome.status == Status::Unresolved && outcome.candidates.is_empty() {
+            if self.store_call(file, position).is_some() {
+                return Outcome::none(Status::External);
+            }
             if let Some(external) = self.external(file, position, depth) {
                 return external;
             }
@@ -3427,6 +3440,9 @@ impl<'a> Resolver<'a> {
                         .copied()
                         .find(|other| facts.reference_facts[*other].end_byte == end)
                 });
+                if let Some(store) = call.and_then(|call| self.store_call(file, call)) {
+                    return self.store_member(store, name);
+                }
                 // A receiver that is a chain of names has the declared type
                 // of its last field.
                 let types = match call {

@@ -1448,6 +1448,8 @@ pub struct FileSymbols {
     /// a C macro, a Bash alias, a property of the global object of
     /// ECMAScript, and a Ruby singleton class of a constant.
     pub rebound: BTreeSet<String>,
+    /// The Pinia stores at the top level of the file, sorted by name.
+    pub stores: Vec<super::stores::Store>,
     /// The facts that the class metrics use.
     pub members: MemberFacts,
     /// The BLAKE3 hash of the bytes that gave these facts.
@@ -1928,6 +1930,21 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         .map(|(position, (draft, _))| (draft.node.id(), position))
         .collect();
     let position_of = |owner: Option<usize>| owner.and_then(|id| positions.get(&id).copied());
+    let stores = if matches!(
+        parsed.language,
+        Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx
+    ) {
+        let symbols_by_name = || {
+            found
+                .iter()
+                .enumerate()
+                .map(|(position, (draft, _))| (draft.name_node.start_byte(), position))
+                .collect()
+        };
+        super::stores::stores(parsed, &imports, &export_aliases, symbols_by_name)
+    } else {
+        Vec::new()
+    };
     let locals: Vec<Local> = extractor
         .locals
         .into_iter()
@@ -2254,6 +2271,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         locals,
         path_targets: BTreeMap::new(),
         rebound: rebound_names(parsed),
+        stores,
         members: member_facts,
         content_hash: *blake3::hash(&parsed.source).as_bytes(),
         test_ranges: mark_table.ranges,

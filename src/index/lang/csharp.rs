@@ -334,6 +334,7 @@ impl LanguageSpec for CSharp {
                     element: true,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
             return;
@@ -352,6 +353,7 @@ impl LanguageSpec for CSharp {
                     element: false,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
             return;
@@ -382,6 +384,7 @@ impl LanguageSpec for CSharp {
                 element: false,
                 result_index: None,
                 visible: None,
+                constant: false,
             });
         }
     }

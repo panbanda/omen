@@ -686,6 +686,7 @@ fn parameter_name(name: String) -> LocalName {
         element: false,
         result_index: None,
         visible: None,
+        constant: false,
     }
 }
 
@@ -791,6 +792,7 @@ impl LanguageSpec for Ecma {
                     element: true,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
             return;
@@ -813,7 +815,18 @@ impl LanguageSpec for Ecma {
             return;
         }
         if node.kind() != FORMAL_PARAMETERS {
+            let first = out.len();
             self.call_syntax().locals(node, context, out);
+            let constant = node.kind() == VARIABLE_DECLARATOR
+                && node.parent().is_some_and(|declaration| {
+                    declaration.kind() == "lexical_declaration"
+                        && declaration
+                            .child_by_field_name("kind")
+                            .is_some_and(|keyword| keyword.kind() == "const")
+                });
+            for local in &mut out[first..] {
+                local.constant = constant;
+            }
             return;
         }
         let mut cursor = node.walk();
