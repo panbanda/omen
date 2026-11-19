@@ -21,6 +21,7 @@ use super::{
 };
 use crate::core::Language;
 use crate::index::calls::{one_result, required_type};
+use crate::index::imports::TestRunners;
 
 /// The resolution of the value of a Go local name stops at this depth.
 const MAXIMUM_DEPTH: usize = 4;
@@ -610,6 +611,73 @@ fn is_standard_member(global: &str, member: &str) -> bool {
         })
 }
 
+/// The globals that each test runner gives to a test file, sorted. A
+/// package that depends on the runner can use them without an import.
+const JEST_GLOBALS: &[&str] = &[
+    "afterAll",
+    "afterEach",
+    "beforeAll",
+    "beforeEach",
+    "describe",
+    "expect",
+    "fdescribe",
+    "fit",
+    "it",
+    "jest",
+    "test",
+    "xdescribe",
+    "xit",
+    "xtest",
+];
+const VITEST_GLOBALS: &[&str] = &[
+    "afterAll",
+    "afterEach",
+    "assert",
+    "assertType",
+    "beforeAll",
+    "beforeEach",
+    "bench",
+    "chai",
+    "describe",
+    "expect",
+    "expectTypeOf",
+    "it",
+    "onTestFailed",
+    "onTestFinished",
+    "suite",
+    "test",
+    "vi",
+    "vitest",
+];
+const MOCHA_GLOBALS: &[&str] = &[
+    "after",
+    "afterEach",
+    "before",
+    "beforeEach",
+    "context",
+    "describe",
+    "it",
+    "run",
+    "setup",
+    "specify",
+    "suite",
+    "suiteSetup",
+    "suiteTeardown",
+    "teardown",
+    "test",
+    "xcontext",
+    "xdescribe",
+    "xit",
+    "xspecify",
+];
+
+/// The globals of each test runner.
+const TEST_RUNNER_GLOBALS: &[(TestRunners, &[&str])] = &[
+    (TestRunners::JEST, JEST_GLOBALS),
+    (TestRunners::VITEST, VITEST_GLOBALS),
+    (TestRunners::MOCHA, MOCHA_GLOBALS),
+];
+
 const JAVA_RECEIVERS: &[&str] = &[
     "Boolean",
     "Character",
@@ -990,6 +1058,7 @@ impl<'a> Resolver<'a> {
                                 && !self.unbound_qualifier_can_name(scope, qualifier, name)))
                 }
                 (None, None) => !name.starts_with('$') && self.external_bare(scope, name, rules),
+                (Some(Receiver::Expression), _) => self.test_runner_value(file, position, depth),
                 _ => false,
             }
         };
@@ -1042,11 +1111,7 @@ impl<'a> Resolver<'a> {
         let php_name = self.files[file].language == Language::Php
             && self.php_names.contains(&name.to_ascii_lowercase());
         // A declaration of an ECMAScript global in a different module is not global.
-        let declared = if self.family(file) == super::Family::Ecma && is_ecma_global(name) {
-            self.named_in(name, file).next().is_some()
-        } else {
-            self.by_name.contains_key(name)
-        };
+        let declared = self.is_declared_for(file, name);
         let taken = self.is_rebound(file, name)
             || declared
             || php_name
@@ -1090,12 +1155,86 @@ impl<'a> Resolver<'a> {
         self.is_free_name(scope, name)
             && (rules.receivers.contains(name)
                 || self.is_ecma_global_in(scope.file, name)
+                || self.is_test_global(scope.file, name)
                 || self.is_provided(scope.file, name))
     }
 
     /// An ECMAScript, Node.js, or browser global, in a file of ECMAScript.
     fn is_ecma_global_in(&self, file: usize, name: &str) -> bool {
         self.family(file) == super::Family::Ecma && is_ecma_global(name)
+    }
+
+    /// A global of a test runner that the package of `file` depends on.
+    fn is_test_global(&self, file: usize, name: &str) -> bool {
+        if self.family(file) != super::Family::Ecma {
+            return false;
+        }
+        let runners = self.test_runners.get_or_init(|| {
+            self.files
+                .iter()
+                .map(|facts| TestRunners::of_file(self.manifests, &facts.file))
+                .collect()
+        })[file];
+        TEST_RUNNER_GLOBALS
+            .iter()
+            .any(|(runner, names)| runners.contains(*runner) && names.binary_search(&name).is_ok())
+    }
+
+    /// A symbol of the repository can be the global `name` for `file`. A
+    /// declaration of an ECMAScript global or of a test global in a
+    /// different module is not global, thus only the file counts.
+    fn is_declared_for(&self, file: usize, name: &str) -> bool {
+        if self.is_ecma_global_in(file, name) || self.is_test_global(file, name) {
+            self.named_in(name, file).next().is_some()
+        } else {
+            self.by_name.contains_key(name)
+        }
+    }
+
+    /// The call at `position` gives a value of a test runner: a call of a
+    /// test global, or a call on such a value whose name no function or
+    /// method of the repository has. A custom matcher of the repository can
+    /// have the name of the call.
+    fn test_runner_value(&self, file: usize, position: usize, depth: usize) -> bool {
+        if depth > MAXIMUM_DEPTH {
+            return false;
+        }
+        let facts = &self.files[file];
+        let reference = &facts.references[position];
+        let site = &facts.reference_facts[position];
+        let chain = self.chain(file, site.owner);
+        let scope = Scope {
+            file,
+            chain: &chain,
+            start: site.start_byte,
+            depth,
+        };
+        let rules = rules(facts.language);
+        let head = match (&reference.receiver, &reference.qualifier) {
+            (Some(Receiver::Name(receiver)), _) => receiver.as_str(),
+            (None, Some(qualifier)) => segments(qualifier).first().copied().unwrap_or_default(),
+            (None, None) => reference.name.as_str(),
+            (Some(Receiver::Expression), _) => {
+                return !self.has_callable_named(&reference.name, file)
+                    && self
+                        .receiver_call(file, position)
+                        .is_some_and(|call| self.test_runner_value(file, call, depth + 1));
+            }
+            _ => return false,
+        };
+        self.is_test_global(file, head) && self.is_external_name(scope, head, rules)
+    }
+
+    /// The call that starts the receiver of the call at `position`: of the
+    /// calls that start where the receiver starts, the longest one that ends
+    /// in the receiver. `expect(a)` for `expect(a).not.toBe(b)`.
+    fn receiver_call(&self, file: usize, position: usize) -> Option<usize> {
+        let (start, end) = self.files[file].reference_facts[position].receiver?;
+        self.references_within(file, start, end)
+            .iter()
+            .rev()
+            .map(|(_, other)| *other)
+            .find(|other| *other != position)
     }
 
     fn external_bare(&self, scope: Scope<'_>, name: &str, rules: Rules) -> bool {
@@ -1117,7 +1256,9 @@ impl<'a> Resolver<'a> {
         } else {
             name.to_string()
         };
-        rules.bare.contains(&name) || self.is_provided(scope.file, &name)
+        rules.bare.contains(&name)
+            || self.is_provided(scope.file, &name)
+            || self.is_test_global(scope.file, &name)
     }
 
     fn external_qualifier(&self, scope: Scope<'_>, qualifier: &str, rules: Rules) -> bool {
@@ -1130,7 +1271,7 @@ impl<'a> Resolver<'a> {
         if let Some(binding) = self.binding_of(scope.file, head) {
             return self.is_external_binding(binding);
         }
-        if self.by_name.contains_key(head) {
+        if self.is_declared_for(scope.file, head) {
             return false;
         }
         if self.files[scope.file].language == Language::Rust {
@@ -1143,6 +1284,7 @@ impl<'a> Resolver<'a> {
         !self.has_repository_wildcard(scope.file)
             && (rules.receivers.contains(head)
                 || self.is_ecma_global_in(scope.file, head)
+                || self.is_test_global(scope.file, head)
                 || self.is_provided(scope.file, head))
     }
 
@@ -1639,6 +1781,58 @@ mod tests {
         }
     }
 
+    /// The globals of a test runner are outside the repository in a package
+    /// that depends on the runner, when nothing in the file binds the name.
+    /// A call on the result of such a call is outside the repository too,
+    /// unless a function or a method of the repository has its name.
+    #[test]
+    fn test_ecma_test_runner_globals() {
+        let vitest = "{\"name\": \"app\", \"devDependencies\": {\"vitest\": \"1.0.0\"}}";
+        let mocha = "{\"name\": \"app\", \"devDependencies\": {\"mocha\": \"1.0.0\"}}";
+        let none = "{\"name\": \"app\", \"dependencies\": {\"zod\": \"1.0.0\"}}";
+        let matchers = "export class Matchers {\n  toBeShaped() {}\n}\n";
+        for (file, other) in [
+            ("src/app.test.ts", "src/matchers.ts"),
+            ("src/app.test.js", "src/matchers.js"),
+            ("src/app.test.tsx", "src/matchers.tsx"),
+            ("src/app.test.jsx", "src/matchers.jsx"),
+        ] {
+            let app = "describe('a', () => {\n  it('b', () => {\n    const run = vi.fn();\n    vi.fn().mockResolvedValue(1);\n    expect(run).toHaveBeenCalled();\n    expect(1).not.toEqual(2);\n    expect(1).toBeShaped();\n  });\n});\n";
+            let files = [("package.json", vitest), (file, app), (other, matchers)];
+            for name in [
+                "describe",
+                "it",
+                "fn",
+                "mockResolvedValue",
+                "expect",
+                "toHaveBeenCalled",
+                "toEqual",
+            ] {
+                assert!(external(&files, file, name), "{file} {name}");
+            }
+            // A custom matcher of the repository can be the callee.
+            assert!(!external(&files, file, "toBeShaped"), "{file}");
+            // Without the runner, the names can come from a setup file.
+            let files = [("package.json", none), (file, app), (other, matchers)];
+            assert!(!external(&files, file, "describe"), "{file}");
+            assert!(!external(&files, file, "toHaveBeenCalled"), "{file}");
+            // `vi` is a global of Vitest, not of Mocha. `context` is a global of Mocha.
+            let files = [("package.json", mocha), (file, app), (other, matchers)];
+            assert!(external(&files, file, "describe"), "{file}");
+            assert!(!external(&files, file, "fn"), "{file}");
+            // An import, a local name, or an assignment to the global object binds the name.
+            let bound = "import { it } from './helpers';\nexport function run(expect) {\n  it('a');\n  expect(1).toBe(1);\n}\nglobalThis.describe = run;\ndescribe('a');\n";
+            let files = [
+                ("package.json", vitest),
+                (file, bound),
+                ("src/helpers.ts", "export function it(name: string) {}\n"),
+            ];
+            for name in ["it", "expect", "toBe", "describe"] {
+                assert!(!external(&files, file, name), "{file} {name}");
+            }
+        }
+    }
+
     #[test]
     fn test_ecma_declared_global_type_typescript() {
         for file in ["app.ts", "app.tsx"] {
@@ -1822,7 +2016,8 @@ mod tests {
     fn test_a_receiver_without_a_binding_abstains_when_a_repository_method_has_the_call_name() {
         // `clamp` is not a standard member of `Math`, thus a declaration of
         // the repository can add it.
-        let app = "function run() { return Math.clamp(1); }\nclass Repo { clamp() { return 1; } }\n";
+        let app =
+            "function run() { return Math.clamp(1); }\nclass Repo { clamp() { return 1; } }\n";
         assert!(!external(&[("a.ts", app)], "a.ts", "clamp"));
     }
 
@@ -2051,5 +2246,53 @@ mod tests {
             "def len(a):\n    return a\n\ndef run():\n    len(1)\n",
         )];
         assert!(!external(&files, "app.py", "len"));
+    }
+}
+
+#[cfg(test)]
+mod test_runner_timing_tests {
+    use crate::index::resolve::testing::rows;
+    use crate::index::timing::{assert_scales_linearly, Stopwatch};
+
+    /// One test file with `size` statements, each with a chain of calls on
+    /// a test global. A chain of many calls is not a part of the case: the
+    /// extraction of one chain takes time in proportion to the square of its
+    /// length, before the resolution.
+    fn matcher_chains_at(size: usize) -> std::time::Duration {
+        let package = "{\"name\": \"app\", \"devDependencies\": {\"vitest\": \"1.0.0\"}}";
+        let mut app = String::from("it('a', () => {\n");
+        for position in 0..size {
+            app.push_str(&format!(
+                "  expect({position}).not.toBe({position});\n  vi.fn().mockReturnValue({position}).mockReturnValueOnce({position});\n"
+            ));
+        }
+        app.push_str("});\n");
+        let files = [("package.json", package), ("app.test.ts", app.as_str())];
+        let started = Stopwatch::start();
+        let found = rows(&files, "app.test.ts");
+        let elapsed = started.elapsed();
+        let last = 2 * size + 1;
+        for call in [
+            format!("{} ->(..).toBe External", last - 1),
+            format!("{last} ->(..).mockReturnValueOnce External"),
+        ] {
+            assert!(
+                found.iter().any(|row| row.starts_with(&call)),
+                "{call} {:?}",
+                found.last()
+            );
+        }
+        elapsed
+    }
+
+    #[test]
+    fn test_matcher_chains_are_external() {
+        matcher_chains_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_matcher_chains_are_classified_in_linear_time() {
+        assert_scales_linearly("matcher chains", 2_000, matcher_chains_at);
     }
 }
