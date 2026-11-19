@@ -1325,7 +1325,7 @@ mod tests {
                 std::path::Path::new("lib.rs"),
             )
             .unwrap();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let file = crate::index::extract::extract_file(&parsed, "lib.rs");
         let elapsed = started.elapsed();
         assert_eq!(file.symbols.len(), depth * 2);
