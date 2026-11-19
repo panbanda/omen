@@ -2957,6 +2957,97 @@ func makeHandler(callback func(error)) http.Handler { return nil }
     }
 
     const CHI: &str = "\"github.com/go-chi/chi/v5\"";
+
+    /// The Go routes of `source` on a thread with a small stack, and the same routes on a
+    /// thread with a stack of 1 GiB.
+    fn go_routes_on_small_and_large_stack(source: String) -> (Vec<String>, Vec<String>) {
+        let copy = source.clone();
+        let small =
+            crate::parser::deep::on_small_stack(move || go_routes(&[("main.go", copy.as_str())]));
+        let large = std::thread::Builder::new()
+            .stack_size(1 << 30)
+            .spawn(move || go_routes(&[("main.go", source.as_str())]))
+            .expect("spawn")
+            .join()
+            .expect("no stack overflow");
+        (small, large)
+    }
+
+    /// The nesting depth of the tests of the Go interpreter. In a debug build, the recursion of
+    /// the interpreter without `stacker` overflows the stack of `on_small_stack` at a depth of 50.
+    const INTERPRETER_DEPTH: usize = 200;
+
+    fn interpreter_nest(open: &str, middle: &str, close: &str) -> String {
+        crate::parser::deep::nest_to(INTERPRETER_DEPTH, open, middle, close)
+    }
+
+    /// `closure` reads a function literal inside each level of nested function literals.
+    #[test]
+    fn go_routes_inside_deeply_nested_closures() {
+        let body = format!(
+            "func routes() http.Handler {{\n\tr := chi.NewRouter()\n\t{}\n\treturn r\n}}\n",
+            interpreter_nest("func() {\n", "r.Get(\"/x\", list)\n", "}()\n")
+        );
+        let (small, large) = go_routes_on_small_and_large_stack(go_source(&[CHI], &body));
+        assert_eq!(small, large);
+    }
+
+    /// `chi_route` reads the callback of each level of nested `Route` calls.
+    #[test]
+    fn go_routes_inside_deeply_nested_chi_routes() {
+        let body = format!(
+            "func routes() http.Handler {{\n\tr := chi.NewRouter()\n\t{}\n\treturn r\n}}\n",
+            interpreter_nest(
+                "r.Route(\"/a\", func(r chi.Router) {\n",
+                "r.Get(\"/x\", list)\n",
+                "})\n"
+            )
+        );
+        let (small, large) = go_routes_on_small_and_large_stack(go_source(&[CHI], &body));
+        assert_eq!(small, large);
+        assert!(
+            small
+                .iter()
+                .any(|route| route.contains(&format!("{}/x", "/a".repeat(INTERPRETER_DEPTH)))),
+            "{:?}",
+            small.first()
+        );
+    }
+
+    /// `chi_group` reads the callback of each level of nested `Group` calls.
+    #[test]
+    fn go_routes_inside_deeply_nested_chi_groups() {
+        let body = format!(
+            "func routes() http.Handler {{\n\tr := chi.NewRouter()\n\t{}\n\treturn r\n}}\n",
+            interpreter_nest(
+                "r.Group(func(r chi.Router) {\n",
+                "r.Get(\"/x\", list)\n",
+                "})\n"
+            )
+        );
+        let (small, large) = go_routes_on_small_and_large_stack(go_source(&[CHI], &body));
+        assert_eq!(small, large);
+        assert!(!small.is_empty());
+    }
+
+    /// `eval`, `call_function`, and `walk_declared` read a chain of more factories than the
+    /// limit of the evaluation.
+    #[test]
+    fn go_routes_from_a_chain_of_factories_longer_than_the_limit() {
+        let count = super::go_routes::EVAL_DEPTH_LIMIT + 100;
+        let mut body = String::new();
+        for index in 0..count {
+            body.push_str(&format!(
+                "func f{index}() chi.Router {{ return f{}() }}\n",
+                index + 1
+            ));
+        }
+        body.push_str(&format!(
+            "func f{count}() chi.Router {{ return chi.NewRouter() }}\n\nfunc routes() http.Handler {{\n\tr := f0()\n\tr.Get(\"/x\", list)\n\treturn r\n}}\n"
+        ));
+        let (small, large) = go_routes_on_small_and_large_stack(go_source(&[CHI], &body));
+        assert_eq!(small, large);
+    }
     const ECHO: &str = "\"github.com/labstack/echo/v4\"";
     const MUX: &str = "\"github.com/gorilla/mux\"";
     const GIN: &str = "\"github.com/gin-gonic/gin\"";

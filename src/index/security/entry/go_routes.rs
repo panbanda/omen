@@ -61,7 +61,21 @@ const GIN_ANY: [&str; 9] = [
 
 /// The methods that `Any` registers. echo v4.13.4 `methods`.
 /// The depth of a chain of calls that the walk reads.
-const EVAL_DEPTH_LIMIT: usize = 1000;
+pub(super) const EVAL_DEPTH_LIMIT: usize = 1000;
+
+/// The interpreter of the routes is a walk with recursion: `closure` reads a nested function
+/// literal, `walk_declared` reads a called factory, and `eval` reads the operand of a call,
+/// and each of them calls the others. An explicit stack in place of this recursion changes the
+/// order of the effects of the walk, such as the numbers of the routers and the order of the
+/// records. Thus these functions keep their recursion, and `on_grown_stack` gives them a new
+/// segment of stack on the heap when the stack of the thread is almost full.
+fn on_grown_stack<T>(work: impl FnOnce() -> T) -> T {
+    // The largest use of the stack between two calls of this function, in a debug build, is
+    // less than the red zone.
+    const RED_ZONE: usize = 64 * 1024;
+    const SEGMENT: usize = 1024 * 1024;
+    stacker::maybe_grow(RED_ZONE, SEGMENT, work)
+}
 
 const ECHO_ANY: [&str; 11] = [
     "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PROPFIND", "PUT", "TRACE",
@@ -2733,6 +2747,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     /// Reads the body of a function in a scope of its own, one time. `declared` is the name
     /// of the function. A pure function that returns a router it made gets a summary.
     fn walk_declared(&mut self, node: Node<'t>, declared: Option<&str>) {
+        on_grown_stack(|| self.read_declared(node, declared))
+    }
+
+    fn read_declared(&mut self, node: Node<'t>, declared: Option<&str>) {
         if let Some(name) = declared {
             if !self.walked.insert(name.to_string()) {
                 return;
@@ -3080,6 +3098,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn closure(&mut self, literal: Node<'t>, bound: Option<usize>) {
+        on_grown_stack(|| self.read_closure(literal, bound))
+    }
+
+    fn read_closure(&mut self, literal: Node<'t>, bound: Option<usize>) {
         self.scopes.push(HashMap::new());
         let owner = self.current_owner();
         self.frames.push(Frame {
@@ -3423,6 +3445,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     /// level of `eval_depth` each. The levels wait on a stack and not in recursion, so a long
     /// chain does not overflow the stack of the thread.
     fn eval(&mut self, expression: Node<'t>) -> Option<usize> {
+        on_grown_stack(|| self.eval_levels(expression))
+    }
+
+    fn eval_levels(&mut self, expression: Node<'t>) -> Option<usize> {
         enum Level<'tree> {
             Parenthesis,
             Call(Node<'tree>),
