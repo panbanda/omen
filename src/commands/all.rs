@@ -357,12 +357,15 @@ mod tests {
         assert_eq!(security_of(&experimental), 2);
     }
 
-    /// Runs `all` on the sources of `language` at `LARGE_DEPTH` on a thread with the default
-    /// stack of 2 MiB. Each analyzer gives a result and no error.
-    fn whole_analysis_of_deep_sources(language: crate::core::Language) {
+    /// The analyzer entries of `all` on the sources of `language` at `depth`, in a new
+    /// repository, on a thread with the default stack of 2 MiB.
+    fn analyzer_entries_at(
+        language: crate::core::Language,
+        depth: usize,
+    ) -> Vec<serde_json::Value> {
         use crate::parser::deep;
         let directory = tempfile::tempdir().expect("directory");
-        for source in deep::deep_sources_at(language, deep::LARGE_DEPTH) {
+        for source in deep::deep_sources_at(language, depth) {
             if !source.slow {
                 std::fs::write(directory.path().join(&source.file), &source.source).expect("write");
             }
@@ -407,13 +410,38 @@ mod tests {
             .join()
             .expect("no stack overflow");
         let value: serde_json::Value = serde_json::from_slice(&out).expect("json");
-        let errors: Vec<&serde_json::Value> = value["analyzers"]
-            .as_array()
-            .expect("analyzers")
+        value["analyzers"].as_array().expect("analyzers").clone()
+    }
+
+    fn analyzer_names(entries: &[serde_json::Value]) -> Vec<String> {
+        entries
             .iter()
-            .filter(|entry| entry.get("error").is_some())
+            .map(|entry| entry["analyzer"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn whole_analysis_of_shallow_sources_gives_a_result_for_each_analyzer() {
+        let entries = analyzer_entries_at(crate::core::Language::Go, 1);
+        assert!(
+            entries.iter().all(|entry| entry.get("result").is_some()),
+            "{entries:?}"
+        );
+        assert!(analyzer_names(&entries).contains(&"security".to_string()));
+    }
+
+    /// Runs `all` on the sources of `language` at `LARGE_DEPTH`. Each analyzer of a run on
+    /// shallow sources gives a result, and no analyzer gives an error. A group of analyzers whose
+    /// thread panics gives no entries, thus the names of the two runs must be the same.
+    fn whole_analysis_of_deep_sources(language: crate::core::Language) {
+        let shallow = analyzer_names(&analyzer_entries_at(language, 1));
+        let entries = analyzer_entries_at(language, crate::parser::deep::LARGE_DEPTH);
+        assert_eq!(analyzer_names(&entries), shallow);
+        let failed: Vec<&serde_json::Value> = entries
+            .iter()
+            .filter(|entry| entry.get("result").is_none())
             .collect();
-        assert!(errors.is_empty(), "{errors:?}");
+        assert!(failed.is_empty(), "{failed:?}");
     }
 
     macro_rules! whole_analysis_of_deep_sources {
