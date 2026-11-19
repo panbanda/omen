@@ -137,6 +137,9 @@ pub struct Draft<'tree> {
     pub named_by_binding: bool,
     /// The `cfg` attributes that control the definition.
     pub condition: Option<Condition>,
+    /// A method that a call defines without a body of its own, as Ruby
+    /// `attr_reader :name` does. One node can define several of them.
+    pub generated: bool,
     /// The wrapper type of the `self` parameter of a Rust method, as `Arc`
     /// for `self: &Arc<Self>`.
     pub self_wrapper: Option<&'static str>,
@@ -481,6 +484,22 @@ pub trait LanguageSpec: Sync {
         _context: &Context<'_, 'tree>,
     ) -> Option<Node<'tree>> {
         None
+    }
+
+    /// Each node kind for which the walk calls `generated_methods`.
+    fn generated_kinds(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    /// The methods that a node defines without a body of its own, as Ruby
+    /// `attr_accessor :name` defines `name` and `name=`. Each method has the
+    /// node of its name and the name. Such a method contains no definition.
+    fn generated_methods<'tree>(
+        &self,
+        _node: Node<'tree>,
+        _context: &Context<'_, 'tree>,
+    ) -> Vec<(Node<'tree>, String)> {
+        Vec::new()
     }
 
     /// Corrects the draft that the table gave. If the result is `false`, the
@@ -924,6 +943,7 @@ struct Extractor<'a, 'tree> {
     scope_depths: Vec<usize>,
     found: Vec<(Draft<'tree>, Exported)>,
     import_kinds: Vec<&'static str>,
+    generated_kinds: Vec<&'static str>,
     module_kinds: Vec<&'static str>,
     imports: Vec<ImportBinding>,
     modules: Vec<String>,
@@ -976,6 +996,7 @@ struct KindFacts {
     value: bool,
     scope: bool,
     test_mark: bool,
+    generated: bool,
     rule: Option<DefinitionRule>,
     /// The roles of the kind in the facts of the members, as `members::kind_bits` gives.
     member_bits: u8,
@@ -1001,6 +1022,7 @@ impl<'tree> Extractor<'_, 'tree> {
             value: self.value_kinds.contains(&kind),
             scope: self.spec.scope_kinds().contains(&kind),
             test_mark: self.test_mark_kinds.contains(&kind),
+            generated: self.generated_kinds.contains(&kind),
             rule: self.rules.get(kind).copied(),
             member_bits: self.members.as_ref().map_or(0, |recorder| {
                 members::kind_bits(self.language, &recorder.syntax, kind)
@@ -1085,8 +1107,8 @@ impl<'tree> Extractor<'_, 'tree> {
         }
     }
 
-    fn draft(&self, node: Node<'tree>, rule: &DefinitionRule) -> Option<(Draft<'tree>, Exported)> {
-        let context = Context {
+    fn context(&self, node: Node<'tree>) -> Context<'_, 'tree> {
+        Context {
             file: self.file,
             source: self.source,
             scopes: &self.scopes,
@@ -1095,25 +1117,51 @@ impl<'tree> Extractor<'_, 'tree> {
             members: self.members.as_ref(),
             current: Some((node.id(), self.ancestors.last().copied())),
             memo: &self.memo,
-        };
-        let name_node = match rule.name {
-            NameRule::Field(field) => node.child_by_field_name(field),
-            NameRule::Hook => self.spec.name_node(node, &context),
-        }?;
-        let container = context.container();
-        let in_type = container.is_some_and(|scope| scope.role == ScopeRole::Type);
-        let kind = if in_type {
-            rule.kind_in_type
-        } else {
-            rule.kind
-        };
+        }
+    }
+
+    /// The methods that `node` defines without a body. Each draft has `node`
+    /// as its node, and the span of its name.
+    fn generated_drafts(&self, node: Node<'tree>) -> Vec<(Draft<'tree>, Exported)> {
+        let context = self.context(node);
+        let in_type = context
+            .container()
+            .is_some_and(|scope| scope.role == ScopeRole::Type);
+        if !in_type {
+            return Vec::new();
+        }
+        self.spec
+            .generated_methods(node, &context)
+            .into_iter()
+            .map(|(name_node, name)| {
+                let mut draft = self.new_draft(node, name_node, SymbolKind::Method, &context);
+                draft.name = name;
+                draft.span = Span::of(&name_node);
+                draft.body = None;
+                draft.parameter_count = None;
+                draft.parameter_types = None;
+                draft.return_type = None;
+                draft.generated = true;
+                let exported = self.spec.exported(&draft, &context);
+                (draft, exported)
+            })
+            .collect()
+    }
+
+    fn new_draft(
+        &self,
+        node: Node<'tree>,
+        name_node: Node<'tree>,
+        kind: SymbolKind,
+        context: &Context<'_, 'tree>,
+    ) -> Draft<'tree> {
         let parameters = node.child_by_field_name("parameters");
-        let mut draft = Draft {
+        Draft {
             node,
             name_node,
             name: context.text(name_node),
             kind,
-            container: container.map(|scope| scope.name.clone()),
+            container: context.container().map(|scope| scope.name.clone()),
             container_path: context.path(),
             receiver_type: None,
             supertypes: Vec::new(),
@@ -1135,13 +1183,31 @@ impl<'tree> Extractor<'_, 'tree> {
             defined_type: false,
             prepends: Vec::new(),
             bases: Vec::new(),
-            named_by_binding: rule.name == NameRule::Hook
-                && rule.kind != SymbolKind::Field
-                && (name_node.start_byte() < node.start_byte()
-                    || name_node.end_byte() > node.end_byte()),
+            named_by_binding: false,
             condition: None,
             self_wrapper: None,
+            generated: false,
+        }
+    }
+
+    fn draft(&self, node: Node<'tree>, rule: &DefinitionRule) -> Option<(Draft<'tree>, Exported)> {
+        let context = self.context(node);
+        let name_node = match rule.name {
+            NameRule::Field(field) => node.child_by_field_name(field),
+            NameRule::Hook => self.spec.name_node(node, &context),
+        }?;
+        let container = context.container();
+        let in_type = container.is_some_and(|scope| scope.role == ScopeRole::Type);
+        let kind = if in_type {
+            rule.kind_in_type
+        } else {
+            rule.kind
         };
+        let mut draft = self.new_draft(node, name_node, kind, &context);
+        draft.named_by_binding = rule.name == NameRule::Hook
+            && rule.kind != SymbolKind::Field
+            && (name_node.start_byte() < node.start_byte()
+                || name_node.end_byte() > node.end_byte());
         if draft.kind == SymbolKind::Module {
             draft.role = ScopeRole::Module;
         } else if draft.kind.is_type() {
@@ -1177,6 +1243,7 @@ impl<'tree> Extractor<'_, 'tree> {
             value,
             scope: opens_scope,
             test_mark,
+            generated,
             rule,
             member_bits,
         } = self.kind_facts(node);
@@ -1270,6 +1337,10 @@ impl<'tree> Extractor<'_, 'tree> {
                     (name, owner, block)
                 }));
             }
+        }
+        if generated {
+            let drafts = self.generated_drafts(node);
+            self.found.extend(drafts);
         }
         let definition = rule.and_then(|rule| self.draft(node, &rule));
         let function_value =
@@ -1885,6 +1956,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         scope_depths: Vec::new(),
         found: Vec::new(),
         import_kinds: spec.import_kinds(),
+        generated_kinds: spec.generated_kinds(),
         module_kinds: spec.module_kinds(),
         imports: Vec::new(),
         modules: Vec::new(),
@@ -1922,9 +1994,11 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let export_aliases = extractor.export_aliases;
     let mut found = extractor.found;
     found.sort_by_key(|(draft, _)| (draft.span.start_byte, draft.span.end_byte));
+    // A generated method owns nothing, and its node can name several methods.
     let positions: HashMap<usize, usize> = found
         .iter()
         .enumerate()
+        .filter(|(_, (draft, _))| !draft.generated)
         .map(|(position, (draft, _))| (draft.node.id(), position))
         .collect();
     let position_of = |owner: Option<usize>| owner.and_then(|id| positions.get(&id).copied());
@@ -1967,17 +2041,23 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         .iter()
         .map(|(draft, _)| position_of(draft.owner))
         .collect();
-    // The fields get their ordinals after the other symbols. Thus a field
-    // does not change the key of a method with the same name.
+    // The generated methods and then the fields get their ordinals after the
+    // other symbols. Thus they do not change the key of a method with the
+    // same name that a definition with a body gives.
     // The count is for each rendered key. Two different paths can render one
     // key, for example a Bash function `a.b` and a function `b` in `a`.
     // A name that ends in `~2` can also render the key of a second definition.
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut used: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut ordinals = vec![0; found.len()];
-    for fields in [false, true] {
+    let pass = |draft: &Draft<'_>| match (draft.generated, draft.kind == SymbolKind::Field) {
+        (false, false) => 0,
+        (true, _) => 1,
+        (false, true) => 2,
+    };
+    for current in 0..3 {
         for (position, (draft, _)) in found.iter().enumerate() {
-            if (draft.kind == SymbolKind::Field) == fields {
+            if pass(draft) == current {
                 let base = symbol_key(file, &draft.container_path, &draft.name, 1);
                 let count = counts.entry(base).or_insert(0);
                 *count += 1;
