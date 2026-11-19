@@ -26,6 +26,7 @@ use super::model::{
     ResolutionBasis as Basis, ResolutionStatus as Status, SharedStr, Symbol, SymbolKind,
 };
 use crate::core::Language;
+use crate::index::lang::bash::Alias;
 
 /// Languages that can call the definitions of each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -3222,7 +3223,8 @@ impl<'a> Resolver<'a> {
         let site = &facts.reference_facts[position];
         let aliased;
         let reference = match &site.alias {
-            Some(name) => {
+            Some(Alias::Unknown) => return Outcome::none(Status::Unresolved),
+            Some(Alias::Name(name)) => {
                 aliased = Reference {
                     name: name.clone(),
                     ..facts.references[position].clone()

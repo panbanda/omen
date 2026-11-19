@@ -217,9 +217,9 @@ pub struct ReferenceFacts {
     /// A function reference whose name is a variable. Only a function value
     /// that the variable holds is its candidate.
     pub variable: bool,
-    /// The name that the call runs when its name is a Bash alias. The
-    /// resolver resolves this name in place of the name of the reference.
-    pub alias: Option<String>,
+    /// What the call runs when its name is a Bash alias. The resolver
+    /// resolves the name of the alias value in place of the name of the reference.
+    pub alias: Option<crate::index::lang::bash::Alias>,
 }
 
 /// The names of the value that an index expression reads: `c.items[i]`
@@ -2081,8 +2081,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         let alias = aliases
             .as_ref()
             .filter(|_| call.kind == ReferenceKind::Call)
-            .and_then(|aliases| aliases.target(&name, start_byte))
-            .map(str::to_string);
+            .and_then(|aliases| aliases.target(&name, start_byte));
         references.push(Reference {
             file: shared_file.clone(),
             name_range: Span::of(&call.callee.name_node),
