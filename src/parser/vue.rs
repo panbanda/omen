@@ -943,12 +943,12 @@ impl<'a, 'w> Template<'a, 'w> {
         if self.in_pre() {
             return Ok(());
         }
-        let content = self.content;
+        // Each search stops at the end of the text.
+        let text = &self.content[..range.end];
         let mut position = range.start;
-        while let Some(open) = find(content, position, b"{{").filter(|open| *open < range.end) {
-            let close = find(content, open + 2, b"}}")
-                .filter(|close| *close + 2 <= range.end)
-                .ok_or("a mustache of the template has no end")?;
+        while let Some(open) = find(text, position, b"{{") {
+            let close =
+                find(text, open + 2, b"}}").ok_or("a mustache of the template has no end")?;
             self.writer.expression(open, open + 2..close, &self.bound)?;
             position = close + 2;
         }
@@ -1460,6 +1460,18 @@ mod tests {
                 .repeat(size);
             translate_in(&format!(
                 "<template>{template}</template>\n<script setup>\nconst label = 1;\n</script>\n"
+            ))
+        });
+    }
+
+    /// The search for a mustache in a text stops at the end of the text.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_texts_without_mustaches_are_read_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("elements", 20_000, |size| {
+            let template = "<div>a</div>".repeat(size);
+            translate_in(&format!(
+                "<template>{template}</template>\n<script setup>\nconst a = 1;\n</script>\n"
             ))
         });
     }
