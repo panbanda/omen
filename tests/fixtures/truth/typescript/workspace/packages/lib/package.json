@@ -1,0 +1,1 @@
+{ "name": "my-lib", "main": "out/index.js", "types": "out/index.d.ts" }

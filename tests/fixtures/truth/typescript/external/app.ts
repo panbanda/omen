@@ -31,3 +31,9 @@ export function shadowed(): number {
 export function parameter(console): void {
   console.log("x");
 }
+
+export function collect(): number {
+  const seen = new Set<string>();
+  seen.add("a");
+  return new Date().getTime() + seen.size;
+}

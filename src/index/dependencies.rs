@@ -13,10 +13,12 @@ use super::model::{ImportKind, ImportTarget};
 /// The files that each file imports, in path order of the importing files.
 ///
 /// A statement that declares a module in a different file, as Rust `mod name;`
-/// does, is containment and not a dependency. An import that has more than one
-/// possible file gives no target, because the index cannot tell which one the
-/// import names. An import of a module that is not in the repository gives its
-/// path as the target only when `include_external` is set.
+/// does, is containment and not a dependency. A TypeScript import of a type
+/// only is not a dependency at run time, thus it makes no edge and no cycle.
+/// An import that has more than one possible file gives no target, because the
+/// index cannot tell which one the import names. An import of a module that is
+/// not in the repository gives its path as the target only when
+/// `include_external` is set.
 pub fn file_dependencies(index: &CodeIndex, include_external: bool) -> Vec<(String, Vec<String>)> {
     index
         .files
@@ -24,7 +26,7 @@ pub fn file_dependencies(index: &CodeIndex, include_external: bool) -> Vec<(Stri
         .map(|file| {
             let mut targets = Vec::new();
             for binding in &file.imports {
-                if binding.kind == ImportKind::ModuleDeclaration {
+                if binding.kind == ImportKind::ModuleDeclaration || binding.type_only {
                     continue;
                 }
                 match &binding.target_file {
@@ -139,6 +141,44 @@ mod tests {
 
         assert_eq!(dependencies_of(&dependencies, "a.ts"), ["b.ts"]);
         assert!(dependencies_of(&dependencies, "b.ts").is_empty());
+    }
+
+    #[test]
+    fn test_type_only_import_is_not_a_runtime_dependency_typescript() {
+        for extension in ["ts", "tsx"] {
+            let a = format!("a.{extension}");
+            let b = format!("b.{extension}");
+            let c = format!("c.{extension}");
+            let d = format!("d.{extension}");
+            let index = index_of(&[
+                (a.as_str(), "import type { B } from './b';\nexport class A {}\n"),
+                (b.as_str(), "import { A } from './a';\nexport class B {}\n"),
+                (
+                    c.as_str(),
+                    "import { type A, B } from './b';\nimport { type A as Other } from './a';\nexport type { B as C } from './b';\n",
+                ),
+                (d.as_str(), "export type { A } from './a';\nexport { B } from './b';\n"),
+            ]);
+
+            let dependencies = file_dependencies(&index, false);
+
+            assert!(dependencies_of(&dependencies, &a).is_empty(), "{extension}");
+            assert_eq!(
+                dependencies_of(&dependencies, &b),
+                std::slice::from_ref(&a),
+                "{extension}"
+            );
+            assert_eq!(
+                dependencies_of(&dependencies, &c),
+                std::slice::from_ref(&b),
+                "{extension}"
+            );
+            assert_eq!(
+                dependencies_of(&dependencies, &d),
+                std::slice::from_ref(&b),
+                "{extension}"
+            );
+        }
     }
 
     #[test]
