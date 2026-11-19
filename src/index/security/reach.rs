@@ -141,7 +141,7 @@ fn frameworks_of(language: Language) -> &'static [&'static str] {
         ],
         Language::Java => &["spring", "java"],
         Language::CSharp => &["aspnet", "csharp"],
-        Language::Go => &["net/http", "gin", "go"],
+        Language::Go => &["net/http", "chi", "echo", "gin", "gorilla/mux", "go"],
         Language::Rust => &["axum", "actix", "rocket", "ffi", "rust"],
         Language::Php => &["laravel"],
         Language::Ruby => &["rails"],
@@ -653,4 +653,21 @@ pub fn count_by_category(sinks: &[Sink]) -> BTreeMap<SinkCategory, usize> {
         *counts.entry(sink.category).or_insert(0) += 1;
     }
     counts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_go_coverage_names_each_go_router_framework() {
+        let found = coverage(&[Language::Go], false);
+        for name in ["chi", "echo", "gin", "gorilla/mux", "net/http"] {
+            assert!(
+                found.frameworks.iter().any(|known| known == name),
+                "{name} is not in {:?}",
+                found.frameworks
+            );
+        }
+    }
 }

@@ -316,12 +316,13 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 | `conditional_callback` | Rails | A callback for the action has `if:` or `unless:`, or it is in a branch that omen cannot evaluate. |
 | `around_callback` | Rails | A class of the chain has an `around_action` callback. Omen reads only the `before_action` callbacks. |
 | `imported_router` | FastAPI | An import binds the router of the route, or the router that includes it. |
-| `unresolved_router` | FastAPI | The router is not one name with one assignment of a `FastAPI` call or an `APIRouter` call. |
+| `unresolved_router` | FastAPI, Go router types | FastAPI: the router is not one name with one assignment of a `FastAPI` call or an `APIRouter` call. Go: a part of the path is not known. The path starts with `<unresolved>`. |
 | `included_elsewhere` | FastAPI | The file does not include the `APIRouter` in an application. A different file can include it with more dependencies. |
 | `unreadable_include` | FastAPI | The file includes the router two times, in a condition, after the route, or in a loop of routers. |
 | `unreadable_dependency` | FastAPI | A dependency is not a name, or the `dependencies` value is not a literal list. Or the file uses the `dependencies` attribute of an object, as `router.dependencies.clear()`, which can change the dependencies that a later route gets. |
 | `wildcard_import` | FastAPI | The file has `from module import *`, which can bind a name again. |
-| `unread_middleware` | chi, echo, gin, gorilla/mux, `net/http`, Express, Koa, Fastify | A middleware argument is not a name. For Go, its guard text is `<expression>` or `<function literal>`. Or a call around the handler is not a conversion, as `http.HandlerFunc(show)`, and not a middleware of the repository, as `middleware.Auth(cfg)(...)`. For Express, Koa, and Fastify, a middleware argument of the route call is a call, as `limit(5)`, or a function, and omen does not list it. The options object of a Fastify route is not a middleware. The handler and the known guards stay. |
+| `conditional_middleware` | Go router types | A layer method of a router, as `AfterRouting`, is called in a condition, a loop, or a function literal, or a function returns the router with different layers. |
+| `unread_middleware` | chi, echo, gin, gorilla/mux, `net/http`, Go router types, Express, Koa, Fastify | A middleware argument is not a name, or a spread of a Go slice that omen cannot read. For Go, its guard text is `<expression>` or `<function literal>`. Or a call around the handler is not a conversion, as `http.HandlerFunc(show)`, and not a middleware of the repository, as `middleware.Auth(cfg)(...)`. For Express, Koa, and Fastify, a middleware argument of the route call is a call, as `limit(5)`, or a function, and omen does not list it. The options object of a Fastify route is not a middleware. The handler and the known guards stay. |
 | `layer_not_read` | See the next table | The framework has a place for guards that omen does not read. |
 
 Omen reads the full chain of the guards only for Rails, for FastAPI, and for the Go routers.
@@ -874,6 +875,55 @@ index, and the other commands, do not know the symbol.
   gorilla/mux. Omen models the registrations of a valid program. It does not model a
   framework panic. A program that panics at start, as chi does when `Use` follows a
   route in some versions, is out of scope.
+- A router type of the repository is a type whose route methods send their pattern to a
+  router of one of these frameworks, in a field of the type. The body of each method is the
+  evidence. A name of a type is not evidence. Gitea has such a type, `modules/web.Router`.
+- A call of a route method of such a type registers a route. The last argument is the
+  handler, and the arguments before it are guards. A group method that keeps its prefix in
+  a field adds the prefix and its guards to each route inside its function. A combo method
+  keeps the pattern for each method of its chain.
+- Omen follows such a router through parameters, returned values, and mounts in the whole
+  repository. A route gets one path for each chain of mounts and calls up to a root. A
+  router that only a parameter gives, and that no call gives, has no path. A prefix that is
+  not a string literal, a cycle of calls, and a router with more than 256 chains give one
+  entry for each route. Its path starts with `<unresolved>` in place of the part that omen
+  cannot read, and its guards are not complete, with the reason `unresolved_router`.
+  These limits keep the work for each route bounded: a group deeper than 256 groups, a
+  chain of more than 256 mounts, and a prefix longer than 4096 bytes give the same
+  `<unresolved>` path. A list of more than 256 guards keeps its first 256 guards and the
+  placeholder `<expression>` in place of the others.
+- Omen does not read the code of a method that changes the path. For example, Gitea removes
+  a slash at the end of a pattern, so 16 paths of Gitea that end with a slash have that
+  slash in the result of omen, but not in Gitea.
+- A slice of guards is read when it is a literal, an `append` of known slices, or a variadic
+  parameter. The guards of a variadic parameter come from each call of the function, also
+  through a chain of calls. A change of a slice in a condition, in a loop, in a function
+  literal, or at an index makes its guards not complete, with the reason
+  `unread_middleware`. The guards that omen read stay in the list.
+- A layer method of a router type keeps its variadic argument in a field, or gives it to the
+  framework router. Its arguments are guards, in source order. The evidence for when they
+  run is in the bodies of the methods:
+  - The method keeps the middleware in a field, and a route method or a mount method reads
+    that field. Gitea `AfterRouting` is an example. The middleware guards each route and
+    mount that the router registers after the call. A route before the call does not get it.
+  - The method gives the middleware to `Use` of chi or of gorilla/mux, or to `Pre` of echo.
+    Gitea `BeforeRouting` is an example. These frameworks wrap each route of the router,
+    so the middleware guards each route of the router and of each router that it mounts,
+    also a route before the call. chi panics when `Use` follows a route. Omen reports what
+    the code says.
+  - The method gives the middleware to `Use` of gin. gin adds it to the routes that the
+    router registers later.
+  - Other cases, as `Use` of echo, which works in one way for an `Echo` and in another way
+    for a `Group`, and a field that no route method reads. The guards of each route of the
+    router, and of each router that it mounts, are not complete, with the reason
+    `layer_not_read`.
+- A function that returns a router gives the layers of that router to the routes that the
+  caller registers on the result. A layer that a function adds to its parameter is a layer
+  of the routes inside the function. The routes of each caller of the function are not
+  complete, with the reason `layer_not_read`.
+- A layer call in a condition, a loop, or a function literal gives its guards, and the
+  guards are not complete, with the reason `conditional_middleware`.
+- A test file gives no route and no mount.
 - A router is a value that the import of the framework proves. It is a constructor
   call, a group or sub-router of a router, or a parameter that has a router type. A
   variable name alone does not prove a router.
