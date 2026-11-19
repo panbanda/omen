@@ -55,11 +55,11 @@ pub fn run(
         }
         other => other?,
     };
-    let analysis = crate::analyzers::security::analyze_context(&ctx)?;
-    report.security = Some(crate::index::security::symbol_security(
-        &analysis,
+    report.security = Some(crate::analyzers::security::symbol_security_of_context(
+        &ctx,
+        &view,
         &report.qualified_name,
-    ));
+    )?);
     let mut value = serde_json::to_value(&report)?;
     // `--top` and `--offset` page only the callers, as the MCP tool does.
     let scope = &request.scope;

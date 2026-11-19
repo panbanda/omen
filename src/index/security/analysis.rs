@@ -13,7 +13,7 @@ use super::matcher::{file_sinks, Repository};
 use super::reach::{coverage, reachability, Coverage, InlineRegions, Reachability};
 use super::spec::SinkSpec;
 use super::suppress::{self, InvalidSuppression, Suppressed};
-use super::{find_sinks_with, Sink};
+use super::Sink;
 use crate::core::Language;
 use crate::index::build::{list_directory, CodeIndex, ListDirectory, ReadFile};
 use crate::index::extract::FileSymbols;
@@ -90,6 +90,38 @@ pub fn analyze_with_index(
     read: ReadFile<'_>,
     options: &Options,
 ) -> crate::core::Result<Analysis> {
+    analyze_in_scope(index, root, files, read, options, &SinkScope::All)
+}
+
+/// The files whose sinks and suppression comments an analysis finds. The entry points
+/// always come from all files.
+enum SinkScope {
+    All,
+    /// One flag for each file of the index.
+    Files(Vec<bool>),
+}
+
+impl SinkScope {
+    fn contains(&self, position: usize) -> bool {
+        match self {
+            Self::All => true,
+            Self::Files(flags) => flags[position],
+        }
+    }
+}
+
+/// The analysis with the sinks of the files of `scope` only. A path, a suppression, and a
+/// sink of a file in the scope are the same as in the analysis of all files, because a sink
+/// depends only on the tree of its file, and a path to a sink depends only on the entry
+/// points and the call graph, which do not depend on the scope.
+fn analyze_in_scope(
+    index: &CodeIndex,
+    root: &Path,
+    files: &[PathBuf],
+    read: ReadFile<'_>,
+    options: &Options,
+    scope: &SinkScope,
+) -> crate::core::Result<Analysis> {
     let by_relative: BTreeMap<String, &PathBuf> = files
         .iter()
         .map(|path| (relative(root, path), path))
@@ -106,9 +138,9 @@ pub fn analyze_with_index(
         )
     };
     let (all_sinks, comments, entry_points, kept) =
-        match findings_one_tree_at_a_time(index, &parse_file, options)? {
+        match findings_one_tree_at_a_time(index, &parse_file, options, scope)? {
             Some(findings) => findings,
-            None => findings_with_all_trees(index, &parse_file, options)?,
+            None => findings_with_all_trees(index, &parse_file, options, scope)?,
         };
     let mut all_sinks = all_sinks;
     if !options.experimental {
@@ -228,6 +260,7 @@ fn findings_one_tree_at_a_time(
     index: &CodeIndex,
     parse_file: &(dyn Fn(usize) -> crate::core::Result<Option<ParseResult>> + Sync),
     options: &Options,
+    scope: &SinkScope,
 ) -> crate::core::Result<Option<Findings>> {
     let files = &index.files;
     let repository = Repository::new(files);
@@ -239,9 +272,17 @@ fn findings_one_tree_at_a_time(
                 return Ok(None);
             };
             let file = &files[position];
+            let (sinks, comments) = if scope.contains(position) {
+                (
+                    file_sinks(&tree, file, &repository, options.sink_rows),
+                    suppress::comments_of(&tree, &file.file),
+                )
+            } else {
+                Default::default()
+            };
             Ok(Some((
-                file_sinks(&tree, file, &repository, options.sink_rows),
-                suppress::comments_of(&tree, &file.file),
+                sinks,
+                comments,
                 entry_points_of_file(position, &tree, files, &trees, &options.entry_rules),
             )))
         })
@@ -272,6 +313,7 @@ fn findings_with_all_trees(
     index: &CodeIndex,
     parse_file: &(dyn Fn(usize) -> crate::core::Result<Option<ParseResult>> + Sync),
     options: &Options,
+    scope: &SinkScope,
 ) -> crate::core::Result<Findings> {
     let parsed: Vec<Option<ParseResult>> = (0..index.files.len())
         .into_par_iter()
@@ -287,14 +329,87 @@ fn findings_with_all_trees(
             trees.push(tree);
         }
     }
-    let sinks = find_sinks_with(&trees, &kept, options.sink_rows);
+    let repository = Repository::new(&kept);
+    let per_file: Vec<Vec<Sink>> = (0..kept.len())
+        .into_par_iter()
+        .filter(|kept_position| scope.contains(positions[*kept_position]))
+        .map(|kept_position| {
+            file_sinks(
+                &trees[kept_position],
+                &kept[kept_position],
+                &repository,
+                options.sink_rows,
+            )
+        })
+        .collect();
+    let sinks = per_file.into_iter().flatten().collect();
     let comments = trees
         .iter()
         .zip(&kept)
-        .map(|(tree, file)| suppress::comments_of(tree, &file.file))
+        .zip(&positions)
+        .map(|((tree, file), position)| {
+            if scope.contains(*position) {
+                suppress::comments_of(tree, &file.file)
+            } else {
+                Default::default()
+            }
+        })
         .collect();
     let entry_points = find_entry_points_with(&trees, &kept, &options.entry_rules);
     Ok((sinks, comments, entry_points, positions))
+}
+
+/// What the security analysis says about the symbol `key`, as `symbol_security` gives it from
+/// the analysis of all files. `view` is `CallView::from_index(index)`.
+pub fn symbol_security_with_index(
+    index: &CodeIndex,
+    root: &Path,
+    files: &[PathBuf],
+    read: ReadFile<'_>,
+    options: &Options,
+    view: &CallView,
+    key: &str,
+) -> crate::core::Result<super::SymbolSecurity> {
+    let Some(start) = view.position_of(key) else {
+        let analysis = analyze_with_index(index, root, files, read, options)?;
+        return Ok(super::symbol_security(&analysis, key));
+    };
+    let reached = sink_files_of(view, start);
+    let scope = SinkScope::Files(
+        index
+            .files
+            .iter()
+            .map(|file| reached.contains(file.file.as_str()))
+            .collect(),
+    );
+    let analysis = analyze_in_scope(index, root, files, read, options, &scope)?;
+    Ok(super::symbol_security(&analysis, key))
+}
+
+/// The files of the definitions that `start` reaches through calls and function references of
+/// any basis. `symbol_security` reads only the sinks of these files: a sink in its body has
+/// `start` as the definition around it, and a path through `start` goes on to its sink. An
+/// inline handler of the full analysis takes calls of the definition around it, and that
+/// definition gives it a function reference, so the definition is in these files too.
+fn sink_files_of(view: &CallView, start: usize) -> BTreeSet<&str> {
+    let mut seen = vec![false; view.symbols.len()];
+    seen[start] = true;
+    let mut stack = vec![start];
+    let mut found = BTreeSet::new();
+    while let Some(symbol) = stack.pop() {
+        found.insert(view.symbols[symbol].file.as_str());
+        let targets = view
+            .callee_edges(symbol)
+            .iter()
+            .chain(view.function_reference_edges(symbol));
+        for (target, _) in targets {
+            if !seen[*target] {
+                seen[*target] = true;
+                stack.push(*target);
+            }
+        }
+    }
+    found
 }
 
 /// Analyzes files that the caller already has as text. The names are relative paths.
@@ -379,11 +494,11 @@ mod tests {
         let options = Options::default();
 
         let (sinks, comments, entries, kept) =
-            findings_one_tree_at_a_time(&index, &parse_file, &options)
+            findings_one_tree_at_a_time(&index, &parse_file, &options, &SinkScope::All)
                 .unwrap()
                 .unwrap();
         let (all_sinks, all_comments, all_entries, all_kept) =
-            findings_with_all_trees(&index, &parse_file, &options).unwrap();
+            findings_with_all_trees(&index, &parse_file, &options, &SinkScope::All).unwrap();
 
         assert!(!sinks.is_empty());
         assert!(!entries.is_empty());
@@ -466,13 +581,17 @@ mod tests {
         };
         let index = CodeIndex::build(Path::new(""), &paths, &read, &|_| Vec::new());
         let no_tree = |_: usize| Ok(None);
-        assert!(
-            findings_one_tree_at_a_time(&index, &no_tree, &Options::default())
-                .unwrap()
-                .is_none()
-        );
+        assert!(findings_one_tree_at_a_time(
+            &index,
+            &no_tree,
+            &Options::default(),
+            &SinkScope::All
+        )
+        .unwrap()
+        .is_none());
         let (sinks, _, entries, kept) =
-            findings_with_all_trees(&index, &no_tree, &Options::default()).unwrap();
+            findings_with_all_trees(&index, &no_tree, &Options::default(), &SinkScope::All)
+                .unwrap();
         assert!(sinks.is_empty() && entries.is_empty() && kept.is_empty());
     }
 
@@ -1011,5 +1130,312 @@ mod tests {
             assert_eq!(found.paths.len(), size);
             took
         });
+    }
+}
+
+#[cfg(test)]
+mod symbol_scope_tests {
+    use super::*;
+
+    /// A router type of the repository in the shape of the router of Gitea.
+    const GO_ROUTER: &str = r#"package web
+
+import (
+	"net/http"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+)
+
+type Router struct {
+	chiRouter      *chi.Mux
+	curGroupPrefix string
+	curMiddlewares []any
+}
+
+func NewRouter() *Router {
+	r := chi.NewRouter()
+	return &Router{chiRouter: r}
+}
+
+func (r *Router) Group(pattern string, fn func(), middlewares ...any) {
+	previousGroupPrefix := r.curGroupPrefix
+	previousMiddlewares := r.curMiddlewares
+	r.curGroupPrefix += pattern
+	r.curMiddlewares = append(r.curMiddlewares, middlewares...)
+	fn()
+	r.curGroupPrefix = previousGroupPrefix
+	r.curMiddlewares = previousMiddlewares
+}
+
+func (r *Router) getPattern(pattern string) string {
+	newPattern := r.curGroupPrefix + pattern
+	if !strings.HasPrefix(newPattern, "/") {
+		newPattern = "/" + newPattern
+	}
+	return newPattern
+}
+
+func toHandler(h []any) http.HandlerFunc { return nil }
+
+func (r *Router) Methods(methods, pattern string, h ...any) {
+	fullPattern := r.getPattern(pattern)
+	if strings.Contains(methods, ",") {
+		for method := range strings.SplitSeq(methods, ",") {
+			r.chiRouter.With().Method(strings.TrimSpace(method), fullPattern, toHandler(h))
+		}
+	} else {
+		r.chiRouter.With().Method(methods, fullPattern, toHandler(h))
+	}
+}
+
+func (r *Router) Mount(pattern string, subRouter *Router) {
+	r.chiRouter.Mount(r.getPattern(pattern), subRouter.chiRouter)
+}
+
+func (r *Router) Any(pattern string, h ...any) {
+	r.chiRouter.HandleFunc(r.getPattern(pattern), toHandler(h))
+}
+
+func (r *Router) Get(pattern string, h ...any) { r.Methods("GET", pattern, h...) }
+
+func (r *Router) Post(pattern string, h ...any) { r.Methods("POST", pattern, h...) }
+
+func (r *Router) Combo(pattern string, h ...any) *Combo {
+	return &Combo{r, pattern, h}
+}
+
+type Combo struct {
+	r       *Router
+	pattern string
+	h       []any
+}
+
+func (c *Combo) Get(h ...any) *Combo {
+	c.r.Get(c.pattern, append(c.h, h...)...)
+	return c
+}
+
+func (c *Combo) Post(h ...any) *Combo {
+	c.r.Post(c.pattern, append(c.h, h...)...)
+	return c
+}
+"#;
+    const GO_MAIN: &str = "package main\n\nimport (\n\t\"net/http\"\n\n\t\"example.com/app/api\"\n\t\"example.com/app/web\"\n)\n\nfunc main() {\n\tr := web.NewRouter()\n\tr.Mount(\"/api\", api.Routes())\n\tr.Get(\"/health\", health)\n}\n\nfunc health(w http.ResponseWriter, req *http.Request) {}\n";
+    const GO_ROUTES: &str = "package api\n\nimport \"example.com/app/web\"\n\nfunc Routes() *web.Router {\n\tm := web.NewRouter()\n\tm.Post(\"/run\", Run)\n\treturn m\n}\n";
+    const GO_RUN: &str = "package api\n\nimport (\n\t\"net/http\"\n\t\"os/exec\"\n)\n\nfunc Run(w http.ResponseWriter, req *http.Request) {\n\texecute(req.FormValue(\"cmd\"))\n}\n\nfunc execute(command string) {\n\texec.Command(\"sh\", \"-c\", command).Run()\n}\n\nfunc unused(command string) {\n\texec.Command(command).Run()\n}\n";
+    const EXPRESS_SERVER: &str = "const express = require('express');\nconst { exec } = require('child_process');\nconst { runCommand } = require('./handlers');\nconst routes = require('./routes');\nconst app = express();\napp.post('/run', runCommand);\napp.use('/v1', routes);\nfunction setup() {\n  app.get('/inline', (req, res) => exec(req.query.cmd));\n}\nfunction boot() {\n  setup();\n}\napp.get('/boot', boot);\n";
+    const EXPRESS_HANDLERS: &str = "const { exec } = require('child_process');\nfunction runCommand(req, res) {\n  shell(req.body.cmd);\n}\nfunction shell(command) {\n  exec(command);\n}\nmodule.exports = { runCommand };\n";
+    const EXPRESS_ROUTES: &str = "const express = require('express');\nconst { exec } = require('child_process');\nconst router = express.Router();\nrouter.delete('/item', (req, res) => exec(req.body.id));\nmodule.exports = router;\n";
+    const RAILS_ROUTES: &str =
+        "Rails.application.routes.draw do\n  post \"/run\", to: \"commands#run\"\nend\n";
+    const RAILS_CONTROLLER: &str = "class CommandsController < ApplicationController\n  def run\n    Runner.new.go(params[:cmd])\n  end\nend\n";
+    const RAILS_RUNNER: &str = "class Runner\n  def go(command)\n    system(command)\n  end\nend\n";
+    const FASTAPI_MAIN: &str = "from fastapi import FastAPI\nfrom app.routers import items\n\napp = FastAPI()\napp.include_router(items.router, prefix=\"/items\")\n";
+    const FASTAPI_ITEMS: &str = "import subprocess\nfrom fastapi import APIRouter\n\nrouter = APIRouter()\n\n@router.post(\"/run\")\ndef run(cmd: str):\n    return helper(cmd)\n\ndef helper(cmd):\n    subprocess.run(cmd, shell=True)\n";
+    const SPRING_CONTROLLER: &str = "package app;\n\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestParam;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class CommandController {\n    private final CommandService service = new CommandService();\n\n    @PostMapping(\"/run\")\n    public String run(@RequestParam String cmd) throws Exception {\n        return service.execute(cmd);\n    }\n}\n";
+    const SPRING_SERVICE: &str = "package app;\n\npublic class CommandService {\n    public String execute(String cmd) throws Exception {\n        Runtime.getRuntime().exec(cmd);\n        return \"ok\";\n    }\n}\n";
+
+    fn sources() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("go.mod", "module example.com/app\n"),
+            ("main.go", GO_MAIN),
+            ("web/router.go", GO_ROUTER),
+            ("api/routes.go", GO_ROUTES),
+            ("api/run.go", GO_RUN),
+            ("web/server.js", EXPRESS_SERVER),
+            ("web/handlers.js", EXPRESS_HANDLERS),
+            ("web/routes.js", EXPRESS_ROUTES),
+            ("config/routes.rb", RAILS_ROUTES),
+            ("app/controllers/commands_controller.rb", RAILS_CONTROLLER),
+            ("app/models/runner.rb", RAILS_RUNNER),
+            ("app/main.py", FASTAPI_MAIN),
+            ("app/routers/items.py", FASTAPI_ITEMS),
+            (
+                "src/main/java/app/CommandController.java",
+                SPRING_CONTROLLER,
+            ),
+            ("src/main/java/app/CommandService.java", SPRING_SERVICE),
+        ]
+    }
+
+    struct Fixture {
+        index: CodeIndex,
+        paths: Vec<PathBuf>,
+        sources: Vec<(&'static str, &'static str)>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let sources = sources();
+            let paths: Vec<PathBuf> = sources
+                .iter()
+                .map(|(name, _)| PathBuf::from(name))
+                .collect();
+            let read = |path: &Path| Self::read_from(&sources, path);
+            let list = |directory: &Path| -> Vec<PathBuf> {
+                paths
+                    .iter()
+                    .filter(|path| path.parent() == Some(directory))
+                    .cloned()
+                    .collect()
+            };
+            let index = CodeIndex::build(Path::new(""), &paths, &read, &list);
+            Self {
+                index,
+                paths,
+                sources,
+            }
+        }
+
+        fn read_from(sources: &[(&str, &str)], path: &Path) -> crate::core::Result<Vec<u8>> {
+            sources
+                .iter()
+                .find(|(name, _)| Path::new(name) == path)
+                .map(|(_, text)| text.as_bytes().to_vec())
+                .ok_or_else(|| crate::core::Error::analysis("missing"))
+        }
+
+        fn read(&self, path: &Path) -> crate::core::Result<Vec<u8>> {
+            Self::read_from(&self.sources, path)
+        }
+    }
+
+    #[test]
+    fn the_security_of_each_symbol_is_the_security_that_the_full_analysis_gives() {
+        let fixture = Fixture::new();
+        let read = |path: &Path| fixture.read(path);
+        let options = Options::default();
+        let full = analyze_with_index(
+            &fixture.index,
+            Path::new(""),
+            &fixture.paths,
+            &read,
+            &options,
+        )
+        .unwrap();
+        let frameworks: BTreeSet<&str> = full
+            .reachability
+            .paths
+            .iter()
+            .filter_map(|path| {
+                full.entry_points
+                    .iter()
+                    .find(|entry| entry.key == path.entry)
+            })
+            .map(|entry| entry.framework.as_str())
+            .collect();
+        for framework in ["chi", "express", "rails", "fastapi", "spring"] {
+            assert!(
+                frameworks.contains(framework),
+                "{framework} has no path: {frameworks:?}"
+            );
+        }
+        assert!(
+            full.entry_points.iter().any(|entry| entry
+                .symbol
+                .as_deref()
+                .is_some_and(|symbol| !symbol.starts_with(&format!("{}#", entry.file)))),
+            "no entry has its handler in another file than its registration"
+        );
+        let view = CallView::from_index(&fixture.index);
+        let mut nonempty = 0;
+        for symbol in &view.symbols {
+            let key = symbol.qualified_name.as_str();
+            let expected = super::super::symbol_security(&full, key);
+            if expected != super::super::SymbolSecurity::default() {
+                nonempty += 1;
+            }
+            let actual = symbol_security_with_index(
+                &fixture.index,
+                Path::new(""),
+                &fixture.paths,
+                &read,
+                &options,
+                &view,
+                key,
+            )
+            .unwrap();
+            assert_eq!(actual, expected, "{key}");
+        }
+        assert!(nonempty >= 10, "{nonempty} symbols have security facts");
+    }
+
+    /// The scope of `key`: one flag for each file of the index.
+    fn scope_of(fixture: &Fixture, key: &str) -> (SinkScope, BTreeSet<String>) {
+        let view = CallView::from_index(&fixture.index);
+        let reached: BTreeSet<String> = sink_files_of(&view, view.position_of(key).unwrap())
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let flags = fixture
+            .index
+            .files
+            .iter()
+            .map(|file| reached.contains(&file.file))
+            .collect();
+        (SinkScope::Files(flags), reached)
+    }
+
+    #[test]
+    fn the_sinks_come_only_from_the_files_that_the_symbol_reaches() {
+        let fixture = Fixture::new();
+        let read = |path: &Path| fixture.read(path);
+        let options = Options::default();
+        let (scope, reached) = scope_of(&fixture, "app/routers/items.py#run");
+        assert_eq!(
+            reached,
+            BTreeSet::from(["app/routers/items.py".to_string()])
+        );
+        let scoped = analyze_in_scope(
+            &fixture.index,
+            Path::new(""),
+            &fixture.paths,
+            &read,
+            &options,
+            &scope,
+        )
+        .unwrap();
+        let full = analyze_with_index(
+            &fixture.index,
+            Path::new(""),
+            &fixture.paths,
+            &read,
+            &options,
+        )
+        .unwrap();
+        let files = |analysis: &Analysis| -> BTreeSet<String> {
+            analysis
+                .sinks
+                .iter()
+                .map(|sink| sink.file.clone())
+                .collect()
+        };
+        assert_eq!(files(&scoped), reached);
+        assert!(files(&full).len() > 5, "{:?}", files(&full));
+        assert_eq!(scoped.entry_points, full.entry_points);
+    }
+
+    #[test]
+    fn a_scope_gives_the_same_findings_with_one_tree_at_a_time_and_with_all_trees() {
+        let fixture = Fixture::new();
+        let parse_file = |position: usize| -> crate::core::Result<Option<ParseResult>> {
+            let file = &fixture.index.files[position];
+            let path = Path::new(&file.file);
+            Ok(headers::parse(path, file.language, &fixture.read(path)?))
+        };
+        let options = Options::default();
+        let (scope, _) = scope_of(&fixture, "web/server.js#boot");
+        let (sinks, comments, entries, kept) =
+            findings_one_tree_at_a_time(&fixture.index, &parse_file, &options, &scope)
+                .unwrap()
+                .unwrap();
+        let (all_sinks, all_comments, all_entries, all_kept) =
+            findings_with_all_trees(&fixture.index, &parse_file, &options, &scope).unwrap();
+        assert!(!sinks.is_empty());
+        assert_eq!(sinks, all_sinks);
+        assert_eq!(entries, all_entries);
+        assert_eq!(kept, all_kept);
+        assert_eq!(comments.len(), all_comments.len());
     }
 }
