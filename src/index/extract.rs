@@ -708,19 +708,17 @@ fn signature(draft: &Draft<'_>, source: &[u8]) -> String {
 }
 
 /// The comments that end on the line before the definition, with no line between them.
-fn doc(node: Node<'_>, comment_kinds: &[&str], source: &[u8]) -> Option<String> {
+fn doc(node: Node<'_>, comment_before: &HashMap<usize, Node<'_>>, source: &[u8]) -> Option<String> {
     let mut lines = Vec::new();
     let mut next_start_row = node.start_position().row;
-    let mut previous = node.prev_sibling();
+    let mut previous = comment_before.get(&node.id());
     while let Some(comment) = previous {
-        if !comment_kinds.contains(&comment.kind())
-            || comment.end_position().row + 1 != next_start_row
-        {
+        if comment.end_position().row + 1 != next_start_row {
             break;
         }
         lines.push(comment.utf8_text(source).unwrap_or("").to_string());
         next_start_row = comment.start_position().row;
-        previous = comment.prev_sibling();
+        previous = comment_before.get(&comment.id());
     }
     if lines.is_empty() {
         return None;
@@ -923,6 +921,9 @@ struct PendingDecorators {
 
 struct Extractor<'a, 'tree> {
     spec: &'a dyn LanguageSpec,
+    /// The comment before each node that follows a comment, by the id of the node.
+    /// `Node::prev_sibling` searches from the root, so the walk records the sibling.
+    comment_before: HashMap<usize, Node<'tree>>,
     rules: HashMap<&'static str, DefinitionRule>,
     file: &'a str,
     source: &'a [u8],
@@ -1382,9 +1383,17 @@ impl<'tree> Extractor<'_, 'tree> {
     fn walk(&mut self, root: Node<'tree>) {
         let mut cursor = root.walk();
         let mut depth = 0;
+        let comment_kinds = self.spec.comment_kinds();
+        let mut previous: Option<Node<'tree>> = None;
         loop {
             let node = cursor.node();
+            if let Some(comment) =
+                previous.filter(|sibling| comment_kinds.contains(&sibling.kind()))
+            {
+                self.comment_before.insert(node.id(), comment);
+            }
             self.enter(node, depth);
+            previous = None;
             if cursor.goto_first_child() {
                 if self.return_owner_kinds.contains(&node.kind()) {
                     let owner = self.spec.return_owner(node, self.source);
@@ -1402,7 +1411,9 @@ impl<'tree> Extractor<'_, 'tree> {
             }
             loop {
                 self.leave(depth);
+                let left = cursor.node();
                 if cursor.goto_next_sibling() {
+                    previous = Some(left);
                     break;
                 }
                 if !cursor.goto_parent() {
@@ -1879,6 +1890,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let spec = language_spec(parsed.language);
     let mut extractor = Extractor {
         spec,
+        comment_before: HashMap::new(),
         rules: spec
             .definitions()
             .into_iter()
@@ -1927,6 +1939,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let modules = extractor.modules;
     let export_aliases = extractor.export_aliases;
     let mut found = extractor.found;
+    let comment_before = extractor.comment_before;
     found.sort_by_key(|(draft, _)| (draft.span.start_byte, draft.span.end_byte));
     let positions: HashMap<usize, usize> = found
         .iter()
@@ -2022,7 +2035,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         symbols.push(Symbol {
             key: symbol_key(file, &draft.container_path, &draft.name, ordinal).into(),
             signature: signature(&draft, &parsed.source),
-            doc: doc(draft.node, spec.comment_kinds(), &parsed.source),
+            doc: doc(draft.node, &comment_before, &parsed.source),
             name: draft.name,
             kind: draft.kind,
             container: draft.container,
@@ -2373,6 +2386,52 @@ mod tests {
     fn timing_global_assignments_in_deeply_nested_blocks_are_linear() {
         let elapsed = global_assignments_in_deeply_nested_blocks_are_linear_at(50_000);
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    /// The time of `extract_file` on `size` nested blocks of a Java method, each with a local
+    /// class after a comment, without the parse.
+    fn deeply_nested_java_classes_at(size: usize) -> std::time::Duration {
+        let source = format!(
+            "class A {{\nvoid f() {{\n{}{}}}\n}}\n",
+            (0..size)
+                .map(|level| format!("{{\n// L{level}\nclass L{level} {{}}\n"))
+                .collect::<String>(),
+            "}\n".repeat(size)
+        );
+        std::thread::Builder::new()
+            .stack_size(1 << 30)
+            .spawn(move || {
+                let parsed = crate::parser::Parser::new()
+                    .parse(
+                        source.as_bytes(),
+                        Language::Java,
+                        std::path::Path::new("A.java"),
+                    )
+                    .unwrap();
+                let started = std::time::Instant::now();
+                let symbols = super::extract_file(&parsed, "A.java");
+                let elapsed = started.elapsed();
+                let local = symbols
+                    .symbols
+                    .iter()
+                    .find(|symbol| symbol.name == "L1")
+                    .expect("L1");
+                assert_eq!(local.doc.as_deref(), Some("// L1"));
+                elapsed
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deeply_nested_classes_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "local classes in nested blocks",
+            5_000,
+            deeply_nested_java_classes_at,
+        );
     }
 
     #[test]
