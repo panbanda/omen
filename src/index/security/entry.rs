@@ -439,27 +439,35 @@ impl TreeSource for OnDemandTrees<'_> {
                 None
             }
         };
-        let cell = {
-            let mut parsed = self.parsed.lock();
-            let cell = parsed.entry(position).or_default();
-            let released = matches!(cell.get(), Some(Some(tree)) if tree.strong_count() == 0);
-            if released {
-                *cell = Cell::default();
+        // The thread that parsed the tree can release it before a waiting thread reads
+        // it. Then the waiting thread asks again, and its parse is in the cache for the
+        // later requests.
+        let tree = loop {
+            let cell = {
+                let mut parsed = self.parsed.lock();
+                let cell = parsed.entry(position).or_default();
+                let released = matches!(cell.get(), Some(Some(tree)) if tree.strong_count() == 0);
+                if released {
+                    *cell = Cell::default();
+                }
+                std::sync::Arc::clone(cell)
+            };
+            let mut parsed_here = None;
+            let stored = cell.get_or_init(|| {
+                let tree = parse()?;
+                let weak = std::sync::Arc::downgrade(&tree);
+                parsed_here = Some(tree);
+                Some(weak)
+            });
+            match (parsed_here, stored) {
+                (Some(tree), _) => break tree,
+                (None, None) => return None,
+                (None, Some(weak)) => {
+                    if let Some(tree) = weak.upgrade() {
+                        break tree;
+                    }
+                }
             }
-            std::sync::Arc::clone(cell)
-        };
-        let mut parsed_here = None;
-        let stored = cell.get_or_init(|| {
-            let tree = parse()?;
-            let weak = std::sync::Arc::downgrade(&tree);
-            parsed_here = Some(tree);
-            Some(weak)
-        });
-        let tree = match (parsed_here, stored) {
-            (Some(tree), _) => tree,
-            (None, None) => return None,
-            // The thread that parsed the tree can release it before this thread reads it.
-            (None, Some(weak)) => weak.upgrade().or_else(parse)?,
         };
         Some(TreeRef::Shared(tree))
     }
@@ -2397,6 +2405,41 @@ pub(super) mod tests {
         drop(tree);
         assert!(released.upgrade().is_none());
         assert!(trees.transient_tree(0).is_some());
+        assert_eq!(parses.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_waiter_whose_tree_was_released_publishes_its_parse_for_later_requests() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let parses = AtomicUsize::new(0);
+        let waiting = AtomicBool::new(false);
+        let parse_file = |_: usize| {
+            if parses.fetch_add(1, Ordering::SeqCst) == 0 {
+                // The second thread must wait on the cell while the first parses.
+                while !waiting.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Ok(Parser::new()
+                .parse(b"x = 1\n", Language::Python, Path::new("a.py"))
+                .ok())
+        };
+        let trees = OnDemandTrees::new(&parse_file);
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| drop(trees.transient_tree(0)));
+            while parses.load(Ordering::SeqCst) == 0 {
+                std::thread::yield_now();
+            }
+            let second = scope.spawn(|| {
+                waiting.store(true, Ordering::SeqCst);
+                trees.transient_tree(0)
+            });
+            first.join().unwrap();
+            let held = second.join().unwrap();
+            assert!(held.is_some());
+            assert!(trees.transient_tree(0).is_some());
+        });
         assert_eq!(parses.load(Ordering::SeqCst), 2);
     }
 
