@@ -140,6 +140,10 @@ pub struct Draft<'tree> {
     /// The wrapper type of the `self` parameter of a Rust method, as `Arc`
     /// for `self: &Arc<Self>`.
     pub self_wrapper: Option<&'static str>,
+    /// A Ruby method of the class object, as `def self.name` and a method in
+    /// `class << self` are. Its instance variables are those of the class
+    /// object.
+    pub singleton: bool,
 }
 
 /// The `cfg` attributes that control a Rust definition. Two definitions of
@@ -185,6 +189,8 @@ pub struct LinkFacts {
     /// The names, different from its own, under which the module exports
     /// this top-level symbol, as `export { a as b }` gives `b` to `a`.
     pub export_aliases: Vec<String>,
+    /// See `Draft::singleton`.
+    pub singleton: bool,
 }
 
 /// Facts of a reference that only the resolver uses.
@@ -1145,6 +1151,7 @@ impl<'tree> Extractor<'_, 'tree> {
                     || name_node.end_byte() > node.end_byte()),
             condition: None,
             self_wrapper: None,
+            singleton: false,
         };
         if draft.kind == SymbolKind::Module {
             draft.role = ScopeRole::Module;
@@ -2073,6 +2080,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             condition: draft.condition,
             self_wrapper: draft.self_wrapper,
             export_aliases,
+            singleton: draft.singleton,
         });
     }
     let mut calls = extractor.calls;

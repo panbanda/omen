@@ -59,6 +59,10 @@ const IDENTIFIER: &str = "identifier";
 const SCOPE_RESOLUTION: &str = "scope_resolution";
 const ARGUMENT_LIST: &str = "argument_list";
 const SIMPLE_SYMBOL: &str = "simple_symbol";
+const SINGLETON_CLASS: &str = "singleton_class";
+const INSTANCE_VARIABLE: &str = "instance_variable";
+/// The methods that define a writer of an instance variable for each symbol argument.
+const WRITER_MACROS: &[&str] = &["attr_writer", "attr_accessor"];
 
 const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::function(METHOD, NameRule::Field("name")),
@@ -68,6 +72,78 @@ const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new(LAMBDA, SymbolKind::Function, NameRule::Hook),
     DefinitionRule::new(CALL, SymbolKind::Function, NameRule::Hook),
 ];
+
+/// Tells if the nearest class, module, or `class << self` around `node` is
+/// `class << self`.
+fn in_singleton_class(node: Node<'_>) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        match parent.kind() {
+            SINGLETON_CLASS => return true,
+            CLASS | MODULE => return false,
+            _ => current = parent.parent(),
+        }
+    }
+    false
+}
+
+/// An instance variable without a known value: its name, and no type.
+fn unknown_instance_variable(name: String) -> LocalName {
+    LocalName {
+        name,
+        type_name: None,
+        value_start: None,
+        is_parameter: false,
+        element: false,
+        result_index: None,
+        visible: None,
+    }
+}
+
+/// The instance variables that the assignment `node` writes. `@name = value`
+/// gives the start of the value; a variable of a list of targets, as
+/// `@a, @b = values`, has no known value.
+fn instance_variable_writes(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+    let Some(left) = node.child_by_field_name("left") else {
+        return;
+    };
+    if left.kind() == INSTANCE_VARIABLE {
+        let mut local = unknown_instance_variable(context.text(left));
+        local.value_start = node
+            .child_by_field_name("right")
+            .map(|value| value.start_byte());
+        out.push(local);
+        return;
+    }
+    let mut pending = vec![left];
+    while let Some(target) = pending.pop() {
+        if target.kind() == INSTANCE_VARIABLE {
+            out.push(unknown_instance_variable(context.text(target)));
+            continue;
+        }
+        let mut cursor = target.walk();
+        pending.extend(target.named_children(&mut cursor));
+    }
+}
+
+/// `attr_writer :name` and `attr_accessor :name` define a method that writes
+/// `@name` with a value of any type.
+fn instance_variable_writers(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+    let is_writer = node.child_by_field_name("receiver").is_none()
+        && node
+            .child_by_field_name("method")
+            .is_some_and(|method| WRITER_MACROS.contains(&context.text(method).as_str()));
+    let Some(arguments) = node.child_by_field_name("arguments").filter(|_| is_writer) else {
+        return;
+    };
+    let mut cursor = arguments.walk();
+    for argument in arguments.named_children(&mut cursor) {
+        if argument.kind() == SIMPLE_SYMBOL {
+            let name = context.text(argument);
+            out.push(unknown_instance_variable(format!("@{}", &name[1..])));
+        }
+    }
+}
 
 /// The methods that change the visibility of instance methods.
 const INSTANCE_MODIFIERS: &[(&str, bool)] = &[
@@ -249,6 +325,7 @@ impl LanguageSpec for Ruby {
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
         kinds.extend(PARAMETER_LISTS);
+        kinds.push(CALL);
         kinds
     }
 
@@ -315,9 +392,17 @@ impl LanguageSpec for Ruby {
         }
     }
 
-    /// The parameters of a method, a block, or a lambda are local names.
+    /// The parameters of a method, a block, or a lambda are local names. An
+    /// instance variable that a statement writes is a local name of the
+    /// method too, and the resolver collects these names of all the methods
+    /// that can run on one object.
     fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if node.kind() == CALL {
+            instance_variable_writers(node, context, out);
+            return;
+        }
         if !PARAMETER_LISTS.contains(&node.kind()) {
+            instance_variable_writes(node, context, out);
             let before = out.len();
             self.call_syntax().locals(node, context, out);
             // `Alias = Name` gives a second name to a class or a module.
@@ -437,7 +522,9 @@ impl LanguageSpec for Ruby {
                 if draft.kind == SymbolKind::Method && draft.name == "initialize" {
                     draft.kind = SymbolKind::Constructor;
                 }
+                draft.singleton = in_singleton_class(node);
             }
+            SINGLETON_METHOD => draft.singleton = true,
             CLASS | MODULE => {
                 // The methods of a module are methods, as the methods of a class are.
                 draft.role = ScopeRole::Type;

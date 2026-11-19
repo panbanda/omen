@@ -62,7 +62,7 @@
   {
     "id": "ruby/idioms/calls/instance_variable_receiver/no_missed_edge",
     "reason": "no edge to store.rb:add:16",
-    "tracking": "the Ruby resolver does not infer the type of an instance variable from its assignment"
+    "tracking": "the Ruby resolver does not infer the type of the value that a method returns: `@store = Store.open` gives no type, because `open` returns `new`"
   },
   {
     "id": "ruby/idioms/calls/prepend_super/no_missed_edge",
