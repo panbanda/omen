@@ -1463,6 +1463,21 @@ impl<'a> Resolver<'a> {
             .collect()
     }
 
+    /// The types that a Ruby constant names at a call in `chain`, as
+    /// `ruby_constant` finds them from the innermost type or module that
+    /// encloses the call. `None` when the code is not Ruby or no type or
+    /// module encloses the call.
+    fn ruby_constant_at(&self, file: usize, chain: &[Id], text: &str) -> Option<Vec<Id>> {
+        if self.family(file) != Family::Ruby {
+            return None;
+        }
+        let scope = chain
+            .iter()
+            .copied()
+            .find(|id| is_container(self.symbol(*id)))?;
+        Some(self.ruby_constant(scope, text, false))
+    }
+
     /// The constructors of a type or of its nearest parent type that has one.
     /// A type without a constructor is its own constructor.
     fn constructors(&self, owner: Id, arity: usize) -> Vec<Id> {
@@ -1874,7 +1889,12 @@ impl<'a> Resolver<'a> {
     }
 
     /// The types that the receiver of a Ruby `Type.new` call names.
-    fn ruby_new_receiver_types(&self, file: usize, reference: &Reference) -> Option<Vec<Id>> {
+    fn ruby_new_receiver_types(
+        &self,
+        file: usize,
+        reference: &Reference,
+        owner: Option<usize>,
+    ) -> Option<Vec<Id>> {
         if self.family(file) != Family::Ruby || reference.name != "new" {
             return None;
         }
@@ -1883,6 +1903,9 @@ impl<'a> Resolver<'a> {
             (None, Some(Receiver::Name(name))) => name.as_str(),
             _ => return None,
         };
+        if let Some(types) = self.ruby_constant_at(file, &self.chain(file, owner), text) {
+            return (!types.is_empty()).then_some(types);
+        }
         let path = segments(text);
         let (last, before) = path.split_last()?;
         let before = (!before.is_empty()).then(|| before.join("."));
@@ -1939,7 +1962,8 @@ impl<'a> Resolver<'a> {
             }
             // Ruby `Type.new` gives an object of `Type`, also when
             // `initialize` comes from a parent type or from a module.
-            if let Some(types) = self.ruby_new_receiver_types(file, reference) {
+            let owner = facts.reference_facts[position].owner;
+            if let Some(types) = self.ruby_new_receiver_types(file, reference, owner) {
                 return Some(types);
             }
             return if is_container(symbol) {
@@ -2701,7 +2725,9 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
-        let types = self.types(x, None, file);
+        let types = self
+            .ruby_constant_at(file, chain, x)
+            .unwrap_or_else(|| self.types(x, None, file));
         if types.is_empty() {
             return match self.own_field(file, chain, x) {
                 Some((text, text_file)) => {
@@ -2797,7 +2823,9 @@ impl<'a> Resolver<'a> {
         }
         if let Some(last) = path.last() {
             let before = (path.len() > 1).then(|| path[..path.len() - 1].join("."));
-            let types = self.types(last, before.as_deref(), file);
+            let types = self
+                .ruby_constant_at(file, chain, qualifier)
+                .unwrap_or_else(|| self.types(last, before.as_deref(), file));
             if !types.is_empty() {
                 return self.on_types(&types, name, reference.arity, Basis::QualifiedPath, file);
             }
@@ -4782,6 +4810,44 @@ mod false_edge_tests {
         assert_eq!(
             rows(&[("database.rb", database), ("upload.rb", upload), ("other.rb", other)], "upload.rb")[0],
             "4 Migrations.Database.FilesDB.insert>Migrations::Database::format_boolean UniqueCandidate QualifiedPath [database.rb#Migrations.Database.format_boolean]"
+        );
+    }
+
+    #[test]
+    fn test_ruby_constant_receiver_resolves_in_the_enclosing_modules_first() {
+        // Ruby finds `Problem` in `Check` before the top level, thus
+        // `Blog::Problem` is not a candidate.
+        let check = "class Check\n  class Problem\n    def initialize(text)\n      @text = text\n    end\n\n    def text\n      @text\n    end\n  end\nend\n";
+        let blog = "module Blog\n  class Problem\n    def initialize(text)\n      @text = text\n    end\n\n    def text\n      @text\n    end\n  end\nend\n";
+        let caller = "class Check\n  def problem\n    found = Problem.new('a')\n    found.text\n  end\nend\n";
+        let files = [
+            ("check/problem.rb", check),
+            ("blog/problem.rb", blog),
+            ("check.rb", caller),
+        ];
+        assert_eq!(
+            rows(&files, "check.rb"),
+            [
+                "3 Check.problem>Problem.new UniqueCandidate QualifiedPath [check/problem.rb#Check.Problem.initialize]",
+                "4 Check.problem>found.text UniqueCandidate ReceiverDeclaredType [check/problem.rb#Check.Problem.text]",
+                "4 Check.problem>found Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ruby_qualified_constant_receiver_resolves_in_the_enclosing_modules_first() {
+        let api = "module Api\n  module Body\n    class Location\n      def self.for(name)\n        name\n      end\n    end\n  end\nend\n";
+        let other = "module Other\n  module Body\n    class Location\n      def self.for(name)\n        name\n      end\n    end\n  end\nend\n";
+        let caller = "module Api\n  class Contract\n    def build\n      Body::Location.for('a')\n    end\n  end\nend\n";
+        let files = [
+            ("api.rb", api),
+            ("other.rb", other),
+            ("contract.rb", caller),
+        ];
+        assert_eq!(
+            rows(&files, "contract.rb"),
+            ["4 Api.Contract.build>Body::Location::for UniqueCandidate QualifiedPath [api.rb#Api.Body.Location.for]"]
         );
     }
 
