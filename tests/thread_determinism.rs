@@ -50,13 +50,25 @@ fn repository() -> TempDir {
             let target = next(&mut seed) % MODULES;
             if target != module {
                 text.push_str(&format!("import {{ f{target} }} from \"./m{target}\";\n"));
-                body.push_str(&format!(
-                    "  if (value > {target}) {{ value += f{target}(value); }}\n"
-                ));
+                body.push_str(&format!("  value += f{target}(value);\n"));
             }
         }
+        // Statements of different shapes in a pseudo-random order, so that
+        // the modules are not clones of each other.
+        for _ in 0..2 + next(&mut seed) % 4 {
+            body.push_str(match next(&mut seed) % 8 {
+                0 => "  if (value > 3) { value -= 1; }\n",
+                1 => "  for (let step = 0; step < 2; step++) { value *= 2; }\n",
+                2 => "  while (value > 100) { value = value / 2; }\n",
+                3 => "  const items = [value, value + 1];\n  value = items.length;\n",
+                4 => "  switch (value) {\n    case 1:\n      value = 0;\n      break;\n    default:\n      value += 4;\n  }\n",
+                5 => "  try {\n    value = JSON.parse(String(value));\n  } catch {\n    value = -1;\n  }\n",
+                6 => "  value = value > 0 ? value : -value;\n",
+                _ => "  // TODO: check the bounds\n",
+            });
+        }
         text.push_str(&format!(
-            "\nexport function f{module}(value: number): number {{\n{body}  // TODO: check the bounds\n  return value;\n}}\n"
+            "\nexport function f{module}(value: number): number {{\n{body}  return value;\n}}\n"
         ));
         write(&format!("src/m{module}.ts"), &text);
     }
