@@ -28,5 +28,260 @@
     "id": "go/generic_methods/symbols/flash_error/range",
     "reason": "flash.go:Error:5 was not extracted",
     "tracking": "tree-sitter-go 0.25.0 does not parse a method with type parameters"
+  },
+  {
+    "id": "ruby/idioms/calls/attr_accessor_call/no_missed_edge",
+    "reason": "no edge to store.rb:limit:3",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/calls/attr_reader_call/no_missed_edge",
+    "reason": "no edge to store.rb:items:2",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/calls/define_method_call/no_missed_edge",
+    "reason": "no edge to main.rb:ready?:29",
+    "tracking": "the Ruby index does not read `define_method` with a literal name"
+  },
+  {
+    "id": "ruby/idioms/calls/extend_mixin/no_missed_edge",
+    "reason": "no edge to greeting.rb:greet:2",
+    "tracking": "the Ruby resolver does not add the methods of an `extend` module to the class methods"
+  },
+  {
+    "id": "ruby/idioms/calls/instance_variable_receiver/no_missed_edge",
+    "reason": "no edge to store.rb:add:16",
+    "tracking": "the Ruby resolver does not infer the type of an instance variable from its assignment"
+  },
+  {
+    "id": "ruby/idioms/calls/prepend_super/no_missed_edge",
+    "reason": "no edge to main.rb:say:17",
+    "tracking": "the Ruby resolver does not bind `super` in a prepended module to the method of the class"
+  },
+  {
+    "id": "ruby/idioms/calls/struct_constructor/no_false_edge",
+    "reason": "false edge to main.rb:Flags:28, main.rb:Speaker:14, main.rb:initialize:33",
+    "tracking": "the Ruby resolver binds `X.new` of a class without `initialize` to unrelated classes and constructors"
+  },
+  {
+    "id": "ruby/idioms/calls/struct_method/no_missed_edge",
+    "reason": "no edge to main.rb:norm:23",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/imports/autoload_interpolated/found",
+    "reason": "'#{__dir__}/store' not extracted at main.rb:1; extracted there: []",
+    "tracking": "the Ruby index does not read `autoload` as an import"
+  },
+  {
+    "id": "ruby/idioms/imports/autoload_interpolated/names",
+    "reason": "'#{__dir__}/store' not extracted at main.rb:1; extracted there: []",
+    "tracking": "the Ruby index does not read `autoload` as an import"
+  },
+  {
+    "id": "ruby/idioms/imports/autoload_interpolated/target",
+    "reason": "'#{__dir__}/store' not extracted at main.rb:1; extracted there: []",
+    "tracking": "the Ruby index does not read `autoload` as an import"
+  },
+  {
+    "id": "ruby/idioms/imports/autoload_load_path/found",
+    "reason": "'greeting' not extracted at main.rb:2; extracted there: []",
+    "tracking": "the Ruby index does not read `autoload` as an import"
+  },
+  {
+    "id": "ruby/idioms/imports/autoload_load_path/names",
+    "reason": "'greeting' not extracted at main.rb:2; extracted there: []",
+    "tracking": "the Ruby index does not read `autoload` as an import"
+  },
+  {
+    "id": "ruby/idioms/imports/autoload_load_path/target",
+    "reason": "'greeting' not extracted at main.rb:2; extracted there: []",
+    "tracking": "the Ruby index does not read `autoload` as an import"
+  },
+  {
+    "id": "ruby/idioms/symbols/flags_ready/container",
+    "reason": "main.rb:ready?:29 was not extracted",
+    "tracking": "the Ruby index does not read `define_method` with a literal name"
+  },
+  {
+    "id": "ruby/idioms/symbols/flags_ready/exported",
+    "reason": "main.rb:ready?:29 was not extracted",
+    "tracking": "the Ruby index does not read `define_method` with a literal name"
+  },
+  {
+    "id": "ruby/idioms/symbols/flags_ready/found",
+    "reason": "main.rb:ready?:29 was not extracted",
+    "tracking": "the Ruby index does not read `define_method` with a literal name"
+  },
+  {
+    "id": "ruby/idioms/symbols/flags_ready/kind",
+    "reason": "main.rb:ready?:29 was not extracted",
+    "tracking": "the Ruby index does not read `define_method` with a literal name"
+  },
+  {
+    "id": "ruby/idioms/symbols/flags_ready/range",
+    "reason": "main.rb:ready?:29 was not extracted",
+    "tracking": "the Ruby index does not read `define_method` with a literal name"
+  },
+  {
+    "id": "ruby/idioms/symbols/point/container",
+    "reason": "main.rb:Point:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point/exported",
+    "reason": "main.rb:Point:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point/found",
+    "reason": "main.rb:Point:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point/kind",
+    "reason": "main.rb:Point:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point/range",
+    "reason": "main.rb:Point:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_norm/container",
+    "reason": "expected Some(\"Point\"), got None",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_norm/kind",
+    "reason": "expected Some(Method), got Some(Function)",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_x/container",
+    "reason": "main.rb:x:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_x/exported",
+    "reason": "main.rb:x:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_x/found",
+    "reason": "main.rb:x:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_x/kind",
+    "reason": "main.rb:x:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_x/range",
+    "reason": "main.rb:x:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_y/container",
+    "reason": "main.rb:y:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_y/exported",
+    "reason": "main.rb:y:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_y/found",
+    "reason": "main.rb:y:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_y/kind",
+    "reason": "main.rb:y:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/point_y/range",
+    "reason": "main.rb:y:22 was not extracted",
+    "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_items/container",
+    "reason": "store.rb:items:2 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_items/exported",
+    "reason": "store.rb:items:2 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_items/found",
+    "reason": "store.rb:items:2 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_items/kind",
+    "reason": "store.rb:items:2 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_items/range",
+    "reason": "store.rb:items:2 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_limit/container",
+    "reason": "store.rb:limit:3 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_limit/exported",
+    "reason": "store.rb:limit:3 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_limit/found",
+    "reason": "store.rb:limit:3 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_limit/kind",
+    "reason": "store.rb:limit:3 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_limit/range",
+    "reason": "store.rb:limit:3 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_limit_writer/container",
+    "reason": "store.rb:limit=:3 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_limit_writer/exported",
+    "reason": "store.rb:limit=:3 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_limit_writer/found",
+    "reason": "store.rb:limit=:3 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_limit_writer/kind",
+    "reason": "store.rb:limit=:3 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
+  },
+  {
+    "id": "ruby/idioms/symbols/store_limit_writer/range",
+    "reason": "store.rb:limit=:3 was not extracted",
+    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
   }
 ]

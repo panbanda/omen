@@ -1,0 +1,434 @@
+{
+  "version": 1,
+  "language": "ruby",
+  "split": "development",
+  "oracle": "Author-reviewed. `ruby -wc` (Ruby 3.4.7) accepts each file. `ruby -w -I. main.rb` in the case directory prints `hi`, `HELLO`, `25`, and `true` with no warning: `extend` makes `greet` a method of `Bot`, `prepend` puts `Loud#say` before `Speaker#say`, and `super` in `Loud#say` calls `Speaker#say`. `autoload :Greeting, 'greeting'` finds the file through `$LOAD_PATH` at run time, so no file of the case is a certain target. The harness does not run the code.",
+  "closed_world": true,
+  "symbols": [
+    {
+      "label": "store",
+      "category": "type",
+      "file": "store.rb",
+      "name": "Store",
+      "kind": "class",
+      "container": null,
+      "start_line": 1,
+      "end_line": 25,
+      "exported": true
+    },
+    {
+      "label": "store_items",
+      "category": "generated_method",
+      "file": "store.rb",
+      "name": "items",
+      "kind": "method",
+      "container": "Store",
+      "start_line": 2,
+      "end_line": 2,
+      "exported": true
+    },
+    {
+      "label": "store_limit",
+      "category": "generated_method",
+      "file": "store.rb",
+      "name": "limit",
+      "kind": "method",
+      "container": "Store",
+      "start_line": 3,
+      "end_line": 3,
+      "exported": true
+    },
+    {
+      "label": "store_limit_writer",
+      "category": "generated_method",
+      "file": "store.rb",
+      "name": "limit=",
+      "kind": "method",
+      "container": "Store",
+      "start_line": 3,
+      "end_line": 3,
+      "exported": true
+    },
+    {
+      "label": "store_init",
+      "category": "constructor",
+      "file": "store.rb",
+      "name": "initialize",
+      "kind": "constructor",
+      "container": "Store",
+      "start_line": 5,
+      "end_line": 8,
+      "exported": true
+    },
+    {
+      "label": "store_open",
+      "category": "singleton_class_method",
+      "file": "store.rb",
+      "name": "open",
+      "kind": "method",
+      "container": "Store",
+      "start_line": 11,
+      "end_line": 13,
+      "exported": true
+    },
+    {
+      "label": "store_add",
+      "category": "method",
+      "file": "store.rb",
+      "name": "add",
+      "kind": "method",
+      "container": "Store",
+      "start_line": 16,
+      "end_line": 20,
+      "exported": true
+    },
+    {
+      "label": "store_full",
+      "category": "method",
+      "file": "store.rb",
+      "name": "full?",
+      "kind": "method",
+      "container": "Store",
+      "start_line": 22,
+      "end_line": 24,
+      "exported": true
+    },
+    {
+      "label": "greeting",
+      "category": "type",
+      "file": "greeting.rb",
+      "name": "Greeting",
+      "kind": "module",
+      "container": null,
+      "start_line": 1,
+      "end_line": 5,
+      "exported": true
+    },
+    {
+      "label": "greeting_greet",
+      "category": "method",
+      "file": "greeting.rb",
+      "name": "greet",
+      "kind": "method",
+      "container": "Greeting",
+      "start_line": 2,
+      "end_line": 4,
+      "exported": true
+    },
+    {
+      "label": "bot",
+      "category": "type",
+      "file": "main.rb",
+      "name": "Bot",
+      "kind": "class",
+      "container": null,
+      "start_line": 4,
+      "end_line": 6,
+      "exported": true
+    },
+    {
+      "label": "loud",
+      "category": "type",
+      "file": "main.rb",
+      "name": "Loud",
+      "kind": "module",
+      "container": null,
+      "start_line": 8,
+      "end_line": 12,
+      "exported": true
+    },
+    {
+      "label": "loud_say",
+      "category": "same_name_methods",
+      "file": "main.rb",
+      "name": "say",
+      "kind": "method",
+      "container": "Loud",
+      "start_line": 9,
+      "end_line": 11,
+      "exported": true
+    },
+    {
+      "label": "speaker",
+      "category": "type",
+      "file": "main.rb",
+      "name": "Speaker",
+      "kind": "class",
+      "container": null,
+      "start_line": 14,
+      "end_line": 20,
+      "exported": true
+    },
+    {
+      "label": "speaker_say",
+      "category": "same_name_methods",
+      "file": "main.rb",
+      "name": "say",
+      "kind": "method",
+      "container": "Speaker",
+      "start_line": 17,
+      "end_line": 19,
+      "exported": true
+    },
+    {
+      "label": "point",
+      "category": "struct_type",
+      "file": "main.rb",
+      "name": "Point",
+      "kind": "class",
+      "container": null,
+      "start_line": 22,
+      "end_line": 26,
+      "exported": true
+    },
+    {
+      "label": "point_x",
+      "category": "generated_method",
+      "file": "main.rb",
+      "name": "x",
+      "kind": "method",
+      "container": "Point",
+      "start_line": 22,
+      "end_line": 22,
+      "exported": true
+    },
+    {
+      "label": "point_y",
+      "category": "generated_method",
+      "file": "main.rb",
+      "name": "y",
+      "kind": "method",
+      "container": "Point",
+      "start_line": 22,
+      "end_line": 22,
+      "exported": true
+    },
+    {
+      "label": "point_norm",
+      "category": "method",
+      "file": "main.rb",
+      "name": "norm",
+      "kind": "method",
+      "container": "Point",
+      "start_line": 23,
+      "end_line": 25,
+      "exported": true
+    },
+    {
+      "label": "flags",
+      "category": "type",
+      "file": "main.rb",
+      "name": "Flags",
+      "kind": "class",
+      "container": null,
+      "start_line": 28,
+      "end_line": 30,
+      "exported": true
+    },
+    {
+      "label": "flags_ready",
+      "category": "generated_method",
+      "file": "main.rb",
+      "name": "ready?",
+      "kind": "method",
+      "container": "Flags",
+      "start_line": 29,
+      "end_line": 29,
+      "exported": true
+    },
+    {
+      "label": "report",
+      "category": "type",
+      "file": "main.rb",
+      "name": "Report",
+      "kind": "class",
+      "container": null,
+      "start_line": 32,
+      "end_line": 40,
+      "exported": true
+    },
+    {
+      "label": "report_init",
+      "category": "constructor",
+      "file": "main.rb",
+      "name": "initialize",
+      "kind": "constructor",
+      "container": "Report",
+      "start_line": 33,
+      "end_line": 35,
+      "exported": true
+    },
+    {
+      "label": "report_fill",
+      "category": "method",
+      "file": "main.rb",
+      "name": "fill",
+      "kind": "method",
+      "container": "Report",
+      "start_line": 37,
+      "end_line": 39,
+      "exported": true
+    },
+    {
+      "label": "main",
+      "category": "free_function",
+      "file": "main.rb",
+      "name": "main",
+      "kind": "function",
+      "container": null,
+      "start_line": 42,
+      "end_line": 51,
+      "exported": true
+    }
+  ],
+  "calls": [
+    {
+      "label": "singleton_class_method",
+      "category": "static_qualified",
+      "caller": "report_init",
+      "line": 34,
+      "callee_text": "Store.open",
+      "expected": [
+        "store_open"
+      ]
+    },
+    {
+      "label": "singleton_new",
+      "category": "constructor",
+      "caller": "store_open",
+      "line": 12,
+      "callee_text": "new",
+      "expected": [
+        "store_init"
+      ]
+    },
+    {
+      "label": "predicate_method",
+      "category": "implicit_self",
+      "caller": "store_add",
+      "line": 17,
+      "callee_text": "full?",
+      "expected": [
+        "store_full"
+      ]
+    },
+    {
+      "label": "attr_reader_call",
+      "category": "generated_method",
+      "caller": "store_add",
+      "line": 19,
+      "callee_text": "items",
+      "expected": [
+        "store_items"
+      ]
+    },
+    {
+      "label": "attr_accessor_call",
+      "category": "generated_method",
+      "caller": "store_full",
+      "line": 23,
+      "callee_text": "limit",
+      "expected": [
+        "store_limit"
+      ]
+    },
+    {
+      "label": "extend_mixin",
+      "category": "extend_mixin",
+      "caller": "main",
+      "line": 43,
+      "callee_text": "Bot.greet",
+      "expected": [
+        "greeting_greet"
+      ]
+    },
+    {
+      "label": "prepend_first",
+      "category": "prepend_mixin",
+      "caller": "main",
+      "line": 45,
+      "callee_text": "speaker.say",
+      "expected": [
+        "loud_say"
+      ]
+    },
+    {
+      "label": "prepend_super",
+      "category": "super_call",
+      "caller": "loud_say",
+      "line": 10,
+      "callee_text": "super",
+      "expected": [
+        "speaker_say"
+      ]
+    },
+    {
+      "label": "struct_constructor",
+      "category": "constructor",
+      "caller": "main",
+      "line": 46,
+      "callee_text": "Point.new",
+      "expected": []
+    },
+    {
+      "label": "struct_method",
+      "category": "inferred_receiver",
+      "caller": "main",
+      "line": 47,
+      "callee_text": "point.norm",
+      "expected": [
+        "point_norm"
+      ]
+    },
+    {
+      "label": "define_method_call",
+      "category": "generated_method",
+      "caller": "main",
+      "line": 49,
+      "callee_text": "flags.ready?",
+      "expected": [
+        "flags_ready"
+      ]
+    },
+    {
+      "label": "instance_variable_receiver",
+      "category": "field_receiver",
+      "caller": "report_fill",
+      "line": 38,
+      "callee_text": "@store.add",
+      "expected": [
+        "store_add"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "label": "autoload_interpolated",
+      "category": "named",
+      "file": "main.rb",
+      "line": 1,
+      "path": "#{__dir__}/store",
+      "names": [
+        {
+          "name": "Store",
+          "alias": null
+        }
+      ],
+      "required_file": "store.rb"
+    },
+    {
+      "label": "autoload_load_path",
+      "category": "named",
+      "file": "main.rb",
+      "line": 2,
+      "path": "greeting",
+      "names": [
+        {
+          "name": "Greeting",
+          "alias": null
+        }
+      ],
+      "required_file": null
+    }
+  ]
+}
