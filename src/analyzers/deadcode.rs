@@ -737,23 +737,39 @@ fn allows_dead_code(path: &str, arguments: &str) -> bool {
             .any(|word| word == "dead_code" || word == "unused")
 }
 
-/// The path and the arguments of each outer attribute of an item. A comment
-/// between two attributes, or between an attribute and the item, does not end the list.
-fn preceding_attributes<'a>(
-    node: &tree_sitter::Node<'_>,
+/// The path and the arguments of an attribute.
+type Attribute<'a> = (&'a str, &'a str);
+
+/// Each child of `node`, with the path and the arguments of each outer attribute of
+/// the child, the nearest first. A comment between two attributes, or between an
+/// attribute and the child, does not end the list. Only a child of a kind in `items`
+/// gets its attributes.
+///
+/// The children are read in order. `Node::prev_sibling` searches from the root, so
+/// a search back from each item takes quadratic time in a deep tree.
+fn children_with_attributes<'tree, 'a>(
+    node: &tree_sitter::Node<'tree>,
+    items: &[&str],
     source: &'a [u8],
-) -> Vec<(&'a str, &'a str)> {
-    let mut attributes = Vec::new();
-    let mut previous = node.prev_sibling();
-    while let Some(sibling) = previous {
-        match sibling.kind() {
-            "attribute_item" => attributes.extend(rust_attribute_text(sibling, source)),
-            "line_comment" | "block_comment" => {}
-            _ => break,
-        }
-        previous = sibling.prev_sibling();
-    }
-    attributes
+) -> Vec<(tree_sitter::Node<'tree>, Vec<Attribute<'a>>)> {
+    let mut run: Vec<Attribute<'a>> = Vec::new();
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .map(|child| {
+            let mut attributes = Vec::new();
+            match child.kind() {
+                "attribute_item" => run.extend(rust_attribute_text(child, source)),
+                "line_comment" | "block_comment" => {}
+                kind => {
+                    if items.contains(&kind) {
+                        attributes = run.iter().rev().copied().collect();
+                    }
+                    run.clear();
+                }
+            }
+            (child, attributes)
+        })
+        .collect()
 }
 
 /// An inner attribute of the block, as `#![allow(dead_code)]` is, permits dead code.
@@ -789,9 +805,12 @@ fn extract_rust_function_attributes(
 ) -> HashMap<usize, RustFunctionInfo> {
     let mut info: HashMap<usize, RustFunctionInfo> = HashMap::new();
     let source: &[u8] = &result.source;
-    // Each entry is a node, the trait flag of its block, and the lint flag of its scope.
-    let mut stack = vec![(result.root_node(), false, false)];
-    while let Some((node, in_trait_impl, allows_dead)) = stack.pop() {
+    const ITEMS: [&str; 4] = ["function_item", "mod_item", "impl_item", "trait_item"];
+    // Each entry is a node, the trait flag of its block, the lint flag of its scope,
+    // and the outer attributes of the node.
+    let mut stack: Vec<(tree_sitter::Node<'_>, bool, bool, Vec<Attribute<'_>>)> =
+        vec![(result.root_node(), false, false, Vec::new())];
+    while let Some((node, in_trait_impl, allows_dead, attributes)) = stack.pop() {
         let mut in_trait_impl = in_trait_impl;
         let mut allows_dead = allows_dead;
         match node.kind() {
@@ -802,8 +821,7 @@ fn extract_rust_function_attributes(
             _ => {}
         }
         let is_function = node.kind() == "function_item";
-        if is_function || matches!(node.kind(), "mod_item" | "impl_item" | "trait_item") {
-            let attributes = preceding_attributes(&node, source);
+        if ITEMS.contains(&node.kind()) {
             allows_dead = allows_dead
                 || attributes
                     .iter()
@@ -833,10 +851,10 @@ fn extract_rust_function_attributes(
                 );
             }
         }
-        let mut cursor = node.walk();
         stack.extend(
-            node.children(&mut cursor)
-                .map(|child| (child, in_trait_impl, allows_dead)),
+            children_with_attributes(&node, &ITEMS, source)
+                .into_iter()
+                .map(|(child, attributes)| (child, in_trait_impl, allows_dead, attributes)),
         );
     }
     info
@@ -2356,6 +2374,38 @@ mod tests {
             "if x {".repeat(depth),
             "}".repeat(depth)
         ))
+    }
+
+    /// The time of `extract_rust_function_attributes` on `depth` nested modules.
+    fn attributes_of_nested_modules_at(depth: usize) -> std::time::Duration {
+        let source = format!(
+            "{}#[allow(dead_code)]\nfn f() {{}}{}\n",
+            "#[cfg(test)]\nmod m {".repeat(depth),
+            "}".repeat(depth)
+        );
+        let result = parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Rust,
+                std::path::Path::new("a.rs"),
+            )
+            .expect("parse");
+        let started = std::time::Instant::now();
+        let info = extract_rust_function_attributes(&result);
+        let elapsed = started.elapsed();
+        assert_eq!(info.len(), 1);
+        assert!(info.values().all(|function| function.runtime_entry));
+        elapsed
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_attributes_of_nested_modules_are_read_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "attributes of nested modules",
+            5_000,
+            attributes_of_nested_modules_at,
+        );
     }
 
     #[test]
