@@ -1978,7 +1978,7 @@ mod typescript_timing_tests {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&files, "app/main.ts");
         let elapsed = started.elapsed();
         assert_eq!(found.len(), size);
@@ -2024,7 +2024,7 @@ mod typescript_timing_tests {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let facts = index(&files);
         let elapsed = started.elapsed();
         let last = format!("c{}/src/main.ts", size - 1);
@@ -2072,7 +2072,7 @@ mod typescript_timing_tests {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let facts = index(&files);
         let elapsed = started.elapsed();
         let last = format!("app/m{}.ts", size - 1);
@@ -2122,7 +2122,7 @@ mod typescript_timing_tests {
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
         let last = format!("c{}/main.ts", size - 1);
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&files, &last);
         let elapsed = started.elapsed();
         assert!(found[0].contains("c0/shared/value.ts"), "{found:?}");
@@ -2170,7 +2170,7 @@ mod typescript_timing_tests {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&files, "top/main.ts");
         let elapsed = started.elapsed();
         // A cycle of `extends` is an error of `tsc`. A parent that reaches

@@ -1585,12 +1585,13 @@ fn a_class_in_deep_modules_finds_the_superclass_of_the_top_level() {
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_a_relative_superclass_in_deep_modules_takes_the_time_of_an_absolute_one() {
+    use crate::index::timing::on_one_thread;
     let size = 1_500;
     let mut absolute = std::time::Duration::MAX;
     let mut relative = std::time::Duration::MAX;
     for _ in 0..3 {
-        absolute = absolute.min(deep_modules_at(size, size, false));
-        relative = relative.min(deep_modules_at(size, size, true));
+        absolute = absolute.min(on_one_thread(|| deep_modules_at(size, size, false)));
+        relative = relative.min(on_one_thread(|| deep_modules_at(size, size, true)));
     }
     let allowed = absolute.max(std::time::Duration::from_millis(100)) * 2;
     assert!(

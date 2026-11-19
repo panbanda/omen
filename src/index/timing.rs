@@ -42,6 +42,16 @@ fn thread_time() -> Duration {
     ORIGIN.get_or_init(std::time::Instant::now).elapsed()
 }
 
+/// Runs `run` on a new pool of one thread. The parallel work of `run` thus
+/// occurs on that thread, and `Stopwatch` measures all of it.
+pub(crate) fn on_one_thread<T: Send>(run: impl FnOnce() -> T + Send) -> T {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("a thread for the timing run")
+        .install(run)
+}
+
 /// Runs a timing case at `size` and at twice that size, and checks that the
 /// time grows in proportion to the size. A quadratic search takes four times
 /// as long for twice the input. The check uses the best time of each size.
@@ -66,13 +76,7 @@ pub(crate) fn assert_scales_linearly_above(
     // each run has a new pool of one thread, which also does the parallel
     // work of the run. The runs of the two sizes alternate, so that a slow
     // period of the machine affects the two sizes.
-    let run_on_new_thread = |size: usize| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .expect("a thread for the timing run")
-            .install(|| run(size))
-    };
+    let run_on_new_thread = |size: usize| on_one_thread(|| run(size));
     let mut small = Duration::MAX;
     let mut large = Duration::MAX;
     for _ in 0..RUNS {

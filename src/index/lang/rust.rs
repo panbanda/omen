@@ -1371,12 +1371,13 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_functions_in_deep_modules_take_the_time_of_structs() {
+        use crate::index::timing::on_one_thread;
         let depth = 1_000;
         let mut structs = std::time::Duration::MAX;
         let mut functions = std::time::Duration::MAX;
         for _ in 0..3 {
-            structs = structs.min(deep_modules_at(depth, false));
-            functions = functions.min(deep_modules_at(depth, true));
+            structs = structs.min(on_one_thread(|| deep_modules_at(depth, false)));
+            functions = functions.min(on_one_thread(|| deep_modules_at(depth, true)));
         }
         let allowed = structs.max(std::time::Duration::from_millis(100)) * 2;
         assert!(

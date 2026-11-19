@@ -5064,7 +5064,7 @@ mod ecma_timing_tests {
             source.push_str("    this.find(1, 'a');\n");
         }
         source.push_str("  }\n}\n");
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&[("repo.ts", &source)], "repo.ts");
         let elapsed = started.elapsed();
         assert_eq!(found.len(), 10);
@@ -5090,7 +5090,7 @@ mod ecma_timing_tests {
             source.push_str("  @mark('b')\n");
         }
         source.push_str("  last(): void {}\n}\n");
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&[("service.ts", &source)], "service.ts");
         let elapsed = started.elapsed();
         assert_eq!(found.len(), 2 * size);
@@ -5116,7 +5116,7 @@ mod ecma_timing_tests {
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
         let last = format!("s{}.ts", size - 1);
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&files, &last);
         let elapsed = started.elapsed();
         // Each class has `plain`, thus only the class argument gives the edge.
@@ -5148,7 +5148,7 @@ mod ecma_timing_tests {
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
         let last = format!("s{}.ts", size - 1);
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&files, &last);
         let elapsed = started.elapsed();
         // Each class has `plain`, thus only the class argument gives the edge.
@@ -5185,7 +5185,7 @@ mod ecma_timing_tests {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&files, "main.ts");
         let elapsed = started.elapsed();
         let last = size - 1;
