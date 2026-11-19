@@ -676,13 +676,20 @@ impl ViewCache {
             .map(|(path, content)| (path.clone(), blake3::hash(content)))
             .collect();
         let paths: Vec<PathBuf> = sources.keys().cloned().collect();
-        let listings = Mutex::new(BTreeMap::new());
+        let listings = Mutex::new(BTreeMap::<PathBuf, Vec<PathBuf>>::new());
+        // A directory can change during the load. The first listing of a
+        // directory applies to the discovery and to the build, thus both
+        // see the same files.
         let record = |directory: &Path| -> Vec<PathBuf> {
+            if let Some(found) = listings.lock().get(directory) {
+                return found.clone();
+            }
             let found = list(directory);
             listings
                 .lock()
-                .insert(directory.to_path_buf(), found.clone());
-            found
+                .entry(directory.to_path_buf())
+                .or_insert(found)
+                .clone()
         };
         // A manifest that cannot be read has no effect on the index.
         let mut snapshot: BTreeMap<PathBuf, Option<Vec<u8>>> = sources
@@ -690,8 +697,7 @@ impl ViewCache {
             .map(|(path, content)| (path, Some(content)))
             .collect();
         let mut manifests = BTreeMap::new();
-        for path in super::build::manifest_paths(&root, &paths, &record) {
-            let content = read(&path).ok();
+        for (path, content) in super::build::manifest_files(&root, &paths, read, &record) {
             if let Some(content) = &content {
                 manifests.insert(path.clone(), blake3::hash(content));
             }
@@ -981,6 +987,107 @@ mod tests {
         std::fs::write(&manifest, r#"{"name": "shop", "exports": "./src/b.js"}"#).unwrap();
         let changed = cache.load(root, &files).unwrap();
         assert_eq!(callee(&changed), ["lib/src/b.js#run"]);
+    }
+
+    /// A TypeScript config that `extends` names is a manifest, also in a
+    /// directory without a source file.
+    #[test]
+    fn test_cache_reads_an_extended_typescript_config_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        for path in ["app/src", "config", "one", "two"] {
+            std::fs::create_dir_all(root.join(path)).unwrap();
+        }
+        std::fs::write(
+            root.join("app/tsconfig.json"),
+            r#"{"extends": "../config/tsconfig.base.json"}"#,
+        )
+        .unwrap();
+        let base = root.join("config/tsconfig.base.json");
+        std::fs::write(
+            &base,
+            r#"{"compilerOptions": {"paths": {"~/*": ["./../one/*"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("one/a.ts"), "export function run() {}\n").unwrap();
+        std::fs::write(root.join("two/a.ts"), "export function run() {}\n").unwrap();
+        std::fs::write(
+            root.join("app/src/main.ts"),
+            "import { run } from \"~/a\";\n\nexport function go() {\n  run();\n}\n",
+        )
+        .unwrap();
+        let files: Vec<PathBuf> = ["one/a.ts", "two/a.ts", "app/src/main.ts"]
+            .iter()
+            .map(|file| root.join(file))
+            .collect();
+        let callee = |view: &CallView| -> Vec<String> {
+            let go = view.resolve("go");
+            view.callees(&go, 1, DEFAULT_MIN_BASIS)
+                .into_iter()
+                .flatten()
+                .map(|position| view.symbols[position].qualified_name.clone())
+                .collect()
+        };
+        let mut cache = ViewCache::default();
+        let first = cache.load(root, &files).unwrap();
+        assert_eq!(callee(&first), ["one/a.ts#run"]);
+        std::fs::write(
+            &base,
+            r#"{"compilerOptions": {"paths": {"~/*": ["./../two/*"]}}}"#,
+        )
+        .unwrap();
+        let changed = cache.load(root, &files).unwrap();
+        assert_eq!(callee(&changed), ["two/a.ts#run"]);
+    }
+
+    /// A directory that the discovery lists two times gives the build its
+    /// first listing, thus the build reads each config that the discovery
+    /// read, also when the directory changes during the load.
+    #[test]
+    fn test_cache_builds_with_the_first_listing_of_a_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        for path in ["app/src", "one"] {
+            std::fs::create_dir_all(root.join(path)).unwrap();
+        }
+        std::fs::write(root.join("app/tsconfig.json"), r#"{"extends": "./base"}"#).unwrap();
+        std::fs::write(
+            root.join("app/base.json"),
+            r#"{"compilerOptions": {"paths": {"~/*": ["../one/*"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("one/a.ts"), "export function run() {}\n").unwrap();
+        std::fs::write(
+            root.join("app/src/main.ts"),
+            "import { run } from \"~/a\";\n\nexport function go() {\n  run();\n}\n",
+        )
+        .unwrap();
+        let files: Vec<PathBuf> = ["one/a.ts", "app/src/main.ts"]
+            .iter()
+            .map(|file| root.join(file))
+            .collect();
+        // The second listing of `app` does not have `tsconfig.json`.
+        let app = root.join("app");
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let list = |directory: &Path| -> Vec<PathBuf> {
+            let mut found = super::super::build::list_directory(directory);
+            if directory == app && calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+                found.retain(|path| !path.ends_with("tsconfig.json"));
+            }
+            found
+        };
+        let mut cache = ViewCache::default();
+        let view = cache
+            .load_with(&root, &files, &|path| Ok(std::fs::read(path)?), &list)
+            .unwrap();
+        let go = view.resolve("go");
+        let callees: Vec<String> = view
+            .callees(&go, 1, DEFAULT_MIN_BASIS)
+            .into_iter()
+            .flatten()
+            .map(|position| view.symbols[position].qualified_name.clone())
+            .collect();
+        assert_eq!(callees, ["one/a.ts#run"]);
     }
 
     /// The fingerprint names the content: a rewrite with the same bytes keeps

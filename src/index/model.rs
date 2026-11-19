@@ -314,6 +314,10 @@ pub struct ImportBinding {
     pub target_file: ImportTarget,
     /// The key of the symbol to which a named import refers.
     pub target_symbol: Option<String>,
+    /// The import binds only a type, as TypeScript `import type` does. The
+    /// compiler removes it, thus it is not a dependency at run time.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub type_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

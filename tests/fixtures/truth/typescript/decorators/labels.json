@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "language": "typescript",
+  "split": "development",
+  "oracle": "Author-reviewed. A decorator runs when the class is defined. The call of a decorator has the decorated class or method as its caller. The harness does not run the code.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "rest_controller", "category": "free_function", "file": "decorators.ts", "name": "RestController", "kind": "function", "container": null, "start_line": 1, "end_line": 3, "exported": true},
+    {"label": "get", "category": "free_function", "file": "decorators.ts", "name": "Get", "kind": "function", "container": null, "start_line": 5, "end_line": 7, "exported": true},
+    {"label": "controller", "category": "type", "file": "controller.ts", "name": "Controller", "kind": "class", "container": null, "start_line": 4, "end_line": 9, "exported": true},
+    {"label": "list", "category": "method", "file": "controller.ts", "name": "list", "kind": "method", "container": "Controller", "start_line": 6, "end_line": 8, "exported": true}
+  ],
+  "calls": [
+    {"label": "decorator_of_an_exported_class", "category": "cross_file_import", "caller": "controller", "line": 3, "callee_text": "RestController", "expected": ["rest_controller"]},
+    {"label": "decorator_of_a_method", "category": "cross_file_import", "caller": "list", "line": 5, "callee_text": "Get", "expected": ["get"]}
+  ]
+}
