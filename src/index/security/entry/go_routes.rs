@@ -216,6 +216,23 @@ impl Framework {
         Some(PrefixState { top, slash })
     }
 
+    /// Tells if `materialize` gives a path, without the text of the path.
+    fn accepts(self, state: &PrefixState) -> bool {
+        match self {
+            Self::Chi | Self::Mux => {
+                let mut current = state.top.as_ref();
+                while let Some(piece) = current {
+                    if !piece.text.is_empty() {
+                        return true;
+                    }
+                    current = piece.parent.as_ref();
+                }
+                false
+            }
+            Self::Echo | Self::Gin => true,
+        }
+    }
+
     /// The path that a joined list gives.
     fn materialize(self, state: &PrefixState) -> Option<String> {
         let mut pieces: Vec<&str> = Vec::new();
@@ -4732,12 +4749,24 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             if unreadable && framework == Framework::Mux {
                 continue;
             }
+            // A hidden record of chi or gin only replaces other records, by its own pattern. It
+            // needs to know only that the library accepts the path. The text of the path is as
+            // long as the chain of mounts above the record, so a chain of mounts would take
+            // quadratic time in all.
+            let text_unused =
+                record.omitted && matches!(framework, Framework::Chi | Framework::Gin);
             let composed = up
                 .state
                 .as_ref()
                 .filter(|_| !up.dead)
                 .and_then(|state| framework.extend(state, &record.path))
-                .and_then(|state| framework.materialize(&state));
+                .and_then(|state| {
+                    if text_unused {
+                        framework.accepts(&state).then(String::new)
+                    } else {
+                        framework.materialize(&state)
+                    }
+                });
             let path = match composed {
                 Some(path) => path,
                 None if unreadable => {

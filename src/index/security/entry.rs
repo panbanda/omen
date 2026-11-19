@@ -5591,6 +5591,13 @@ func routes() {
         |_| 0
     );
 
+    /// The hidden records of a long chain of mounts must not each build the path of the chain.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_the_hidden_records_of_a_chain_of_mounts_cost_linear_time() {
+        assert_scales_linearly("mount chain", 10_000, |size| scenario_mount_chain(size).1);
+    }
+
     fn scenario_packages_with_one_handler_name(count: usize) -> Search {
         let mut imports = vec!["\"net/http\"".to_string(), CHI.to_string()];
         let mut body = String::from("func routes() {\n\tr := chi.NewRouter()\n");
