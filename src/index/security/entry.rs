@@ -2293,7 +2293,7 @@ pub(super) mod tests {
     use crate::index::extract::{extract_file, link_files};
     use crate::index::imports::{resolve_imports, Manifests};
     use crate::index::resolve::resolve_references;
-    pub(super) use crate::index::timing::assert_scales_linearly;
+    pub(super) use crate::index::timing::{assert_scales_linearly, assert_scales_linearly_above};
     use crate::parser::Parser;
 
     #[test]
@@ -2356,7 +2356,7 @@ pub(super) mod tests {
             resolve_imports(&mut index, &test_manifests());
             resolve_references(&mut index);
         }
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = find_entry_points(&parsed, &index);
         (found, started.elapsed())
     }
@@ -5277,16 +5277,6 @@ func routes() {
         assert_eq!(run(small * 2).0, expected(small * 2));
     }
 
-    fn assert_linear_growth(small: usize, run: fn(usize) -> Search) {
-        let (_, first) = run(small);
-        let (_, second) = run(small * 2);
-        let floor = std::time::Duration::from_millis(300);
-        assert!(
-            second < 3 * first.max(floor),
-            "{first:?} for {small}, then {second:?}"
-        );
-    }
-
     // The ratio check runs only in the release timing step: a debug or coverage
     // build on a shared runner is too slow and too noisy for a ratio of times.
     macro_rules! go_timing {
@@ -5299,7 +5289,12 @@ func routes() {
             #[test]
             #[ignore = "timing: run in release"]
             fn $large_test() {
-                assert_linear_growth($small, $scenario);
+                assert_scales_linearly_above(
+                    stringify!($scenario),
+                    $small,
+                    std::time::Duration::from_millis(300),
+                    |size| $scenario(size).1,
+                );
                 let (_, took) = $scenario($large);
                 assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
             }
@@ -5533,7 +5528,7 @@ func routes() {
         for index in 0..count {
             pattern.push_str(&format!("/{{p{index}}}"));
         }
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         assert!(go_routes::servemux_pattern(&pattern).is_some());
         (1, started.elapsed())
     }

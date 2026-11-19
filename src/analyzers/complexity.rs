@@ -27,6 +27,7 @@
 //! println!("Analyzed {} functions", result.summary.total_functions);
 //! ```
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -331,8 +332,10 @@ fn analyze_parse_result(result: &ParseResult) -> FileResult {
         &result.source,
         result.language,
     );
+    let nodes = FunctionNodes::of(result);
     for func in functions {
-        let metrics = analyze_function_complexity(&func, result);
+        let node = nodes.find(result, func.start_line, func.body_byte_range);
+        let metrics = measure_node(node, func.start_line, func.end_line, result);
         file_result.total_cyclomatic += metrics.cyclomatic;
         file_result.total_cognitive += metrics.cognitive;
 
@@ -380,17 +383,63 @@ pub fn analyze_symbol_complexity(symbol: &Symbol, result: &ParseResult) -> Metri
     )
 }
 
+/// The metrics of each symbol, in the order of `symbols`. It finds the nodes
+/// of all symbols in one walk; see [`analyze_symbol_complexity`].
+pub fn analyze_symbols_complexity<'symbol>(
+    symbols: impl IntoIterator<Item = &'symbol Symbol>,
+    result: &ParseResult,
+) -> Vec<Metrics> {
+    let nodes = FunctionNodes::of(result);
+    symbols
+        .into_iter()
+        .map(|symbol| {
+            let line = symbol.range.start_line;
+            let body = symbol
+                .body_range
+                .map(|body| (body.start_byte, body.end_byte));
+            let node = nodes.find(result, line, body);
+            measure_node(node, line, symbol.range.end_line, result)
+        })
+        .collect()
+}
+
+/// The maximum nesting depth of a file: the code outside the functions, and
+/// each function from its own body, as `Metrics::max_nesting` measures it.
+pub fn max_nesting_of_file(result: &ParseResult) -> u32 {
+    let outside = calculate_max_nesting(&result.root_node(), result.language, 0);
+    let nodes = FunctionNodes::of(result);
+    parser::extract_functions(result)
+        .iter()
+        .filter_map(|func| nodes.find(result, func.start_line, func.body_byte_range))
+        .filter(|node| !body_is_a_nested_function(node, result.language))
+        .map(|node| {
+            let body = node.child_by_field_name("body").unwrap_or(node);
+            calculate_max_nesting(&body, result.language, 0)
+        })
+        .fold(outside, u32::max)
+}
+
 fn measure_function(
     start_line: u32,
     end_line: u32,
     body_byte_range: Option<(usize, usize)>,
     result: &ParseResult,
 ) -> Metrics {
-    let root = result.root_node();
+    let node = find_function_node(
+        &result.root_node(),
+        start_line,
+        body_byte_range,
+        result.language,
+    );
+    measure_node(node, start_line, end_line, result)
+}
 
-    // Find the function node in the tree
-    let func_node = find_function_node(&root, start_line, body_byte_range, result.language);
-
+fn measure_node(
+    func_node: Option<tree_sitter::Node<'_>>,
+    start_line: u32,
+    end_line: u32,
+    result: &ParseResult,
+) -> Metrics {
     let (cyclomatic, cognitive, max_nesting) = match func_node {
         // A concise arrow body can itself be another function, as in
         // `a => b => ...`. The walkers exempt their own starting node from
@@ -414,6 +463,70 @@ fn measure_function(
         cognitive,
         max_nesting,
         lines: end_line.saturating_sub(start_line) + 1,
+    }
+}
+
+/// The function nodes of a file, from one walk. A search from the root for
+/// each function costs time in proportion to the number of functions, so a
+/// file with many functions took quadratic time.
+struct FunctionNodes<'tree> {
+    /// The first node in pre-order for each body byte range.
+    by_body: HashMap<(usize, usize), tree_sitter::Node<'tree>>,
+    /// The last node in pre-order, thus the innermost, for each start row.
+    by_start_row: HashMap<usize, tree_sitter::Node<'tree>>,
+}
+
+impl<'tree> FunctionNodes<'tree> {
+    fn of(result: &'tree ParseResult) -> Self {
+        let function_kinds = parser::get_function_node_types(result.language);
+        let mut nodes = Self {
+            by_body: HashMap::new(),
+            by_start_row: HashMap::new(),
+        };
+        let mut cursor = result.root_node().walk();
+        loop {
+            let node = cursor.node();
+            if function_kinds.contains(&node.kind()) {
+                if let Some(body) = parser::function_body_byte_range(&node) {
+                    nodes.by_body.entry(body).or_insert(node);
+                }
+                nodes.by_start_row.insert(node.start_position().row, node);
+            }
+            if cursor.goto_first_child() {
+                continue;
+            }
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    return nodes;
+                }
+            }
+        }
+    }
+
+    /// The node that `find_function_node` gives, from the index. A function
+    /// with no node that starts on its line uses the search.
+    fn find(
+        &self,
+        result: &'tree ParseResult,
+        start_line: u32,
+        body_byte_range: Option<(usize, usize)>,
+    ) -> Option<tree_sitter::Node<'tree>> {
+        let row = start_line.saturating_sub(1) as usize;
+        let contains_row = |node: &tree_sitter::Node<'_>| {
+            node.start_position().row <= row && row <= node.end_position().row
+        };
+        body_byte_range
+            .and_then(|body| self.by_body.get(&body).copied())
+            .filter(contains_row)
+            .or_else(|| self.by_start_row.get(&row).copied())
+            .or_else(|| {
+                find_function_node(
+                    &result.root_node(),
+                    start_line,
+                    body_byte_range,
+                    result.language,
+                )
+            })
     }
 }
 
@@ -517,8 +630,8 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
     let boundary_types = get_nested_scope_node_types(lang);
     let mut count = 0;
     let mut cursor = node.walk();
-    // The level of the cursor below `node`. `TreeCursor::depth` counts the levels each time,
-    // so a call for each node takes quadratic time in a deep tree.
+    // `TreeCursor::depth` counts the cursor stack at each call, so the walk
+    // keeps its own level.
     let mut level = 0usize;
 
     loop {
@@ -677,15 +790,15 @@ fn calculate_cognitive_complexity(
 
     let mut complexity = 0;
     let mut cursor = node.walk();
-    // The level of the cursor below `node`. `TreeCursor::depth` counts the levels each time,
-    // so a call for each node takes quadratic time in a deep tree.
+    // `TreeCursor::depth` counts the cursor stack at each call, so the walk
+    // keeps its own level.
     let mut level = 0usize;
 
     // Track nesting depth separately from cursor depth
     // Use a small stack to track depth changes at each cursor level
-    let mut depth_at_level: Vec<u32> = vec![initial_depth; 64]; // Pre-allocate for typical depths
-                                                                // The kind of the node at each cursor level. `Node::parent` searches from
-                                                                // the root, so a call for each node is quadratic in a deep tree.
+    let mut depth_at_level: Vec<u32> = vec![initial_depth; 64];
+    // The kind of the node at each cursor level. `Node::parent` searches from
+    // the root, so a call for each node is quadratic in a deep tree.
     let mut kind_at_level: Vec<&str> = vec![""; 64];
 
     loop {
@@ -693,7 +806,8 @@ fn calculate_cognitive_complexity(
         let kind = current.kind();
 
         // Ensure we have space for this level
-        if level >= depth_at_level.len() {
+        // Room for the children of this node, which are written below.
+        if level + 1 >= depth_at_level.len() {
             depth_at_level.resize(level + 16, initial_depth);
             kind_at_level.resize(level + 16, "");
         }
@@ -727,16 +841,12 @@ fn calculate_cognitive_complexity(
             if parent_kind != "else_clause" {
                 complexity += 1;
             }
-            if level + 1 < depth_at_level.len() {
-                depth_at_level[level + 1] = current_depth;
-            }
+            depth_at_level[level + 1] = current_depth;
         } else if current.is_named() && nesting_types.contains(&kind) {
             // Nesting constructs: +1 base plus nesting penalty
             complexity += 1 + current_depth;
             // Children will have increased depth
-            if level + 1 < depth_at_level.len() {
-                depth_at_level[level + 1] = current_depth + 1;
-            }
+            depth_at_level[level + 1] = current_depth + 1;
         } else if current.is_named() && flat_types.contains(&kind) {
             // Flat constructs: +1 only, NO nesting penalty per SonarSource spec
             if !is_jump_without_label(&current, source, lang) && !is_else_of_case(kind, parent_kind)
@@ -744,9 +854,7 @@ fn calculate_cognitive_complexity(
                 complexity += 1;
             }
             // Children stay at same depth
-            if level + 1 < depth_at_level.len() {
-                depth_at_level[level + 1] = current_depth;
-            }
+            depth_at_level[level + 1] = current_depth;
         } else if kind == "binary_expression"
             || kind == "logical_expression"
             || kind == "boolean_operator"
@@ -758,14 +866,10 @@ fn calculate_cognitive_complexity(
                 }
             }
             // Children inherit current depth
-            if level + 1 < depth_at_level.len() {
-                depth_at_level[level + 1] = current_depth;
-            }
+            depth_at_level[level + 1] = current_depth;
         } else {
             // Non-complexity node, children inherit current depth
-            if level + 1 < depth_at_level.len() {
-                depth_at_level[level + 1] = current_depth;
-            }
+            depth_at_level[level + 1] = current_depth;
         }
 
         // Traverse tree, stopping at nested function-scope boundaries. The
@@ -789,7 +893,8 @@ fn calculate_cognitive_complexity(
     }
 }
 
-/// Calculate maximum nesting depth.
+/// Calculate maximum nesting depth. The nesting kinds are those of the
+/// cognitive complexity (`get_nesting_node_types`).
 /// Uses iterative cursor traversal with depth tracking for performance.
 ///
 /// Like `count_decision_points`, does not descend into nested function-like
@@ -797,31 +902,12 @@ fn calculate_cognitive_complexity(
 /// folded into the enclosing function's. The starting `node` itself is
 /// exempt from this boundary check.
 fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_depth: u32) -> u32 {
-    const NESTING_KINDS: &[&str] = &[
-        "if_statement",
-        "if_expression",
-        "if",
-        "unless",
-        "while_statement",
-        "while_expression",
-        "while",
-        "until",
-        "for_statement",
-        "for_expression",
-        "for",
-        "switch_statement",
-        "match_expression",
-        "case",
-        "catch_clause",
-        "except_clause",
-        "rescue",
-    ];
-
+    let nesting_types = get_nesting_node_types(lang);
     let boundary_types = get_nested_scope_node_types(lang);
     let mut max_depth = initial_depth;
     let mut cursor = node.walk();
-    // The level of the cursor below `node`. `TreeCursor::depth` counts the levels each time,
-    // so a call for each node takes quadratic time in a deep tree.
+    // `TreeCursor::depth` counts the cursor stack at each call, so the walk
+    // keeps its own level.
     let mut level = 0usize;
 
     // Track nesting depth at each cursor level
@@ -832,7 +918,8 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
         let current = cursor.node();
         let kind = current.kind();
 
-        if level >= depth_at_level.len() {
+        // Room for the children of this node, which are written below.
+        if level + 1 >= depth_at_level.len() {
             depth_at_level.resize(level + 16, initial_depth);
             kind_at_level.resize(level + 16, "");
         }
@@ -859,15 +946,13 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
             && chain_branch(kind, parent_kind, cursor.field_name(), lang) == ChainBranch::ElseIf;
         let child_depth = if is_else_if {
             current_depth
-        } else if current.is_named() && NESTING_KINDS.contains(&kind) {
+        } else if current.is_named() && nesting_types.contains(&kind) {
             current_depth + 1
         } else {
             current_depth
         };
 
-        if level + 1 < depth_at_level.len() {
-            depth_at_level[level + 1] = child_depth;
-        }
+        depth_at_level[level + 1] = child_depth;
 
         // Traverse tree, stopping at nested function-scope boundaries. The
         // starting node (level 0) is exempt so the
@@ -1127,6 +1212,47 @@ mod tests {
     }
 
     // Language-specific complexity calculation tests
+
+    fn parse_many_functions(count: usize) -> ParseResult {
+        let code: String = (0..count)
+            .map(|index| format!("function f{index}(x) {{ if (x) {{ g(); }} }}\n"))
+            .collect();
+        crate::parser::Parser::new()
+            .parse(
+                code.as_bytes(),
+                Language::JavaScript,
+                std::path::Path::new("a.js"),
+            )
+            .expect("Parse failed")
+    }
+
+    /// The node of each function comes from one walk of the file, not from a
+    /// search from the root for each function.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_functions_in_one_file_are_measured_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("functions", 5_000, |size| {
+            let result = parse_many_functions(size);
+            let started = crate::index::timing::Stopwatch::start();
+            let file = analyze_parse_result(&result);
+            let elapsed = started.elapsed();
+            assert_eq!(file.functions.len(), size);
+            elapsed
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_the_nesting_of_a_file_with_many_functions_is_linear() {
+        crate::index::timing::assert_scales_linearly("functions", 5_000, |size| {
+            let result = parse_many_functions(size);
+            let started = crate::index::timing::Stopwatch::start();
+            let nesting = max_nesting_of_file(&result);
+            let elapsed = started.elapsed();
+            assert_eq!(nesting, 1);
+            elapsed
+        });
+    }
 
     fn parse_and_analyze(code: &[u8], lang: Language, filename: &str) -> FileResult {
         let parser = crate::parser::Parser::new();
@@ -2127,6 +2253,42 @@ fn drain(v: &mut Vec<i32>) {
         }
     }
 
+    /// The maximum nesting uses the nesting kinds of the cognitive
+    /// complexity. Each probe has two nested constructs.
+    #[test]
+    fn test_max_nesting_uses_the_cognitive_nesting_kinds() {
+        let cases: &[(Language, &str, &str)] = &[
+            (Language::TypeScript, "a.ts", "function f(xs, c) { for (const x of xs) { do { g(); } while (c); } }"),
+            (Language::JavaScript, "a.js", "function f(xs, c) { for (const x in xs) { do { g(); } while (c); } }"),
+            (Language::Tsx, "a.tsx", "function f(xs, c) { for (const x of xs) { do { g(); } while (c); } }"),
+            (Language::Java, "A.java", "class A { void f(int[] xs, boolean c) { for (int x : xs) { do { g(); } while (c); } } }"),
+            (Language::Java, "A.java", "class A { void f(int x, boolean c) { switch (x) { case 0 -> { if (c) g(); } default -> g(); } } }"),
+            (Language::CSharp, "A.cs", "class A { void F(int[] xs, bool c) { foreach (var x in xs) { do { G(); } while (c); } } }"),
+            (Language::C, "a.c", "void f(int x, int c) { do { switch (x) { case 0: g(); } } while (c); }"),
+            (Language::Cpp, "a.cpp", "void f(int x, int c) { do { switch (x) { case 0: g(); } } while (c); }"),
+            (Language::Go, "a.go", "package p\nfunc f(x int, a chan int) { switch x { case 0: select { case <-a: g() } } }\n"),
+            (Language::Go, "a.go", "package p\nfunc f(v any, c bool) { switch v.(type) { case int: if c { g() } } }\n"),
+            (Language::Rust, "a.rs", "fn f(c: bool) { loop { while c { g(); } } }"),
+            (Language::Python, "a.py", "def f(x, c):\n    match x:\n        case 0:\n            if c:\n                g()\n"),
+            (Language::Ruby, "a.rb", "def f(x, c)\n  case x\n  in 0\n    if c then g end\n  end\nend\n"),
+            (Language::Php, "a.php", "<?php\nfunction f($xs, $c) { foreach ($xs as $x) { do { g(); } while ($c); } }\n"),
+            (Language::Bash, "a.sh", "f() {\n  case \"$x\" in\n    a) while true; do g; done ;;\n  esac\n}\n"),
+        ];
+        let mut failures = Vec::new();
+        for (lang, filename, code) in cases {
+            let result = parse_and_analyze(code.as_bytes(), *lang, filename);
+            let nesting: Vec<u32> = result
+                .functions
+                .iter()
+                .map(|f| f.metrics.max_nesting)
+                .collect();
+            if nesting != [2] {
+                failures.push(format!("{lang:?} {nesting:?}: {code}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     /// The default branch is the one that matches each remaining value: no
     /// guard, and a pattern that cannot fail.
     #[test]
@@ -2187,6 +2349,27 @@ fn drain(v: &mut Vec<i32>) {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// The walk keeps the nesting depth of each tree level. A tree deeper
+    /// than the first 64 levels keeps the right depth.
+    #[test]
+    fn test_deep_nesting_keeps_its_depth() {
+        let count = 70u32;
+        let mut code = String::from("function f(x) {");
+        for _ in 0..count {
+            code.push_str(" if (x) {");
+        }
+        code.push_str(" g();");
+        for _ in 0..count {
+            code.push_str(" }");
+        }
+        code.push_str(" }");
+        let result = parse_and_analyze(code.as_bytes(), Language::JavaScript, "a.js");
+        let metrics = &result.functions[0].metrics;
+        assert_eq!(metrics.max_nesting, count);
+        assert_eq!(metrics.cognitive, (1..=count).sum::<u32>());
+        assert_eq!(metrics.cyclomatic, count + 1);
     }
 
     fn assert_two_case_switch(code: &str, lang: Language, filename: &str) {
@@ -2724,37 +2907,6 @@ export default function anon(a) { if (a) {} return a; }
             assert_eq!(result.total_cognitive, 1, "{lang:?}");
         }
     }
-
-    /// The measures of a function with `depth` nested parentheses and `depth` nested blocks.
-    fn deeply_nested_function_at(depth: usize) -> std::time::Duration {
-        let code = format!(
-            "package p\nfunc f(x bool) int {{\n{}{}\nreturn {}1{}\n}}\n",
-            "if x {".repeat(depth),
-            "}".repeat(depth),
-            "(".repeat(depth),
-            ")".repeat(depth)
-        );
-        let started = std::time::Instant::now();
-        let result = std::thread::Builder::new()
-            .stack_size(1 << 30)
-            .spawn(move || parse_and_analyze(code.as_bytes(), Language::Go, "a.go"))
-            .expect("spawn")
-            .join()
-            .expect("analysis");
-        let elapsed = started.elapsed();
-        assert_eq!(result.functions.len(), 1);
-        elapsed
-    }
-
-    #[test]
-    #[ignore = "timing: run in release"]
-    fn timing_deeply_nested_functions_are_measured_in_linear_time() {
-        crate::index::timing::assert_scales_linearly(
-            "deeply nested function",
-            2_500,
-            deeply_nested_function_at,
-        );
-    }
 }
 
 #[cfg(test)]
@@ -2840,6 +2992,49 @@ mod symbol_tests {
 
             assert_eq!(metrics.cyclomatic, 2, "{language:?}");
         }
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_symbols_in_one_file_are_measured_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("symbols", 5_000, |size| {
+            let source: String = (0..size)
+                .map(|index| format!("function f{index}(x) {{ if (x) {{ g(); }} }}\n"))
+                .collect();
+            let result = crate::index::headers::parse(
+                Path::new("a.js"),
+                Language::JavaScript,
+                source.as_bytes(),
+            )
+            .unwrap();
+            let facts = extract_file(&result, "a.js");
+            let started = crate::index::timing::Stopwatch::start();
+            let metrics = analyze_symbols_complexity(&facts.symbols, &result);
+            let elapsed = started.elapsed();
+            assert!(metrics.iter().all(|metrics| metrics.cyclomatic == 2));
+            elapsed
+        });
+    }
+
+    #[test]
+    fn test_symbols_get_the_metrics_of_one_symbol() {
+        let name = "t.js";
+        let source = "function a() {} function b(x) { if (x) {} }\nconst c = (y) => y && g();\n";
+        let parsed =
+            crate::index::headers::parse(Path::new(name), Language::JavaScript, source.as_bytes())
+                .unwrap();
+        let facts = extract_file(&parsed, name);
+        let each: Vec<(u32, u32, u32)> = facts
+            .symbols
+            .iter()
+            .map(|symbol| analyze_symbol_complexity(symbol, &parsed))
+            .map(|metrics| (metrics.cyclomatic, metrics.cognitive, metrics.max_nesting))
+            .collect();
+        let all: Vec<(u32, u32, u32)> = analyze_symbols_complexity(&facts.symbols, &parsed)
+            .iter()
+            .map(|metrics| (metrics.cyclomatic, metrics.cognitive, metrics.max_nesting))
+            .collect();
+        assert_eq!(all, each);
     }
 
     #[test]
