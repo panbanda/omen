@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Go. The chi package is not in the case. The type Router of web/router.go sends the pattern of Get to a chi router in a field, so a call of Get registers a route. The last argument is the handler, and the arguments before it are guards. The harness does not build or run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "router_type_direct", "file": "main.go", "line": 18, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/direct", "guards": ["mw"]},
+    {"label": "router_type_wrapped", "file": "main.go", "line": 20, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/wrapped", "guards": ["reqSignIn"]},
+    {"label": "router_type_main", "file": "main.go", "line": 16, "kind": "cli_main", "framework": "go"}
+  ]
+}

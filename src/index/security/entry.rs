@@ -23,6 +23,7 @@ use crate::parser::ParseResult;
 mod ecma;
 mod fastapi;
 mod go_routes;
+mod go_wrappers;
 mod persistent;
 mod rails;
 
@@ -126,6 +127,9 @@ pub enum GuardsUnknownReason {
     UnreadableDependency,
     /// The file has a wildcard import, which can bind a name again.
     WildcardImport,
+    /// A middleware layer of a router is added in a condition, a loop, or a function literal, so
+    /// omen does not know if it runs.
+    ConditionalMiddleware,
     /// A middleware argument is not a name that omen can read, or a call around a Go handler is
     /// not a conversion and not a middleware that omen reads.
     UnreadMiddleware,
@@ -154,6 +158,7 @@ impl GuardsUnknownReason {
             Self::UnreadableInclude => "unreadable_include",
             Self::UnreadableDependency => "unreadable_dependency",
             Self::WildcardImport => "wildcard_import",
+            Self::ConditionalMiddleware => "conditional_middleware",
             Self::UnreadMiddleware => "unread_middleware",
             Self::LayerNotRead => "layer_not_read",
         }
@@ -363,6 +368,7 @@ fn callables_by_name(
 pub struct EntryShared {
     rails: std::sync::OnceLock<rails::RailsShared>,
     go_call_sites: std::sync::OnceLock<go_routes::CallSites>,
+    go_wrappers: std::sync::OnceLock<go_wrappers::WrapperRoutes>,
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
     go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
     go_packages: std::sync::OnceLock<go_routes::PackageNames>,
@@ -1925,6 +1931,7 @@ impl<'a> Context<'a> {
     fn go(&self, node: Node<'_>, out: &mut Vec<Draft>) {
         if node.kind() == "source_file" {
             go_routes::collect(self, node, out);
+            go_wrappers::collect(self, node, out);
             return;
         }
         if node.kind() != "call_expression" {
