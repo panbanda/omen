@@ -245,6 +245,52 @@ mod timing_tests {
         elapsed
     }
 
+    /// The first query of a thread of the pool builds the tables in a
+    /// `OnceLock`. A build that runs parallel work there lets the thread run
+    /// a second query of the pool, which then waits for the first one: a
+    /// hang. The case runs on a pool of eight threads, with a time limit.
+    #[test]
+    fn test_export_tables_build_on_a_pool_of_eight_threads() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(8)
+                .build()
+                .unwrap();
+            // Each file calls a function of the barrel. Thus each thread
+            // has calls to resolve when the first query builds the tables.
+            let mut files: Vec<(String, String)> = Vec::new();
+            let mut barrel = String::new();
+            for position in 0..2_000 {
+                files.push((
+                    format!("m{position}.ts"),
+                    format!(
+                        "import {{ f{} }} from './index';\n\nexport function f{position}() {{\n\tf{}();\n}}\n",
+                        (position + 1) % 2_000,
+                        (position + 1) % 2_000
+                    ),
+                ));
+                barrel.push_str(&format!("export * from './m{position}';\n"));
+            }
+            files.push(("index.ts".to_string(), barrel));
+            let files: Vec<(&str, &str)> = files
+                .iter()
+                .map(|(path, text)| (path.as_str(), text.as_str()))
+                .collect();
+            for _ in 0..20 {
+                let found = pool.install(|| rows(&files, "m0.ts"));
+                assert_eq!(found, ["4 f0>f1 UniqueCandidate ImportedName [m1.ts#f1]"]);
+            }
+            sender.send(()).unwrap();
+        });
+        assert!(
+            receiver
+                .recv_timeout(std::time::Duration::from_secs(120))
+                .is_ok(),
+            "the resolution did not end"
+        );
+    }
+
     #[test]
     fn test_timing_cases_resolve_each_call() {
         wildcard_barrel_at(3);

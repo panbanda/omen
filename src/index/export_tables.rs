@@ -43,6 +43,11 @@ fn empty_table<'a, T>() -> Table<'a, T> {
 }
 
 /// The work of the build is at most this factor times `size * log2(size)`.
+/// When each file is the target of at most one wildcard re-export, a name
+/// moves only from a table into one at least twice as large, thus the work
+/// is at most `size * log2(size)`. The factor 4 keeps each such graph exact
+/// with a margin. A graph above the cap re-exports the same names through
+/// many paths.
 const CAP_FACTOR: usize = 4;
 
 /// The facts of one file that its table needs.
@@ -740,6 +745,65 @@ mod tests {
         assert_eq!(names(&tables, 2, "y"), [11]);
         assert_eq!(names(&tables, 3, "x"), [10, 13]);
         assert!(tables.not_resolved().is_empty());
+    }
+
+    /// Cycles of wildcard re-exports, with the answer of `ResolveExport`
+    /// for each file and the name `x`.
+    #[test]
+    fn test_cycle_cases_give_the_answer_of_resolve_export() {
+        type Case = (Vec<Member<'static, usize>>, [&'static [usize]; 3]);
+        let cases: Vec<Case> = vec![
+            // A -> B -> C -> A; B and C define `x`. A sees B only.
+            (
+                vec![
+                    file(&[], &[1], &[]),
+                    file(&[("x", 1)], &[2], &[]),
+                    file(&[("x", 2)], &[0], &[]),
+                ],
+                [&[1], &[1], &[2]],
+            ),
+            // A <-> B, A -> C; only C defines `x`.
+            (
+                vec![
+                    file(&[], &[1, 2], &[]),
+                    file(&[], &[0], &[]),
+                    file(&[("x", 2)], &[], &[]),
+                ],
+                [&[2], &[2], &[2]],
+            ),
+            // A <-> B, A -> C, B -> C; B and C define `x`.
+            (
+                vec![
+                    file(&[], &[1, 2], &[]),
+                    file(&[("x", 1)], &[0, 2], &[]),
+                    file(&[("x", 2)], &[], &[]),
+                ],
+                [&[1, 2], &[1], &[2]],
+            ),
+            // A <-> B <-> C; A and C define `x`. B sees both.
+            (
+                vec![
+                    file(&[("x", 0)], &[1], &[]),
+                    file(&[], &[0, 2], &[]),
+                    file(&[("x", 2)], &[1], &[]),
+                ],
+                [&[0], &[0, 2], &[2]],
+            ),
+            // A -> B -> C -> A; no file defines `x`.
+            (
+                vec![
+                    file(&[], &[1], &[]),
+                    file(&[], &[2], &[]),
+                    file(&[], &[0], &[]),
+                ],
+                [&[], &[], &[]],
+            ),
+        ];
+        for (members, expected) in cases {
+            let tables = Tables::build(&Graph(members));
+            let found: Vec<Vec<usize>> = (0..3).map(|member| names(&tables, member, "x")).collect();
+            assert_eq!(found, expected.map(<[usize]>::to_vec));
+        }
     }
 
     #[test]
