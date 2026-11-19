@@ -1196,6 +1196,9 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
     let mut token_tree_depths: Vec<u32> = Vec::new();
     let mut value_uses: BTreeSet<(String, String, bool, bool)> = BTreeSet::new();
     let mut path_uses: Vec<PathUse> = Vec::new();
+    // The depth of the cursor. `TreeCursor::depth` counts the levels each time, so a call
+    // for each node takes quadratic time in a deep tree.
+    let mut cursor_depth: u32 = 0;
 
     // Iterative pre-order traversal
     loop {
@@ -1206,18 +1209,18 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         // left behind.
         while scopes
             .last()
-            .is_some_and(|(depth, _)| *depth >= cursor.depth())
+            .is_some_and(|(depth, _)| *depth >= cursor_depth)
         {
             scopes.pop();
         }
         while token_tree_depths
             .last()
-            .is_some_and(|depth| *depth >= cursor.depth())
+            .is_some_and(|depth| *depth >= cursor_depth)
         {
             token_tree_depths.pop();
         }
         if lang == Language::Rust && kind == "token_tree" {
-            token_tree_depths.push(cursor.depth());
+            token_tree_depths.push(cursor_depth);
         }
 
         // Track function context. The name may live on the binding rather
@@ -1226,7 +1229,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         // inside an anonymous callback is not mistaken for module-level code.
         if is_function_node(kind) {
             scopes.push((
-                cursor.depth(),
+                cursor_depth,
                 parser::function_binding_name(&node, source, lang),
             ));
         }
@@ -1304,6 +1307,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
 
         // Move to next node in pre-order traversal
         if cursor.goto_first_child() {
+            cursor_depth += 1;
             continue;
         }
 
@@ -1328,6 +1332,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                 fdc.path_uses = path_uses;
                 return; // Done traversing
             }
+            cursor_depth -= 1;
         }
     }
 }
@@ -2282,6 +2287,51 @@ pub struct AnalysisSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The time of `collect_usages_and_calls` on a function with `depth` nested parentheses.
+    fn usages_of_deep_parentheses_at(depth: usize) -> std::time::Duration {
+        let source = format!(
+            "package p\nfunc f() int {{ return {}x{} }}\n",
+            "(".repeat(depth),
+            ")".repeat(depth)
+        );
+        std::thread::Builder::new()
+            .stack_size(1 << 30)
+            .spawn(move || {
+                let result = parser::Parser::new()
+                    .parse(
+                        source.as_bytes(),
+                        Language::Go,
+                        std::path::Path::new("a.go"),
+                    )
+                    .expect("parse");
+                let mut fdc = FileDeadCode {
+                    path: "a.go".to_string(),
+                    definitions: Vec::new(),
+                    usages: HashSet::new(),
+                    calls: Vec::new(),
+                    path_uses: Vec::new(),
+                };
+                let started = std::time::Instant::now();
+                collect_usages_and_calls(&result, &mut fdc);
+                let elapsed = started.elapsed();
+                assert!(fdc.usages.contains("x"));
+                elapsed
+            })
+            .expect("spawn")
+            .join()
+            .expect("collect")
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_usages_in_deep_parentheses_are_collected_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "usages in deep parentheses",
+            20_000,
+            usages_of_deep_parentheses_at,
+        );
+    }
 
     #[test]
     fn test_analyzer_uses_content_source_for_historical_commits() {
