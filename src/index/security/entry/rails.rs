@@ -5625,7 +5625,7 @@ fn read_inflection_calls(
                     receiver.filter(|receiver| is_inflections_call(*receiver, source))
                 };
                 match governing.map(|call| inflections_locale(call, source)) {
-                    Some(Locale::Other) => return,
+                    Some(Locale::Other) => continue,
                     Some(Locale::Unknown) => {
                         unreadable(out);
                         continue;

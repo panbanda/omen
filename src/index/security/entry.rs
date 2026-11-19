@@ -7843,6 +7843,27 @@ func routes() {
     }
 
     #[test]
+    fn an_acronym_after_an_inflections_block_of_another_locale_is_read() {
+        let routes =
+            "Rails.application.routes.draw do\n  get \"/u\", to: \"api/users#show\"\nend\n";
+        let upper = "module API\n  class UsersController\n    before_action :upper\n    def show; end\n  end\nend\n";
+        let lower = "module Api\n  class UsersController\n    before_action :lower\n    def show; end\n  end\nend\n";
+        let inflections = "ActiveSupport::Inflector.inflections(:fr) do |inflect|\n  inflect.plural \"x\", \"y\"\nend\nActiveSupport::Inflector.inflections(:en) do |inflect|\n  inflect.acronym \"API\"\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/upper.rb", upper),
+                ("controllers/lower.rb", lower),
+                ("config/initializers/inflections.rb", inflections),
+            ],
+        );
+        assert_eq!(
+            found[0].symbol.as_deref(),
+            Some("controllers/upper.rb#API.UsersController.show")
+        );
+    }
+
+    #[test]
     fn a_registered_acronym_changes_the_controller_class() {
         let routes =
             "Rails.application.routes.draw do\n  get \"/u\", to: \"api/users#show\"\nend\n";
