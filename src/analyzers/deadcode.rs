@@ -2208,6 +2208,35 @@ pub struct AnalysisSummary {
 mod tests {
     use super::*;
 
+    /// `x + x + ... + x` is a left-deep tree, as deep as the number of terms.
+    /// The walk of the uses must not search up the tree from each node.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_the_uses_of_a_deep_expression_are_read_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("terms", 5_000, |size| {
+            let content = format!("function f(x) {{ return x{}; }}\n", " + x".repeat(size));
+            let result = crate::parser::Parser::new()
+                .parse(
+                    content.as_bytes(),
+                    Language::JavaScript,
+                    std::path::Path::new("a.js"),
+                )
+                .unwrap();
+            let mut fdc = FileDeadCode {
+                path: "a.js".to_string(),
+                definitions: Vec::new(),
+                usages: HashSet::new(),
+                calls: Vec::new(),
+                path_uses: Vec::new(),
+            };
+            let started = std::time::Instant::now();
+            collect_usages_and_calls(&result, &mut fdc);
+            let elapsed = started.elapsed();
+            assert!(fdc.usages.contains("x"));
+            elapsed
+        });
+    }
+
     #[test]
     fn test_analyzer_uses_content_source_for_historical_commits() {
         use crate::config::Config;
