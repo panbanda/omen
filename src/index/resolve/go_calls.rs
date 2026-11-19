@@ -277,7 +277,7 @@ fn timing_interface_calls_resolve_in_linear_time() {
     assert_scales_linearly("types", 8_000, |size| {
         interface_calls_resolve_at(size, 10, false)
     });
-    assert_scales_linearly("embedded chain", 8_000, |size| {
+    assert_scales_linearly("embedded chain", 16_000, |size| {
         interface_calls_resolve_at(size, 10, true)
     });
 }
@@ -310,7 +310,7 @@ fn calls_of_each_interface_method_resolve_at(methods: usize) -> std::time::Durat
 fn timing_calls_of_many_interface_methods_resolve_in_linear_time() {
     crate::index::timing::assert_scales_linearly(
         "methods",
-        4_000,
+        16_000,
         calls_of_each_interface_method_resolve_at,
     );
 }

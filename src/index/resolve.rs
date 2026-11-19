@@ -5383,10 +5383,10 @@ mod false_edge_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_calls_between_the_files_of_many_packages_resolve_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("go", 8_000, |size| {
+        crate::index::timing::assert_scales_linearly("go", 64_000, |size| {
             calls_between_the_files_of_packages_resolve_at(size, false)
         });
-        crate::index::timing::assert_scales_linearly("java", 8_000, |size| {
+        crate::index::timing::assert_scales_linearly("java", 16_000, |size| {
             calls_between_the_files_of_packages_resolve_at(size, true)
         });
     }
@@ -5421,7 +5421,7 @@ mod false_edge_tests {
     fn timing_one_method_name_in_many_classes_resolves_in_linear_time() {
         crate::index::timing::assert_scales_linearly(
             "classes",
-            8_000,
+            64_000,
             calls_of_one_method_name_in_many_classes_resolve_at,
         );
     }
@@ -5475,7 +5475,7 @@ mod false_edge_tests {
     fn timing_calls_in_one_large_package_resolve_in_linear_time() {
         crate::index::timing::assert_scales_linearly(
             "files",
-            16_000,
+            32_000,
             calls_in_one_large_package_resolve_at,
         );
     }
@@ -5920,7 +5920,7 @@ mod ecma_timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_typescript_overloads_resolve_in_linear_time() {
-        assert_scales_linearly("overloads", 2_000, overloads_at);
+        assert_scales_linearly("overloads", 8_000, overloads_at);
     }
 
     #[test]
@@ -5944,7 +5944,7 @@ mod ecma_timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_typescript_branching_aliases_resolve_in_linear_time() {
-        assert_scales_linearly("branching aliases", 1_000, branching_aliases_at);
+        assert_scales_linearly("branching aliases", 4_000, branching_aliases_at);
     }
 }
 

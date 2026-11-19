@@ -5502,8 +5502,35 @@ func routes() {
 
     // The ratio check runs only in the release timing step: a debug or coverage
     // build on a shared runner is too slow and too noisy for a ratio of times.
+    // `$small` is the size of the count test in the debug build. `start` is the
+    // small size of the ratio check, so that its time is above the floor of the
+    // check from the start. A scenario that is fast at each size that it can
+    // have runs `repeat` times for each measure.
     macro_rules! go_timing {
         ($scenario:ident, $small_test:ident, $large_test:ident, $small:expr, $large:expr, $expected:expr) => {
+            go_timing!(
+                $scenario,
+                $small_test,
+                $large_test,
+                $small,
+                $large,
+                $expected,
+                start = $small
+            );
+        };
+        ($scenario:ident, $small_test:ident, $large_test:ident, $small:expr, $large:expr, $expected:expr, start = $start:expr) => {
+            go_timing!(
+                $scenario,
+                $small_test,
+                $large_test,
+                $small,
+                $large,
+                $expected,
+                start = $start,
+                repeat = 1
+            );
+        };
+        ($scenario:ident, $small_test:ident, $large_test:ident, $small:expr, $large:expr, $expected:expr, start = $start:expr, repeat = $repeat:expr) => {
             #[test]
             fn $small_test() {
                 assert_found_counts($small, $scenario, $expected);
@@ -5512,8 +5539,10 @@ func routes() {
             #[test]
             #[ignore = "timing: run in release"]
             fn $large_test() {
-                assert_scales_linearly(stringify!($scenario), $small, |size| $scenario(size).1);
-                let (_, took) = $scenario($large);
+                assert_scales_linearly(stringify!($scenario), $start, |size| {
+                    (0..$repeat).map(|_| $scenario(size).1).sum()
+                });
+                let (_, took) = crate::index::timing::on_one_thread(|| $scenario($large));
                 assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
             }
         };
@@ -5540,7 +5569,8 @@ func routes() {
         timing_ten_thousand_handlers_and_registrations_are_read_in_linear_time,
         1_000,
         10_000,
-        |count| count
+        |count| count,
+        start = 8_000
     );
 
     fn scenario_returned_routers(count: usize) -> Search {
@@ -5561,7 +5591,8 @@ func routes() {
         timing_a_function_with_many_returned_routers_is_read_in_linear_time,
         600,
         5_000,
-        |_| 0
+        |_| 0,
+        start = 4_800
     );
 
     fn scenario_mount_chain(count: usize) -> Search {
@@ -5645,7 +5676,8 @@ func routes() {
         timing_ten_thousand_wrapped_handlers_are_read_in_linear_time,
         1_250,
         10_000,
-        |count| count
+        |count| count,
+        start = 10_000
     );
 
     fn scenario_mentioned_factories(count: usize) -> Search {
@@ -5669,7 +5701,8 @@ func routes() {
         timing_many_factories_with_one_name_that_are_mentioned_are_read_in_linear_time,
         600,
         5_000,
-        |_| 0
+        |_| 0,
+        start = 2_400
     );
 
     fn scenario_parents_of_one_router(count: usize) -> Search {
@@ -5695,7 +5728,8 @@ func routes() {
         timing_one_router_that_many_parents_mount_is_read_in_linear_time,
         600,
         5_000,
-        |_| 0
+        |_| 0,
+        start = 2_400
     );
 
     fn scenario_servemux_variables(count: usize) -> Search {
@@ -5716,7 +5750,8 @@ func routes() {
         timing_ten_thousand_servemux_variables_are_read_in_linear_time,
         1_250,
         10_000,
-        |count| count
+        |count| count,
+        start = 10_000
     );
 
     fn scenario_group_chain(count: usize) -> Search {
@@ -5738,7 +5773,8 @@ func routes() {
         timing_a_chain_of_twenty_thousand_groups_is_read_in_linear_time,
         2_500,
         20_000,
-        |count| count
+        |count| count,
+        start = 10_000
     );
 
     fn scenario_wildcard_pattern(count: usize) -> Search {
@@ -5757,7 +5793,9 @@ func routes() {
         timing_a_pattern_with_a_hundred_thousand_wildcards_is_read_in_linear_time,
         12_500,
         100_000,
-        |_| 1
+        |_| 1,
+        start = 100_000,
+        repeat = 24
     );
 
     fn scenario_conditional_group_returns(count: usize) -> Search {
@@ -5798,7 +5836,8 @@ func routes() {
         timing_two_long_method_lists_are_intersected_in_linear_time,
         12_500,
         100_000,
-        |count| count
+        |count| count,
+        start = 25_000
     );
 
     fn scenario_nested_gin_groups(count: usize) -> Search {
@@ -5820,7 +5859,8 @@ func routes() {
         timing_ten_thousand_nested_gin_groups_join_paths_in_linear_time,
         7_500,
         60_000,
-        |_| 1
+        |_| 1,
+        start = 15_000
     );
 
     fn scenario_alias_chain(count: usize) -> Search {
@@ -5844,7 +5884,8 @@ func routes() {
         timing_a_chain_of_forty_thousand_aliases_is_resolved_in_linear_time,
         12_500,
         100_000,
-        |_| 1
+        |_| 1,
+        start = 25_000
     );
 
     fn scenario_gorilla_routes(count: usize) -> Search {
@@ -5863,7 +5904,8 @@ func routes() {
         timing_many_gorilla_routes_are_ordered_in_near_linear_time,
         7_500,
         60_000,
-        |count| count
+        |count| count,
+        start = 15_000
     );
 
     fn scenario_slash_groups(count: usize) -> Search {
@@ -5904,7 +5946,8 @@ func routes() {
         timing_many_package_variables_and_functions_cost_linear_time,
         2_500,
         20_000,
-        |_| 1
+        |_| 1,
+        start = 20_000
     );
 
     fn scenario_functions_in_one_file(count: usize) -> Search {
@@ -5924,7 +5967,8 @@ func routes() {
         timing_ten_thousand_functions_in_one_file_are_read_in_linear_time,
         1_250,
         10_000,
-        |_| 0
+        |_| 0,
+        start = 5_000
     );
 
     fn scenario_files_that_call_one_factory(count: usize) -> Search {
@@ -5951,7 +5995,8 @@ func routes() {
         timing_five_thousand_files_that_call_one_factory_are_read_in_linear_time,
         600,
         5_000,
-        |_| 1
+        |_| 1,
+        start = 9_600
     );
 
     fn scenario_calls_of_one_factory(count: usize) -> Search {
@@ -5979,7 +6024,8 @@ func routes() {
         timing_ten_thousand_calls_of_one_factory_are_read_in_linear_time,
         1_250,
         10_000,
-        |count| count
+        |count| count,
+        start = 5_000
     );
 
     fn scenario_factory_chain(steps: usize) -> Search {
@@ -6003,7 +6049,9 @@ func routes() {
         timing_a_chain_of_factories_that_call_each_other_twice_is_read_in_linear_time,
         10,
         30,
-        |_| 1
+        |_| 1,
+        start = 320,
+        repeat = 8
     );
 
     fn scenario_nested_blocks(depth: usize) -> Search {
@@ -6025,7 +6073,8 @@ func routes() {
         timing_many_nested_blocks_with_net_http_routes_cost_linear_time,
         1_000,
         20_000,
-        |depth| depth
+        |depth| depth,
+        start = 16_000
     );
 
     fn scenario_deep_expression(count: usize) -> Search {
@@ -6044,7 +6093,8 @@ func routes() {
         timing_a_deep_expression_costs_linear_time,
         12_500,
         200_000,
-        |_| 1
+        |_| 1,
+        start = 200_000
     );
 
     fn scenario_method_chain(count: usize) -> Search {
@@ -6063,7 +6113,8 @@ func routes() {
         timing_a_long_method_chain_costs_linear_time,
         1_250,
         40_000,
-        |_| 0
+        |_| 0,
+        start = 40_000
     );
 
     #[test]
@@ -7651,8 +7702,12 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_openings_of_a_superclass_resolve_in_linear_time() {
-        let many_routes = many_openings_of_a_superclass_resolve_in_linear_time_at(10_000, 1_000);
-        let many_openings = many_openings_of_a_superclass_resolve_in_linear_time_at(10, 10_000);
+        let many_routes = crate::index::timing::on_one_thread(|| {
+            many_openings_of_a_superclass_resolve_in_linear_time_at(10_000, 1_000)
+        });
+        let many_openings = crate::index::timing::on_one_thread(|| {
+            many_openings_of_a_superclass_resolve_in_linear_time_at(10, 10_000)
+        });
         assert!(many_routes.as_secs() < 30, "{many_routes:?}");
         assert!(many_openings.as_secs() < 30, "{many_openings:?}");
     }
@@ -7737,7 +7792,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_actions_with_many_empty_openings_resolve_in_linear_time() {
-        let elapsed = many_actions_with_many_empty_openings_resolve_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            many_actions_with_many_empty_openings_resolve_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -7782,7 +7839,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_deep_chain_of_superclasses_resolves_in_linear_time() {
-        let elapsed = a_deep_chain_of_superclasses_resolves_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            a_deep_chain_of_superclasses_resolves_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -7930,7 +7989,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_callbacks_for_other_actions_resolve_in_linear_time() {
-        let elapsed = many_callbacks_for_other_actions_resolve_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            many_callbacks_for_other_actions_resolve_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -7966,7 +8027,8 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_engines_resolve_in_linear_time() {
-        let elapsed = many_engines_resolve_in_linear_time_at(5_000);
+        let elapsed =
+            crate::index::timing::on_one_thread(|| many_engines_resolve_in_linear_time_at(5_000));
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -8157,7 +8219,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_children_of_one_parent_resolve_in_linear_time() {
-        let elapsed = many_children_of_one_parent_resolve_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            many_children_of_one_parent_resolve_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -8298,7 +8362,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_nested_blocks_resolve_in_linear_time() {
-        let elapsed = many_nested_blocks_resolve_in_linear_time_at(2_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            many_nested_blocks_resolve_in_linear_time_at(2_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -8332,7 +8398,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_chain_without_the_action_resolves_in_linear_time() {
-        let elapsed = a_chain_without_the_action_resolves_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            a_chain_without_the_action_resolves_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -8454,7 +8522,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_nested_conditions_resolve_in_linear_time() {
-        let elapsed = many_nested_conditions_resolve_in_linear_time_at(2_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            many_nested_conditions_resolve_in_linear_time_at(2_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -8598,7 +8668,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_literal_when_branches_resolve_in_linear_time() {
-        let elapsed = many_literal_when_branches_resolve_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            many_literal_when_branches_resolve_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -8637,7 +8709,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_chain_of_never_callbacks_resolves_in_linear_time() {
-        let elapsed = a_chain_of_never_callbacks_resolves_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            a_chain_of_never_callbacks_resolves_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -8676,7 +8750,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_chain_of_show_callbacks_resolves_in_linear_time() {
-        let elapsed = a_chain_of_show_callbacks_resolves_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            a_chain_of_show_callbacks_resolves_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -8776,7 +8852,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_prepend_callbacks_resolve_in_linear_time() {
-        let elapsed = many_prepend_callbacks_resolve_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            many_prepend_callbacks_resolve_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -8848,7 +8926,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_an_alternating_chain_resolves_in_linear_time() {
-        let elapsed = an_alternating_chain_resolves_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            an_alternating_chain_resolves_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -8879,7 +8959,8 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_nested_scopes_resolve_in_linear_time() {
-        let elapsed = nested_scopes_resolve_in_linear_time_at(2_000);
+        let elapsed =
+            crate::index::timing::on_one_thread(|| nested_scopes_resolve_in_linear_time_at(2_000));
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -9103,8 +9184,8 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_nested_scopes_without_routes_resolve_in_linear_time() {
-        for segment in ["/a", "/a(x)"] {
-            assert_scales_linearly(segment, 15_000, |size| {
+        for (segment, start) in [("/a", 30_000), ("/a(x)", 60_000)] {
+            assert_scales_linearly(segment, start, |size| {
                 nested_scopes_without_routes_at(size, segment)
             });
         }
@@ -9143,8 +9224,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_nested_blocks_of_each_kind_resolve_in_linear_time() {
-        for open in NESTING_OPENERS {
-            assert_scales_linearly(open, 15_000, |size| {
+        let starts = [60_000, 60_000, 30_000, 120_000];
+        for (open, start) in NESTING_OPENERS.into_iter().zip(starts) {
+            assert_scales_linearly(open, start, |size| {
                 nested_blocks_with_one_route_at(size, open).1
             });
         }
@@ -9168,11 +9250,11 @@ func routes() {
     #[ignore = "timing: run in release"]
     fn timing_deep_blocks_and_chains_resolve_in_linear_time() {
         for (kind, depth) in [
-            ("constraints", 2_000),
-            ("module", 2_000),
-            ("unique", 4_000),
-            ("plain", 4_000),
-            ("alternating", 4_000),
+            ("constraints", 32_000),
+            ("module", 32_000),
+            ("unique", 8_000),
+            ("plain", 8_000),
+            ("alternating", 8_000),
         ] {
             assert_scales_linearly(kind, depth, |size| {
                 deep_blocks_and_chains_resolve_in_linear_time(kind, size)
@@ -9696,7 +9778,7 @@ func routes() {
     #[ignore = "timing: run in release"]
     fn timing_one_callback_with_many_names_and_actions_resolves_in_linear_time() {
         for shape in 0..3 {
-            assert_scales_linearly(&format!("shape {shape}"), 10_000, |size| {
+            assert_scales_linearly(&format!("shape {shape}"), 20_000, |size| {
                 one_big_callback_at(size, shape)
             });
         }
@@ -9803,13 +9885,13 @@ func routes() {
     fn timing_many_actions_over_a_chain_resolve_in_linear_time() {
         assert_scales_linearly(
             "empty chain",
-            4_000,
+            8_000,
             chain_of_empty_classes_with_many_actions,
         );
-        assert_scales_linearly("one class", 4_000, |size| listed_callbacks_at(size, false));
+        assert_scales_linearly("one class", 8_000, |size| listed_callbacks_at(size, false));
         assert_scales_linearly("chain", 4_000, |size| listed_callbacks_at(size, true));
         for in_module in [true, false] {
-            assert_scales_linearly("long names", 2_000, |size| {
+            assert_scales_linearly("long names", 32_000, |size| {
                 long_names_at(size, 400_000, in_module)
             });
         }
@@ -9908,7 +9990,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_routes_from_the_deepest_class_resolve_in_linear_time() {
-        let elapsed = routes_from_the_deepest_class_resolve_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            routes_from_the_deepest_class_resolve_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -9993,7 +10077,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_same_named_controllers_in_one_file_resolve_in_linear_time() {
-        let elapsed = same_named_controllers_in_one_file_resolve_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            same_named_controllers_in_one_file_resolve_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -10074,7 +10160,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_methods_of_one_controller_resolve_in_linear_time() {
-        let elapsed = many_methods_of_one_controller_resolve_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            many_methods_of_one_controller_resolve_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
@@ -10118,7 +10206,9 @@ func routes() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_routes_and_controllers_resolve_in_linear_time() {
-        let elapsed = many_routes_and_controllers_resolve_in_linear_time_at(10_000);
+        let elapsed = crate::index::timing::on_one_thread(|| {
+            many_routes_and_controllers_resolve_in_linear_time_at(10_000)
+        });
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 

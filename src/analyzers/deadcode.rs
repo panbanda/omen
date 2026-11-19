@@ -2322,7 +2322,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_the_uses_of_a_deep_expression_are_read_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("terms", 5_000, |size| {
+        crate::index::timing::assert_scales_linearly("terms", 320_000, |size| {
             let content = format!("function f(x) {{ return x{}; }}\n", " + x".repeat(size));
             let result = crate::parser::Parser::new()
                 .parse(
@@ -5188,7 +5188,7 @@ mod go_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_interface_methods_of_many_types_are_found_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("types", 4_000, interface_methods_found_at);
+        crate::index::timing::assert_scales_linearly("types", 64_000, interface_methods_found_at);
     }
     use crate::config::Config;
     use crate::core::FileSet;

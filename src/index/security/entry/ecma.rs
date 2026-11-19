@@ -2944,7 +2944,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_assigned_variables_resolve_in_linear_time() {
-        assert_scales_linearly("assigned variables", 2_000, many_assigned_variables);
+        assert_scales_linearly("assigned variables", 8_000, many_assigned_variables);
     }
 
     fn many_fields(count: usize) -> std::time::Duration {
@@ -2971,7 +2971,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_fields_of_one_class_resolve_in_linear_time() {
-        assert_scales_linearly("fields of one class", 4_000, many_fields);
+        assert_scales_linearly("fields of one class", 8_000, many_fields);
     }
 
     /// Each route as `METHOD path handler [guards]`.

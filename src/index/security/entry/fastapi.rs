@@ -1416,7 +1416,7 @@ mod tests {
         assert_scales_linearly("one route", 20_000, |count| {
             a_chain_with_one_route_at(count, true)
         });
-        assert_scales_linearly("no route", 20_000, |count| {
+        assert_scales_linearly("no route", 40_000, |count| {
             a_chain_with_one_route_at(count, false)
         });
     }

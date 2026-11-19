@@ -1647,7 +1647,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_imports_of_a_module_of_many_roots_resolve_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("roots", 2_000, |size| {
+        crate::index::timing::assert_scales_linearly("roots", 16_000, |size| {
             imports_of_a_module_of_many_roots_resolve_at(size, size)
         });
     }
@@ -2206,7 +2206,7 @@ mod typescript_timing_tests {
     fn timing_branching_extends_with_a_cycle_resolves_in_linear_time() {
         assert_scales_linearly(
             "branching extends",
-            1_000,
+            32_000,
             branching_extends_with_a_cycle_at,
         );
     }
@@ -2219,7 +2219,7 @@ mod typescript_timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_chain_of_extends_resolves_in_linear_time() {
-        assert_scales_linearly("chain of extends", 500, chain_of_extends_at);
+        assert_scales_linearly("chain of extends", 8_000, chain_of_extends_at);
     }
 
     #[test]
@@ -2230,7 +2230,7 @@ mod typescript_timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_path_patterns_resolve_in_linear_time() {
-        assert_scales_linearly("path patterns", 2_000, path_patterns_at);
+        assert_scales_linearly("path patterns", 8_000, path_patterns_at);
     }
 
     #[test]
@@ -2241,7 +2241,7 @@ mod typescript_timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_export_patterns_resolve_in_linear_time() {
-        assert_scales_linearly("export patterns", 2_000, export_patterns_at);
+        assert_scales_linearly("export patterns", 4_000, export_patterns_at);
     }
 
     #[test]
@@ -2252,6 +2252,6 @@ mod typescript_timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_patterns_with_one_prefix_resolve_in_linear_time() {
-        assert_scales_linearly("patterns with one prefix", 1_000, same_prefix_patterns_at);
+        assert_scales_linearly("patterns with one prefix", 4_000, same_prefix_patterns_at);
     }
 }

@@ -913,8 +913,9 @@ mod tests {
     }
 
     /// `depth` nested inline handlers that close at one byte, and `depth` bytes after it that
-    /// only the outermost handler contains.
-    fn innermost_after_a_deep_nest(depth: usize) -> std::time::Duration {
+    /// only the outermost handler contains. The lookups of the bytes run `rounds` times, because
+    /// one round is too fast to measure.
+    fn innermost_after_a_deep_nest(depth: usize, rounds: usize) -> std::time::Duration {
         use crate::index::model::Span;
         use crate::index::security::entry::{EntryBasis, EntryKind, InlineHandler};
         let entries: Vec<EntryPoint> = (0..depth)
@@ -950,26 +951,26 @@ mod tests {
             .collect();
         let regions = InlineRegions::new(&entries, |position, _| Some(position));
         let start = crate::index::timing::Stopwatch::start();
-        for byte in depth + 1..2 * depth + 1 {
-            assert_eq!(regions.innermost("a.ts", None, byte), Some(0));
+        for _ in 0..rounds {
+            for byte in depth + 1..2 * depth + 1 {
+                assert_eq!(regions.innermost("a.ts", None, byte), Some(0));
+            }
+            assert_eq!(regions.innermost("a.ts", None, depth), Some(depth - 1));
         }
-        assert_eq!(regions.innermost("a.ts", None, depth), Some(depth - 1));
         start.elapsed()
     }
 
     #[test]
     fn a_byte_after_a_nest_belongs_to_the_handler_around_the_nest() {
-        innermost_after_a_deep_nest(10);
+        innermost_after_a_deep_nest(10, 1);
     }
 
     #[test]
     #[ignore = "timing test: run in release with --ignored"]
     fn timing_bytes_after_a_deep_nest_of_inline_handlers_resolve_in_linear_time() {
-        crate::index::timing::assert_scales_linearly(
-            "bytes after a nest",
-            20_000,
-            innermost_after_a_deep_nest,
-        );
+        crate::index::timing::assert_scales_linearly("bytes after a nest", 80_000, |depth| {
+            innermost_after_a_deep_nest(depth, 64)
+        });
     }
 
     #[test]

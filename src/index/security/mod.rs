@@ -341,7 +341,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_bare_calls_of_locals_scale_linearly() {
-        crate::index::timing::assert_scales_linearly("bare calls", 20_000, many_bare_calls_at);
+        crate::index::timing::assert_scales_linearly("bare calls", 80_000, many_bare_calls_at);
     }
 
     fn found(language: Language, files: &[(&str, &str)]) -> Vec<Found> {

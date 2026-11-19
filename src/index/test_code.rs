@@ -1437,7 +1437,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_deeply_nested_cfg_predicate_is_read_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("nested cfg", 400_000, |depth| {
+        crate::index::timing::assert_scales_linearly("nested cfg", 6_400_000, |depth| {
             let predicate = nested_cfg(depth);
             let started = crate::index::timing::Stopwatch::start();
             assert!(cfg_requires_test(&predicate));
@@ -2274,7 +2274,7 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_rust_attributes_before_one_test_are_read_in_linear_time() {
-        assert_scales_linearly("attributes", 20_000, |size| {
+        assert_scales_linearly("attributes", 80_000, |size| {
             let source = format!("{}#[test]\nfn check() {{}}\n", "#[inline]\n".repeat(size));
             time_of_marks(Language::Rust, "src/lib.rs", &source)
         });
@@ -2283,7 +2283,7 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_rust_tests_in_one_module_are_read_in_linear_time() {
-        assert_scales_linearly("tests", 20_000, |size| {
+        assert_scales_linearly("tests", 80_000, |size| {
             let source: String = (0..size)
                 .map(|position| format!("#[test]\nfn check_{position}() {{}}\n"))
                 .collect();
@@ -2294,7 +2294,7 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_c_test_macros_are_read_in_linear_time() {
-        assert_scales_linearly("macros", 20_000, |size| {
+        assert_scales_linearly("macros", 80_000, |size| {
             let source: String = (0..size)
                 .map(|position| format!("TEST(Suite, Name{position}) {{\n}}\n"))
                 .collect();
@@ -2305,7 +2305,7 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_tests_in_deeply_nested_anonymous_classes_are_read_in_linear_time() {
-        assert_scales_linearly("java", 2_000, |depth| {
+        assert_scales_linearly("java", 128_000, |depth| {
             let source = format!(
                 "class A {{ void m() {{ {}{} }} }}\n",
                 "new Object() { @Test void t() { ".repeat(depth),
@@ -2318,7 +2318,7 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_tests_in_deeply_nested_ruby_blocks_are_read_in_linear_time() {
-        assert_scales_linearly("ruby", 2_000, |depth| {
+        assert_scales_linearly("ruby", 128_000, |depth| {
             let source = format!(
                 "class ATest < Minitest::Test\n{}{}end\n",
                 "run do\ndef test_a\nend\n".repeat(depth),
@@ -2331,7 +2331,7 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_tests_in_deeply_nested_structs_are_read_in_linear_time() {
-        assert_scales_linearly("csharp", 2_000, |depth| {
+        assert_scales_linearly("csharp", 64_000, |depth| {
             let source = format!(
                 "{}{}",
                 "struct S { [Test] void M() {} ".repeat(depth),
@@ -2344,7 +2344,7 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_methods_of_a_class_with_many_bases_are_read_in_linear_time() {
-        assert_scales_linearly("python", 10_000, |size| {
+        assert_scales_linearly("python", 160_000, |size| {
             let bases: Vec<String> = (0..size)
                 .map(|position| format!("Base{position}"))
                 .collect();
@@ -2359,7 +2359,7 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_methods_of_a_class_with_a_long_superclass_are_read_in_linear_time() {
-        assert_scales_linearly("ruby", 20_000, |size| {
+        assert_scales_linearly("ruby", 320_000, |size| {
             let methods: String = (0..size)
                 .map(|position| format!("def test_{position}\nend\n"))
                 .collect();

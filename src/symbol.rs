@@ -1337,6 +1337,6 @@ mod timing {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_lookup_failures_are_linear_in_the_number_of_definitions() {
-        crate::index::timing::assert_scales_linearly("definitions", 5_000, lookups);
+        crate::index::timing::assert_scales_linearly("definitions", 80_000, lookups);
     }
 }

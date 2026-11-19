@@ -164,14 +164,8 @@ fn functions_of(text: &str) -> std::collections::HashMap<&str, String> {
     let mut functions: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
     let mut current: Option<&str> = None;
     for line in text.lines() {
-        let declaration = line
-            .trim_start()
-            .trim_start_matches("pub(crate) ")
-            .trim_start_matches("pub(super) ")
-            .trim_start_matches("pub ");
-        if let Some(rest) = declaration.strip_prefix("fn ") {
-            let end = rest.find(['(', '<']).unwrap_or(rest.len());
-            current = Some(&rest[..end]);
+        if let Some(name) = declared_name(line) {
+            current = Some(name);
         }
         if let Some(name) = current {
             let body = functions.entry(name).or_default();
@@ -182,24 +176,35 @@ fn functions_of(text: &str) -> std::collections::HashMap<&str, String> {
     functions
 }
 
-/// The text of the arguments of each call of `assert_scales_linearly` in `text`.
-fn timing_calls(text: &str) -> Vec<&str> {
-    let call = "assert_scales_linearly(";
+/// The byte range of the arguments of each call of `function` in `text`.
+fn arguments_of(text: &str, function: &str) -> Vec<std::ops::Range<usize>> {
+    let call = format!("{function}(");
     let mut calls = Vec::new();
-    for (start, _) in text.match_indices(call) {
-        let arguments = &text[start + call.len()..];
+    for (start, _) in text.match_indices(&call) {
+        let first = start + call.len();
         let mut depth = 1;
-        let end = arguments.char_indices().find_map(|(position, character)| {
-            match character {
-                '(' => depth += 1,
-                ')' => depth -= 1,
-                _ => {}
-            }
-            (depth == 0).then_some(position)
-        });
-        calls.push(&arguments[..end.unwrap_or(arguments.len())]);
+        let end = text[first..]
+            .char_indices()
+            .find_map(|(position, character)| {
+                match character {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(first + position)
+            })
+            .unwrap_or(text.len());
+        calls.push(first..end);
     }
     calls
+}
+
+/// The text of the arguments of each call of `assert_scales_linearly` in `text`.
+fn timing_calls(text: &str) -> Vec<&str> {
+    arguments_of(text, "assert_scales_linearly")
+        .into_iter()
+        .map(|range| &text[range])
+        .collect()
 }
 
 /// The places in `text` where a timing case of `assert_scales_linearly`
@@ -279,6 +284,127 @@ fn test_timing_cases_do_not_measure_wall_time() {
     assert!(
         wrong.is_empty(),
         "use `Stopwatch` in place of `Instant`:\n{}",
+        wrong.join("\n")
+    );
+}
+
+#[test]
+fn test_stopwatch_outside_a_run_of_one_thread_is_found() {
+    let text = "fn case_at(size: usize) -> Duration {\n    let started = Stopwatch::start();\n    started.elapsed()\n}\n\nfn helper(size: usize) -> Duration {\n    case_at(size)\n}\n\n#[test]\n#[ignore = \"timing: run in release\"]\nfn timing_inside() {\n    assert_scales_linearly(\"case\", 10, |size| helper(size));\n    let took = on_one_thread(|| case_at(100));\n}\n\n#[test]\n#[ignore = \"timing: run in release\"]\nfn timing_outside() {\n    assert_scales_linearly(\"case\", 10, |size| helper(size));\n    assert!(helper(100) < LIMIT);\n}\n\n#[test]\nfn untimed() {\n    helper(10);\n}\n\nmacro_rules! timing {\n    ($scenario:ident, $test:ident) => {\n        #[test]\n        #[ignore = \"timing: run in release\"]\n        fn $test() {\n            let (_, took) = $scenario(100);\n        }\n    };\n}\n";
+    assert_eq!(
+        stopwatches_outside_one_thread(text),
+        ["fn $test", "fn timing_outside"]
+    );
+}
+
+/// The timing tests of `text` that measure with `Stopwatch` outside a run of
+/// `assert_scales_linearly` or `on_one_thread`.
+fn stopwatches_outside_one_thread(text: &str) -> Vec<String> {
+    let functions = functions_of(text);
+    let mut measuring: std::collections::HashSet<&str> = functions
+        .iter()
+        .filter(|(_, body)| body.contains("Stopwatch::start"))
+        .map(|(name, _)| *name)
+        .collect();
+    loop {
+        let callers: Vec<&str> = functions
+            .iter()
+            .filter(|(name, body)| {
+                !measuring.contains(*name)
+                    && called_names(body).any(|called| measuring.contains(called))
+            })
+            .map(|(name, _)| *name)
+            .collect();
+        if callers.is_empty() {
+            break;
+        }
+        measuring.extend(callers);
+    }
+    let mut timing_tests = Vec::new();
+    let mut marked = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("#[ignore = \"timing") {
+            marked = true;
+        } else if let Some(name) = declared_name(line) {
+            if marked {
+                timing_tests.push(name);
+            }
+            marked = false;
+        }
+    }
+    let mut found: Vec<String> = timing_tests
+        .into_iter()
+        .filter(|name| {
+            let mut rest = functions[name].clone();
+            for function in ["assert_scales_linearly", "on_one_thread"] {
+                for range in arguments_of(&rest.clone(), function) {
+                    rest.replace_range(range.clone(), &" ".repeat(range.len()));
+                }
+            }
+            rest.contains("Stopwatch::start")
+                || called_names(&rest).any(|called| {
+                    called != *name && (called.starts_with('$') || measuring.contains(called))
+                })
+        })
+        .map(|name| format!("fn {name}"))
+        .collect();
+    found.sort();
+    found
+}
+
+/// The name of the function that `line` declares.
+fn declared_name(line: &str) -> Option<&str> {
+    let declaration = line
+        .trim_start()
+        .trim_start_matches("pub(crate) ")
+        .trim_start_matches("pub(super) ")
+        .trim_start_matches("pub ");
+    let rest = declaration.strip_prefix("fn ")?;
+    let end = rest.find(['(', '<']).unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// The names that `text` calls, with the `$` of a macro variable.
+fn called_names(text: &str) -> impl Iterator<Item = &str> {
+    text.match_indices('(').filter_map(|(open, _)| {
+        let before = &text[..open];
+        let start = before
+            .rfind(|character: char| {
+                !(character.is_alphanumeric() || character == '_' || character == '$')
+            })
+            .map_or(0, |position| position + 1);
+        (start < open).then(|| &text[start..open])
+    })
+}
+
+/// `Stopwatch` measures the processor time of its thread. Outside a run of one
+/// thread, the parallel work of a case is on other threads, and the time
+/// misses it.
+#[test]
+fn test_timing_cases_measure_on_one_thread() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut wrong = Vec::new();
+    for entry in ignore::WalkBuilder::new(root.join("src"))
+        .add(root.join("tests"))
+        .build()
+        .flatten()
+    {
+        let path = entry.path();
+        let own = path.ends_with("index/timing.rs") || path.ends_with("index/timing_tests.rs");
+        if own || path.extension().is_none_or(|extension| extension != "rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(path).expect("a source file");
+        for place in stopwatches_outside_one_thread(&text) {
+            wrong.push(format!(
+                "{}: {place}",
+                path.strip_prefix(root).unwrap_or(path).display()
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "measure in `assert_scales_linearly` or `on_one_thread`:\n{}",
         wrong.join("\n")
     );
 }

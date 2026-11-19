@@ -304,7 +304,7 @@ fn test_chain_of_import_names_keeps_the_last_name() {
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_chain_of_import_names_scales_linearly() {
-    assert_scales_linearly("chain of import names", 20_000, chain_of_import_names_at);
+    assert_scales_linearly("chain of import names", 320_000, chain_of_import_names_at);
 }
 
 /// One function uses `size` functions as values. With `one_name`, each use
