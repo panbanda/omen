@@ -20,10 +20,13 @@ use super::{
     Receiver, ReferenceKind, Resolver, Status, SymbolKind,
 };
 use crate::core::Language;
-use crate::index::calls::required_type;
+use crate::index::calls::{one_result, required_type};
+
+/// The resolution of the value of a Go local name stops at this depth.
+const MAXIMUM_DEPTH: usize = 4;
 
 /// The version of the lists in this module.
-pub const LIST_VERSION: u32 = 1;
+pub const LIST_VERSION: u32 = 2;
 
 /// A list of names, or the reason why the rule does not apply to the language.
 #[derive(Debug, Clone, Copy)]
@@ -144,9 +147,48 @@ const PYTHON_TYPES: &[&str] = &[
     "bytes", "dict", "float", "int", "list", "set", "str", "tuple",
 ];
 
+/// The predeclared functions of Go, and the predeclared types, whose call is a conversion.
 const GO_BUILTINS: &[&str] = &[
-    "append", "cap", "clear", "close", "complex", "copy", "delete", "imag", "len", "make", "max",
-    "min", "new", "panic", "print", "println", "real", "recover",
+    "any",
+    "append",
+    "bool",
+    "byte",
+    "cap",
+    "clear",
+    "close",
+    "comparable",
+    "complex",
+    "complex128",
+    "complex64",
+    "copy",
+    "delete",
+    "error",
+    "float32",
+    "float64",
+    "imag",
+    "int",
+    "int16",
+    "int32",
+    "int64",
+    "int8",
+    "len",
+    "make",
+    "max",
+    "min",
+    "new",
+    "panic",
+    "print",
+    "println",
+    "real",
+    "recover",
+    "rune",
+    "string",
+    "uint",
+    "uint16",
+    "uint32",
+    "uint64",
+    "uint8",
+    "uintptr",
 ];
 
 const RUST_BUILTINS: &[&str] = &["Err", "Ok", "Some", "drop"];
@@ -656,18 +698,20 @@ fn declared_head(text: &str) -> Option<(Option<String>, String)> {
     (!name.is_empty()).then_some((qualifier, name))
 }
 
-/// The place of a call: its file, the definitions that contain it, and its start byte.
+/// The place of a call: its file, the definitions that contain it, and its
+/// start byte, with the depth of the resolution that asks for it.
 #[derive(Clone, Copy)]
 struct Scope<'s> {
     file: usize,
     chain: &'s [Id],
     start: usize,
+    depth: usize,
 }
 
 impl<'a> Resolver<'a> {
     /// The outcome `External` when the source shows that the call names a
     /// definition outside the repository. The caller gives only a call that has no candidate.
-    pub(super) fn external(&self, file: usize, position: usize) -> Option<Outcome> {
+    pub(super) fn external(&self, file: usize, position: usize, depth: usize) -> Option<Outcome> {
         let facts = &self.files[file];
         let reference = &facts.references[position];
         let rules = rules(facts.language);
@@ -676,6 +720,7 @@ impl<'a> Resolver<'a> {
             file,
             chain: &chain,
             start: facts.reference_facts[position].start_byte,
+            depth,
         };
         let name = reference.name.as_str();
         let evidence = if reference.kind == ReferenceKind::Construct {
@@ -793,6 +838,16 @@ impl<'a> Resolver<'a> {
     }
 
     fn external_bare(&self, scope: Scope<'_>, name: &str, rules: Rules) -> bool {
+        // Only a local name, an import, or a definition of the package hides
+        // a Go builtin. A dot import gives only exported names, and no
+        // builtin is exported.
+        if self.files[scope.file].language == Language::Go {
+            return rules.bare.contains(name)
+                && self.local_in_scope(scope, name).is_none()
+                && self.binding_of(scope.file, name).is_none()
+                && !self.is_rebound(scope.file, name)
+                && !self.has_package_top_level(name, scope.file);
+        }
         if !self.is_free_name(scope, name) {
             return false;
         }
@@ -856,6 +911,15 @@ impl<'a> Resolver<'a> {
         name: &str,
         rules: Rules,
     ) -> bool {
+        if self.files[scope.file].language == Language::Go {
+            if let Some(local) = self.local_in_scope(scope, receiver) {
+                return self
+                    .go_local_type(scope, local)
+                    .is_some_and(|(text, text_file)| {
+                        self.is_external_go_type(text_file, text, name)
+                    });
+            }
+        }
         if let Some(local) = self.local_in_scope(scope, receiver) {
             return local
                 .name
@@ -870,6 +934,44 @@ impl<'a> Resolver<'a> {
             .is_some_and(|binding| self.is_external_binding(binding))
             || (self.is_external_name(scope, receiver, rules)
                 && !self.has_callable_named(name, scope.file))
+    }
+
+    /// The text of the type of a Go local name and the file of the text: the
+    /// declared type, or the declared result of the one function of the
+    /// repository whose call gives the value.
+    fn go_local_type(&self, scope: Scope<'_>, local: &'a Local) -> Option<(&'a str, usize)> {
+        let file = scope.file;
+        if let Some(declared) = local.name.type_name.as_deref() {
+            return Some((declared, file));
+        }
+        if local.name.element || scope.depth > MAXIMUM_DEPTH {
+            return None;
+        }
+        let position = *self.references_at(file, local.name.value_start?).first()?;
+        let outcome = self.resolve(file, position, scope.depth + 1);
+        let [callee] = outcome.candidates.as_slice() else {
+            return None;
+        };
+        if outcome.status != Status::UniqueCandidate {
+            return None;
+        }
+        let declared = self.facts(*callee).return_type.as_deref()?;
+        Some((one_result(declared, local.name.result_index)?, callee.0))
+    }
+
+    /// A Go type of a package outside the repository, or `error` with its
+    /// method `Error`. Go has no extension methods, thus a method of the
+    /// repository with the name of the call is not a method of the type.
+    fn is_external_go_type(&self, file: usize, text: &str, call: &str) -> bool {
+        let Some((qualifier, name)) = declared_head(text) else {
+            return false;
+        };
+        match qualifier {
+            Some(qualifier) => self
+                .binding_of(file, &qualifier)
+                .is_some_and(|binding| self.is_external_binding(binding)),
+            None => name == "error" && call == "Error" && !self.has_package_top_level(&name, file),
+        }
     }
 
     /// A member of the repository with the name `call` can belong to a type
@@ -1045,7 +1147,7 @@ mod tests {
 
     #[test]
     fn test_list_version_is_one() {
-        assert_eq!(LIST_VERSION, 1);
+        assert_eq!(LIST_VERSION, 2);
     }
 
     #[test]
@@ -1132,6 +1234,52 @@ mod tests {
         let files = [("main.go", main), ("util.go", other)];
         assert!(external(&files, "main.go", "len"));
         assert!(!external(&files, "main.go", "copy"));
+    }
+
+    /// Only a local name or a definition of the package hides a Go builtin.
+    /// A method, a definition in a different package, or a definition in a
+    /// different language does not. A conversion to a predeclared type is a
+    /// call of a definition outside the repository.
+    #[test]
+    fn test_go_builtin_is_hidden_only_in_its_package() {
+        let main = "package main\n\nfunc run(items []int, value int) string {\n\titems = append(items, 1)\n\t_ = int64(value)\n\treturn string(rune(value))\n}\n";
+        let files = [
+            ("go.mod", "module example.com/m\n"),
+            ("main.go", main),
+            ("list/list.go", "package list\n\ntype List struct{}\n\nfunc (l *List) append() {}\n\nfunc string() {}\n"),
+            ("web/list.js", "function append() {}\n"),
+        ];
+        assert!(external(&files, "main.go", "append"));
+        assert!(external(&files, "main.go", "int64"));
+        assert!(external(&files, "main.go", "string"));
+        assert!(external(&files, "main.go", "rune"));
+        let hidden = [
+            ("go.mod", "module example.com/m\n"),
+            ("main.go", main),
+            ("util.go", "package main\n\ntype int64 int\n\nfunc append(items []int, value int) []int { return items }\n"),
+        ];
+        assert!(!external(&hidden, "main.go", "append"));
+        assert!(!external(&hidden, "main.go", "int64"));
+        assert!(external(&hidden, "main.go", "string"));
+        let local = "package main\n\nfunc run(string func() int) int {\n\treturn string()\n}\n";
+        assert!(!external(&[("main.go", local)], "main.go", "string"));
+    }
+
+    /// Go has no extension methods: a method of the repository cannot be a
+    /// method of a type of a different package. `error` has the method `Error`.
+    #[test]
+    fn test_go_method_of_an_external_type_with_a_repository_method_of_the_name() {
+        let main = "package main\n\nimport \"net/http\"\n\nfunc load() error { return nil }\n\nfunc run(w http.ResponseWriter, failure error) string {\n\tw.Write(nil)\n\terr := load()\n\t_ = err.Error()\n\treturn failure.Error()\n}\n";
+        let files = [
+            ("go.mod", "module example.com/m\n"),
+            ("main.go", main),
+            (
+                "errs/errs.go",
+                "package errs\n\ntype Missing struct{}\n\nfunc (m Missing) Error() string { return \"\" }\n\nfunc (m Missing) Write(data []byte) {}\n",
+            ),
+        ];
+        assert!(external(&files, "main.go", "Write"));
+        assert!(external(&files, "main.go", "Error"));
     }
 
     #[test]

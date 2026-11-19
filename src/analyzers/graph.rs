@@ -583,6 +583,32 @@ mod tests {
         );
     }
 
+    /// An import of a Go package does not give its `_test.go` files. Thus a
+    /// test that imports a package which imports the tested package is not
+    /// a cycle.
+    #[test]
+    fn test_go_import_gives_no_edge_to_a_test_file() {
+        let analysis = analyze_fixture(&[
+            ("go.mod", "module example.com/shop\n"),
+            ("a/a.go", "package a\n\nfunc A() {}\n"),
+            (
+                "a/a_test.go",
+                "package a\n\nimport \"example.com/shop/b\"\n\nfunc TestA() { b.B() }\n",
+            ),
+            (
+                "b/b.go",
+                "package b\n\nimport \"example.com/shop/a\"\n\nfunc B() { a.A() }\n",
+            ),
+        ]);
+        let edges: Vec<(&str, &str)> = analysis
+            .edges
+            .iter()
+            .map(|edge| (edge.from.as_str(), edge.to.as_str()))
+            .collect();
+        assert_eq!(edges, [("a/a_test.go", "b/b.go"), ("b/b.go", "a/a.go")]);
+        assert!(analysis.cycles.is_empty(), "{:?}", analysis.cycles);
+    }
+
     #[test]
     fn test_graph_and_smells_agree_on_edges_and_cycles() {
         // graph and smells must build the SAME edge set -- not just the same

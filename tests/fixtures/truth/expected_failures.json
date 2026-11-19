@@ -1,1 +1,32 @@
-[]
+[
+  {
+    "id": "go/generic_methods/calls/generic_method/no_missed_edge",
+    "reason": "no edge to flash.go:Error:5",
+    "tracking": "tree-sitter-go 0.25.0 does not parse a method with type parameters"
+  },
+  {
+    "id": "go/generic_methods/symbols/flash_error/container",
+    "reason": "flash.go:Error:5 was not extracted",
+    "tracking": "tree-sitter-go 0.25.0 does not parse a method with type parameters"
+  },
+  {
+    "id": "go/generic_methods/symbols/flash_error/exported",
+    "reason": "flash.go:Error:5 was not extracted",
+    "tracking": "tree-sitter-go 0.25.0 does not parse a method with type parameters"
+  },
+  {
+    "id": "go/generic_methods/symbols/flash_error/found",
+    "reason": "flash.go:Error:5 was not extracted",
+    "tracking": "tree-sitter-go 0.25.0 does not parse a method with type parameters"
+  },
+  {
+    "id": "go/generic_methods/symbols/flash_error/kind",
+    "reason": "flash.go:Error:5 was not extracted",
+    "tracking": "tree-sitter-go 0.25.0 does not parse a method with type parameters"
+  },
+  {
+    "id": "go/generic_methods/symbols/flash_error/range",
+    "reason": "flash.go:Error:5 was not extracted",
+    "tracking": "tree-sitter-go 0.25.0 does not parse a method with type parameters"
+  }
+]
