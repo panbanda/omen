@@ -745,8 +745,11 @@ fn is_jump_without_label(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
 /// The number of loops that a PHP `break` or `continue` leaves, such as 2 in
 /// `break 2`, `break (2)`, or `break 0b10`.
 fn php_jump_level(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<u64> {
+    let mut node = node;
+    while node.kind() == "parenthesized_expression" {
+        node = node.named_child(0)?;
+    }
     match node.kind() {
-        "parenthesized_expression" => php_jump_level(node.named_child(0)?, source),
         "integer" => {
             let text = node.utf8_text(source).ok()?.replace('_', "").to_lowercase();
             let (digits, radix) = if let Some(hex) = text.strip_prefix("0x") {
@@ -2359,6 +2362,21 @@ fn drain(v: &mut Vec<i32>) {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// The parentheses around a PHP jump level can be nested to any depth.
+    #[test]
+    fn test_php_jump_level_in_deeply_nested_parentheses() {
+        use crate::parser::deep;
+        let code = format!(
+            "<?php\nfunction f() {{ while (1) {{ while (1) {{ break {}; }} }} }}\n",
+            deep::nest("(", "2", ")")
+        );
+        let cognitive = deep::on_small_stack(move || {
+            let result = parse_and_analyze(code.as_bytes(), Language::Php, "a.php");
+            result.functions[0].metrics.cognitive
+        });
+        assert_eq!(cognitive, 4);
     }
 
     /// The walk keeps the nesting depth of each tree level. A tree deeper

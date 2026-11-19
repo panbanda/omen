@@ -942,12 +942,17 @@ fn calculate_lcom(methods: &[MethodInfo]) -> u32 {
     components
 }
 
-/// DFS for connected components.
-fn dfs(v: usize, adj: &[Vec<usize>], visited: &mut [bool]) {
-    visited[v] = true;
-    for &u in &adj[v] {
-        if !visited[u] {
-            dfs(u, adj, visited);
+/// Marks each method of the component of `start`. The search keeps its own
+/// stack, because a chain of methods can be as long as the class.
+fn dfs(start: usize, adj: &[Vec<usize>], visited: &mut [bool]) {
+    visited[start] = true;
+    let mut pending = vec![start];
+    while let Some(v) = pending.pop() {
+        for &u in &adj[v] {
+            if !visited[u] {
+                visited[u] = true;
+                pending.push(u);
+            }
         }
     }
 }
@@ -1117,6 +1122,28 @@ pub struct Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A chain of methods, each calling the next, is one connected component
+    /// however long it is.
+    #[test]
+    fn test_lcom_of_a_long_chain_of_calls() {
+        let components = crate::parser::deep::on_small_stack(|| {
+            let methods: Vec<MethodInfo> = (0..crate::parser::deep::DEPTH)
+                .map(|position| MethodInfo {
+                    name: format!("m{position}"),
+                    complexity: 1,
+                    used_fields: HashSet::new(),
+                    calls: if position + 1 < crate::parser::deep::DEPTH {
+                        vec![position + 1]
+                    } else {
+                        Vec::new()
+                    },
+                })
+                .collect();
+            calculate_lcom(&methods)
+        });
+        assert_eq!(components, 1);
+    }
 
     fn is_oo_language(language: Language) -> bool {
         matches!(class_model(language), ClassModel::Classes(_))

@@ -622,6 +622,7 @@ fn mark_type_only(node: Node<'_>, context: &Context<'_, '_>, bindings: &mut [Imp
         child_of_kind(node, IMPORT_CLAUSE).and_then(|clause| child_of_kind(clause, NAMED_IMPORTS)),
         child_of_kind(node, EXPORT_CLAUSE),
     ];
+    let mut type_only: std::collections::HashSet<String> = std::collections::HashSet::new();
     for list in lists.into_iter().flatten() {
         let mut cursor = list.walk();
         for specifier in list.named_children(&mut cursor) {
@@ -632,11 +633,16 @@ fn mark_type_only(node: Node<'_>, context: &Context<'_, '_>, bindings: &mut [Imp
                 .child_by_field_name("alias")
                 .or_else(|| specifier.child_by_field_name("name"))
                 .map(|name| context.text(name));
-            for binding in bindings.iter_mut() {
-                if binding.local_name.is_some() && binding.local_name == local {
-                    binding.type_only = true;
-                }
-            }
+            type_only.extend(local);
+        }
+    }
+    for binding in bindings.iter_mut() {
+        if binding
+            .local_name
+            .as_ref()
+            .is_some_and(|local| type_only.contains(local))
+        {
+            binding.type_only = true;
         }
     }
 }
@@ -651,8 +657,11 @@ impl Ecma {
     }
 
     fn collect_supertypes(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<String>) {
+        // A stack in place of recursion, in the order of a recursive walk.
         let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
+        let mut pending: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+        pending.reverse();
+        while let Some(child) = pending.pop() {
             match child.kind() {
                 TYPE_ARGUMENTS => {}
                 IDENTIFIER | TYPE_IDENTIFIER | NESTED_TYPE_IDENTIFIER | MEMBER_EXPRESSION => {
@@ -663,7 +672,11 @@ impl Ecma {
                 "extends_clause"
                 | "implements_clause"
                 | "generic_type"
-                | "parenthesized_expression" => self.collect_supertypes(child, context, out),
+                | "parenthesized_expression" => {
+                    let mut cursor = child.walk();
+                    let children: Vec<Node<'_>> = child.named_children(&mut cursor).collect();
+                    pending.extend(children.into_iter().rev());
+                }
                 _ => {}
             }
         }
@@ -684,27 +697,24 @@ fn parameter_name(name: String) -> LocalName {
 
 /// Adds each name that a parameter pattern binds: `{a, b: c, ...d}`, `[e]`, `f = 1`.
 fn pattern_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
-    match node.kind() {
-        IDENTIFIER | "shorthand_property_identifier_pattern" => {
-            out.push(parameter_name(context.text(node)));
-        }
-        "pair_pattern" => {
-            if let Some(value) = node.child_by_field_name("value") {
-                pattern_names(value, context, out);
+    // A stack in place of recursion, because a pattern can nest to any depth.
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        match node.kind() {
+            IDENTIFIER | "shorthand_property_identifier_pattern" => {
+                out.push(parameter_name(context.text(node)));
             }
-        }
-        "assignment_pattern" | "object_assignment_pattern" => {
-            if let Some(left) = node.child_by_field_name("left") {
-                pattern_names(left, context, out);
+            "pair_pattern" => pending.extend(node.child_by_field_name("value")),
+            "assignment_pattern" | "object_assignment_pattern" => {
+                pending.extend(node.child_by_field_name("left"));
             }
-        }
-        "object_pattern" | "array_pattern" | "rest_pattern" => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                pattern_names(child, context, out);
+            "object_pattern" | "array_pattern" | "rest_pattern" => {
+                let mut cursor = node.walk();
+                let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+                pending.extend(children.into_iter().rev());
             }
+            _ => {}
         }
-        _ => {}
     }
 }
 
@@ -917,7 +927,10 @@ impl LanguageSpec for Ecma {
                 // A pair in an object literal is a name here. `function_binding_name`
                 // gives no name for it, because dead code detection cannot follow it.
                 if binding.holder.kind() != PAIR {
-                    function_binding_name(&node, context.source, self.language())?;
+                    let ancestors = std::iter::successors(context.parent(node), |ancestor| {
+                        context.parent(*ancestor)
+                    });
+                    function_binding_name(&node, ancestors, context.source, self.language())?;
                 }
                 Some(binding.name.unwrap_or(node))
             }
@@ -1502,5 +1515,59 @@ mod tests {
                 "9 run>other External - []",
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod type_modifier_timing_tests {
+    use std::path::Path;
+
+    use crate::core::Language;
+    use crate::index::extract::extract_file;
+    use crate::index::timing::{assert_scales_linearly, Stopwatch};
+    use crate::parser::Parser;
+
+    /// One import statement with `size` specifiers, each with an inline
+    /// `type` modifier, and one specifier without it.
+    fn type_specifiers_at(size: usize) -> std::time::Duration {
+        let names: Vec<String> = (0..size)
+            .map(|position| format!("type T{position}"))
+            .collect();
+        let source = format!("import {{ {}, value }} from './types';\n", names.join(", "));
+        let started = Stopwatch::start();
+        let parsed = Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::TypeScript,
+                Path::new("main.ts"),
+            )
+            .unwrap();
+        let facts = extract_file(&parsed, "main.ts");
+        let elapsed = started.elapsed();
+        assert_eq!(facts.imports.len(), size + 1);
+        let type_only = facts
+            .imports
+            .iter()
+            .filter(|binding| binding.type_only)
+            .count();
+        assert_eq!(type_only, size);
+        let value = facts
+            .imports
+            .iter()
+            .find(|binding| binding.local_name.as_deref() == Some("value"))
+            .unwrap();
+        assert!(!value.type_only);
+        elapsed
+    }
+
+    #[test]
+    fn test_type_specifiers_are_type_only() {
+        type_specifiers_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_type_specifiers_are_marked_in_linear_time() {
+        assert_scales_linearly("type specifiers", 20_000, type_specifiers_at);
     }
 }

@@ -4,6 +4,9 @@ pub mod queries;
 pub mod vue;
 
 #[cfg(test)]
+pub(crate) mod deep;
+
+#[cfg(test)]
 mod kind_lint;
 
 use std::cell::RefCell;
@@ -203,37 +206,83 @@ pub struct FunctionNode {
 /// Extract functions from a parse result.
 pub fn extract_functions(result: &ParseResult) -> Vec<FunctionNode> {
     let mut functions = Vec::new();
-    let root = result.root_node();
-
     let function_types = get_function_node_types(result.language);
-
-    fn visit(
-        node: tree_sitter::Node<'_>,
-        source: &[u8],
-        lang: Language,
-        function_types: &[&str],
-        functions: &mut Vec<FunctionNode>,
-    ) {
+    // The ancestors of the node of the cursor, the nearest last. `Node::parent` searches from
+    // the root, so the walk gives the ancestors that it knows.
+    let mut ancestors: Vec<tree_sitter::Node<'_>> = Vec::new();
+    let mut cursor = result.root_node().walk();
+    loop {
+        let node = cursor.node();
         if function_types.contains(&node.kind()) {
-            if let Some(func) = extract_function_info(&node, source, lang) {
+            let parents = ancestors.iter().rev().copied();
+            if let Some(func) =
+                extract_function_info(&node, parents, &result.source, result.language)
+            {
                 functions.push(func);
             }
         }
-
-        for child in node.children(&mut node.walk()) {
-            visit(child, source, lang, function_types, functions);
+        if cursor.goto_first_child() {
+            ancestors.push(node);
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return functions;
+            }
+            ancestors.pop();
         }
     }
+}
 
-    visit(
-        root,
-        &result.source,
-        result.language,
-        &function_types,
-        &mut functions,
-    );
+/// What a walk does after it visits a node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Walk {
+    /// Go into the children of the node.
+    Children,
+    /// Do not go into the children of the node.
+    SkipChildren,
+    /// Stop the walk.
+    Stop,
+}
 
-    functions
+/// Visit `root` and each node below it in pre-order, which is the order of a
+/// recursive walk. The walk uses a cursor and not recursion, because generated
+/// source can have a very deep tree.
+pub fn walk_preorder<'tree>(
+    root: tree_sitter::Node<'tree>,
+    mut visit: impl FnMut(tree_sitter::Node<'tree>) -> Walk,
+) {
+    let mut cursor = root.walk();
+    loop {
+        match visit(cursor.node()) {
+            Walk::Stop => return,
+            Walk::Children if cursor.goto_first_child() => continue,
+            _ => {}
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return;
+            }
+        }
+    }
+}
+
+/// The first node in pre-order, `root` or a node below it, for which `test`
+/// is true.
+pub fn find_preorder<'tree>(
+    root: tree_sitter::Node<'tree>,
+    mut test: impl FnMut(tree_sitter::Node<'tree>) -> bool,
+) -> Option<tree_sitter::Node<'tree>> {
+    let mut found = None;
+    walk_preorder(root, |node| {
+        if test(node) {
+            found = Some(node);
+            Walk::Stop
+        } else {
+            Walk::Children
+        }
+    });
+    found
 }
 
 /// Get the AST node kinds that represent a function/method definition in
@@ -309,19 +358,27 @@ fn occupies_field(
 /// inspects exactly one parent, requiring that the function occupies that
 /// parent's value slot. Searching further up would name the callback in
 /// `const f = xs.map(x => x)` after `f`.
-fn resolve_js_binding(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<JsBinding> {
+///
+/// `ancestors` gives the parent of the node, then the parent of the parent,
+/// and so on. `Node::parent` searches from the root, so a walk gives the
+/// ancestors that it knows.
+fn resolve_js_binding<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    ancestors: impl IntoIterator<Item = tree_sitter::Node<'tree>>,
+    source: &[u8],
+) -> Option<JsBinding> {
     let mut current = *node;
-    while let Some(parent) = current.parent() {
+    let mut ancestors = ancestors.into_iter();
+    let parent = loop {
+        let parent = ancestors.next()?;
         match parent.kind() {
             "parenthesized_expression"
             | "as_expression"
             | "satisfies_expression"
             | "non_null_expression" => current = parent,
-            _ => break,
+            _ => break parent,
         }
-    }
-
-    let parent = current.parent()?;
+    };
     let name = match parent.kind() {
         "variable_declarator" if occupies_field(&parent, "value", &current) => {
             let name_node = parent.child_by_field_name("name")?;
@@ -385,13 +442,17 @@ fn node_text(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
 /// Exposed so consumers that track a call graph can name the function a call
 /// was made from, which for `const f = () => { ... }` lives on the binding
 /// rather than on the function node.
-pub fn function_binding_name(
-    node: &tree_sitter::Node<'_>,
+///
+/// `ancestors` gives the parent of the node, then the parent of the parent,
+/// and so on. Only a JavaScript or TypeScript node reads them.
+pub fn function_binding_name<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    ancestors: impl IntoIterator<Item = tree_sitter::Node<'tree>>,
     source: &[u8],
     lang: Language,
 ) -> Option<String> {
     if is_js_family(lang) {
-        resolve_js_binding(node, source)
+        resolve_js_binding(node, ancestors, source)
             .map(|binding| binding.name)
             .or_else(|| {
                 JS_DECLARATION_KINDS
@@ -403,8 +464,9 @@ pub fn function_binding_name(
     }
 }
 
-fn extract_function_info(
-    node: &tree_sitter::Node<'_>,
+fn extract_function_info<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    ancestors: impl IntoIterator<Item = tree_sitter::Node<'tree>>,
     source: &[u8],
     lang: Language,
 ) -> Option<FunctionNode> {
@@ -417,7 +479,7 @@ fn extract_function_info(
         // is exactly such a child, and matching it names the function after
         // its own parameter.
         let intrinsic = find_child_by_field(node, "name", source);
-        let binding = resolve_js_binding(node, source);
+        let binding = resolve_js_binding(node, ancestors, source);
 
         let binding_name = binding.as_ref().map(|b| b.name.clone()).or_else(|| {
             if !JS_DECLARATION_KINDS.contains(&node.kind()) {
@@ -497,27 +559,32 @@ pub fn function_body_byte_range(node: &tree_sitter::Node<'_>) -> Option<(usize, 
 /// `identifier`.
 fn extract_c_function_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     fn recurse_declarator(decl: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-        match decl.kind() {
-            "identifier" => decl.utf8_text(source).ok().map(|s| s.to_string()),
-            "function_declarator"
-            | "pointer_declarator"
-            | "reference_declarator"
-            | "abstract_declarator" => {
-                // Try the named `declarator` field first, then first named child
-                if let Some(inner) = decl.child_by_field_name("declarator") {
-                    return recurse_declarator(inner, source);
-                }
-                for child in decl.children(&mut decl.walk()) {
-                    if child.is_named() {
-                        if let Some(name) = recurse_declarator(child, source) {
-                            return Some(name);
-                        }
+        // A stack in place of recursion, because a declarator can have any
+        // number of pointer levels.
+        let mut pending = vec![decl];
+        while let Some(decl) = pending.pop() {
+            match decl.kind() {
+                "identifier" => {
+                    if let Ok(name) = decl.utf8_text(source) {
+                        return Some(name.to_string());
                     }
                 }
-                None
+                "function_declarator"
+                | "pointer_declarator"
+                | "reference_declarator"
+                | "abstract_declarator" => {
+                    // Try the named `declarator` field first, then each named child
+                    if let Some(inner) = decl.child_by_field_name("declarator") {
+                        pending.push(inner);
+                    } else {
+                        let children: Vec<_> = decl.named_children(&mut decl.walk()).collect();
+                        pending.extend(children.into_iter().rev());
+                    }
+                }
+                _ => {}
             }
-            _ => None,
         }
+        None
     }
 
     // Walk the `declarator` field of the function_definition
@@ -550,6 +617,30 @@ fn find_node_child<'a>(node: &tree_sitter::Node<'a>, kind: &str) -> Option<tree_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The time of `extract_functions` on `size` nested arrow functions, without the parse.
+    fn functions_of_nested_arrows_at(size: usize) -> std::time::Duration {
+        let source = format!("const f = {}1;\n", "() => ".repeat(size));
+        let result = Parser::new()
+            .parse(source.as_bytes(), Language::TypeScript, Path::new("a.ts"))
+            .unwrap();
+        let started = crate::index::timing::Stopwatch::start();
+        let functions = extract_functions(&result);
+        let elapsed = started.elapsed();
+        assert_eq!(functions.len(), size);
+        assert_eq!(functions[0].name, "f");
+        elapsed
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_arrow_functions_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "nested arrow functions",
+            5_000,
+            functions_of_nested_arrows_at,
+        );
+    }
 
     #[test]
     fn test_parser_default() {
@@ -796,6 +887,33 @@ mod tests {
 
         let functions = extract_functions(&result);
         assert_eq!(functions.len(), 1);
+    }
+
+    #[test]
+    fn test_extract_functions_in_deeply_nested_source() {
+        deep::on_small_stack(|| {
+            for (_, parsed) in deep::parsed_deep_sources() {
+                extract_functions(parsed);
+            }
+        });
+    }
+
+    /// The function name is at the end of a chain of `DEPTH` pointer declarators.
+    #[test]
+    fn test_c_function_name_below_deeply_nested_pointers() {
+        let names = deep::on_small_stack(|| {
+            [(Language::C, "a.c"), (Language::Cpp, "a.cpp")].map(|(language, file)| {
+                let source = format!("int {}f(void) {{ return 0; }}\n", "*".repeat(deep::DEPTH));
+                let parsed = Parser::new()
+                    .parse(source.as_bytes(), language, Path::new(file))
+                    .unwrap();
+                extract_functions(&parsed)
+                    .into_iter()
+                    .map(|function| function.name)
+                    .collect::<Vec<_>>()
+            })
+        });
+        assert_eq!(names, [vec!["f".to_string()], vec!["f".to_string()]]);
     }
 
     #[test]

@@ -118,21 +118,31 @@ impl CallSyntax {
 
     /// Tells if an expression is only names with `.` or `::` between them.
     fn is_name_chain(&self, node: Node<'_>) -> bool {
-        if self.names.contains(&node.kind()) {
-            return true;
-        }
-        // A call node can also be a member rule. A call is not a name.
-        if self.calls.iter().any(|rule| rule.0 == node.kind()) {
-            return false;
-        }
-        let rule = self.members.iter().chain(self.paths);
-        rule.filter(|(kind, _, _)| node.kind() == *kind)
-            .any(|(_, before, name)| {
-                let before = node.child_by_field_name(before);
+        // A search with a stack in place of recursion, because a chain can be
+        // very long. Two rules can lead to one node, so the search reads each
+        // node one time.
+        let mut pending = vec![node];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(node) = pending.pop() {
+            if !seen.insert(node.id()) {
+                continue;
+            }
+            if self.names.contains(&node.kind()) {
+                return true;
+            }
+            // A call node can also be a member rule. A call is not a name.
+            if self.calls.iter().any(|rule| rule.0 == node.kind()) {
+                continue;
+            }
+            let rule = self.members.iter().chain(self.paths);
+            for (_, before, name) in rule.filter(|(kind, _, _)| node.kind() == *kind) {
                 let name = node.child_by_field_name(name);
-                before.is_some_and(|before| self.is_name_chain(before))
-                    && name.is_some_and(|name| name.named_child_count() == 0)
-            })
+                if name.is_some_and(|name| name.named_child_count() == 0) {
+                    pending.extend(node.child_by_field_name(before));
+                }
+            }
+        }
+        false
     }
 
     /// Describes the callee expression of a call.

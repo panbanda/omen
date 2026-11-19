@@ -2685,106 +2685,122 @@ impl<'a> Context<'a> {
     /// statement lists, the literal conditions that it can evaluate, the class bodies, and the
     /// blocks. An assignment under any other kind of node, such as an expression, an argument, or
     /// a `begin` block, is not attributed to a route set.
-    fn collect_api_only(
+    fn collect_api_only<'tree>(
         &self,
-        node: Node<'_>,
+        node: Node<'tree>,
         scan: &ApiScan<'_>,
         depth: usize,
         conditional: bool,
         names: &mut Vec<(bool, String)>,
         out: &mut ApiOnlySets,
     ) {
-        if depth > MAX_READ_DEPTH {
-            out.unattributed = true;
-            return;
+        /// A step of the walk. The steps of the children are on the stack in the reverse
+        /// order, so the walk reads the nodes in the order of the recursion that it replaces.
+        enum Step<'tree> {
+            Read {
+                node: Node<'tree>,
+                depth: usize,
+                conditional: bool,
+            },
+            LeaveClass,
         }
-        let mut cursor = node.walk();
-        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-        match node.kind() {
-            "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
-                let condition = node.child_by_field_name("condition");
-                let literal = condition
-                    .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"));
-                for part in children {
-                    if Some(part) == condition {
-                        self.check_api_only_subtree(part, scan, out);
-                        continue;
-                    }
-                    if Self::is_dead_branch(node, part) {
-                        continue;
-                    }
-                    self.collect_api_only(
-                        part,
-                        scan,
-                        depth + 1,
-                        conditional || !literal,
-                        names,
-                        out,
-                    );
+        let mut pending = vec![Step::Read {
+            node,
+            depth,
+            conditional,
+        }];
+        while let Some(step) = pending.pop() {
+            let (node, depth, conditional) = match step {
+                Step::LeaveClass => {
+                    names.pop();
+                    continue;
                 }
+                Step::Read {
+                    node,
+                    depth,
+                    conditional,
+                } => (node, depth, conditional),
+            };
+            if depth > MAX_READ_DEPTH {
+                out.unattributed = true;
+                continue;
             }
-            "case" if literal_case_children(node).is_some() => {
-                for child in literal_case_children(node).unwrap_or_default() {
-                    self.collect_api_only(child, scan, depth + 1, conditional, names, out);
-                }
-            }
-            "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
-            | "until" | "while_modifier" | "until_modifier" => {
-                for child in children {
-                    self.collect_api_only(child, scan, depth + 1, true, names, out);
-                }
-            }
-            "class" | "module" => {
-                let name = node
-                    .child_by_field_name("name")
-                    .map(|name| super::syntax::text(name, scan.source).replace("::", "."))
-                    .unwrap_or_default();
-                names.push((node.kind() == "class", name));
-                for child in children {
-                    self.collect_api_only(child, scan, depth + 1, conditional, names, out);
-                }
-                names.pop();
-            }
-            "assignment" => {
-                let assigns_api_only = node.child_by_field_name("left").is_some_and(|left| {
-                    left.kind() == "call"
-                        && left.child_by_field_name("method").is_some_and(|method| {
-                            super::syntax::text(method, scan.source) == "api_only"
-                        })
-                });
-                if assigns_api_only {
-                    self.attribute_api_only(node, scan, conditional, names, out);
-                }
-                if let Some(right) = node.child_by_field_name("right") {
-                    self.check_api_only_subtree(right, scan, out);
-                }
-            }
-            "call" => {
-                let configure = node
-                    .child_by_field_name("method")
-                    .is_some_and(|method| super::syntax::text(method, scan.source) == "configure");
-                for child in children {
-                    if matches!(child.kind(), "do_block" | "block") {
-                        self.collect_api_only(
-                            child,
-                            scan,
-                            depth + 1,
-                            conditional || !configure,
-                            names,
-                            out,
-                        );
-                    } else {
-                        self.check_api_only_subtree(child, scan, out);
+            let read = |node: Node<'tree>, conditional: bool| Step::Read {
+                node,
+                depth: depth + 1,
+                conditional,
+            };
+            let mut cursor = node.walk();
+            let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+            let mut steps = Vec::new();
+            match node.kind() {
+                "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
+                    let condition = node.child_by_field_name("condition");
+                    let literal = condition.is_some_and(|condition| {
+                        matches!(condition.kind(), "true" | "false" | "nil")
+                    });
+                    for part in children {
+                        if Some(part) == condition {
+                            self.check_api_only_subtree(part, scan, out);
+                            continue;
+                        }
+                        if Self::is_dead_branch(node, part) {
+                            continue;
+                        }
+                        steps.push(read(part, conditional || !literal));
                     }
                 }
-            }
-            "program" | "body_statement" | "then" | "else" | "block_body" | "do_block"
-            | "block" => {
-                for child in children {
-                    self.collect_api_only(child, scan, depth + 1, conditional, names, out);
+                "case" if literal_case_children(node).is_some() => {
+                    for child in literal_case_children(node).unwrap_or_default() {
+                        steps.push(read(child, conditional));
+                    }
                 }
+                "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for"
+                | "while" | "until" | "while_modifier" | "until_modifier" => {
+                    steps.extend(children.into_iter().map(|child| read(child, true)));
+                }
+                "class" | "module" => {
+                    let name = node
+                        .child_by_field_name("name")
+                        .map(|name| super::syntax::text(name, scan.source).replace("::", "."))
+                        .unwrap_or_default();
+                    names.push((node.kind() == "class", name));
+                    pending.push(Step::LeaveClass);
+                    steps.extend(children.into_iter().map(|child| read(child, conditional)));
+                }
+                "assignment" => {
+                    let assigns_api_only = node.child_by_field_name("left").is_some_and(|left| {
+                        left.kind() == "call"
+                            && left.child_by_field_name("method").is_some_and(|method| {
+                                super::syntax::text(method, scan.source) == "api_only"
+                            })
+                    });
+                    if assigns_api_only {
+                        self.attribute_api_only(node, scan, conditional, names, out);
+                    }
+                    if let Some(right) = node.child_by_field_name("right") {
+                        self.check_api_only_subtree(right, scan, out);
+                    }
+                }
+                "call" => {
+                    let configure = node.child_by_field_name("method").is_some_and(|method| {
+                        super::syntax::text(method, scan.source) == "configure"
+                    });
+                    for child in children {
+                        if matches!(child.kind(), "do_block" | "block") {
+                            steps.push(read(child, conditional || !configure));
+                        } else {
+                            self.check_api_only_subtree(child, scan, out);
+                        }
+                    }
+                }
+                "program" | "body_statement" | "then" | "else" | "block_body" | "do_block"
+                | "block" => {
+                    steps.extend(children.into_iter().map(|child| read(child, conditional)));
+                }
+                _ => self.check_api_only_subtree(node, scan, out),
             }
-            _ => self.check_api_only_subtree(node, scan, out),
+            pending.extend(steps.into_iter().rev());
         }
     }
 
@@ -3476,158 +3492,229 @@ impl<'a> Context<'a> {
     /// Tells if the code has a `def`, or a call of `private`, `protected`, or `public`, outside a
     /// nested class or module.
     fn defines_methods(&self, node: Node<'_>, depth: usize) -> bool {
-        if depth > MAX_READ_DEPTH {
-            return true;
-        }
-        match node.kind() {
-            "method" => return true,
-            "class" | "module" | "singleton_class" => return false,
-            "call" => {
-                let method = node
-                    .child_by_field_name("method")
-                    .map_or("", |method| self.text(method));
-                if node.child_by_field_name("receiver").is_none()
-                    && matches!(method, "private" | "protected" | "public")
-                {
-                    return true;
-                }
+        let mut pending = vec![(node, depth)];
+        while let Some((node, depth)) = pending.pop() {
+            if depth > MAX_READ_DEPTH {
+                return true;
             }
-            _ => {}
+            match node.kind() {
+                "method" => return true,
+                "class" | "module" | "singleton_class" => continue,
+                "call" => {
+                    let method = node
+                        .child_by_field_name("method")
+                        .map_or("", |method| self.text(method));
+                    if node.child_by_field_name("receiver").is_none()
+                        && matches!(method, "private" | "protected" | "public")
+                    {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+            let mut cursor = node.walk();
+            pending.extend(
+                node.named_children(&mut cursor)
+                    .map(|child| (child, depth + 1)),
+            );
         }
-        let mut cursor = node.walk();
-        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-        children
-            .into_iter()
-            .any(|child| self.defines_methods(child, depth + 1))
+        false
     }
 
     /// Reads the callbacks in the children of the node. `conditional` tells that a branch that
     /// omen cannot evaluate holds the node. A callback in such a branch is conditional. A literal
     /// condition makes a branch dead or live, as it does for a route. A callback under any other
     /// kind of node makes the guards of the class not complete.
-    fn collect_callbacks(
+    fn collect_callbacks<'tree>(
         &self,
-        node: Node<'_>,
+        node: Node<'tree>,
         conditional: bool,
         depth: usize,
         out: &mut ClassCallbacks,
     ) {
-        let mut cursor = node.walk();
-        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-        for child in children {
-            self.collect_callback_node(child, conditional, depth + 1, out);
+        /// A step of the walk. The steps of the children are on the stack in the reverse
+        /// order, so the walk reads the nodes in the order of the recursion that it replaces.
+        enum Step<'tree> {
+            /// The children of the node, as `collect_callbacks` read them.
+            Children {
+                node: Node<'tree>,
+                conditional: bool,
+                depth: usize,
+            },
+            /// One node, as `collect_callback_node` read it.
+            Read {
+                node: Node<'tree>,
+                conditional: bool,
+                depth: usize,
+            },
+            EnterBlock,
+            LeaveBlock,
         }
-    }
-
-    fn collect_callback_node(
-        &self,
-        node: Node<'_>,
-        conditional: bool,
-        depth: usize,
-        out: &mut ClassCallbacks,
-    ) {
-        if depth > MAX_READ_DEPTH {
-            out.note(GuardsUnknownReason::UnreadableCallback);
-            return;
-        }
-        match node.kind() {
-            "method" | "singleton_method" | "class" | "module" | "singleton_class" => {}
-            "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
-                let condition = node.child_by_field_name("condition");
-                let literal = condition
-                    .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"));
-                let mut cursor = node.walk();
-                let parts: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-                for part in parts {
-                    if Some(part) == condition {
-                        if subtree_has_callback(part, self.source, 0) {
-                            out.note(GuardsUnknownReason::UnreadableCallback);
-                        }
-                        continue;
-                    }
-                    if Self::is_dead_branch(node, part) {
-                        continue;
-                    }
-                    self.collect_callback_node(part, conditional || !literal, depth + 1, out);
+        let mut pending = vec![Step::Children {
+            node,
+            conditional,
+            depth,
+        }];
+        while let Some(step) = pending.pop() {
+            let (node, conditional, depth) = match step {
+                Step::EnterBlock => {
+                    out.blocks += 1;
+                    continue;
                 }
-            }
-            "case" if literal_case_children(node).is_some() => {
-                for child in literal_case_children(node).unwrap_or_default() {
-                    self.collect_callback_node(child, conditional, depth + 1, out);
+                Step::LeaveBlock => {
+                    out.blocks -= 1;
+                    continue;
                 }
-            }
-            "case" | "case_match" | "do_block" | "block" | "lambda" => {
-                out.blocks += 1;
-                self.collect_callbacks(node, true, depth, out);
-                out.blocks -= 1;
-            }
-            "identifier" => {
-                let name = self.text(node);
-                let forgery = matches!(name, "protect_from_forgery" | "skip_forgery_protection");
-                if forgery {
-                    out.list.push(Statement::Callback(Callback::named(
-                        "verify_authenticity_token",
-                        name == "skip_forgery_protection",
-                        conditional || out.blocks > 0,
-                    )));
-                } else if out.blocks == 0 && !CLASS_METHODS_WITHOUT_CALLBACKS.contains(&name) {
-                    out.list.push(Statement::Macro {
-                        name: name.to_string(),
+                Step::Children {
+                    node,
+                    conditional,
+                    depth,
+                } => {
+                    let mut cursor = node.walk();
+                    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+                    pending.extend(children.into_iter().rev().map(|child| Step::Read {
+                        node: child,
                         conditional,
-                        at: node.start_byte(),
-                    });
+                        depth: depth + 1,
+                    }));
+                    continue;
                 }
+                Step::Read {
+                    node,
+                    conditional,
+                    depth,
+                } => (node, conditional, depth),
+            };
+            if depth > MAX_READ_DEPTH {
+                out.note(GuardsUnknownReason::UnreadableCallback);
+                continue;
             }
-            "call" => match self.rails_callback(node, out.macro_name.as_deref()) {
-                Some(mut callback) if Self::is_own_call(node) => {
-                    if callback.unnamed_block {
-                        out.note(GuardsUnknownReason::UnreadableCallback);
+            let mut steps = Vec::new();
+            let block = |node: Node<'tree>, conditional: bool| {
+                [
+                    Step::EnterBlock,
+                    Step::Children {
+                        node,
+                        conditional,
+                        depth,
+                    },
+                    Step::LeaveBlock,
+                ]
+            };
+            match node.kind() {
+                "method" | "singleton_method" | "class" | "module" | "singleton_class" => {}
+                "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
+                    let condition = node.child_by_field_name("condition");
+                    let literal = condition.is_some_and(|condition| {
+                        matches!(condition.kind(), "true" | "false" | "nil")
+                    });
+                    let mut cursor = node.walk();
+                    let parts: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+                    for part in parts {
+                        if Some(part) == condition {
+                            if subtree_has_callback(part, self.source, 0) {
+                                out.note(GuardsUnknownReason::UnreadableCallback);
+                            }
+                            continue;
+                        }
+                        if Self::is_dead_branch(node, part) {
+                            continue;
+                        }
+                        steps.push(Step::Read {
+                            node: part,
+                            conditional: conditional || !literal,
+                            depth: depth + 1,
+                        });
                     }
-                    callback.conditional |= conditional;
-                    out.list.push(Statement::Callback(callback));
                 }
-                _ => {
-                    let method = node
-                        .child_by_field_name("method")
-                        .map_or("", |method| self.text(method));
-                    if MODULE_CALLS.contains(&method) {
-                        out.note(GuardsUnknownReason::IncludedModule);
-                    } else if is_callback_family(method) || CLASS_CHANGING_CALLS.contains(&method) {
-                        out.note(GuardsUnknownReason::UnreadableCallback);
-                    } else if method.contains("around_action") || method.contains("around_filter") {
-                        out.note(GuardsUnknownReason::AroundCallback);
-                    } else if out.blocks == 0
-                        && Self::is_own_call(node)
-                        && !CLASS_METHODS_WITHOUT_CALLBACKS.contains(&method)
-                    {
-                        // A call of a class method in the class body can register callbacks.
+                "case" if literal_case_children(node).is_some() => {
+                    for child in literal_case_children(node).unwrap_or_default() {
+                        steps.push(Step::Read {
+                            node: child,
+                            conditional,
+                            depth: depth + 1,
+                        });
+                    }
+                }
+                "case" | "case_match" | "do_block" | "block" | "lambda" => {
+                    steps.extend(block(node, true));
+                }
+                "identifier" => {
+                    let name = self.text(node);
+                    let forgery =
+                        matches!(name, "protect_from_forgery" | "skip_forgery_protection");
+                    if forgery {
+                        out.list.push(Statement::Callback(Callback::named(
+                            "verify_authenticity_token",
+                            name == "skip_forgery_protection",
+                            conditional || out.blocks > 0,
+                        )));
+                    } else if out.blocks == 0 && !CLASS_METHODS_WITHOUT_CALLBACKS.contains(&name) {
                         out.list.push(Statement::Macro {
-                            name: method.to_string(),
+                            name: name.to_string(),
                             conditional,
                             at: node.start_byte(),
                         });
                     }
-                    let mut cursor = node.walk();
-                    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-                    for child in children {
-                        if matches!(child.kind(), "do_block" | "block") {
-                            out.blocks += 1;
-                            self.collect_callbacks(child, true, depth, out);
-                            out.blocks -= 1;
-                        } else if subtree_has_callback(child, self.source, 0) {
+                }
+                "call" => match self.rails_callback(node, out.macro_name.as_deref()) {
+                    Some(mut callback) if Self::is_own_call(node) => {
+                        if callback.unnamed_block {
                             out.note(GuardsUnknownReason::UnreadableCallback);
                         }
+                        callback.conditional |= conditional;
+                        out.list.push(Statement::Callback(callback));
+                    }
+                    _ => {
+                        let method = node
+                            .child_by_field_name("method")
+                            .map_or("", |method| self.text(method));
+                        if MODULE_CALLS.contains(&method) {
+                            out.note(GuardsUnknownReason::IncludedModule);
+                        } else if is_callback_family(method)
+                            || CLASS_CHANGING_CALLS.contains(&method)
+                        {
+                            out.note(GuardsUnknownReason::UnreadableCallback);
+                        } else if method.contains("around_action")
+                            || method.contains("around_filter")
+                        {
+                            out.note(GuardsUnknownReason::AroundCallback);
+                        } else if out.blocks == 0
+                            && Self::is_own_call(node)
+                            && !CLASS_METHODS_WITHOUT_CALLBACKS.contains(&method)
+                        {
+                            // A call of a class method in the class body can register callbacks.
+                            out.list.push(Statement::Macro {
+                                name: method.to_string(),
+                                conditional,
+                                at: node.start_byte(),
+                            });
+                        }
+                        let mut cursor = node.walk();
+                        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+                        for child in children {
+                            if matches!(child.kind(), "do_block" | "block") {
+                                steps.extend(block(child, true));
+                            } else if subtree_has_callback(child, self.source, 0) {
+                                out.note(GuardsUnknownReason::UnreadableCallback);
+                            }
+                        }
+                    }
+                },
+                "body_statement" | "then" | "else" | "when" | "block_body" => {
+                    steps.push(Step::Children {
+                        node,
+                        conditional,
+                        depth,
+                    });
+                }
+                _ => {
+                    if subtree_has_callback(node, self.source, 0) {
+                        out.note(GuardsUnknownReason::UnreadableCallback);
                     }
                 }
-            },
-            "body_statement" | "then" | "else" | "when" | "block_body" => {
-                self.collect_callbacks(node, conditional, depth, out)
             }
-            _ => {
-                if subtree_has_callback(node, self.source, 0) {
-                    out.note(GuardsUnknownReason::UnreadableCallback);
-                }
-            }
+            pending.extend(steps.into_iter().rev());
         }
     }
 
@@ -4817,43 +4904,51 @@ fn is_callback_family(method: &str) -> bool {
 
 /// Tells if the code has a call of the callback family, with any receiver.
 fn subtree_has_callback(node: Node<'_>, source: &[u8], depth: usize) -> bool {
-    if depth > MAX_READ_DEPTH {
-        return true;
+    let mut pending = vec![(node, depth)];
+    while let Some((node, depth)) = pending.pop() {
+        if depth > MAX_READ_DEPTH {
+            return true;
+        }
+        if node.kind() == "call"
+            && node
+                .child_by_field_name("method")
+                .is_some_and(|method| is_callback_family(super::syntax::text(method, source)))
+        {
+            return true;
+        }
+        let mut cursor = node.walk();
+        pending.extend(
+            node.named_children(&mut cursor)
+                .map(|child| (child, depth + 1)),
+        );
     }
-    if node.kind() == "call"
-        && node
-            .child_by_field_name("method")
-            .is_some_and(|method| is_callback_family(super::syntax::text(method, source)))
-    {
-        return true;
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-    children
-        .into_iter()
-        .any(|child| subtree_has_callback(child, source, depth + 1))
+    false
 }
 
 /// Tells if the code assigns `api_only` of any receiver.
 fn subtree_assigns_api_only(node: Node<'_>, source: &[u8], depth: usize) -> bool {
-    if depth > MAX_READ_DEPTH {
-        return true;
+    let mut pending = vec![(node, depth)];
+    while let Some((node, depth)) = pending.pop() {
+        if depth > MAX_READ_DEPTH {
+            return true;
+        }
+        if matches!(node.kind(), "assignment" | "operator_assignment")
+            && node.child_by_field_name("left").is_some_and(|left| {
+                left.kind() == "call"
+                    && left
+                        .child_by_field_name("method")
+                        .is_some_and(|method| super::syntax::text(method, source) == "api_only")
+            })
+        {
+            return true;
+        }
+        let mut cursor = node.walk();
+        pending.extend(
+            node.named_children(&mut cursor)
+                .map(|child| (child, depth + 1)),
+        );
     }
-    if matches!(node.kind(), "assignment" | "operator_assignment")
-        && node.child_by_field_name("left").is_some_and(|left| {
-            left.kind() == "call"
-                && left
-                    .child_by_field_name("method")
-                    .is_some_and(|method| super::syntax::text(method, source) == "api_only")
-        })
-    {
-        return true;
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-    children
-        .into_iter()
-        .any(|child| subtree_assigns_api_only(child, source, depth + 1))
+    false
 }
 
 /// The methods of `ActiveSupport::Inflector` and of its `Inflections` class that give the names
@@ -5264,27 +5359,31 @@ const INFLECTION_METHODS: [&str; 7] = [
 
 /// Tells if the code has a call of a method that changes the inflections, with any receiver.
 fn subtree_has_inflection_call(node: Node<'_>, source: &[u8], depth: usize) -> bool {
-    if depth > MAX_READ_DEPTH {
-        return true;
+    let mut pending = vec![(node, depth)];
+    while let Some((node, depth)) = pending.pop() {
+        if depth > MAX_READ_DEPTH {
+            return true;
+        }
+        if node.kind() == "constant" && super::syntax::text(node, source) == "Inflections" {
+            return true;
+        }
+        if node.kind() == "call"
+            && node.child_by_field_name("method").is_some_and(|method| {
+                INFLECTION_METHODS.contains(&super::syntax::text(method, source))
+            })
+        {
+            return true;
+        }
+        if is_inflection_object(node, source, &[]) {
+            return true;
+        }
+        let mut cursor = node.walk();
+        pending.extend(
+            node.named_children(&mut cursor)
+                .map(|child| (child, depth + 1)),
+        );
     }
-    if node.kind() == "constant" && super::syntax::text(node, source) == "Inflections" {
-        return true;
-    }
-    if node.kind() == "call"
-        && node
-            .child_by_field_name("method")
-            .is_some_and(|method| INFLECTION_METHODS.contains(&super::syntax::text(method, source)))
-    {
-        return true;
-    }
-    if is_inflection_object(node, source, &[]) {
-        return true;
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-    children
-        .into_iter()
-        .any(|child| subtree_has_inflection_call(child, source, depth + 1))
+    false
 }
 
 /// Tells if the call is `<name>.<method>(<literals>)` for a name of `params`, a method that changes
@@ -5292,28 +5391,36 @@ fn subtree_has_inflection_call(node: Node<'_>, source: &[u8], depth: usize) -> b
 /// lists of them, without interpolation.
 fn modelled_inflection_call(node: Node<'_>, source: &[u8], params: &[String]) -> bool {
     fn literal(node: Node<'_>, source: &[u8], depth: usize) -> bool {
-        if depth > MAX_READ_DEPTH {
-            return false;
-        }
-        match node.kind() {
-            "string" => evaluate_string(node, source, None).is_some(),
-            "simple_symbol" => true,
-            "regex" => {
-                let mut cursor = node.walk();
-                let plain = node
-                    .named_children(&mut cursor)
-                    .all(|child| child.kind() != "interpolation");
-                plain
+        let mut pending = vec![(node, depth)];
+        while let Some((node, depth)) = pending.pop() {
+            if depth > MAX_READ_DEPTH {
+                return false;
             }
-            "array" => {
-                let mut cursor = node.walk();
-                let all = node
-                    .named_children(&mut cursor)
-                    .all(|child| literal(child, source, depth + 1));
-                all
+            let plain = match node.kind() {
+                "string" => evaluate_string(node, source, None).is_some(),
+                "simple_symbol" => true,
+                "regex" => {
+                    let mut cursor = node.walk();
+                    let plain = node
+                        .named_children(&mut cursor)
+                        .all(|child| child.kind() != "interpolation");
+                    plain
+                }
+                "array" => {
+                    let mut cursor = node.walk();
+                    pending.extend(
+                        node.named_children(&mut cursor)
+                            .map(|child| (child, depth + 1)),
+                    );
+                    true
+                }
+                _ => false,
+            };
+            if !plain {
+                return false;
             }
-            _ => false,
         }
+        true
     }
     let receiver_ok = node
         .child_by_field_name("receiver")
@@ -5350,42 +5457,50 @@ fn inflection_statements_ok(
     own: Option<Node<'_>>,
     depth: usize,
 ) -> bool {
-    if depth > MAX_READ_DEPTH {
-        return false;
-    }
-    if Some(node) == own {
-        return true;
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-    let all = |parts: Vec<Node<'_>>| {
-        parts
-            .into_iter()
-            .all(|part| inflection_statements_ok(part, source, params, own, depth + 1))
-    };
-    match node.kind() {
-        "comment" | "pattern" | "true" | "false" | "nil" => true,
-        "do_block" | "block" | "body_statement" | "block_body" | "then" | "else" => all(children),
-        "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" => {
-            let condition = node.child_by_field_name("condition");
-            if !condition
-                .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"))
-            {
-                return false;
-            }
-            all(children
-                .into_iter()
-                .filter(|part| Some(*part) != condition && !Context::is_dead_branch(node, *part))
-                .collect())
+    let mut pending = vec![(node, depth)];
+    while let Some((node, depth)) = pending.pop() {
+        if depth > MAX_READ_DEPTH {
+            return false;
         }
-        "case" => match literal_case_children(node) {
-            Some(alive) => all(alive),
-            None => false,
-        },
-        "when" => all(children),
-        "call" => modelled_inflection_call(node, source, params),
-        _ => false,
+        if Some(node) == own {
+            continue;
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+        let parts: Vec<Node<'_>> = match node.kind() {
+            "comment" | "pattern" | "true" | "false" | "nil" => continue,
+            "do_block" | "block" | "body_statement" | "block_body" | "then" | "else" | "when" => {
+                children
+            }
+            "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" => {
+                let condition = node.child_by_field_name("condition");
+                if !condition
+                    .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"))
+                {
+                    return false;
+                }
+                children
+                    .into_iter()
+                    .filter(|part| {
+                        Some(*part) != condition && !Context::is_dead_branch(node, *part)
+                    })
+                    .collect()
+            }
+            "case" => match literal_case_children(node) {
+                Some(alive) => alive,
+                None => return false,
+            },
+            "call" => {
+                if !modelled_inflection_call(node, source, params) {
+                    return false;
+                }
+                continue;
+            }
+            _ => return false,
+        };
+        pending.extend(parts.into_iter().map(|part| (part, depth + 1)));
     }
+    true
 }
 
 /// Reads the inflection calls in the code: `acronym` with a string, and the calls that change
@@ -5402,167 +5517,205 @@ fn read_inflection_calls(
     params: &[String],
     out: &mut Inflections,
 ) {
+    /// A node to read, with the names of the object of the inflections in its scope. The reads
+    /// of the children are on the stack in the reverse order, so the walk reads the nodes in the
+    /// order of the recursion that it replaces.
+    struct Read<'tree> {
+        node: Node<'tree>,
+        depth: usize,
+        conditional: bool,
+        params: Rc<Vec<String>>,
+    }
     let unreadable = |out: &mut Inflections| {
         out.unreadable_acronym = true;
         out.changes_singulars = true;
     };
-    if depth > MAX_READ_DEPTH {
-        unreadable(out);
-        return;
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-    match node.kind() {
-        "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
-            let condition = node.child_by_field_name("condition");
-            let literal = condition
-                .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"));
-            for part in children {
-                if Some(part) == condition {
-                    if subtree_has_inflection_call(part, source, 0) {
+    let mut pending = vec![Read {
+        node,
+        depth,
+        conditional,
+        params: Rc::new(params.to_vec()),
+    }];
+    while let Some(Read {
+        node,
+        depth,
+        conditional,
+        params,
+    }) = pending.pop()
+    {
+        if depth > MAX_READ_DEPTH {
+            unreadable(out);
+            continue;
+        }
+        let mut steps = Vec::new();
+        let mut cursor = node.walk();
+        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+        match node.kind() {
+            "if" | "elsif" | "unless" | "if_modifier" | "unless_modifier" | "conditional" => {
+                let condition = node.child_by_field_name("condition");
+                let literal = condition
+                    .is_some_and(|condition| matches!(condition.kind(), "true" | "false" | "nil"));
+                for part in children {
+                    if Some(part) == condition {
+                        if subtree_has_inflection_call(part, source, 0) {
+                            unreadable(out);
+                        }
+                        continue;
+                    }
+                    if Context::is_dead_branch(node, part) {
+                        continue;
+                    }
+                    steps.push(Read {
+                        node: part,
+                        depth: depth + 1,
+                        conditional: conditional || !literal,
+                        params: Rc::clone(&params),
+                    });
+                }
+            }
+            "case" if literal_case_children(node).is_some() => {
+                for child in literal_case_children(node).unwrap_or_default() {
+                    steps.push(Read {
+                        node: child,
+                        depth: depth + 1,
+                        conditional,
+                        params: Rc::clone(&params),
+                    });
+                }
+            }
+            "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
+            | "until" | "while_modifier" | "until_modifier" => {
+                for child in children {
+                    steps.push(Read {
+                        node: child,
+                        depth: depth + 1,
+                        conditional: true,
+                        params: Rc::clone(&params),
+                    });
+                }
+            }
+            "program" | "body_statement" | "then" | "else" | "block_body" | "do_block"
+            | "block" | "class" | "module" => {
+                // The name of `class Inflections` is not a use of the class. `reopen_changes_names`
+                // reads the body of such a class.
+                let name = node.child_by_field_name("name");
+                for child in children {
+                    if Some(child) != name {
+                        steps.push(Read {
+                            node: child,
+                            depth: depth + 1,
+                            conditional,
+                            params: Rc::clone(&params),
+                        });
+                    }
+                }
+            }
+            "call" => {
+                let method = node
+                    .child_by_field_name("method")
+                    .map_or("", |method| super::syntax::text(method, source));
+                let receiver = node.child_by_field_name("receiver");
+                let opens_inflections = method == "inflections"
+                    && receiver.is_some_and(|receiver| {
+                        is_inflector_constant(super::syntax::text(receiver, source))
+                    });
+                let governing = if opens_inflections {
+                    Some(node)
+                } else {
+                    receiver.filter(|receiver| is_inflections_call(*receiver, source))
+                };
+                match governing.map(|call| inflections_locale(call, source)) {
+                    Some(Locale::Other) => continue,
+                    Some(Locale::Unknown) => {
+                        unreadable(out);
+                        continue;
+                    }
+                    _ => {}
+                }
+                let mut block_params: Vec<String> = params.to_vec();
+                if opens_inflections {
+                    let names = block_parameter_names(node, source);
+                    let own = node
+                        .child_by_field_name("block")
+                        .and_then(|block| block.child_by_field_name("parameters"));
+                    let readable = match node.child_by_field_name("block") {
+                        Some(block) => inflection_statements_ok(block, source, &names, own, 0),
+                        None => node.parent().is_some_and(|parent| {
+                            parent.kind() == "call"
+                                && parent.child_by_field_name("receiver") == Some(node)
+                                && parent.child_by_field_name("method").is_some_and(|method| {
+                                    INFLECTION_METHODS
+                                        .contains(&super::syntax::text(method, source))
+                                })
+                        }),
+                    };
+                    if readable {
+                        block_params.extend(names);
+                    } else {
                         unreadable(out);
                     }
-                    continue;
                 }
-                if Context::is_dead_branch(node, part) {
-                    continue;
-                }
-                read_inflection_calls(
-                    part,
-                    source,
-                    depth + 1,
-                    conditional || !literal,
-                    params,
-                    out,
-                );
-            }
-        }
-        "case" if literal_case_children(node).is_some() => {
-            for child in literal_case_children(node).unwrap_or_default() {
-                read_inflection_calls(child, source, depth + 1, conditional, params, out);
-            }
-        }
-        "case" | "case_match" | "lambda" | "method" | "singleton_method" | "for" | "while"
-        | "until" | "while_modifier" | "until_modifier" => {
-            for child in children {
-                read_inflection_calls(child, source, depth + 1, true, params, out);
-            }
-        }
-        "program" | "body_statement" | "then" | "else" | "block_body" | "do_block" | "block"
-        | "class" | "module" => {
-            // The name of `class Inflections` is not a use of the class. `reopen_changes_names`
-            // reads the body of such a class.
-            let name = node.child_by_field_name("name");
-            for child in children {
-                if Some(child) != name {
-                    read_inflection_calls(child, source, depth + 1, conditional, params, out);
-                }
-            }
-        }
-        "call" => {
-            let method = node
-                .child_by_field_name("method")
-                .map_or("", |method| super::syntax::text(method, source));
-            let receiver = node.child_by_field_name("receiver");
-            let opens_inflections = method == "inflections"
-                && receiver.is_some_and(|receiver| {
-                    is_inflector_constant(super::syntax::text(receiver, source))
-                });
-            let governing = if opens_inflections {
-                Some(node)
-            } else {
-                receiver.filter(|receiver| is_inflections_call(*receiver, source))
-            };
-            match governing.map(|call| inflections_locale(call, source)) {
-                Some(Locale::Other) => return,
-                Some(Locale::Unknown) => {
+                let block_params = Rc::new(block_params);
+                let on_object = receiver
+                    .is_some_and(|receiver| is_inflection_object(receiver, source, &params));
+                let affects = on_object && INFLECTION_METHODS.contains(&method);
+                if affects && conditional {
                     unreadable(out);
-                    return;
-                }
-                _ => {}
-            }
-            let mut block_params: Vec<String> = params.to_vec();
-            if opens_inflections {
-                let names = block_parameter_names(node, source);
-                let own = node
-                    .child_by_field_name("block")
-                    .and_then(|block| block.child_by_field_name("parameters"));
-                let readable = match node.child_by_field_name("block") {
-                    Some(block) => inflection_statements_ok(block, source, &names, own, 0),
-                    None => node.parent().is_some_and(|parent| {
-                        parent.kind() == "call"
-                            && parent.child_by_field_name("receiver") == Some(node)
-                            && parent.child_by_field_name("method").is_some_and(|method| {
-                                INFLECTION_METHODS.contains(&super::syntax::text(method, source))
-                            })
-                    }),
-                };
-                if readable {
-                    block_params.extend(names);
-                } else {
-                    unreadable(out);
-                }
-            }
-            let on_object =
-                receiver.is_some_and(|receiver| is_inflection_object(receiver, source, params));
-            let affects = on_object && INFLECTION_METHODS.contains(&method);
-            if affects && conditional {
-                unreadable(out);
-            } else if affects {
-                match method {
-                    "acronym" => {
-                        let mut arguments_cursor = node.walk();
-                        let arguments: Vec<Node<'_>> = node
-                            .child_by_field_name("arguments")
-                            .map(|list| list.named_children(&mut arguments_cursor).collect())
-                            .unwrap_or_default();
-                        let words: Vec<String> = arguments
-                            .iter()
-                            .filter_map(|argument| {
-                                (argument.kind() == "string")
-                                    .then(|| evaluate_string(*argument, source, None))
-                                    .flatten()
-                            })
-                            .collect();
-                        if words.is_empty() || words.len() != arguments.len() {
-                            out.unreadable_acronym = true;
-                        }
-                        for word in words {
-                            out.acronyms.insert(word.to_lowercase(), word);
-                        }
-                    }
-                    "clear" => unreadable(out),
-                    _ => out.changes_singulars = true,
-                }
-            }
-            for child in children {
-                if matches!(child.kind(), "do_block" | "block") {
-                    read_inflection_calls(
-                        child,
-                        source,
-                        depth + 1,
-                        conditional || !opens_inflections,
-                        &block_params,
-                        out,
-                    );
                 } else if affects {
-                    if !is_inflection_object(child, source, params)
-                        && subtree_has_inflection_call(child, source, 0)
+                    match method {
+                        "acronym" => {
+                            let mut arguments_cursor = node.walk();
+                            let arguments: Vec<Node<'_>> = node
+                                .child_by_field_name("arguments")
+                                .map(|list| list.named_children(&mut arguments_cursor).collect())
+                                .unwrap_or_default();
+                            let words: Vec<String> = arguments
+                                .iter()
+                                .filter_map(|argument| {
+                                    (argument.kind() == "string")
+                                        .then(|| evaluate_string(*argument, source, None))
+                                        .flatten()
+                                })
+                                .collect();
+                            if words.is_empty() || words.len() != arguments.len() {
+                                out.unreadable_acronym = true;
+                            }
+                            for word in words {
+                                out.acronyms.insert(word.to_lowercase(), word);
+                            }
+                        }
+                        "clear" => unreadable(out),
+                        _ => out.changes_singulars = true,
+                    }
+                }
+                for child in children {
+                    if matches!(child.kind(), "do_block" | "block") {
+                        steps.push(Read {
+                            node: child,
+                            depth: depth + 1,
+                            conditional: conditional || !opens_inflections,
+                            params: Rc::clone(&block_params),
+                        });
+                    } else if affects {
+                        if !is_inflection_object(child, source, &params)
+                            && subtree_has_inflection_call(child, source, 0)
+                        {
+                            unreadable(out);
+                        }
+                    } else if subtree_has_inflection_call(child, source, 0)
+                        && !is_inflection_object(child, source, &params)
                     {
                         unreadable(out);
                     }
-                } else if subtree_has_inflection_call(child, source, 0)
-                    && !is_inflection_object(child, source, params)
-                {
+                }
+            }
+            _ => {
+                if subtree_has_inflection_call(node, source, 0) {
                     unreadable(out);
                 }
             }
         }
-        _ => {
-            if subtree_has_inflection_call(node, source, 0) {
-                unreadable(out);
-            }
-        }
+        pending.extend(steps.into_iter().rev());
     }
 }
 

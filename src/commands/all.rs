@@ -356,4 +356,118 @@ mod tests {
         experimental.security.experimental = true;
         assert_eq!(security_of(&experimental), 2);
     }
+
+    /// The analyzer entries of `all` on the sources of `language` at `depth`, in a new
+    /// repository, on a thread with the default stack of 2 MiB.
+    fn analyzer_entries_at(
+        language: crate::core::Language,
+        depth: usize,
+    ) -> Vec<serde_json::Value> {
+        use crate::parser::deep;
+        let directory = tempfile::tempdir().expect("directory");
+        for source in deep::deep_sources_at(language, depth) {
+            if !source.slow {
+                std::fs::write(directory.path().join(&source.file), &source.source).expect("write");
+            }
+        }
+        for arguments in [
+            &["init", "-q"][..],
+            &["add", "-A"],
+            &[
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "-q",
+                "-m",
+                "deep",
+            ],
+        ] {
+            let status = std::process::Command::new("git")
+                .args(arguments)
+                .current_dir(directory.path())
+                .status()
+                .expect("git");
+            assert!(status.success(), "git {arguments:?}");
+        }
+        let path = directory.path().to_path_buf();
+        let out = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = Vec::new();
+                run(
+                    &path,
+                    &Config::default(),
+                    &Scope::default(),
+                    Format::Json,
+                    &mut out,
+                )
+                .expect("all");
+                out
+            })
+            .expect("spawn")
+            .join()
+            .expect("no stack overflow");
+        let value: serde_json::Value = serde_json::from_slice(&out).expect("json");
+        value["analyzers"].as_array().expect("analyzers").clone()
+    }
+
+    fn analyzer_names(entries: &[serde_json::Value]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|entry| entry["analyzer"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn whole_analysis_of_shallow_sources_gives_a_result_for_each_analyzer() {
+        let entries = analyzer_entries_at(crate::core::Language::Go, 1);
+        assert!(
+            entries.iter().all(|entry| entry.get("result").is_some()),
+            "{entries:?}"
+        );
+        assert!(analyzer_names(&entries).contains(&"security".to_string()));
+    }
+
+    /// Runs `all` on the sources of `language` at `LARGE_DEPTH`. Each analyzer of a run on
+    /// shallow sources gives a result, and no analyzer gives an error. A group of analyzers whose
+    /// thread panics gives no entries, thus the names of the two runs must be the same.
+    fn whole_analysis_of_deep_sources(language: crate::core::Language) {
+        let shallow = analyzer_names(&analyzer_entries_at(language, 1));
+        let entries = analyzer_entries_at(language, crate::parser::deep::LARGE_DEPTH);
+        assert_eq!(analyzer_names(&entries), shallow);
+        let failed: Vec<&serde_json::Value> = entries
+            .iter()
+            .filter(|entry| entry.get("result").is_none())
+            .collect();
+        assert!(failed.is_empty(), "{failed:?}");
+    }
+
+    macro_rules! whole_analysis_of_deep_sources {
+        ($($name:ident: $language:ident,)*) => {$(
+            #[test]
+            #[ignore = "deep: run in release with --ignored deep_whole_analysis_"]
+            fn $name() {
+                whole_analysis_of_deep_sources(crate::core::Language::$language);
+            }
+        )*};
+    }
+
+    whole_analysis_of_deep_sources! {
+        deep_whole_analysis_go: Go,
+        deep_whole_analysis_rust: Rust,
+        deep_whole_analysis_python: Python,
+        deep_whole_analysis_typescript: TypeScript,
+        deep_whole_analysis_javascript: JavaScript,
+        deep_whole_analysis_tsx: Tsx,
+        deep_whole_analysis_jsx: Jsx,
+        deep_whole_analysis_java: Java,
+        deep_whole_analysis_c: C,
+        deep_whole_analysis_cpp: Cpp,
+        deep_whole_analysis_csharp: CSharp,
+        deep_whole_analysis_ruby: Ruby,
+        deep_whole_analysis_php: Php,
+        deep_whole_analysis_bash: Bash,
+    }
 }
