@@ -278,7 +278,9 @@ struct Resolver<'a> {
     types_cache: RwLock<HashMap<TypeQuery, Vec<Id>>>,
     /// The results of `exported`, by the file and the name.
     exported_cache: RwLock<HashMap<ExportQuery, Arc<Vec<Id>>>>,
-    package_cache: RwLock<HashMap<usize, Arc<Vec<usize>>>>,
+    /// For each file, the files of its package. Files of one package share
+    /// one list.
+    packages: OnceLock<Packages<'a>>,
     visible_cache: RwLock<HashMap<usize, Arc<Vec<usize>>>>,
     /// The `cfg` twins that `twin_members` found, or an empty list when the
     /// members are not twins.
@@ -365,6 +367,33 @@ impl<K: Ord> SortedPositions<K> {
         let first = self.keys.partition_point(|key| compare(key).is_lt());
         let end = self.keys.partition_point(|key| compare(key).is_le());
         &self.positions[first..end]
+    }
+}
+
+/// The packages of the files: the files of the package of each file, and
+/// the symbols of each group of files by name.
+struct Packages<'a> {
+    /// For each file, the files of its package.
+    files: Vec<Arc<Vec<usize>>>,
+    /// For each file, the groups whose files are its package.
+    groups: Vec<Vec<usize>>,
+    /// The symbols of the files of each group, by the group and the name.
+    named: HashMap<(usize, &'a str), Vec<Id>>,
+    /// The symbols of the files that are in more than one group of
+    /// namespaces, by the name. These symbols are not in `named` for those
+    /// groups: one entry for each namespace would make the index grow with
+    /// the product of the namespaces and the symbols of a file.
+    spread: HashMap<&'a str, Vec<Id>>,
+}
+
+#[cfg(test)]
+impl Packages<'_> {
+    fn entries(&self) -> usize {
+        self.named
+            .values()
+            .chain(self.spread.values())
+            .map(Vec::len)
+            .sum()
     }
 }
 
@@ -495,7 +524,7 @@ impl<'a> Resolver<'a> {
             constructor_position_cache: RwLock::new(HashMap::new()),
             alias_constructs_cache: RwLock::new(HashMap::new()),
             exported_cache: RwLock::new(HashMap::new()),
-            package_cache: RwLock::new(HashMap::new()),
+            packages: OnceLock::new(),
             visible_cache: RwLock::new(HashMap::new()),
         }
     }
@@ -529,14 +558,14 @@ impl<'a> Resolver<'a> {
     /// The symbols with this name in the language family of `file`.
     /// The symbols with this name in one file. The symbols of a name are in
     /// the order of the files, thus a binary search finds the file.
-    fn named_in(&self, name: &str, file: usize) -> impl Iterator<Item = Id> + '_ {
+    fn named_in(&self, name: &str, file: usize) -> impl Iterator<Item = Id> + use<'_, 'a> {
         let all = self.by_name.get(name).map_or(&[][..], Vec::as_slice);
         let start = all.partition_point(|id| id.0 < file);
         let end = all.partition_point(|id| id.0 <= file);
         all[start..end].iter().copied()
     }
 
-    fn named(&self, name: &str, file: usize) -> impl Iterator<Item = Id> + '_ {
+    fn named(&self, name: &str, file: usize) -> impl Iterator<Item = Id> + use<'_, 'a> {
         let family = self.family(file);
         self.by_name
             .get(name)
@@ -546,6 +575,8 @@ impl<'a> Resolver<'a> {
             .filter(move |id| self.family(id.0) == family)
     }
 
+    /// The rule that `packages_of_files` applies to each pair of files.
+    #[cfg(test)]
     fn same_package(&self, left: usize, right: usize) -> bool {
         let (left_file, right_file) = (&self.files[left], &self.files[right]);
         match self.family(left) {
@@ -590,23 +621,171 @@ impl<'a> Resolver<'a> {
     }
 
     /// The files of the same package as `file`, with `file`.
+    #[cfg(test)]
     fn package_files(&self, file: usize) -> Arc<Vec<usize>> {
-        if let Some(found) = self.package_cache.read().get(&file) {
-            return Arc::clone(found);
+        Arc::clone(&self.packages().files[file])
+    }
+
+    /// Whether `other` is a file of the package of `file`.
+    fn in_package(&self, file: usize, other: usize) -> bool {
+        self.packages().files[file].binary_search(&other).is_ok()
+    }
+
+    /// The symbols `name` of the files of the package of `file`, in the order
+    /// of the files and of the symbols, without a look at each file.
+    fn package_named(&self, file: usize, name: &str) -> Vec<Id> {
+        let packages = self.packages();
+        let in_package = |id: &&Id| self.in_package(file, id.0);
+        let group = match packages.groups[file].as_slice() {
+            [] => return Vec::new(),
+            [group] => *group,
+            // A file with many namespaces does not read each of its groups:
+            // the cost is the number of definitions of the name.
+            _ => {
+                let all = self.by_name.get(name).into_iter().flatten();
+                return all.filter(in_package).copied().collect();
+            }
+        };
+        let mut found: Vec<Id> = packages
+            .named
+            .get(&(group, name))
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect();
+        let length = found.len();
+        found.extend(
+            packages
+                .spread
+                .get(name)
+                .into_iter()
+                .flatten()
+                .filter(in_package),
+        );
+        if found.len() > length {
+            found.sort_unstable();
         }
-        // Only these families have a package of files. For a different
-        // family, a comparison with each file gives no file.
-        let has_packages = matches!(
-            self.family(file),
-            Family::Go | Family::Java | Family::CSharp | Family::Php
-        );
-        let found: Arc<Vec<usize>> = Arc::new(
-            (0..self.files.len())
-                .filter(|other| has_packages && self.same_package(file, *other))
-                .collect(),
-        );
-        self.package_cache.write().insert(file, Arc::clone(&found));
         found
+    }
+
+    fn packages(&self) -> &Packages<'a> {
+        self.packages.get_or_init(|| self.packages_of_files())
+    }
+
+    /// For each file, the files `other` for which `same_package(file, other)`
+    /// is true, in the order of the files. The files of one directory (Go) or
+    /// of one package name (Java, C#, PHP) are a group, and the files of one
+    /// group share one list. Thus the cost is linear in the number of files.
+    fn packages_of_files(&self) -> Packages<'a> {
+        // A Go package is a directory and a package clause. The files that
+        // are not tests are one group, and the package of a test file is a
+        // second group with the test files too.
+        type GoKey<'k> = (&'k str, Option<&'k str>, bool);
+        let mut by_go_key: HashMap<GoKey<'a>, usize> = HashMap::new();
+        let mut by_module: HashMap<&str, usize> = HashMap::new();
+        let mut members: Vec<Vec<usize>> = Vec::new();
+        let new_group = |members: &mut Vec<Vec<usize>>| {
+            members.push(Vec::new());
+            members.len() - 1
+        };
+        let is_test = |path: &str| path.ends_with("_test.go");
+        let mut go_groups = Vec::with_capacity(self.files.len());
+        let mut module_groups: Vec<Vec<usize>> = Vec::with_capacity(self.files.len());
+        for (file, facts) in self.files.iter().enumerate() {
+            let key = |with_tests: bool| -> GoKey<'a> {
+                (
+                    directory(&facts.file),
+                    facts.modules.first().map(String::as_str),
+                    with_tests,
+                )
+            };
+            let without_tests = *by_go_key
+                .entry(key(false))
+                .or_insert_with(|| new_group(&mut members));
+            let with_tests = *by_go_key
+                .entry(key(true))
+                .or_insert_with(|| new_group(&mut members));
+            members[with_tests].push(file);
+            if !is_test(&facts.file) {
+                members[without_tests].push(file);
+            }
+            go_groups.push(if is_test(&facts.file) {
+                with_tests
+            } else {
+                without_tests
+            });
+            let mut groups: Vec<usize> = facts
+                .modules
+                .iter()
+                .map(|module| {
+                    *by_module
+                        .entry(module.as_str())
+                        .or_insert_with(|| new_group(&mut members))
+                })
+                .collect();
+            groups.sort_unstable();
+            groups.dedup();
+            for group in &groups {
+                members[*group].push(file);
+            }
+            module_groups.push(groups);
+        }
+        let mut named: HashMap<(usize, &'a str), Vec<Id>> = HashMap::new();
+        for (group, files) in members.iter().enumerate() {
+            for file in files {
+                if module_groups[*file].len() > 1 && module_groups[*file].contains(&group) {
+                    continue;
+                }
+                for (position, symbol) in self.files[*file].symbols.iter().enumerate() {
+                    named
+                        .entry((group, symbol.name.as_str()))
+                        .or_default()
+                        .push((*file, position));
+                }
+            }
+        }
+        let mut spread: HashMap<&'a str, Vec<Id>> = HashMap::new();
+        for (file, groups) in module_groups.iter().enumerate() {
+            if groups.len() > 1 {
+                for (position, symbol) in self.files[file].symbols.iter().enumerate() {
+                    spread
+                        .entry(symbol.name.as_str())
+                        .or_default()
+                        .push((file, position));
+                }
+            }
+        }
+        let shared: Vec<Arc<Vec<usize>>> = members.into_iter().map(Arc::new).collect();
+        let empty = Arc::new(Vec::new());
+        let (files, groups) = (0..self.files.len())
+            .map(|file| match self.family(file) {
+                Family::Go => {
+                    let group = go_groups[file];
+                    (Arc::clone(&shared[group]), vec![group])
+                }
+                Family::Java | Family::CSharp | Family::Php => match module_groups[file].as_slice()
+                {
+                    [] => (Arc::clone(&empty), Vec::new()),
+                    [group] => (Arc::clone(&shared[*group]), vec![*group]),
+                    groups => {
+                        let mut files: Vec<usize> = groups
+                            .iter()
+                            .flat_map(|group| shared[*group].iter().copied())
+                            .collect();
+                        files.sort_unstable();
+                        files.dedup();
+                        (Arc::new(files), groups.to_vec())
+                    }
+                },
+                _ => (Arc::clone(&empty), Vec::new()),
+            })
+            .unzip();
+        Packages {
+            files,
+            groups,
+            named,
+            spread,
+        }
     }
 
     fn files_through_loads(&self, file: usize) -> Vec<usize> {
@@ -640,20 +819,21 @@ impl<'a> Resolver<'a> {
     /// level. The search reads the definitions of the name, not the files of
     /// the package.
     fn has_package_top_level(&self, name: &str, file: usize) -> bool {
-        let package = self.package_files(file);
-        self.by_name.get(name).into_iter().flatten().any(|id| {
-            package.binary_search(&id.0).is_ok()
-                && self.symbol(*id).container.is_none()
-                && self.facts(*id).parent.is_none()
-        })
+        self.package_named(file, name)
+            .into_iter()
+            .any(|id| self.is_top_level(id))
     }
 
     fn top_level(&self, name: &str, files: &[usize]) -> Vec<Id> {
         files
             .iter()
             .flat_map(|&file| self.named_in(name, file))
-            .filter(|id| self.symbol(*id).container.is_none() && self.facts(*id).parent.is_none())
+            .filter(|id| self.is_top_level(*id))
             .collect()
+    }
+
+    fn is_top_level(&self, id: Id) -> bool {
+        self.symbol(id).container.is_none() && self.facts(id).parent.is_none()
     }
 
     /// The top-level definition `name` of a file, or the definition that the
@@ -911,7 +1091,11 @@ impl<'a> Resolver<'a> {
         if self.family(file) == Family::Ecma && external::is_ecma_global(name) {
             return Vec::new();
         }
-        let found = in_files(&self.package_files(file));
+        let found: Vec<Id> = self
+            .package_named(file, name)
+            .into_iter()
+            .filter(|id| self.family(id.0) == self.family(file) && is_type(id))
+            .collect();
         if !found.is_empty() {
             return found;
         }
@@ -1370,7 +1554,7 @@ impl<'a> Resolver<'a> {
                     .named(&name, file)
                     .filter(|id| {
                         self.symbol(*id).kind == SymbolKind::TypeAlias
-                            && (id.0 == file || self.package_files(file).contains(&id.0))
+                            && (id.0 == file || self.in_package(file, id.0))
                     })
                     .collect();
                 let [alias] = aliases.as_slice() else {
@@ -2560,15 +2744,10 @@ impl<'a> Resolver<'a> {
             let imported = binding.imported_name.as_deref().unwrap_or(name);
             return self.imported(binding, imported, arity);
         }
-        let package: Vec<usize> = self
-            .package_files(file)
-            .iter()
-            .copied()
-            .filter(|other| *other != file)
-            .collect();
         let found: Vec<Id> = self
-            .top_level(name, &package)
+            .package_named(file, name)
             .into_iter()
+            .filter(|id| id.0 != file && self.is_top_level(*id))
             .filter(callable)
             .collect();
         if let Some(outcome) = Outcome::of(Basis::SamePackage, self.preferred(found, arity)) {
@@ -4128,6 +4307,7 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod false_edge_tests {
     use super::testing::rows;
+    use crate::index::timing::assert_scales_linearly;
 
     /// The rows of the calls of `name`.
     fn rows_of(files: &[(&str, &str)], file: &str, name: &str) -> Vec<String> {
@@ -4444,7 +4624,7 @@ mod false_edge_tests {
         source.push_str(&"    a::f();\n".repeat(calls));
         source.push_str("}\n");
         let files = [("a.rs", source.as_str())];
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
@@ -4465,35 +4645,16 @@ mod false_edge_tests {
         calls_into_twin_modules_resolve_at(20, 20, 20);
     }
 
-    /// The best time of two runs at `size` and at `2 * size` of the parameter
-    /// that `run` grows.
-    fn assert_doubles_at_most(
-        label: &str,
-        size: usize,
-        run: impl Fn(usize) -> std::time::Duration,
-    ) {
-        let best = |size: usize| (0..2).map(|_| run(size)).min().expect("two runs");
-        let small = best(size);
-        let large = best(size * 2);
-        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
-        assert!(
-            large < allowed,
-            "{label}: {small:?} at {size}, {large:?} at {}",
-            size * 2
-        );
-        assert!(large.as_secs() < 60, "{label}: {large:?}");
-    }
-
     /// Each call has an edge to each module, thus the edges are
     /// `calls * modules`. The time must grow with the edges, also when the
     /// modules have many members.
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_calls_into_twin_modules_resolve_in_linear_time() {
-        assert_doubles_at_most("modules", 800, |size| {
+        assert_scales_linearly("modules", 800, |size| {
             calls_into_twin_modules_resolve_at(size, 10, 800)
         });
-        assert_doubles_at_most("members", 10_000, |size| {
+        assert_scales_linearly("members", 10_000, |size| {
             calls_into_twin_modules_resolve_at(20, size, 2_000)
         });
     }
@@ -4519,7 +4680,7 @@ mod false_edge_tests {
         }
         source.push_str("}\n");
         let files = [("a.rs", source.as_str())];
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
@@ -4546,7 +4707,7 @@ mod false_edge_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_calls_of_many_names_into_twin_modules_resolve_in_linear_time() {
-        assert_doubles_at_most("modules", 400, |size| {
+        assert_scales_linearly("modules", 400, |size| {
             calls_of_many_names_into_twin_modules_resolve_at(size, 400)
         });
     }
@@ -4569,7 +4730,7 @@ mod false_edge_tests {
             "}}\n\n#[cfg(not(any({features})))]\nimpl Engine {{\n    fn step(&self) {{}}\n}}\n"
         ));
         let files = [("a.rs", source.as_str())];
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
@@ -4595,22 +4756,7 @@ mod false_edge_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_methods_under_a_long_condition_resolve_in_linear_time() {
-        let size = 8_000;
-        let best = |size: usize| {
-            (0..2)
-                .map(|_| methods_under_a_long_condition_resolve_at(size))
-                .min()
-                .expect("two runs")
-        };
-        let small = best(size);
-        let large = best(size * 2);
-        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
-        assert!(
-            large < allowed,
-            "{small:?} at {size} methods, {large:?} at {} methods",
-            size * 2
-        );
-        assert!(large.as_secs() < 60, "{large:?}");
+        assert_scales_linearly("methods", 8_000, methods_under_a_long_condition_resolve_at);
     }
 
     #[test]
@@ -4880,7 +5026,7 @@ mod false_edge_tests {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
@@ -4902,22 +5048,7 @@ mod false_edge_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_calls_between_the_crates_of_a_workspace_resolve_in_linear_time() {
-        let size = 1_500;
-        let best = |size: usize| {
-            (0..2)
-                .map(|_| workspace_crates_resolve_at(size))
-                .min()
-                .expect("two runs")
-        };
-        let small = best(size);
-        let large = best(size * 2);
-        let allowed = small.max(std::time::Duration::from_millis(100)) * 3;
-        assert!(
-            large < allowed,
-            "{small:?} at {size} crates, {large:?} at {} crates",
-            size * 2
-        );
-        assert!(large.as_secs() < 60, "{large:?}");
+        assert_scales_linearly("crates", 1_500, workspace_crates_resolve_at);
     }
 
     /// Two modules of one file can import one type. The type is one type.
@@ -5149,6 +5280,245 @@ mod false_edge_tests {
         let rows = rows(&[("Item.cs", source)], "Item.cs");
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0].ends_with("[Item.cs#Item.Item]"), "{rows:?}");
+    }
+
+    /// `packages` packages of two files, in which one file calls a function
+    /// of the other file. The shape gives Go packages (a directory each) or
+    /// Java packages (a package clause each, all in one directory).
+    fn calls_between_the_files_of_packages_resolve_at(
+        packages: usize,
+        java: bool,
+    ) -> std::time::Duration {
+        let mut sources: Vec<(String, String)> = vec![(
+            "go.mod".to_string(),
+            "module example.com/shop\n".to_string(),
+        )];
+        for package in 0..packages {
+            if java {
+                sources.push((
+                    format!("src/A{package}.java"),
+                    format!("package p{package};\n\nclass A{package} {{\n    void run() {{ B{package}.help{package}(); }}\n}}\n"),
+                ));
+                sources.push((
+                    format!("src/B{package}.java"),
+                    format!("package p{package};\n\nclass B{package} {{\n    static void help{package}() {{}}\n}}\n"),
+                ));
+            } else {
+                sources.push((
+                    format!("p{package}/a.go"),
+                    format!("package p{package}\n\nfunc run() {{\n\thelp()\n}}\n"),
+                ));
+                sources.push((
+                    format!("p{package}/b.go"),
+                    format!("package p{package}\n\nfunc help() {{}}\n"),
+                ));
+            }
+        }
+        let files: Vec<(&str, &str)> = sources
+            .iter()
+            .map(|(path, source)| (path.as_str(), source.as_str()))
+            .collect();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        let started = crate::index::timing::Stopwatch::start();
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let unique = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| reference.resolution.status == super::Status::UniqueCandidate)
+            .count();
+        assert_eq!(unique, packages);
+        elapsed
+    }
+
+    /// The shared lists of `package_files` give the files that a comparison
+    /// of each pair of files gives.
+    #[test]
+    fn test_package_files_match_the_comparison_of_each_pair() {
+        let files = [
+            ("go.mod", "module example.com/shop\n"),
+            ("shop/a.go", "package shop\n\nfunc A() {}\n"),
+            ("shop/b.go", "package shop\n\nfunc B() {}\n"),
+            ("shop/c_test.go", "package shop_test\n\nfunc C() {}\n"),
+            ("shop/e_test.go", "package shop\n\nfunc E() {}\n"),
+            ("shop/f_test.go", "package shop_test\n\nfunc F() {}\n"),
+            ("shop/g.go", "package other\n\nfunc G() {}\n"),
+            ("shop/d.js", "function d() {}\n"),
+            ("main.go", "package main\n\nfunc main() {}\n"),
+            ("src/A.java", "package p;\n\nclass A {}\n"),
+            ("src/B.java", "package p;\n\nclass B {}\n"),
+            ("other/C.java", "package q;\n\nclass C {}\n"),
+            (
+                "src/D.cs",
+                "namespace P { class D {} }\nnamespace Q { class E {} }\n",
+            ),
+            ("src/F.cs", "namespace Q { class F {} }\n"),
+            ("src/G.cs", "namespace P { class G {} }\n"),
+            ("src/H.php", "<?php\nnamespace P;\nclass H {}\n"),
+            ("src/J.cs", "namespace P { class D {} }\n"),
+            ("src/i.py", "def i():\n    pass\n"),
+            ("src/k.rb", "def k; end\n"),
+        ];
+        let (facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        let resolver = super::Resolver::new(&facts, &manifests);
+        for file in 0..facts.len() {
+            let has_packages = matches!(
+                resolver.family(file),
+                super::Family::Go
+                    | super::Family::Java
+                    | super::Family::CSharp
+                    | super::Family::Php
+            );
+            let expected: Vec<usize> = (0..facts.len())
+                .filter(|other| has_packages && resolver.same_package(file, *other))
+                .collect();
+            assert_eq!(
+                *resolver.package_files(file),
+                expected,
+                "{}",
+                facts[file].file
+            );
+            for other in &facts {
+                for symbol in &other.symbols {
+                    let name = symbol.name.as_str();
+                    let expected: Vec<super::Id> = expected
+                        .iter()
+                        .flat_map(|package_file| resolver.named_in(name, *package_file))
+                        .collect();
+                    assert_eq!(resolver.package_named(file, name), expected, "{name}");
+                }
+            }
+            for other in 0..facts.len() {
+                assert_eq!(resolver.in_package(file, other), expected.contains(&other));
+            }
+        }
+        assert!(facts.iter().any(|file| file.modules.len() > 1));
+    }
+
+    /// A file with many namespaces is in many groups. The index of the names
+    /// of the packages has a constant number of entries for each symbol, not
+    /// one entry for each namespace of the file.
+    #[test]
+    fn test_package_name_index_is_linear_in_the_symbols_of_a_file_with_many_namespaces() {
+        let namespaces = 200;
+        let mut source = String::new();
+        for namespace in 0..namespaces {
+            source.push_str(&format!(
+                "namespace N{namespace} {{ class C{namespace} {{}} }}\n"
+            ));
+        }
+        let files = [("src/Many.cs", source.as_str())];
+        let (facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        let resolver = super::Resolver::new(&facts, &manifests);
+        let symbols: usize = facts.iter().map(|file| file.symbols.len()).sum();
+        assert_eq!(facts[0].modules.len(), namespaces);
+        assert!(
+            resolver.packages().entries() <= 3 * symbols,
+            "{} entries for {symbols} symbols",
+            resolver.packages().entries()
+        );
+    }
+
+    /// The files of a package are found without a comparison of each file of
+    /// the repository with each other file.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_calls_between_the_files_of_many_packages_resolve_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go", 8_000, |size| {
+            calls_between_the_files_of_packages_resolve_at(size, false)
+        });
+        crate::index::timing::assert_scales_linearly("java", 8_000, |size| {
+            calls_between_the_files_of_packages_resolve_at(size, true)
+        });
+    }
+
+    /// `classes` Java classes in one file, each with a method `help`, and a
+    /// call of the method of each class.
+    fn calls_of_one_method_name_in_many_classes_resolve_at(classes: usize) -> std::time::Duration {
+        let mut source = String::from("package p;\n\n");
+        for class in 0..classes {
+            source.push_str(&format!(
+                "class B{class} {{\n    static void help() {{}}\n}}\n\nclass A{class} {{\n    void run() {{ B{class}.help(); }}\n}}\n\n"
+            ));
+        }
+        let files = [("src/P.java", source.as_str())];
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        let started = crate::index::timing::Stopwatch::start();
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let unique = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| reference.resolution.status == super::Status::UniqueCandidate)
+            .count();
+        assert_eq!(unique, classes);
+        elapsed
+    }
+
+    /// The members of a type are found without a look at each member of
+    /// the repository with the same name.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_one_method_name_in_many_classes_resolves_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "classes",
+            8_000,
+            calls_of_one_method_name_in_many_classes_resolve_at,
+        );
+    }
+
+    /// One Go package of `files` files, in which each file calls a function
+    /// of the next file and a function `New` that each package of a
+    /// different directory also has.
+    fn calls_in_one_large_package_resolve_at(files: usize) -> std::time::Duration {
+        let mut sources: Vec<(String, String)> = vec![(
+            "go.mod".to_string(),
+            "module example.com/shop\n".to_string(),
+        )];
+        for position in 0..files {
+            sources.push((
+                format!("shop/f{position}.go"),
+                format!(
+                    "package shop\n\nfunc f{position}() {{\n\tf{}()\n\tNew()\n}}\n",
+                    (position + 1) % files
+                ),
+            ));
+            sources.push((
+                format!("other{position}/new.go"),
+                format!("package other{position}\n\nfunc New() {{}}\n"),
+            ));
+        }
+        sources.push((
+            "shop/new.go".to_string(),
+            "package shop\n\nfunc New() {}\n".to_string(),
+        ));
+        let inputs: Vec<(&str, &str)> = sources
+            .iter()
+            .map(|(path, source)| (path.as_str(), source.as_str()))
+            .collect();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&inputs);
+        let started = crate::index::timing::Stopwatch::start();
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let unique = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| reference.resolution.status == super::Status::UniqueCandidate)
+            .count();
+        assert_eq!(unique, files * 2);
+        elapsed
+    }
+
+    /// A lookup of a name in a package does not read each file of the
+    /// package, nor each definition of the name in the repository.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_calls_in_one_large_package_resolve_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "files",
+            16_000,
+            calls_in_one_large_package_resolve_at,
+        );
     }
 }
 
@@ -5444,7 +5814,7 @@ mod ecma_timing_tests {
             source.push_str("    this.find(1, 'a');\n");
         }
         source.push_str("  }\n}\n");
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&[("repo.ts", &source)], "repo.ts");
         let elapsed = started.elapsed();
         assert_eq!(found.len(), 10);
@@ -5470,7 +5840,7 @@ mod ecma_timing_tests {
             source.push_str("  @mark('b')\n");
         }
         source.push_str("  last(): void {}\n}\n");
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&[("service.ts", &source)], "service.ts");
         let elapsed = started.elapsed();
         assert_eq!(found.len(), 2 * size);
@@ -5496,7 +5866,7 @@ mod ecma_timing_tests {
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
         let last = format!("s{}.ts", size - 1);
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&files, &last);
         let elapsed = started.elapsed();
         // Each class has `plain`, thus only the class argument gives the edge.
@@ -5528,7 +5898,7 @@ mod ecma_timing_tests {
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
         let last = format!("s{}.ts", size - 1);
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&files, &last);
         let elapsed = started.elapsed();
         // Each class has `plain`, thus only the class argument gives the edge.
@@ -5565,7 +5935,7 @@ mod ecma_timing_tests {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = rows(&files, "main.ts");
         let elapsed = started.elapsed();
         let last = size - 1;

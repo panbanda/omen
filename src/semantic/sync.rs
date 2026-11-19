@@ -12,7 +12,7 @@ use blake3::Hasher;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 
-use crate::analyzers::complexity::analyze_symbol_complexity;
+use crate::analyzers::complexity::analyze_symbols_complexity;
 use crate::core::progress::is_tty;
 use crate::core::{Error, FileSet, Result, SourceFile};
 use crate::index::extract::extract_file;
@@ -271,8 +271,11 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let complexity_entries: HashMap<(String, u32, u32), (u32, u32)> = functions
         .iter()
         .zip(definition_ordinals(&functions))
-        .map(|(func, ordinal)| {
-            let metrics = analyze_symbol_complexity(func, &parse_result);
+        .zip(analyze_symbols_complexity(
+            functions.iter().copied(),
+            &parse_result,
+        ))
+        .map(|((func, ordinal), metrics)| {
             (
                 (func.name.clone(), func.range.start_line, ordinal),
                 (metrics.cyclomatic, metrics.cognitive),

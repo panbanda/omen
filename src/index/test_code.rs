@@ -1439,7 +1439,7 @@ mod tests {
     fn timing_a_deeply_nested_cfg_predicate_is_read_in_linear_time() {
         crate::index::timing::assert_scales_linearly("nested cfg", 400_000, |depth| {
             let predicate = nested_cfg(depth);
-            let started = std::time::Instant::now();
+            let started = crate::index::timing::Stopwatch::start();
             assert!(cfg_requires_test(&predicate));
             started.elapsed()
         });
@@ -2264,7 +2264,7 @@ mod timing_tests {
         let parsed = Parser::new()
             .parse(source.as_bytes(), language, Path::new(file))
             .unwrap();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let ranges = test_ranges_of_tree(parsed.root_node(), source.as_bytes(), language);
         let elapsed = started.elapsed();
         assert!(!ranges.is_empty(), "{file}");
