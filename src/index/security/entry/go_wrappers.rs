@@ -3969,12 +3969,17 @@ func main() {
     /// `depth` nested `chi` groups, each with a route. The time of the search, on a large stack,
     /// because this branch of the code does not limit the depth of the router expressions.
     fn nested_chi_groups(depth: usize) -> std::time::Duration {
+        nested_chi_groups_with(depth, "r.Group")
+    }
+
+    /// Like `nested_chi_groups`, with `group` in place of `r.Group` at each level.
+    fn nested_chi_groups_with(depth: usize, group: &str) -> std::time::Duration {
         let mut main = String::from(
             "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\nfunc list(w http.ResponseWriter, r *http.Request) {}\n\nfunc main() {\nr := chi.NewRouter()\n",
         );
         for level in 0..depth {
             main.push_str(&format!(
-                "r.Group(func(r chi.Router) {{\nr.Get(\"/x{level}\", list)\n"
+                "{group}(func(r chi.Router) {{\nr.Get(\"/x{level}\", list)\n"
             ));
         }
         main.push_str(&"})\n".repeat(depth));
@@ -4001,6 +4006,16 @@ func main() {
     #[ignore = "timing: run in release"]
     fn timing_nested_chi_groups_cost_linear_time() {
         assert_scales_linearly("nested chi groups", 1_000, nested_chi_groups);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_chi_groups_after_an_empty_middleware_list_cost_linear_time() {
+        assert_scales_linearly(
+            "nested chi groups after an empty middleware list",
+            4_000,
+            |depth| nested_chi_groups_with(depth, "r.With().Group"),
+        );
     }
 
     #[test]
