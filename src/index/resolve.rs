@@ -626,35 +626,58 @@ impl<'a> Resolver<'a> {
     /// of one package name (Java, C#, PHP) are a group, and the files of one
     /// group share one list. Thus the cost is linear in the number of files.
     fn packages_of_files(&self) -> Packages<'a> {
-        let mut by_directory: HashMap<&str, usize> = HashMap::new();
+        // A Go package is a directory and a package clause. The files that
+        // are not tests are one group, and the package of a test file is a
+        // second group with the test files too.
+        type GoKey<'k> = (&'k str, Option<&'k str>, bool);
+        let mut by_go_key: HashMap<GoKey<'a>, usize> = HashMap::new();
         let mut by_module: HashMap<&str, usize> = HashMap::new();
         let mut members: Vec<Vec<usize>> = Vec::new();
-        let mut group_of = |key: &'a str, groups: &mut HashMap<&'a str, usize>| {
-            *groups.entry(key).or_insert_with(|| {
-                members.push(Vec::new());
-                members.len() - 1
-            })
+        let new_group = |members: &mut Vec<Vec<usize>>| {
+            members.push(Vec::new());
+            members.len() - 1
         };
-        let mut directory_groups = Vec::with_capacity(self.files.len());
+        let is_test = |path: &str| path.ends_with("_test.go");
+        let mut go_groups = Vec::with_capacity(self.files.len());
         let mut module_groups: Vec<Vec<usize>> = Vec::with_capacity(self.files.len());
-        for facts in self.files {
-            directory_groups.push(group_of(directory(&facts.file), &mut by_directory));
+        for (file, facts) in self.files.iter().enumerate() {
+            let key = |with_tests: bool| -> GoKey<'a> {
+                (
+                    directory(&facts.file),
+                    facts.modules.first().map(String::as_str),
+                    with_tests,
+                )
+            };
+            let without_tests = *by_go_key
+                .entry(key(false))
+                .or_insert_with(|| new_group(&mut members));
+            let with_tests = *by_go_key
+                .entry(key(true))
+                .or_insert_with(|| new_group(&mut members));
+            members[with_tests].push(file);
+            if !is_test(&facts.file) {
+                members[without_tests].push(file);
+            }
+            go_groups.push(if is_test(&facts.file) {
+                with_tests
+            } else {
+                without_tests
+            });
             let mut groups: Vec<usize> = facts
                 .modules
                 .iter()
-                .map(|module| group_of(module.as_str(), &mut by_module))
+                .map(|module| {
+                    *by_module
+                        .entry(module.as_str())
+                        .or_insert_with(|| new_group(&mut members))
+                })
                 .collect();
             groups.sort_unstable();
             groups.dedup();
-            module_groups.push(groups);
-        }
-        for (file, (directory_group, groups)) in
-            directory_groups.iter().zip(&module_groups).enumerate()
-        {
-            members[*directory_group].push(file);
-            for group in groups {
+            for group in &groups {
                 members[*group].push(file);
             }
+            module_groups.push(groups);
         }
         let mut named: HashMap<(usize, &'a str), Vec<Id>> = HashMap::new();
         for (group, files) in members.iter().enumerate() {
@@ -672,7 +695,7 @@ impl<'a> Resolver<'a> {
         let (files, groups) = (0..self.files.len())
             .map(|file| match self.family(file) {
                 Family::Go => {
-                    let group = directory_groups[file];
+                    let group = go_groups[file];
                     (Arc::clone(&shared[group]), vec![group])
                 }
                 Family::Java | Family::CSharp | Family::Php => match module_groups[file].as_slice()
@@ -730,12 +753,9 @@ impl<'a> Resolver<'a> {
     /// level. The search reads the definitions of the name, not the files of
     /// the package.
     fn has_package_top_level(&self, name: &str, file: usize) -> bool {
-        let package = self.package_files(file);
-        self.by_name.get(name).into_iter().flatten().any(|id| {
-            package.binary_search(&id.0).is_ok()
-                && self.symbol(*id).container.is_none()
-                && self.facts(*id).parent.is_none()
-        })
+        self.package_named(file, name)
+            .into_iter()
+            .any(|id| self.is_top_level(id))
     }
 
     fn top_level(&self, name: &str, files: &[usize]) -> Vec<Id> {
@@ -5275,6 +5295,9 @@ mod false_edge_tests {
             ("shop/a.go", "package shop\n\nfunc A() {}\n"),
             ("shop/b.go", "package shop\n\nfunc B() {}\n"),
             ("shop/c_test.go", "package shop_test\n\nfunc C() {}\n"),
+            ("shop/e_test.go", "package shop\n\nfunc E() {}\n"),
+            ("shop/f_test.go", "package shop_test\n\nfunc F() {}\n"),
+            ("shop/g.go", "package other\n\nfunc G() {}\n"),
             ("shop/d.js", "function d() {}\n"),
             ("main.go", "package main\n\nfunc main() {}\n"),
             ("src/A.java", "package p;\n\nclass A {}\n"),
