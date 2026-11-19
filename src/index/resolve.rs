@@ -209,13 +209,13 @@ struct Resolver<'a> {
     by_name: HashMap<&'a str, Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
-    locals_by_name: Vec<HashMap<&'a str, Vec<usize>>>,
+    locals_by_name: Vec<SortedPositions<&'a str>>,
     /// For each file, the positions of the local names by owner and name, in
     /// source order. Many functions of a file can bind one name, and a lookup
     /// reads only the names of one function.
-    locals_by_owner: Vec<HashMap<&'a str, PositionsByOwner>>,
+    locals_by_owner: Vec<SortedPositions<(&'a str, Option<usize>)>>,
     /// For each file, the positions of the references by start byte, in source order.
-    references_by_start: Vec<ReferencesByStart>,
+    references_by_start: Vec<SortedPositions<usize>>,
     /// For each Ruby type, the types that have it as a direct parent type.
     ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// The results of `types`, `package_files`, and `visible_files`. The
@@ -262,34 +262,32 @@ type ExportQuery = (usize, String);
 /// The file, the name, and the qualifier of one type lookup.
 type TypeQuery = (usize, String, Option<String>);
 
-/// The positions of the local names of one name, by the definition that binds them.
-type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
-
-/// The positions of the references of one file by start byte. The two lists are in the
-/// order of the start byte and then of the position, so the positions that start at one
-/// byte are one slice in source order. A map from each byte to a list costs about ten times
-/// as much memory for each reference.
-struct ReferencesByStart {
-    starts: Vec<usize>,
+/// Positions by a key, as the positions of the references of one file by start byte. The
+/// two lists are in the order of the key and then of the position, so the positions of one
+/// key are one slice in source order. A map from each key to a list costs several times as
+/// much memory for each position.
+struct SortedPositions<K> {
+    keys: Vec<K>,
     positions: Vec<usize>,
 }
 
-impl ReferencesByStart {
-    /// `starts` gives the start byte of each reference, in the order of the positions.
-    fn new(starts: impl Iterator<Item = usize>) -> Self {
-        let mut pairs: Vec<(usize, usize)> = starts
+impl<K: Ord> SortedPositions<K> {
+    /// `keys` gives the key of each position, in the order of the positions.
+    fn new(keys: impl Iterator<Item = K>) -> Self {
+        let mut pairs: Vec<(K, usize)> = keys
             .enumerate()
-            .map(|(position, start)| (start, position))
+            .map(|(position, key)| (key, position))
             .collect();
         pairs.sort_unstable();
-        let (starts, positions) = pairs.into_iter().unzip();
-        Self { starts, positions }
+        let (keys, positions) = pairs.into_iter().unzip();
+        Self { keys, positions }
     }
 
-    /// The positions of the references that start at the byte, in source order.
-    fn at(&self, start: usize) -> &[usize] {
-        let first = self.starts.partition_point(|value| *value < start);
-        let end = self.starts.partition_point(|value| *value <= start);
+    /// The positions, in source order, of the keys for which `compare` gives `Equal`.
+    /// `compare` orders a key against the wanted key.
+    fn matching(&self, compare: impl Fn(&K) -> std::cmp::Ordering) -> &[usize] {
+        let first = self.keys.partition_point(|key| compare(key).is_lt());
+        let end = self.keys.partition_point(|key| compare(key).is_le());
         &self.positions[first..end]
     }
 }
@@ -310,35 +308,24 @@ impl<'a> Resolver<'a> {
         let locals_by_owner = files
             .iter()
             .map(|facts| {
-                let mut positions: HashMap<&str, PositionsByOwner> = HashMap::new();
-                for (position, local) in facts.locals.iter().enumerate() {
-                    positions
-                        .entry(local.name.name.as_str())
-                        .or_default()
-                        .entry(local.owner)
-                        .or_default()
-                        .push(position);
-                }
-                positions
+                SortedPositions::new(
+                    facts
+                        .locals
+                        .iter()
+                        .map(|local| (local.name.name.as_str(), local.owner)),
+                )
             })
             .collect();
         let locals_by_name = files
             .iter()
             .map(|facts| {
-                let mut positions: HashMap<&str, Vec<usize>> = HashMap::new();
-                for (position, local) in facts.locals.iter().enumerate() {
-                    positions
-                        .entry(local.name.name.as_str())
-                        .or_default()
-                        .push(position);
-                }
-                positions
+                SortedPositions::new(facts.locals.iter().map(|local| local.name.name.as_str()))
             })
             .collect();
         let references_by_start = files
             .iter()
             .map(|facts| {
-                ReferencesByStart::new(
+                SortedPositions::new(
                     facts
                         .reference_facts
                         .iter()
@@ -1079,15 +1066,14 @@ impl<'a> Resolver<'a> {
     fn locals_named(&self, file: usize, name: &str) -> impl Iterator<Item = &'a Local> + '_ {
         let locals = &self.files[file].locals;
         self.locals_by_name[file]
-            .get(name)
-            .into_iter()
-            .flatten()
+            .matching(|key| (*key).cmp(name))
+            .iter()
             .map(move |position| &locals[*position])
     }
 
     /// The references of `file` that start at the byte `start`, in source order.
     fn references_at(&self, file: usize, start: usize) -> &[usize] {
-        self.references_by_start[file].at(start)
+        self.references_by_start[file].matching(|key| key.cmp(&start))
     }
 
     /// The local name `name` that a reference at the byte `at` sees. When two
@@ -1118,10 +1104,8 @@ impl<'a> Resolver<'a> {
     ) -> impl Iterator<Item = &'a Local> + '_ {
         let locals = &self.files[file].locals;
         self.locals_by_owner[file]
-            .get(name)
-            .and_then(|owners| owners.get(&owner))
-            .into_iter()
-            .flatten()
+            .matching(|key| (key.0, key.1).cmp(&(name, owner)))
+            .iter()
             .map(move |position| &locals[*position])
     }
 
@@ -2907,18 +2891,35 @@ mod tests {
     use super::testing::rows;
 
     #[test]
-    fn references_by_start_give_the_positions_at_a_byte_in_source_order() {
+    fn sorted_positions_give_the_positions_of_a_key_in_source_order() {
+        use std::cmp::Ordering;
         let starts = [40, 10, 40, 25, 10, 40];
-        let table = super::ReferencesByStart::new(starts.iter().copied());
-        assert_eq!(table.at(10), [1, 4]);
-        assert_eq!(table.at(25), [3]);
-        assert_eq!(table.at(40), [0, 2, 5]);
-        assert!(table.at(0).is_empty());
-        assert!(table.at(30).is_empty());
-        assert!(table.at(99).is_empty());
-        assert!(super::ReferencesByStart::new(std::iter::empty())
-            .at(0)
-            .is_empty());
+        let table = super::SortedPositions::new(starts.iter().copied());
+        let at = |start: usize| table.matching(|key| key.cmp(&start)).to_vec();
+        assert_eq!(at(10), [1, 4]);
+        assert_eq!(at(25), [3]);
+        assert_eq!(at(40), [0, 2, 5]);
+        assert!(at(0).is_empty());
+        assert!(at(30).is_empty());
+        assert!(at(99).is_empty());
+        let empty = super::SortedPositions::<usize>::new(std::iter::empty());
+        assert!(empty.matching(|_| Ordering::Equal).is_empty());
+        let owned = [
+            ("b", Some(1)),
+            ("a", None),
+            ("b", Some(1)),
+            ("b", None),
+            ("a", None),
+        ];
+        let table = super::SortedPositions::new(owned.iter().copied());
+        let named = |name: &str, owner: Option<usize>| {
+            table.matching(|key| key.cmp(&(name, owner))).to_vec()
+        };
+        assert_eq!(named("a", None), [1, 4]);
+        assert_eq!(named("b", Some(1)), [0, 2]);
+        assert_eq!(named("b", None), [3]);
+        assert!(named("b", Some(2)).is_empty());
+        assert!(named("c", None).is_empty());
     }
 
     /// The rows of the calls of `name`.
