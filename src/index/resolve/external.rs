@@ -846,9 +846,7 @@ impl<'a> Resolver<'a> {
                 && self.local_in_scope(scope, name).is_none()
                 && self.binding_of(scope.file, name).is_none()
                 && !self.is_rebound(scope.file, name)
-                && self
-                    .top_level(name, &self.package_files(scope.file))
-                    .is_empty();
+                && !self.has_package_top_level(name, scope.file);
         }
         if !self.is_free_name(scope, name) {
             return false;
@@ -972,11 +970,7 @@ impl<'a> Resolver<'a> {
             Some(qualifier) => self
                 .binding_of(file, &qualifier)
                 .is_some_and(|binding| self.is_external_binding(binding)),
-            None => {
-                name == "error"
-                    && call == "Error"
-                    && self.top_level(&name, &self.package_files(file)).is_empty()
-            }
+            None => name == "error" && call == "Error" && !self.has_package_top_level(&name, file),
         }
     }
 

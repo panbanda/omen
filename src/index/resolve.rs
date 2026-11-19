@@ -622,6 +622,18 @@ impl<'a> Resolver<'a> {
     }
 
     /// The definitions that are not in a type or a function.
+    /// Whether a file of the package of `file` defines `name` at the top
+    /// level. The search reads the definitions of the name, not the files of
+    /// the package.
+    fn has_package_top_level(&self, name: &str, file: usize) -> bool {
+        let package = self.package_files(file);
+        self.by_name.get(name).into_iter().flatten().any(|id| {
+            package.binary_search(&id.0).is_ok()
+                && self.symbol(*id).container.is_none()
+                && self.facts(*id).parent.is_none()
+        })
+    }
+
     fn top_level(&self, name: &str, files: &[usize]) -> Vec<Id> {
         files
             .iter()

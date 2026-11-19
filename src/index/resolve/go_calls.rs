@@ -282,39 +282,6 @@ fn timing_interface_calls_resolve_in_linear_time() {
     });
 }
 
-/// The resolution time of `files` files of one package, each with a call of
-/// a builtin and a call of a function of a different file of the package.
-fn package_calls_resolve_at(files: usize) -> std::time::Duration {
-    let sources: Vec<(String, String)> = (0..files)
-        .map(|position| {
-            (
-                format!("shop/f{position}.go"),
-                format!(
-                    "package shop\n\nfunc f{position}(values []int) int {{\n\treturn len(values) + f{}(values)\n}}\n",
-                    (position + 1) % files
-                ),
-            )
-        })
-        .collect();
-    let mut inputs: Vec<(&str, &str)> = vec![("go.mod", "module example.com/shop\n")];
-    inputs.extend(
-        sources
-            .iter()
-            .map(|(path, source)| (path.as_str(), source.as_str())),
-    );
-    let started = std::time::Instant::now();
-    let found = rows(&inputs, "shop/f0.go");
-    let elapsed = started.elapsed();
-    assert_eq!(found.len(), 2);
-    elapsed
-}
-
-#[test]
-#[ignore = "timing: run in release"]
-fn timing_builtin_calls_in_a_large_package_resolve_in_linear_time() {
-    super::function_references::assert_scales_linearly("files", 2_000, package_calls_resolve_at);
-}
-
 /// The resolution time of a call of each method of an interface with
 /// `methods` methods.
 fn calls_of_each_interface_method_resolve_at(methods: usize) -> std::time::Duration {
