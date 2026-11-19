@@ -154,12 +154,19 @@ fn start_after_annotations(node: Node<'_>) -> Option<Node<'_>> {
 }
 
 fn collect_type_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<String>) {
+    // A stack in place of recursion, in the order of a recursive walk.
     let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
+    let mut pending: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+    pending.reverse();
+    while let Some(child) = pending.pop() {
         match child.kind() {
             TYPE_ARGUMENTS => {}
             TYPE_IDENTIFIER | SCOPED_TYPE_IDENTIFIER => out.push(context.text(child)),
-            _ => collect_type_names(child, context, out),
+            _ => {
+                let mut cursor = child.walk();
+                let children: Vec<Node<'_>> = child.named_children(&mut cursor).collect();
+                pending.extend(children.into_iter().rev());
+            }
         }
     }
 }

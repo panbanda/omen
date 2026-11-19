@@ -190,11 +190,8 @@ pub fn literal_value(node: Node<'_>) -> Node<'_> {
 }
 
 fn has_descendant(node: Node<'_>, test: &dyn Fn(Node<'_>) -> bool) -> bool {
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
-    children
-        .into_iter()
-        .any(|child| test(child) || has_descendant(child, test))
+    crate::parser::find_preorder(node, |descendant| descendant != node && test(descendant))
+        .is_some()
 }
 
 fn is_interpolation(kind: &str) -> bool {
@@ -271,14 +268,21 @@ fn is_composable(node: Node<'_>, source: &[u8]) -> bool {
 /// A string that code builds from parts: a concatenation with a literal, an
 /// interpolation, or a call of a formatting function.
 pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -> bool {
-    match node.kind() {
+    let mut node = node;
+    while matches!(
+        node.kind(),
         "parenthesized_expression"
-        | "reference_expression"
-        | "unary_expression"
-        | "await_expression"
-        | "argument" => node
-            .named_child(0)
-            .is_some_and(|inner| is_built_string(inner, source, syntax)),
+            | "reference_expression"
+            | "unary_expression"
+            | "await_expression"
+            | "argument"
+    ) {
+        let Some(inner) = node.named_child(0) else {
+            return false;
+        };
+        node = inner;
+    }
+    match node.kind() {
         "binary_expression" | "binary_operator" | "binary" | "additive_expression" => {
             let mut cursor = node.walk();
             let joins = node
@@ -317,24 +321,46 @@ pub fn is_built_string(node: Node<'_>, source: &[u8], syntax: &LanguageSyntax) -
     }
 }
 
-/// The interpolations of a string that are not in another interpolation.
+/// The interpolations of a string that are not in another interpolation, in the order of the
+/// source.
 fn outer_interpolations<'tree>(node: Node<'tree>, found: &mut Vec<Node<'tree>>) {
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if is_interpolation(child.kind()) {
-            found.push(child);
-        } else {
-            outer_interpolations(child, found);
+    crate::parser::walk_preorder(node, |descendant| {
+        if descendant == node {
+            return crate::parser::Walk::Children;
         }
-    }
+        if !descendant.is_named() {
+            return crate::parser::Walk::SkipChildren;
+        }
+        if is_interpolation(descendant.kind()) {
+            found.push(descendant);
+            return crate::parser::Walk::SkipChildren;
+        }
+        crate::parser::Walk::Children
+    });
 }
 
 /// A literal without an interpolation, or an operation whose operands are all such literals,
 /// as `"a " + "b"` is.
 pub fn is_literal(node: Node<'_>) -> bool {
+    // A stack in place of recursion, because operands and lists can nest to any depth. The
+    // result is true only when each part is a literal, so the order of the parts has no effect.
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        match literal_parts(node) {
+            Some(parts) => pending.extend(parts),
+            None => return false,
+        }
+    }
+    true
+}
+
+/// The parts of `node` that must each be a literal for `node` to be a literal, or `None` when
+/// `node` is not a literal.
+fn literal_parts(node: Node<'_>) -> Option<Vec<Node<'_>>> {
+    let not_comment = |part: &Node<'_>| !part.kind().contains("comment");
     let kind = node.kind();
     if matches!(kind, "parenthesized_expression" | "argument") {
-        return node.named_child(0).is_some_and(is_literal);
+        return node.named_child(0).map(|inner| vec![inner]);
     }
     if matches!(
         kind,
@@ -343,13 +369,13 @@ pub fn is_literal(node: Node<'_>) -> bool {
         let mut cursor = node.walk();
         let operands: Vec<Node<'_>> = node
             .named_children(&mut cursor)
-            .filter(|operand| !operand.kind().contains("comment"))
+            .filter(not_comment)
             .collect();
-        return !operands.is_empty() && operands.into_iter().all(is_literal);
+        return (!operands.is_empty()).then_some(operands);
     }
     // A list of literals, as `["ls", "-l"]` or Go `[]string{"ls"}`, is a constant.
     if kind == "composite_literal" {
-        return node.child_by_field_name("body").is_some_and(is_literal);
+        return node.child_by_field_name("body").map(|body| vec![body]);
     }
     if matches!(
         kind,
@@ -364,28 +390,34 @@ pub fn is_literal(node: Node<'_>) -> bool {
             | "array_initializer"
     ) {
         let mut cursor = node.walk();
-        return node
-            .named_children(&mut cursor)
-            .filter(|element| !element.kind().contains("comment"))
-            .all(is_literal);
+        return Some(
+            node.named_children(&mut cursor)
+                .filter(not_comment)
+                .collect(),
+        );
     }
     if kind.contains("string") {
         if node.kind() == "encapsed_string"
             && has_descendant(node, &|child| child.kind() == "variable_name")
         {
-            return false;
+            return None;
         }
         // An interpolation of literals only, as `${"users"}`, gives a constant.
         let mut interpolations = Vec::new();
         outer_interpolations(node, &mut interpolations);
-        return interpolations.into_iter().all(|interpolation| {
+        let mut parts = Vec::new();
+        for interpolation in interpolations {
             let mut cursor = interpolation.walk();
             let values: Vec<Node<'_>> = interpolation
                 .named_children(&mut cursor)
-                .filter(|value| !value.kind().contains("comment"))
+                .filter(not_comment)
                 .collect();
-            !values.is_empty() && values.into_iter().all(is_literal)
-        });
+            if values.is_empty() {
+                return None;
+            }
+            parts.extend(values);
+        }
+        return Some(parts);
     }
     [
         "integer", "float", "number", "true", "false", "null", "nil", "none", "char", "boolean",
@@ -393,6 +425,7 @@ pub fn is_literal(node: Node<'_>) -> bool {
     ]
     .iter()
     .any(|word| kind.contains(word))
+    .then(Vec::new)
 }
 
 /// The pairs of a call: each argument that is a pair, and each direct member of an object
