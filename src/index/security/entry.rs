@@ -2302,7 +2302,7 @@ pub(super) mod tests {
     use crate::index::extract::{extract_file, link_files};
     use crate::index::imports::{resolve_imports, Manifests};
     use crate::index::resolve::resolve_references;
-    pub(super) use crate::index::timing::{assert_scales_linearly, assert_scales_linearly_above};
+    pub(super) use crate::index::timing::assert_scales_linearly;
     use crate::parser::Parser;
 
     /// The entry points of one file, found on a thread with a small stack.
@@ -5512,12 +5512,7 @@ func routes() {
             #[test]
             #[ignore = "timing: run in release"]
             fn $large_test() {
-                assert_scales_linearly_above(
-                    stringify!($scenario),
-                    $small,
-                    std::time::Duration::from_millis(300),
-                    |size| $scenario(size).1,
-                );
+                assert_scales_linearly(stringify!($scenario), $small, |size| $scenario(size).1);
                 let (_, took) = $scenario($large);
                 assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
             }
