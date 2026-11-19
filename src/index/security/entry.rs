@@ -318,8 +318,7 @@ pub struct EntryShared {
     rails: std::sync::OnceLock<rails::RailsShared>,
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
     go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
-    go_call_sites: std::sync::OnceLock<go_routes::CallSites>,
-    go_packages: std::sync::OnceLock<go_routes::PackageNames>,
+    go_packages: std::sync::OnceLock<go_routes::GoPackages>,
 }
 
 /// The syntax trees that the entry point rules ask for in other files. The source
@@ -2376,7 +2375,7 @@ mod tests {
     }
 
     #[test]
-    fn the_go_package_rules_read_each_go_file_twice_and_again_only_for_a_factory_call() {
+    fn the_go_package_rules_read_each_go_file_once_and_again_only_for_a_factory_call() {
         let sources = [
             ("app/main.go", "package app\n\nimport \"net/http\"\n\nfunc main() {\n\thttp.ListenAndServe(\":80\", newRouter())\n}\n"),
             ("app/routes.go", "package app\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\nfunc newRouter() chi.Router {\n\tr := chi.NewRouter()\n\tr.Get(\"/a\", list)\n\treturn r\n}\n\nfunc list(w http.ResponseWriter, r *http.Request) {}\n"),
@@ -2416,12 +2415,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["/a"]
         );
-        // The names of the packages and the factories are two walks of each Go file: the
-        // search for the factories reads the names of the packages. `app/main.go` calls the
-        // factory `newRouter`, so a third walk reads it.
+        // One walk reads each Go file. `app/main.go` calls the factory `newRouter`, and the
+        // factories are known only after the walk of all files, so a second walk reads it.
         assert_eq!(
             trees.requests.load(std::sync::atomic::Ordering::SeqCst),
-            2 * sources.len() + 1
+            sources.len() + 1
         );
     }
 

@@ -33,14 +33,14 @@
 //! The others are an echo group that `Host` makes, a gorilla/mux route that `NewRoute()`
 //! builds, and the gin methods `Static`, `StaticFile`, `StaticFileFS`, and `StaticFS`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use tree_sitter::Node;
 
 use super::{
-    syntax, Context, Draft, EntryBasis, EntryKind, GuardsUnknownReason, Route, TreeSource,
+    syntax, Context, Draft, EntryBasis, EntryKind, GuardsUnknownReason, Route, TreeRef, TreeSource,
 };
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
@@ -436,6 +436,14 @@ fn parse_function_type(text: &str) -> Option<Signature> {
     })
 }
 
+/// Tells if the file imports the package of a framework. `Routes::new` reads a file only
+/// then, so only such a file has factories.
+fn imports_a_framework(file: &FileSymbols) -> bool {
+    Framework::ALL.into_iter().any(|framework| {
+        !package_names(file, |module| framework.owns(module), framework.package()).is_empty()
+    })
+}
+
 /// The names that the imports of a file give to a package.
 fn package_names(file: &FileSymbols, owns: impl Fn(&str) -> bool, package: &str) -> Vec<String> {
     file.imports
@@ -708,8 +716,9 @@ impl<'a> Context<'a> {
     fn go_function_referenced(&self, key: &str) -> bool {
         self.all_parsed
             .shared()
-            .go_call_sites
+            .go_packages
             .get_or_init(|| CallSites::build(self.all, self.all_parsed))
+            .call_sites
             .is_referenced(key)
     }
 
@@ -719,8 +728,9 @@ impl<'a> Context<'a> {
     fn go_factory_blocked(&self, key: &str) -> bool {
         self.all_parsed
             .shared()
-            .go_call_sites
+            .go_packages
             .get_or_init(|| CallSites::build(self.all, self.all_parsed))
+            .call_sites
             .is_blocked(key)
     }
 
@@ -1420,31 +1430,15 @@ pub(super) struct PackageNames {
     by_package: HashMap<(String, String), Arc<HashSet<String>>>,
 }
 
-impl PackageNames {
-    pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> Self {
-        let mut sets: HashMap<(String, String), HashSet<String>> = HashMap::new();
-        for (position, file) in files.iter().enumerate() {
-            if file.language != Language::Go {
-                continue;
-            }
-            let Some(tree) = trees.tree(position) else {
-                continue;
-            };
-            let root = tree.root_node();
-            let key = (
-                directory_of(&file.file).to_string(),
-                package_name(root, &tree.source),
-            );
-            declared_names(root, &tree.source, sets.entry(key).or_default());
-        }
-        Self {
-            by_package: sets
-                .into_iter()
-                .map(|(key, names)| (key, Arc::new(names)))
-                .collect(),
-        }
-    }
+/// The facts of all Go files that the route rules share: the names of each package and the
+/// call sites of the factories. One walk of the files of each directory gives both.
+#[derive(Default)]
+pub(super) struct GoPackages {
+    pub(super) names: PackageNames,
+    pub(super) call_sites: CallSites,
+}
 
+impl PackageNames {
     fn names(&self, key: &(String, String)) -> Arc<HashSet<String>> {
         self.by_package.get(key).cloned().unwrap_or_default()
     }
@@ -1797,7 +1791,8 @@ impl<'a> Context<'a> {
                 self.all_parsed
                     .shared()
                     .go_packages
-                    .get_or_init(|| PackageNames::build(self.all, self.all_parsed))
+                    .get_or_init(|| CallSites::build(self.all, self.all_parsed))
+                    .names
                     .names(&key)
             })
             .contains(self.text(node))
@@ -1907,16 +1902,19 @@ impl CallSites {
         self.referenced.contains(key)
     }
 
-    /// The facts for all Go files. One walk of the syntax of each file finds the factories
-    /// and the names that the file mentions. Then one pass over the references, and a second
-    /// walk of only the files that call a factory, classify each use of a factory. A tree is
-    /// in use only during the walk of its file.
-    pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> Self {
-        // The names of the Go symbols. The names of the factories are some of them, so the
-        // first walk can keep the mentions of these names before it knows the factories.
+    /// The facts for all Go files. One walk of the files of each directory finds the names
+    /// of each package, the factories, and the names that each file mentions. The search for
+    /// the factories of a file reads the names of its package, so the trees of one directory
+    /// are in use together, and only those. Then one pass over the references, and a second
+    /// walk of only the files that call a factory, classify each use of a factory: the
+    /// factories are known only after the first walk of all files.
+    pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> GoPackages {
+        // A factory is a symbol of a Go file that imports a framework, so the names of the
+        // symbols of these files contain the names of the factories. The first walk keeps
+        // the mentions of these names before it knows the factories.
         let symbol_names: HashSet<&str> = files
             .iter()
-            .filter(|file| file.language == Language::Go)
+            .filter(|file| file.language == Language::Go && imports_a_framework(file))
             .flat_map(|file| &file.symbols)
             .map(|symbol| symbol.name.as_str())
             .collect();
@@ -1936,35 +1934,71 @@ impl CallSites {
         // declarations of the key. The alias has the name of its base type, and tells if
         // the base type cannot be read as a name of the same package.
         let mut types: TypeTable = HashMap::new();
+        // The Go files of each directory, in the order of their positions. The order of the
+        // directories does not change a result: each table that the walk fills has the
+        // directory in its key, or is a set.
+        let mut by_directory: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
         for (position, file) in files.iter().enumerate() {
-            if file.language != Language::Go {
-                continue;
-            }
-            let Some(tree) = trees.tree(position) else {
-                continue;
-            };
-            mentioned[position] = Some(Self::mentions(
-                tree.root_node(),
-                &tree.source,
-                &symbol_names,
-            ));
-            let context = Context::new(&tree, file, files, trees, &[]);
-            let directory = directory_of(&file.file);
-            for (name, alias) in collect_aliases(tree.root_node(), &tree.source) {
-                let entry = types
-                    .entry((directory.to_string(), name))
-                    .or_insert((0, None));
-                entry.0 += 1;
-                entry.1 = alias;
-            }
-            for (key, wrapper) in factory_keys(&context, tree.root_node()) {
-                if let Some(kind) = wrapper {
-                    wrappers.insert(key.clone());
-                    raw_wrapper_types.push((key.clone(), kind));
-                }
-                factories.insert(key);
+            if file.language == Language::Go {
+                by_directory
+                    .entry(directory_of(&file.file))
+                    .or_default()
+                    .push(position);
             }
         }
+        let mut package_names: HashMap<(String, String), Arc<HashSet<String>>> = HashMap::new();
+        for (directory, positions) in &by_directory {
+            let parsed: Vec<(usize, TreeRef<'_>, String)> = positions
+                .iter()
+                .filter_map(|position| {
+                    let tree = trees.tree(*position)?;
+                    let package = package_name(tree.root_node(), &tree.source);
+                    Some((*position, tree, package))
+                })
+                .collect();
+            let mut sets: HashMap<&str, HashSet<String>> = HashMap::new();
+            for (_, tree, package) in &parsed {
+                declared_names(
+                    tree.root_node(),
+                    &tree.source,
+                    sets.entry(package).or_default(),
+                );
+            }
+            let sets: HashMap<&str, Arc<HashSet<String>>> = sets
+                .into_iter()
+                .map(|(package, names)| (package, Arc::new(names)))
+                .collect();
+            for (position, tree, package) in &parsed {
+                let (position, file) = (*position, &files[*position]);
+                mentioned[position] = Some(Self::mentions(
+                    tree.root_node(),
+                    &tree.source,
+                    &symbol_names,
+                ));
+                let context = Context::new(tree, file, files, trees, &[]);
+                let _ = context.go_declared.set(Arc::clone(&sets[package.as_str()]));
+                for (name, alias) in collect_aliases(tree.root_node(), &tree.source) {
+                    let entry = types
+                        .entry((directory.to_string(), name))
+                        .or_insert((0, None));
+                    entry.0 += 1;
+                    entry.1 = alias;
+                }
+                for (key, wrapper) in factory_keys(&context, tree.root_node()) {
+                    if let Some(kind) = wrapper {
+                        wrappers.insert(key.clone());
+                        raw_wrapper_types.push((key.clone(), kind));
+                    }
+                    factories.insert(key);
+                }
+            }
+            for (package, names) in sets {
+                package_names.insert((directory.to_string(), package.to_string()), names);
+            }
+        }
+        let names = PackageNames {
+            by_package: package_names,
+        };
         let mut blocked = HashSet::new();
         let mut memo: HashMap<(String, String), Option<String>> = HashMap::new();
         let mut wrapper_types: Vec<(String, String, String)> = Vec::new();
@@ -1986,9 +2020,12 @@ impl CallSites {
             }
         }
         if factories.is_empty() {
-            return Self {
-                blocked,
-                referenced,
+            return GoPackages {
+                names,
+                call_sites: Self {
+                    blocked,
+                    referenced,
+                },
             };
         }
         // A wrapper type can define a method that hides a method of the router, or that
@@ -2046,7 +2083,7 @@ impl CallSites {
                     (!keys.is_empty()).then_some((reference, keys))
                 })
                 .collect();
-            let Some(names) = &mentioned[position] else {
+            let Some(mentions) = &mentioned[position] else {
                 blocked.extend(
                     sites
                         .iter()
@@ -2055,7 +2092,7 @@ impl CallSites {
                 );
                 continue;
             };
-            blocked_names.extend(names.iter().filter(|name| by_name.contains_key(*name)));
+            blocked_names.extend(mentions.iter().filter(|name| by_name.contains_key(*name)));
             if sites.is_empty() {
                 continue;
             }
@@ -2069,6 +2106,11 @@ impl CallSites {
                 continue;
             };
             let context = Context::new(&tree, file, files, trees, &[]);
+            let package = (
+                directory_of(&file.file).to_string(),
+                package_name(tree.root_node(), &tree.source),
+            );
+            let _ = context.go_declared.set(names.names(&package));
             let own_index = FileUses::new(tree.root_node(), &tree.source, file, &context, false);
             let mut other_index: Option<FileUses<'_, '_>> = None;
             for (reference, keys) in sites {
@@ -2098,9 +2140,12 @@ impl CallSites {
                 blocked.extend(keys.iter().map(|key| key.to_string()));
             }
         }
-        Self {
-            blocked,
-            referenced,
+        GoPackages {
+            names,
+            call_sites: Self {
+                blocked,
+                referenced,
+            },
         }
     }
 
