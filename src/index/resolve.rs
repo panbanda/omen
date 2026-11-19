@@ -265,12 +265,17 @@ struct Resolver<'a> {
     locals_by_owner: Vec<HashMap<&'a str, PositionsByOwner>>,
     /// For each file, the positions of the references by start byte, in source order.
     references_by_start: Vec<HashMap<usize, Vec<usize>>>,
+    /// For each file, the end byte and the position of the references by
+    /// start byte, sorted. A chain of calls has many calls with one start.
+    references_by_span: Vec<HashMap<usize, Vec<(usize, usize)>>>,
     /// For each Ruby type, the types that have it as a direct parent type.
     ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// For each Go type, the Go structs that embed it.
     go_embedders: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// For each Go type, the methods that it has itself.
     go_methods: OnceLock<BTreeMap<Id, Vec<Id>>>,
+    /// For each file, the test runners of its packages.
+    test_runners: OnceLock<Vec<crate::index::imports::TestRunners>>,
     /// The results of `implementations`, by the interface.
     implementations_cache: RwLock<HashMap<Id, Arc<ImplementationsByName>>>,
     /// The results of `types`, `package_files`, and `visible_files`. The
@@ -431,6 +436,22 @@ impl<'a> Resolver<'a> {
                 positions
             })
             .collect();
+        let references_by_span = files
+            .iter()
+            .map(|facts| {
+                let mut spans: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+                for (position, reference) in facts.reference_facts.iter().enumerate() {
+                    spans
+                        .entry(reference.start_byte)
+                        .or_default()
+                        .push((reference.end_byte, position));
+                }
+                for list in spans.values_mut() {
+                    list.sort_unstable();
+                }
+                spans
+            })
+            .collect();
         let rebound = files
             .iter()
             .flat_map(|facts| {
@@ -500,9 +521,11 @@ impl<'a> Resolver<'a> {
             locals_by_name,
             locals_by_owner,
             references_by_start,
+            references_by_span,
             ruby_children: OnceLock::new(),
             go_embedders: OnceLock::new(),
             go_methods: OnceLock::new(),
+            test_runners: OnceLock::new(),
             implementations_cache: RwLock::new(HashMap::new()),
             types_cache: RwLock::new(HashMap::new()),
             twin_members_cache: RwLock::new(HashMap::new()),
@@ -1437,6 +1460,23 @@ impl<'a> Resolver<'a> {
         self.references_by_start[file]
             .get(&start)
             .map_or(&[], Vec::as_slice)
+    }
+
+    /// The references of `file` that start at `start` and end at or before
+    /// `end`, sorted by the end byte and then by source order.
+    fn references_within(&self, file: usize, start: usize, end: usize) -> &[(usize, usize)] {
+        let spans = self.references_by_span[file]
+            .get(&start)
+            .map_or(&[][..], Vec::as_slice);
+        &spans[..spans.partition_point(|(other, _)| *other <= end)]
+    }
+
+    /// The first reference in source order that has exactly the bytes
+    /// `start` to `end`.
+    fn reference_spanning(&self, file: usize, start: usize, end: usize) -> Option<usize> {
+        let within = self.references_within(file, start, end);
+        let first = within.partition_point(|(other, _)| *other < end);
+        within.get(first).map(|(_, position)| *position)
     }
 
     /// The local name `name` that a reference at the byte `at` sees. When two
@@ -3322,7 +3362,6 @@ impl<'a> Resolver<'a> {
         site: &ReferenceFacts,
         depth: usize,
     ) -> Outcome {
-        let facts = &self.files[file];
         let chain = self.chain(file, site.owner);
         let name = reference.name.as_str();
         let arity = reference.arity;
@@ -3421,12 +3460,8 @@ impl<'a> Resolver<'a> {
             Some(Receiver::Expression) => {
                 // A receiver that is a call has the type of the result of that call.
                 let receiver = site.receiver;
-                let call = receiver.and_then(|(start, end)| {
-                    self.references_at(file, start)
-                        .iter()
-                        .copied()
-                        .find(|other| facts.reference_facts[*other].end_byte == end)
-                });
+                let call =
+                    receiver.and_then(|(start, end)| self.reference_spanning(file, start, end));
                 // A receiver that is a chain of names has the declared type
                 // of its last field.
                 let types = match call {

@@ -994,67 +994,90 @@ impl FileContext<'_> {
             .map(|position| self.file.symbols[position].key.to_string())
     }
 
-    /// Walks the tree for the sinks that are not calls.
-    /// The walk uses a cursor and not recursion, because generated source can
-    /// have a very deep tree.
+    /// Walks the tree for the sinks that are not calls. The walk uses a cursor and not
+    /// recursion, because generated source can have a very deep tree. It keeps the ancestors
+    /// of the node, the nearest last, because `Node::parent` searches from the root.
     fn tree_sinks(&self, root: Node<'_>, sinks: &mut Vec<Sink>, covered: &HashSet<usize>) {
-        crate::parser::walk_preorder(root, |node| {
-            let kind = node.kind();
-            if self.syntax.string_kinds.contains(&kind) {
-                let literal = syntax::text(node, self.source);
-                if let Some(prefix) = syntax::token_prefix(literal) {
-                    sinks.push(self.sink(
-                        SinkCategory::HardcodedCredential,
-                        Span::of(&node),
-                        self.enclosing_key(node.start_byte()),
-                        prefix,
-                        SinkBasis::Builtin,
-                        false,
-                    ));
-                }
-                return crate::parser::Walk::SkipChildren;
+        let mut ancestors: Vec<Node<'_>> = Vec::new();
+        let mut cursor = root.walk();
+        loop {
+            let node = cursor.node();
+            if self.tree_sink(node, &ancestors, sinks, covered) && cursor.goto_first_child() {
+                ancestors.push(node);
+                continue;
             }
-            if self.syntax.unsafe_kinds.contains(&kind)
-                && self.has_target(|target| matches!(target, Target::UnsafeBlock))
-            {
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    return;
+                }
+                ancestors.pop();
+            }
+        }
+    }
+
+    /// Reads the sinks of one node. Returns false when the walk must not go into the children.
+    fn tree_sink(
+        &self,
+        node: Node<'_>,
+        ancestors: &[Node<'_>],
+        sinks: &mut Vec<Sink>,
+        covered: &HashSet<usize>,
+    ) -> bool {
+        let kind = node.kind();
+        if self.syntax.string_kinds.contains(&kind) {
+            let literal = syntax::text(node, self.source);
+            if let Some(prefix) = syntax::token_prefix(literal) {
                 sinks.push(self.sink(
-                    SinkCategory::MemoryUnsafe,
+                    SinkCategory::HardcodedCredential,
                     Span::of(&node),
                     self.enclosing_key(node.start_byte()),
-                    "unsafe",
+                    prefix,
                     SinkBasis::Builtin,
                     false,
                 ));
             }
-            if self.syntax.mention_kinds.contains(&kind) && self.mention(node, sinks) {
-                return crate::parser::Walk::SkipChildren;
+            return false;
+        }
+        if self.syntax.unsafe_kinds.contains(&kind)
+            && self.has_target(|target| matches!(target, Target::UnsafeBlock))
+        {
+            sinks.push(self.sink(
+                SinkCategory::MemoryUnsafe,
+                Span::of(&node),
+                self.enclosing_key(node.start_byte()),
+                "unsafe",
+                SinkBasis::Builtin,
+                false,
+            ));
+        }
+        if self.syntax.mention_kinds.contains(&kind) && self.mention(node, sinks) {
+            return false;
+        }
+        if self.syntax.keyed_kinds.contains(&kind) {
+            self.keyed_field(node, ancestors, sinks);
+        }
+        if self.syntax.assignment_kinds.contains(&kind) {
+            if self.has_target(|target| matches!(target, Target::MemberAssignment { .. })) {
+                self.member_assignment(node, sinks);
             }
-            if self.syntax.keyed_kinds.contains(&kind) {
-                self.keyed_field(node, sinks);
+            if self.has_target(|target| matches!(target, Target::Assignment { .. })) {
+                self.assignment(node, sinks);
             }
-            if self.syntax.assignment_kinds.contains(&kind) {
-                if self.has_target(|target| matches!(target, Target::MemberAssignment { .. })) {
-                    self.member_assignment(node, sinks);
-                }
-                if self.has_target(|target| matches!(target, Target::Assignment { .. })) {
-                    self.assignment(node, sinks);
-                }
-            }
-            if self.syntax.attribute_kinds.contains(&kind) {
-                self.attribute(node, sinks);
-            }
-            if self.syntax.property_kinds.contains(&kind) {
-                self.object_property(node, sinks, covered);
-            }
-            crate::parser::Walk::Children
-        });
+        }
+        if self.syntax.attribute_kinds.contains(&kind) {
+            self.attribute(node, sinks);
+        }
+        if self.syntax.property_kinds.contains(&kind) {
+            self.object_property(node, ancestors.last().copied(), sinks, covered);
+        }
+        true
     }
 
     fn has_target(&self, test: impl Fn(&Target) -> bool) -> bool {
         self.specs.iter().any(|spec| test(&spec.target))
     }
 
-    fn keyed_field(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
+    fn keyed_field(&self, node: Node<'_>, ancestors: &[Node<'_>], sinks: &mut Vec<Sink>) {
         let Some((key, _)) = syntax::key_value(node, self.source) else {
             return;
         };
@@ -1075,7 +1098,7 @@ impl FileContext<'_> {
             {
                 if key == wanted_key.to_lowercase()
                     && syntax::holds(&spec.predicate, &[value], self.source, &self.syntax)
-                    && self.literal_has_type(node, module, owner)
+                    && self.literal_has_type(node, ancestors, module, owner)
                 {
                     // A value can hold a literal, and a literal can be a secret. Thus the text
                     // of the sink has the value only when the value is a chain of names.
@@ -1102,9 +1125,14 @@ impl FileContext<'_> {
 
     /// The nearest composite literal around the node has the type `owner` of the module,
     /// and the imports resolve the type. A map literal has no such type.
-    fn literal_has_type(&self, node: Node<'_>, module: &str, owner: &str) -> bool {
-        let mut parent = node.parent();
-        while let Some(candidate) = parent {
+    fn literal_has_type(
+        &self,
+        node: Node<'_>,
+        ancestors: &[Node<'_>],
+        module: &str,
+        owner: &str,
+    ) -> bool {
+        for &candidate in ancestors.iter().rev() {
             if candidate.kind() == "composite_literal" {
                 let Some(declared) = candidate.child_by_field_name("type") else {
                     return false;
@@ -1130,7 +1158,6 @@ impl FileContext<'_> {
                     Owner::Repository | Owner::Unknown => false,
                 };
             }
-            parent = candidate.parent();
         }
         false
     }
@@ -1213,8 +1240,14 @@ impl FileContext<'_> {
 
     /// Reports a property of an object literal that a row names, unless the object is an
     /// argument of a call that the call rows read.
-    fn object_property(&self, node: Node<'_>, sinks: &mut Vec<Sink>, covered: &HashSet<usize>) {
-        let Some(object) = node.parent().filter(|parent| parent.kind() == "object") else {
+    fn object_property(
+        &self,
+        node: Node<'_>,
+        parent: Option<Node<'_>>,
+        sinks: &mut Vec<Sink>,
+        covered: &HashSet<usize>,
+    ) {
+        let Some(object) = parent.filter(|parent| parent.kind() == "object") else {
             return;
         };
         if covered.contains(&object.start_byte()) {
