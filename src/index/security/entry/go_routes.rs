@@ -44,7 +44,9 @@ use super::{
 };
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
-use crate::index::model::{ImportKind, ImportTarget, Reference, Span, Symbol, SymbolKind};
+use crate::index::model::{
+    ImportBinding, ImportKind, ImportTarget, Reference, Span, Symbol, SymbolKind,
+};
 
 /// The methods that `Any` registers. gin v1.11.0 `anyMethods`.
 /// The guard text of a middleware argument that is not a name. An entry point with this guard
@@ -1593,12 +1595,7 @@ impl<'a> Context<'a> {
                     return None;
                 }
                 let import = (operand.kind() == "identifier")
-                    .then(|| {
-                        self.file.imports.iter().find(|binding| {
-                            binding.kind == ImportKind::Module
-                                && binding.local_name.as_deref() == Some(self.text(operand))
-                        })
-                    })
+                    .then(|| self.go_module_import(self.text(operand)))
                     .flatten();
                 // Another qualifier is a variable or a field. The index has no symbol for it.
                 let binding = import?;
@@ -1633,6 +1630,26 @@ impl<'a> Context<'a> {
             directory,
             name,
         )
+    }
+
+    /// The first import of a module that binds the local name. A file can have many imports,
+    /// and a file with a handler of each package looks up each of them.
+    fn go_module_import(&self, local_name: &str) -> Option<&'a ImportBinding> {
+        self.go_module_imports
+            .get_or_init(|| {
+                let mut by_name = HashMap::new();
+                for binding in &self.file.imports {
+                    if binding.kind != ImportKind::Module {
+                        continue;
+                    }
+                    if let Some(name) = binding.local_name.as_deref() {
+                        by_name.entry(name).or_insert(binding);
+                    }
+                }
+                by_name
+            })
+            .get(local_name)
+            .copied()
     }
 
     fn package_lookup(
