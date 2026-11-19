@@ -139,10 +139,19 @@ pub struct Draft<'tree> {
     pub condition: Option<Condition>,
     /// A method that a call defines without a body of its own, as Ruby
     /// `attr_reader :name` does. One node can define several of them.
-    pub generated: bool,
+    pub generated: Option<GeneratedFor>,
     /// The wrapper type of the `self` parameter of a Rust method, as `Arc`
     /// for `self: &Arc<Self>`.
     pub self_wrapper: Option<&'static str>,
+}
+
+/// The objects that have a method that a call generates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneratedFor {
+    /// The objects of the type, as Ruby `attr_reader :name` in a class body gives.
+    Instances,
+    /// The type itself, as Ruby `attr_reader :name` in `class << self` gives.
+    Type,
 }
 
 /// The `cfg` attributes that control a Rust definition. Two definitions of
@@ -185,6 +194,8 @@ pub struct LinkFacts {
     pub test_entry_in_test_code: bool,
     pub condition: Option<Condition>,
     pub self_wrapper: Option<&'static str>,
+    /// See `Draft::generated`.
+    pub generated: Option<GeneratedFor>,
     /// The names, different from its own, under which the module exports
     /// this top-level symbol, as `export { a as b }` gives `b` to `a`.
     pub export_aliases: Vec<String>,
@@ -498,7 +509,7 @@ pub trait LanguageSpec: Sync {
         &self,
         _node: Node<'tree>,
         _context: &Context<'_, 'tree>,
-    ) -> Vec<(Node<'tree>, String)> {
+    ) -> Vec<(Node<'tree>, String, GeneratedFor)> {
         Vec::new()
     }
 
@@ -1137,7 +1148,7 @@ impl<'tree> Extractor<'_, 'tree> {
         self.spec
             .generated_methods(node, &context)
             .into_iter()
-            .map(|(name_node, name)| {
+            .map(|(name_node, name, owner)| {
                 let mut draft = self.new_draft(node, name_node, SymbolKind::Method, &context);
                 draft.name = name;
                 draft.span = Span::of(&name_node);
@@ -1145,7 +1156,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 draft.parameter_count = None;
                 draft.parameter_types = None;
                 draft.return_type = None;
-                draft.generated = true;
+                draft.generated = Some(owner);
                 let exported = self.spec.exported(&draft, &context);
                 (draft, exported)
             })
@@ -1190,7 +1201,7 @@ impl<'tree> Extractor<'_, 'tree> {
             named_by_binding: false,
             condition: None,
             self_wrapper: None,
-            generated: false,
+            generated: None,
         }
     }
 
@@ -2023,7 +2034,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let positions: HashMap<usize, usize> = found
         .iter()
         .enumerate()
-        .filter(|(_, (draft, _))| !draft.generated)
+        .filter(|(_, (draft, _))| draft.generated.is_none())
         .map(|(position, (draft, _))| (draft.node.id(), position))
         .collect();
     let position_of = |owner: Option<usize>| owner.and_then(|id| positions.get(&id).copied());
@@ -2075,11 +2086,12 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut used: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut ordinals = vec![0; found.len()];
-    let pass = |draft: &Draft<'_>| match (draft.generated, draft.kind == SymbolKind::Field) {
-        (false, false) => 0,
-        (true, _) => 1,
-        (false, true) => 2,
-    };
+    let pass =
+        |draft: &Draft<'_>| match (draft.generated.is_some(), draft.kind == SymbolKind::Field) {
+            (false, false) => 0,
+            (true, _) => 1,
+            (false, true) => 2,
+        };
     for current in 0..3 {
         for (position, (draft, _)) in found.iter().enumerate() {
             if pass(draft) == current {
@@ -2152,6 +2164,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             test_entry_in_test_code,
             condition: draft.condition,
             self_wrapper: draft.self_wrapper,
+            generated: draft.generated,
             export_aliases,
         });
     }

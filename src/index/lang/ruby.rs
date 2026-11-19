@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use tree_sitter::Node;
 
-use crate::index::extract::{Context, DefinitionRule, Draft, LanguageSpec, NameRule, ScopeRole};
+use crate::index::extract::{
+    Context, DefinitionRule, Draft, GeneratedFor, LanguageSpec, NameRule, ScopeRole,
+};
 use crate::index::model::{Exported, Span, SymbolKind};
 
 use crate::index::model::{ImportBinding, ImportKind, ImportTarget};
@@ -52,6 +54,7 @@ const METHOD: &str = "method";
 const SINGLETON_METHOD: &str = "singleton_method";
 const CLASS: &str = "class";
 const MODULE: &str = "module";
+const SINGLETON_CLASS: &str = "singleton_class";
 const LAMBDA: &str = "lambda";
 const CALL: &str = "call";
 const ASSIGNMENT: &str = "assignment";
@@ -424,7 +427,7 @@ impl LanguageSpec for Ruby {
         &self,
         node: Node<'tree>,
         context: &Context<'_, 'tree>,
-    ) -> Vec<(Node<'tree>, String)> {
+    ) -> Vec<(Node<'tree>, String, GeneratedFor)> {
         let direct_member = context
             .scopes
             .last()
@@ -443,6 +446,18 @@ impl LanguageSpec for Ruby {
         else {
             return Vec::new();
         };
+        // `class << self` is not a scope. Its body gives methods of the type.
+        let mut owner = GeneratedFor::Instances;
+        let mut ancestor = context.parent(node);
+        while let Some(current) =
+            ancestor.filter(|current| ![CLASS, MODULE].contains(&current.kind()))
+        {
+            if current.kind() == SINGLETON_CLASS {
+                owner = GeneratedFor::Type;
+                break;
+            }
+            ancestor = context.parent(current);
+        }
         let mut methods = Vec::new();
         let mut cursor = arguments.walk();
         for argument in arguments.named_children(&mut cursor) {
@@ -450,10 +465,10 @@ impl LanguageSpec for Ruby {
                 continue;
             };
             if reader {
-                methods.push((argument, name.clone()));
+                methods.push((argument, name.clone(), owner));
             }
             if writer {
-                methods.push((argument, format!("{name}=")));
+                methods.push((argument, format!("{name}="), owner));
             }
         }
         methods
@@ -543,7 +558,7 @@ impl LanguageSpec for Ruby {
     /// definition has the visibility of a definition at that level.
     fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
         let node = draft.node;
-        if !draft.generated && [LAMBDA, CALL].contains(&node.kind()) {
+        if draft.generated.is_none() && [LAMBDA, CALL].contains(&node.kind()) {
             return Exported::NotExported;
         }
         let Some(owner) = context
@@ -559,7 +574,8 @@ impl LanguageSpec for Ruby {
             .last()
             .is_some_and(|scope| scope.role == ScopeRole::Type);
         // The node of a generated method is the call that defines it.
-        let is_method = draft.generated || [METHOD, SINGLETON_METHOD].contains(&node.kind());
+        let is_method =
+            draft.generated.is_some() || [METHOD, SINGLETON_METHOD].contains(&node.kind());
         if is_method && direct_member && !is_public_method(node, &draft.name, context) {
             return Exported::NotExported;
         }
@@ -643,6 +659,25 @@ mod tests {
                 "Method inline Circle 19-20 not_exported",
                 "Method open Circle 23-24 exported",
                 "Method closed Circle 28-29 not_exported",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_a_call_in_a_class_body_does_not_bind_to_an_instance_accessor() {
+        // In the class body `self` is the class. `attr_reader :size` gives
+        // objects of `Box` a method, not the class. `attr_reader` in
+        // `class << self` gives the class a method.
+        let source = "class Box\n  attr_reader :size\n\n  class << self\n    attr_reader :registry\n  end\n\n  size\n  registry\n\n  def area\n    size\n  end\nend\n";
+        let rows = crate::index::resolve::testing::rows(&[("box.rb", source)], "box.rb");
+        assert_eq!(
+            rows,
+            [
+                "2 Box>attr_reader Unresolved - []",
+                "5 Box>attr_reader Unresolved - []",
+                "8 Box>size Ambiguous NameOnly [box.rb#Box.size]",
+                "9 Box>registry UniqueCandidate EnclosingType [box.rb#Box.registry]",
+                "12 Box.area>size UniqueCandidate EnclosingType [box.rb#Box.size]",
             ]
         );
     }

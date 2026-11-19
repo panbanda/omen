@@ -40,16 +40,6 @@
     "tracking": "tree-sitter-go 0.25.0 does not parse a method with type parameters"
   },
   {
-    "id": "ruby/idioms/calls/attr_accessor_call/no_missed_edge",
-    "reason": "no edge to store.rb:limit:3",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/calls/attr_reader_call/no_missed_edge",
-    "reason": "no edge to store.rb:items:2",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
     "id": "ruby/idioms/calls/define_method_call/no_missed_edge",
     "reason": "no edge to main.rb:ready?:29",
     "tracking": "the Ruby index does not read `define_method` with a literal name"
@@ -213,80 +203,5 @@
     "id": "ruby/idioms/symbols/point_y/range",
     "reason": "main.rb:y:22 was not extracted",
     "tracking": "the Ruby index does not read `Struct.new` with a block as a class: no class, no member methods, and its methods are top-level functions"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_items/container",
-    "reason": "store.rb:items:2 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_items/exported",
-    "reason": "store.rb:items:2 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_items/found",
-    "reason": "store.rb:items:2 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_items/kind",
-    "reason": "store.rb:items:2 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_items/range",
-    "reason": "store.rb:items:2 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_limit/container",
-    "reason": "store.rb:limit:3 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_limit/exported",
-    "reason": "store.rb:limit:3 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_limit/found",
-    "reason": "store.rb:limit:3 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_limit/kind",
-    "reason": "store.rb:limit:3 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_limit/range",
-    "reason": "store.rb:limit:3 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_limit_writer/container",
-    "reason": "store.rb:limit=:3 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_limit_writer/exported",
-    "reason": "store.rb:limit=:3 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_limit_writer/found",
-    "reason": "store.rb:limit=:3 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_limit_writer/kind",
-    "reason": "store.rb:limit=:3 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
-  },
-  {
-    "id": "ruby/idioms/symbols/store_limit_writer/range",
-    "reason": "store.rb:limit=:3 was not extracted",
-    "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
   }
 ]
