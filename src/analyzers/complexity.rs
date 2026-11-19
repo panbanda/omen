@@ -1233,7 +1233,7 @@ mod tests {
     fn timing_many_functions_in_one_file_are_measured_in_linear_time() {
         crate::index::timing::assert_scales_linearly("functions", 5_000, |size| {
             let result = parse_many_functions(size);
-            let started = std::time::Instant::now();
+            let started = crate::index::timing::Stopwatch::start();
             let file = analyze_parse_result(&result);
             let elapsed = started.elapsed();
             assert_eq!(file.functions.len(), size);
@@ -1246,7 +1246,7 @@ mod tests {
     fn timing_the_nesting_of_a_file_with_many_functions_is_linear() {
         crate::index::timing::assert_scales_linearly("functions", 5_000, |size| {
             let result = parse_many_functions(size);
-            let started = std::time::Instant::now();
+            let started = crate::index::timing::Stopwatch::start();
             let nesting = max_nesting_of_file(&result);
             let elapsed = started.elapsed();
             assert_eq!(nesting, 1);
@@ -3008,7 +3008,7 @@ mod symbol_tests {
             )
             .unwrap();
             let facts = extract_file(&result, "a.js");
-            let started = std::time::Instant::now();
+            let started = crate::index::timing::Stopwatch::start();
             let metrics = analyze_symbols_complexity(&facts.symbols, &result);
             let elapsed = started.elapsed();
             assert!(metrics.iter().all(|metrics| metrics.cyclomatic == 2));

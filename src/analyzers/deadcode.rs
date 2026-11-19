@@ -2338,7 +2338,7 @@ mod tests {
                 calls: Vec::new(),
                 path_uses: Vec::new(),
             };
-            let started = std::time::Instant::now();
+            let started = crate::index::timing::Stopwatch::start();
             collect_usages_and_calls(&result, &mut fdc);
             let elapsed = started.elapsed();
             assert!(fdc.usages.contains("x"));
@@ -5137,7 +5137,7 @@ mod go_tests {
             ("shop/shop.go", source.as_str()),
         ];
         let (facts, _) = crate::index::imports::testing::index_with_manifests(&files);
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = go_interface_methods(&facts);
         let elapsed = started.elapsed();
         assert_eq!(found.len(), size * 2);
