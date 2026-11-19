@@ -989,7 +989,7 @@ mod tests {
         };
         // The index of one large function is outside the measure. Only the steps of the inline
         // handlers are measured.
-        crate::index::timing::assert_scales_linearly("inline handlers", 4_000, |size| {
+        crate::index::timing::assert_scales_linearly("inline handlers", 8_000, |size| {
             let text = source(size);
             let paths = [PathBuf::from("server.js")];
             let read = |_: &Path| Ok(text.as_bytes().to_vec());
