@@ -6,6 +6,7 @@
 //! name. A qualifier or a receiver that fails does not continue to the rules
 //! for a bare name.
 
+mod exports;
 pub mod external;
 #[cfg(test)]
 mod function_references;
@@ -281,8 +282,11 @@ struct Resolver<'a> {
     /// The results of `types`, `package_files`, and `visible_files`. The
     /// resolution of one call asks for the same facts many times.
     types_cache: RwLock<HashMap<TypeQuery, Vec<Id>>>,
-    /// The results of `exported`, by the file and the name.
+    /// The results of `exported`, by the file and the name, for a file
+    /// without an export table.
     exported_cache: RwLock<HashMap<ExportQuery, Arc<Vec<Id>>>>,
+    /// The export table of each file that a query asked for.
+    export_tables: RwLock<exports::ExportTables<'a>>,
     /// For each file, the files of its package. Files of one package share
     /// one list.
     packages: OnceLock<Packages<'a>>,
@@ -533,6 +537,7 @@ impl<'a> Resolver<'a> {
             constructor_position_cache: RwLock::new(HashMap::new()),
             alias_constructs_cache: RwLock::new(HashMap::new()),
             exported_cache: RwLock::new(HashMap::new()),
+            export_tables: RwLock::new(HashMap::new()),
             packages: OnceLock::new(),
             visible_cache: RwLock::new(HashMap::new()),
         }
@@ -919,6 +924,9 @@ impl<'a> Resolver<'a> {
     /// files can import one module with a wildcard, and each asks for the
     /// same names. Thus the function keeps each result.
     fn exported(&self, file: usize, name: &str) -> Arc<Vec<Id>> {
+        if let Some(table) = self.export_table(file) {
+            return Arc::new(table.get(name).cloned().unwrap_or_default());
+        }
         let query = (file, name.to_string());
         if let Some(found) = self.exported_cache.read().get(&query) {
             return Arc::clone(found);

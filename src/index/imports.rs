@@ -6,6 +6,7 @@
 //! package give [`ImportTarget::Package`], which is a certain target.
 
 pub mod cargo;
+mod symbols;
 pub mod typescript;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -57,6 +58,8 @@ struct Repository<'a> {
     /// The options of each TypeScript project file after `extends`.
     project_options: RwLock<HashMap<String, std::sync::Arc<typescript::ProjectOptions>>>,
     inherited_options: typescript::InheritedMemo,
+    /// The symbol table of each file that an import asked for.
+    symbol_tables: RwLock<symbols::SymbolTables<'a>>,
 }
 
 /// The module tree of the Rust files of an index: which file is the root of a crate, the
@@ -157,6 +160,7 @@ impl<'a> Repository<'a> {
             rust_parents: RwLock::new(HashMap::new()),
             project_options: RwLock::new(HashMap::new()),
             inherited_options: RwLock::new(HashMap::new()),
+            symbol_tables: RwLock::new(HashMap::new()),
         };
         repository.read_rust_packages();
         repository
@@ -1485,7 +1489,7 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
                             matches!(binding.kind, ImportKind::Named | ImportKind::ReExportNamed);
                         let symbol = match (&binding.target_file, &binding.imported_name) {
                             (ImportTarget::Resolved(target), Some(name)) if named => {
-                                repository.symbol(target, name, &mut BTreeSet::new())
+                                repository.symbol_of(target, name)
                             }
                             _ => None,
                         };
@@ -2047,6 +2051,35 @@ mod typescript_tests {
         let main = "app/src/main.ts";
         assert_eq!(target(&files, main, "@/a"), "app/lib/a.ts");
         assert_eq!(target(&files, main, "@/b"), "app/src/other/b.ts");
+    }
+
+    /// A name that two wildcard re-exports of one module give is not a name
+    /// of that module. A module that re-exports both that module and the one
+    /// definition still gives that definition, whatever the order of the
+    /// re-exports. A cycle of re-exports still gives the name.
+    #[test]
+    fn test_symbol_of_wildcard_re_exports_through_a_diamond_and_a_cycle() {
+        let files = [
+            ("d.ts", "export function x() {}\n"),
+            ("e.ts", "export function x() {}\n"),
+            ("b.ts", "export * from './d';\nexport * from './e';\n"),
+            ("c.ts", "export * from './d';\n"),
+            ("a.ts", "export * from './b';\nexport * from './c';\n"),
+            ("left.ts", "export * from './right';\nexport function y() {}\n"),
+            ("right.ts", "export * from './left';\n"),
+            (
+                "main.ts",
+                "import { x } from './a';\nimport { x as z } from './b';\nimport { y } from './right';\n",
+            ),
+        ];
+        let (facts, _) = crate::index::imports::testing::index_with_manifests(&files);
+        let main = facts.iter().find(|file| file.file == "main.ts").unwrap();
+        let symbols: Vec<Option<&str>> = main
+            .imports
+            .iter()
+            .map(|binding| binding.target_symbol.as_deref())
+            .collect();
+        assert_eq!(symbols, [Some("d.ts#x"), None, Some("left.ts#y")]);
     }
 
     #[test]
