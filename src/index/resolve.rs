@@ -215,7 +215,7 @@ struct Resolver<'a> {
     /// reads only the names of one function.
     locals_by_owner: Vec<HashMap<&'a str, PositionsByOwner>>,
     /// For each file, the positions of the references by start byte, in source order.
-    references_by_start: Vec<HashMap<usize, Vec<usize>>>,
+    references_by_start: Vec<ReferencesByStart>,
     /// For each Ruby type, the types that have it as a direct parent type.
     ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// The results of `types`, `package_files`, and `visible_files`. The
@@ -265,6 +265,35 @@ type TypeQuery = (usize, String, Option<String>);
 /// The positions of the local names of one name, by the definition that binds them.
 type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
 
+/// The positions of the references of one file by start byte. The two lists are in the
+/// order of the start byte and then of the position, so the positions that start at one
+/// byte are one slice in source order. A map from each byte to a list costs about ten times
+/// as much memory for each reference.
+struct ReferencesByStart {
+    starts: Vec<usize>,
+    positions: Vec<usize>,
+}
+
+impl ReferencesByStart {
+    /// `starts` gives the start byte of each reference, in the order of the positions.
+    fn new(starts: impl Iterator<Item = usize>) -> Self {
+        let mut pairs: Vec<(usize, usize)> = starts
+            .enumerate()
+            .map(|(position, start)| (start, position))
+            .collect();
+        pairs.sort_unstable();
+        let (starts, positions) = pairs.into_iter().unzip();
+        Self { starts, positions }
+    }
+
+    /// The positions of the references that start at the byte, in source order.
+    fn at(&self, start: usize) -> &[usize] {
+        let first = self.starts.partition_point(|value| *value < start);
+        let end = self.starts.partition_point(|value| *value <= start);
+        &self.positions[first..end]
+    }
+}
+
 impl<'a> Resolver<'a> {
     fn new(files: &'a [FileSymbols], manifests: &'a Manifests) -> Self {
         let mut by_name: HashMap<&str, Vec<Id>> = HashMap::new();
@@ -309,14 +338,12 @@ impl<'a> Resolver<'a> {
         let references_by_start = files
             .iter()
             .map(|facts| {
-                let mut positions: HashMap<usize, Vec<usize>> = HashMap::new();
-                for (position, reference) in facts.reference_facts.iter().enumerate() {
-                    positions
-                        .entry(reference.start_byte)
-                        .or_default()
-                        .push(position);
-                }
-                positions
+                ReferencesByStart::new(
+                    facts
+                        .reference_facts
+                        .iter()
+                        .map(|reference| reference.start_byte),
+                )
             })
             .collect();
         let rebound = files
@@ -1060,9 +1087,7 @@ impl<'a> Resolver<'a> {
 
     /// The references of `file` that start at the byte `start`, in source order.
     fn references_at(&self, file: usize, start: usize) -> &[usize] {
-        self.references_by_start[file]
-            .get(&start)
-            .map_or(&[], Vec::as_slice)
+        self.references_by_start[file].at(start)
     }
 
     /// The local name `name` that a reference at the byte `at` sees. When two
@@ -2880,6 +2905,21 @@ pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests)
 #[cfg(test)]
 mod tests {
     use super::testing::rows;
+
+    #[test]
+    fn references_by_start_give_the_positions_at_a_byte_in_source_order() {
+        let starts = [40, 10, 40, 25, 10, 40];
+        let table = super::ReferencesByStart::new(starts.iter().copied());
+        assert_eq!(table.at(10), [1, 4]);
+        assert_eq!(table.at(25), [3]);
+        assert_eq!(table.at(40), [0, 2, 5]);
+        assert!(table.at(0).is_empty());
+        assert!(table.at(30).is_empty());
+        assert!(table.at(99).is_empty());
+        assert!(super::ReferencesByStart::new(std::iter::empty())
+            .at(0)
+            .is_empty());
+    }
 
     /// The rows of the calls of `name`.
     fn rows_of(files: &[(&str, &str)], file: &str, name: &str) -> Vec<String> {
