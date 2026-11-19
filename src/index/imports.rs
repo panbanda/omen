@@ -261,6 +261,66 @@ pub struct Manifests {
     pub node_packages: Vec<NodePackage>,
     /// The project files of TypeScript and JavaScript.
     pub projects: typescript::ProjectConfigs,
+    /// The test runners that each `package.json` file depends on, by the
+    /// directory of the file.
+    pub test_runners: BTreeMap<String, TestRunners>,
+}
+
+/// A set of the test runners of ECMAScript that the index knows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TestRunners(u8);
+
+impl TestRunners {
+    pub const JEST: Self = Self(1);
+    pub const VITEST: Self = Self(2);
+    pub const MOCHA: Self = Self(4);
+
+    /// The runners that the dependencies of a `package.json` text name.
+    pub fn of_package(package_json: &str) -> Self {
+        let Ok(package) = serde_json::from_str::<serde_json::Value>(package_json) else {
+            return Self::default();
+        };
+        let mut runners = Self::default();
+        for field in ["dependencies", "devDependencies"] {
+            let Some(dependencies) = package.get(field).and_then(|value| value.as_object()) else {
+                continue;
+            };
+            for (name, runner) in [
+                ("jest", Self::JEST),
+                ("vitest", Self::VITEST),
+                ("mocha", Self::MOCHA),
+            ] {
+                if dependencies.contains_key(name) {
+                    runners = runners.union(runner);
+                }
+            }
+        }
+        runners
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub fn contains(self, runner: Self) -> bool {
+        self.0 & runner.0 == runner.0
+    }
+
+    /// The runners for `file`: the runners of each `package.json` in the
+    /// directory of the file and in each directory above it.
+    pub fn of_file(manifests: &Manifests, file: &str) -> Self {
+        let mut runners = Self::default();
+        let mut here = directory(file);
+        loop {
+            if let Some(found) = manifests.test_runners.get(here) {
+                runners = runners.union(*found);
+            }
+            if here.is_empty() {
+                return runners;
+            }
+            here = directory(here);
+        }
+    }
 }
 
 /// The facts of one `package.json` file.
@@ -371,6 +431,7 @@ impl Default for Manifests {
             rust_library_directories: BTreeMap::new(),
             node_packages: Vec::new(),
             projects: typescript::ProjectConfigs::default(),
+            test_runners: BTreeMap::new(),
         }
     }
 }
@@ -388,16 +449,33 @@ impl Manifests {
     }
 
     pub fn add(&mut self, path: &str, text: &str) {
+        self.add_each([(path, text)]);
+    }
+
+    /// Reads each file as `add` does. The packages are sorted one time, after
+    /// the last file.
+    pub fn add_each<'t>(&mut self, files: impl IntoIterator<Item = (&'t str, &'t str)>) {
+        for (path, text) in files {
+            self.add_without_order(path, text);
+        }
+        self.node_packages.sort_by(|left, right| {
+            (&left.name, &left.directory).cmp(&(&right.name, &right.directory))
+        });
+    }
+
+    /// Reads one file as `add` does, but does not sort the packages.
+    fn add_without_order(&mut self, path: &str, text: &str) {
         let here = directory(path);
         if typescript::is_project_file(file_name(path)) {
             if let Some(config) = typescript::project_config(text) {
                 self.projects.insert(path.to_string(), config);
             }
         } else if file_name(path) == "package.json" {
+            let runners = TestRunners::of_package(text);
+            if runners != TestRunners::default() {
+                self.test_runners.insert(here.to_string(), runners);
+            }
             self.node_packages.extend(node_package(here, text));
-            self.node_packages.sort_by(|left, right| {
-                (&left.name, &left.directory).cmp(&(&right.name, &right.directory))
-            });
         } else if file_name(path) == "go.mod" {
             self.go_modules
                 .extend(go_module_path(text).map(|module| (here.to_string(), module)));
