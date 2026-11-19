@@ -48,7 +48,7 @@ use super::go_routes::{
     directory_of, is_http_token, package_names, parse_signature, path_parameters,
     servemux_parameters, servemux_pattern, Framework, UNNAMED_FUNCTION_GUARD, UNREAD_GUARD,
 };
-use super::{Context, Draft, EntryBasis, EntryKind, GuardsUnknownReason, Route, TreeSource};
+use super::{Context, Draft, EntryBasis, EntryKind, GuardsUnknownReason, Route};
 use crate::core::{is_test_file, Language};
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ImportKind, ImportTarget, ResolutionStatus, Span, Symbol, SymbolKind};
@@ -398,11 +398,12 @@ struct Found {
 }
 
 pub(super) fn collect(context: &Context<'_>, _root: Node<'_>, out: &mut Vec<Draft>) {
-    let routes = context
+    let routes = &context
         .all_parsed
         .shared()
-        .go_wrappers
-        .get_or_init(|| WrapperRoutes::build(context.all, context.all_parsed));
+        .go_packages
+        .get_or_init(|| super::go_routes::CallSites::build(context.all, context.all_parsed))
+        .wrappers;
     for found in routes.by_file.get(&context.file.file).into_iter().flatten() {
         out.push(Draft {
             range: found.range,
@@ -2414,8 +2415,18 @@ fn rooted(text: &str) -> String {
     }
 }
 
-impl WrapperRoutes {
-    pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> Self {
+/// The first part of the search for routes on the router types of the repository: the facts
+/// of the files of the packages with a method that has the name of a route method. The shared
+/// walk of the Go files gives each such file to `read`.
+pub(super) struct WrapperFacts<'a> {
+    files: &'a [FileSymbols],
+    candidate_directories: HashSet<&'a str>,
+    /// The facts of each file that `read` was given, by position.
+    facts: Vec<Option<FileFacts>>,
+}
+
+impl<'a> WrapperFacts<'a> {
+    pub(super) fn new(files: &'a [FileSymbols]) -> Self {
         // The packages with a method that has the name of a route method.
         let candidate_directories: HashSet<&str> = files
             .iter()
@@ -2429,26 +2440,43 @@ impl WrapperRoutes {
             })
             .map(|file| directory_of(&file.file))
             .collect();
-        if candidate_directories.is_empty() {
-            return Self::default();
+        Self {
+            files,
+            candidate_directories,
+            facts: Vec::new(),
         }
+    }
+
+    /// Reads the facts of the file at `position` when its package is a candidate.
+    pub(super) fn read(&mut self, position: usize, context: &Context<'_>, root: Node<'_>) {
+        let file = &self.files[position];
+        if !is_source(file)
+            || !self
+                .candidate_directories
+                .contains(directory_of(&file.file))
+        {
+            return;
+        }
+        if self.facts.is_empty() {
+            self.facts.resize_with(self.files.len(), || None);
+        }
+        self.facts[position] = Some(file_facts(context, root));
+    }
+
+    /// The router types, and the files that the second walk must give to
+    /// `WrapperWalk::walk`. A later file replaces the facts of a struct of an earlier file,
+    /// so the facts are joined in the order of the positions.
+    pub(super) fn into_walk(self) -> WrapperWalk<'a> {
+        let files = self.files;
         let mut structs: Structs = HashMap::new();
         let mut methods: Vec<MethodFact> = Vec::new();
-        for (position, file) in files.iter().enumerate() {
-            if !is_source(file) || !candidate_directories.contains(directory_of(&file.file)) {
-                continue;
-            }
-            let Some(tree) = trees.tree(position) else {
-                continue;
-            };
-            let context = Context::new(position, &tree, file, files, trees, &[]);
-            let facts = file_facts(&context, tree.root_node());
+        for facts in self.facts.into_iter().flatten() {
             structs.extend(facts.structs);
             methods.extend(facts.methods);
         }
         let (router_types, combos, combo_types) = classify(&structs, &methods);
         if router_types.is_empty() {
-            return Self::default();
+            return WrapperWalk::default();
         }
         let mut keys: Vec<TypeKey> = router_types.keys().cloned().collect();
         keys.sort();
@@ -2505,52 +2533,84 @@ impl WrapperRoutes {
                 directories.insert(directory_of(&file.file).to_string());
             }
         }
-        let mut graph = Graph::default();
-        for (position, file) in files.iter().enumerate() {
-            if !is_source(file) {
-                continue;
-            }
-            let relevant = directories.contains(directory_of(&file.file))
-                || file.imports.iter().any(|binding| {
-                    let target = match &binding.target_file {
-                        ImportTarget::Resolved(target) => Some(target.as_str()),
-                        ImportTarget::Package(targets) => targets.first().map(String::as_str),
-                        _ => None,
-                    };
-                    target.is_some_and(|target| directories.contains(directory_of(target)))
-                });
-            if !relevant {
-                continue;
-            }
-            let Some(tree) = trees.tree(position) else {
-                continue;
-            };
-            let context = Context::new(position, &tree, file, files, trees, &[]);
-            let references = file
-                .references
-                .iter()
-                .enumerate()
-                .map(|(index, reference)| (reference.name_range.start_byte, index))
-                .collect();
-            let mut walker = Walker {
-                context: &context,
-                tables: &tables,
-                graph: &mut graph,
-                file: position,
-                references,
-                scopes: Vec::new(),
-                frames: Vec::new(),
-                groups: HashMap::new(),
-                layers: HashMap::new(),
-                depths: HashMap::new(),
-                deferred: Vec::new(),
-                depth: 0,
-            };
-            walker.run(tree.root_node());
+        let relevant: Vec<usize> = files
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| is_source(file))
+            .filter(|(_, file)| {
+                directories.contains(directory_of(&file.file))
+                    || file.imports.iter().any(|binding| {
+                        let target = match &binding.target_file {
+                            ImportTarget::Resolved(target) => Some(target.as_str()),
+                            ImportTarget::Package(targets) => targets.first().map(String::as_str),
+                            _ => None,
+                        };
+                        target.is_some_and(|target| directories.contains(directory_of(target)))
+                    })
+            })
+            .map(|(position, _)| position)
+            .collect();
+        WrapperWalk {
+            tables: Some(tables),
+            graph: Graph::default(),
+            relevant,
         }
-        Self::finish(&tables, graph)
+    }
+}
+
+/// The second part of the search: the walk of each file that defines a router type, uses
+/// one in a signature, or imports such a package.
+#[derive(Default)]
+pub(super) struct WrapperWalk<'a> {
+    tables: Option<Tables<'a>>,
+    graph: Graph,
+    /// The positions of the files to walk, in order.
+    relevant: Vec<usize>,
+}
+
+impl WrapperWalk<'_> {
+    pub(super) fn relevant(&self) -> &[usize] {
+        &self.relevant
     }
 
+    /// Walks the file at `position`. The caller gives the files of `relevant` in order.
+    pub(super) fn walk<'c>(&mut self, position: usize, context: &Context<'c>, root: Node<'c>) {
+        let Some(tables) = &self.tables else {
+            return;
+        };
+        let references = context
+            .file
+            .references
+            .iter()
+            .enumerate()
+            .map(|(index, reference)| (reference.name_range.start_byte, index))
+            .collect();
+        let mut walker = Walker {
+            context,
+            tables,
+            graph: &mut self.graph,
+            file: position,
+            references,
+            scopes: Vec::new(),
+            frames: Vec::new(),
+            groups: HashMap::new(),
+            layers: HashMap::new(),
+            depths: HashMap::new(),
+            deferred: Vec::new(),
+            depth: 0,
+        };
+        walker.run(root);
+    }
+
+    pub(super) fn finish(self) -> WrapperRoutes {
+        match &self.tables {
+            Some(tables) => WrapperRoutes::finish(tables, self.graph),
+            None => WrapperRoutes::default(),
+        }
+    }
+}
+
+impl WrapperRoutes {
     fn finish(tables: &Tables<'_>, mut graph: Graph) -> Self {
         // The router that a function returns is the router of each call of the function.
         let mut returned_as: HashMap<usize, Vec<usize>> = HashMap::new();

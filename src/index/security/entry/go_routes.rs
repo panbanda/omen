@@ -1434,12 +1434,15 @@ pub(super) struct PackageNames {
     by_package: HashMap<(String, String), Arc<HashSet<String>>>,
 }
 
-/// The facts of all Go files that the route rules share: the names of each package and the
-/// call sites of the factories. One walk of the files of each directory gives both.
+/// The facts of all Go files that the route rules share: the names of each package, the call
+/// sites of the factories, and the routes on the router types of the repository. One walk of
+/// the files of each directory, and one second walk of the files that need the results of the
+/// first, give all three.
 #[derive(Default)]
 pub(super) struct GoPackages {
     pub(super) names: PackageNames,
     pub(super) call_sites: CallSites,
+    pub(super) wrappers: super::go_wrappers::WrapperRoutes,
 }
 
 impl PackageNames {
@@ -1907,11 +1910,11 @@ impl CallSites {
     }
 
     /// The facts for all Go files. One walk of the files of each directory finds the names
-    /// of each package, the factories, and the names that each file mentions. The search for
-    /// the factories of a file reads the names of its package, so the trees of one directory
-    /// are in use together, and only those. Then one pass over the references, and a second
-    /// walk of only the files that call a factory, classify each use of a factory: the
-    /// factories are known only after the first walk of all files.
+    /// of each package, the factories, the names that each file mentions, and the facts of
+    /// the router types. The search for the factories of a file reads the names of its
+    /// package, so the trees of one directory are in use together, and only those. The
+    /// factories and the router types are known only after the first walk of all files, so
+    /// one second walk reads each file that calls a factory or needs a router type, in order.
     pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> GoPackages {
         // A factory is a symbol of a Go file that imports a framework, so the names of the
         // symbols of these files contain the names of the factories. The first walk keeps
@@ -1941,6 +1944,7 @@ impl CallSites {
         // The Go files of each directory, in the order of their positions. The order of the
         // directories does not change a result: each table that the walk fills has the
         // directory in its key, or is a set.
+        let mut wrapper_facts = super::go_wrappers::WrapperFacts::new(files);
         let mut by_directory: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
         for (position, file) in files.iter().enumerate() {
             if file.language == Language::Go {
@@ -1955,7 +1959,7 @@ impl CallSites {
             let parsed: Vec<(usize, TreeRef<'_>, String)> = positions
                 .iter()
                 .filter_map(|position| {
-                    let tree = trees.tree(*position)?;
+                    let tree = trees.transient_tree(*position)?;
                     let package = package_name(tree.root_node(), &tree.source);
                     Some((*position, tree, package))
                 })
@@ -1995,6 +1999,7 @@ impl CallSites {
                     }
                     factories.insert(key);
                 }
+                wrapper_facts.read(position, &context, tree.root_node());
             }
             for (package, names) in sets {
                 package_names.insert((directory.to_string(), package.to_string()), names);
@@ -2023,54 +2028,51 @@ impl CallSites {
                 }
             }
         }
-        if factories.is_empty() {
-            return GoPackages {
-                names,
-                call_sites: Self {
-                    blocked,
-                    referenced,
-                },
-            };
-        }
-        // A wrapper type can define a method that hides a method of the router, or that
-        // serves the requests in another way. Then its values are not routers.
-        let mut hiding: HashSet<(String, String)> = HashSet::new();
-        for file in files.iter().filter(|file| file.language == Language::Go) {
-            let directory = directory_of(&file.file);
-            for symbol in file.symbols.iter().filter(|symbol| {
-                symbol.is_callable()
-                    && (ROUTER_METHODS.contains(&symbol.name.as_str())
-                        || matches!(symbol.name.as_str(), "Use" | "Pre" | "ServeHTTP"))
-            }) {
-                let Some(kind) = symbol
-                    .receiver_type
-                    .as_deref()
-                    .or(symbol.container.as_deref())
-                else {
-                    continue;
-                };
-                if let Some(base) = resolve_alias(&types, &mut memo, directory, type_name(kind)) {
-                    hiding.insert((directory.to_string(), base));
+        let mut wrapper_walk = wrapper_facts.into_walk();
+        // The calls of the factories in each file that the first walk read, by position.
+        let mut sites_by_file: BTreeMap<usize, Vec<(&Reference, Vec<&str>)>> = BTreeMap::new();
+        let mut by_name: HashMap<&str, Vec<&str>> = HashMap::new();
+        if !factories.is_empty() {
+            // A wrapper type can define a method that hides a method of the router, or that
+            // serves the requests in another way. Then its values are not routers.
+            let mut hiding: HashSet<(String, String)> = HashSet::new();
+            for file in files.iter().filter(|file| file.language == Language::Go) {
+                let directory = directory_of(&file.file);
+                for symbol in file.symbols.iter().filter(|symbol| {
+                    symbol.is_callable()
+                        && (ROUTER_METHODS.contains(&symbol.name.as_str())
+                            || matches!(symbol.name.as_str(), "Use" | "Pre" | "ServeHTTP"))
+                }) {
+                    let Some(kind) = symbol
+                        .receiver_type
+                        .as_deref()
+                        .or(symbol.container.as_deref())
+                    else {
+                        continue;
+                    };
+                    if let Some(base) = resolve_alias(&types, &mut memo, directory, type_name(kind))
+                    {
+                        hiding.insert((directory.to_string(), base));
+                    }
                 }
             }
-        }
-        for (key, directory, name) in &wrapper_types {
-            if hiding.contains(&(directory.clone(), name.clone())) {
-                blocked.insert(key.clone());
+            for (key, directory, name) in &wrapper_types {
+                if hiding.contains(&(directory.clone(), name.clone())) {
+                    blocked.insert(key.clone());
+                }
             }
-        }
-        let mut by_name: HashMap<&str, Vec<&str>> = HashMap::new();
-        for symbol in files
-            .iter()
-            .filter(|file| file.language == Language::Go)
-            .flat_map(|file| &file.symbols)
-            .filter(|symbol| factories.contains(&*symbol.key))
-        {
-            by_name.entry(&symbol.name).or_default().push(&symbol.key);
+            for symbol in files
+                .iter()
+                .filter(|file| file.language == Language::Go)
+                .flat_map(|file| &file.symbols)
+                .filter(|symbol| factories.contains(&*symbol.key))
+            {
+                by_name.entry(&symbol.name).or_default().push(&symbol.key);
+            }
         }
         let mut blocked_names: HashSet<&str> = HashSet::new();
         for (position, file) in files.iter().enumerate() {
-            if file.language != Language::Go {
+            if factories.is_empty() || file.language != Language::Go {
                 continue;
             }
             let sites: Vec<(&Reference, Vec<&str>)> = file
@@ -2097,13 +2099,25 @@ impl CallSites {
                 continue;
             };
             blocked_names.extend(mentions.iter().filter(|name| by_name.contains_key(*name)));
-            if sites.is_empty() {
-                continue;
+            if !sites.is_empty() {
+                sites_by_file.insert(position, sites);
             }
-            let Some(tree) = trees.tree(position) else {
+        }
+        let mut second: Vec<usize> = sites_by_file
+            .keys()
+            .copied()
+            .chain(wrapper_walk.relevant().iter().copied())
+            .collect();
+        second.sort_unstable();
+        second.dedup();
+        for position in second {
+            let file = &files[position];
+            let sites = sites_by_file.remove(&position);
+            let Some(tree) = trees.transient_tree(position) else {
                 blocked.extend(
                     sites
                         .iter()
+                        .flatten()
                         .flat_map(|(_, keys)| keys)
                         .map(|key| key.to_string()),
                 );
@@ -2115,28 +2129,35 @@ impl CallSites {
                 package_name(tree.root_node(), &tree.source),
             );
             let _ = context.go_declared.set(names.names(&package));
-            let own_index = FileUses::new(tree.root_node(), &tree.source, file, &context, false);
-            let mut other_index: Option<FileUses<'_, '_>> = None;
-            for (reference, keys) in sites {
-                let strict = keys.iter().any(|key| wrappers.contains(*key));
-                // A registration in the file of the factory has an order that the walk reads.
-                let same_file = keys
-                    .iter()
-                    .all(|key| key.split('#').next() == Some(file.file.as_str()));
-                let index = if same_file {
-                    &own_index
-                } else {
-                    &*other_index.get_or_insert_with(|| {
-                        FileUses::new(tree.root_node(), &tree.source, file, &context, true)
-                    })
-                };
-                if index.is_blocked(
-                    reference.name_range.start_byte,
-                    reference.name_range.end_byte,
-                    strict,
-                ) {
-                    blocked.extend(keys.into_iter().map(str::to_string));
+            if let Some(sites) = sites {
+                let own_index =
+                    FileUses::new(tree.root_node(), &tree.source, file, &context, false);
+                let mut other_index: Option<FileUses<'_, '_>> = None;
+                for (reference, keys) in sites {
+                    let strict = keys.iter().any(|key| wrappers.contains(*key));
+                    // A registration in the file of the factory has an order that the walk
+                    // reads.
+                    let same_file = keys
+                        .iter()
+                        .all(|key| key.split('#').next() == Some(file.file.as_str()));
+                    let index = if same_file {
+                        &own_index
+                    } else {
+                        &*other_index.get_or_insert_with(|| {
+                            FileUses::new(tree.root_node(), &tree.source, file, &context, true)
+                        })
+                    };
+                    if index.is_blocked(
+                        reference.name_range.start_byte,
+                        reference.name_range.end_byte,
+                        strict,
+                    ) {
+                        blocked.extend(keys.into_iter().map(str::to_string));
+                    }
                 }
+            }
+            if wrapper_walk.relevant().binary_search(&position).is_ok() {
+                wrapper_walk.walk(position, &context, tree.root_node());
             }
         }
         for name in blocked_names {
@@ -2150,6 +2171,7 @@ impl CallSites {
                 blocked,
                 referenced,
             },
+            wrappers: wrapper_walk.finish(),
         }
     }
 
@@ -2158,24 +2180,33 @@ impl CallSites {
     /// name another function of the same name, and the result stays safe.
     fn mentions<'m>(root: Node<'_>, source: &[u8], known: &HashSet<&'m str>) -> HashSet<&'m str> {
         let mut found = HashSet::new();
-        let mut pending = vec![root];
-        while let Some(node) = pending.pop() {
+        // Each node with its parent and the parent of its parent. `Node::parent` searches
+        // down from the root, so in a deep tree a call for each name costs quadratic time.
+        let mut pending = vec![(root, None, None)];
+        while let Some((node, parent, grandparent)) = pending.pop() {
             if matches!(node.kind(), "identifier" | "field_identifier") {
                 let name = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
                 if let Some(known) = known.get(name) {
-                    if !Self::is_declaration_or_callee(node) {
+                    if !Self::is_declaration_or_callee(node, parent, grandparent) {
                         found.insert(*known);
                     }
                 }
             }
             let mut cursor = node.walk();
-            pending.extend(node.named_children(&mut cursor));
+            pending.extend(
+                node.named_children(&mut cursor)
+                    .map(|child| (child, Some(node), parent)),
+            );
         }
         found
     }
 
-    fn is_declaration_or_callee(node: Node<'_>) -> bool {
-        let Some(parent) = node.parent() else {
+    fn is_declaration_or_callee(
+        node: Node<'_>,
+        parent: Option<Node<'_>>,
+        grandparent: Option<Node<'_>>,
+    ) -> bool {
+        let Some(parent) = parent else {
             return false;
         };
         match parent.kind() {
@@ -2185,7 +2216,7 @@ impl CallSites {
             "call_expression" => parent.child_by_field_name("function") == Some(node),
             "selector_expression" => {
                 parent.child_by_field_name("field") == Some(node)
-                    && parent.parent().is_some_and(|call| {
+                    && grandparent.is_some_and(|call| {
                         call.kind() == "call_expression"
                             && call.child_by_field_name("function") == Some(parent)
                     })
