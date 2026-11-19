@@ -353,6 +353,19 @@ fn test_php_promoted_constructor_parameter_is_a_field() {
 }
 
 #[test]
+fn test_typescript_parameter_property_is_a_field() {
+    let source = "export class A {\n  private count = 0;\n  constructor(private readonly repo: Repo, public log: Logger, plain: number, readonly size?: number) {}\n  m1() { return this.repo.find() + this.count; }\n  m2() { this.log.info('x'); }\n  m3() { return this.repo.save(); }\n}\nclass Repo { find() { return 1; } save() { return 2; } }\nclass Logger { info(_: string) {} }\n";
+    for file in ["a.ts", "a.tsx"] {
+        let analysis = analyze(&[(file, source)]);
+        let found = class(&analysis, "A");
+        let mut fields = found.fields.clone();
+        fields.sort();
+        assert_eq!(fields, ["count", "log", "repo", "size"], "{file}");
+        assert_eq!(found.nof, 4, "{file}");
+    }
+}
+
+#[test]
 fn test_c_and_bash_have_no_class() {
     for language in [Language::C, Language::Bash] {
         assert!(
