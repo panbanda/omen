@@ -345,7 +345,7 @@ pub(super) fn file_sinks(
     };
     let mut sinks = Vec::new();
     let covered = context.reference_sinks(&mut sinks);
-    context.tree_sinks(parsed.root_node(), &mut Vec::new(), &mut sinks, &covered);
+    context.tree_sinks(parsed.root_node(), &mut sinks, &covered);
     sinks.sort_by_key(|sink| (sink.range.start_byte, sink.category));
     sinks.dedup_by_key(|sink| (sink.range.start_byte, sink.category));
     sinks
@@ -994,16 +994,35 @@ impl FileContext<'_> {
             .map(|position| self.file.symbols[position].key.to_string())
     }
 
-    /// Walks the tree for the sinks that are not calls.
-    /// `ancestors` holds the ancestors of `node`, the nearest last. `Node::parent` searches
-    /// from the root, so the walk gives the ancestors that it knows.
-    fn tree_sinks<'tree>(
+    /// Walks the tree for the sinks that are not calls. The walk uses a cursor and not
+    /// recursion, because generated source can have a very deep tree. It keeps the ancestors
+    /// of the node, the nearest last, because `Node::parent` searches from the root.
+    fn tree_sinks(&self, root: Node<'_>, sinks: &mut Vec<Sink>, covered: &HashSet<usize>) {
+        let mut ancestors: Vec<Node<'_>> = Vec::new();
+        let mut cursor = root.walk();
+        loop {
+            let node = cursor.node();
+            if self.tree_sink(node, &ancestors, sinks, covered) && cursor.goto_first_child() {
+                ancestors.push(node);
+                continue;
+            }
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    return;
+                }
+                ancestors.pop();
+            }
+        }
+    }
+
+    /// Reads the sinks of one node. Returns false when the walk must not go into the children.
+    fn tree_sink(
         &self,
-        node: Node<'tree>,
-        ancestors: &mut Vec<Node<'tree>>,
+        node: Node<'_>,
+        ancestors: &[Node<'_>],
         sinks: &mut Vec<Sink>,
         covered: &HashSet<usize>,
-    ) {
+    ) -> bool {
         let kind = node.kind();
         if self.syntax.string_kinds.contains(&kind) {
             let literal = syntax::text(node, self.source);
@@ -1017,7 +1036,7 @@ impl FileContext<'_> {
                     false,
                 ));
             }
-            return;
+            return false;
         }
         if self.syntax.unsafe_kinds.contains(&kind)
             && self.has_target(|target| matches!(target, Target::UnsafeBlock))
@@ -1032,7 +1051,7 @@ impl FileContext<'_> {
             ));
         }
         if self.syntax.mention_kinds.contains(&kind) && self.mention(node, sinks) {
-            return;
+            return false;
         }
         if self.syntax.keyed_kinds.contains(&kind) {
             self.keyed_field(node, ancestors, sinks);
@@ -1051,12 +1070,7 @@ impl FileContext<'_> {
         if self.syntax.property_kinds.contains(&kind) {
             self.object_property(node, ancestors.last().copied(), sinks, covered);
         }
-        ancestors.push(node);
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.tree_sinks(child, ancestors, sinks, covered);
-        }
-        ancestors.pop();
+        true
     }
 
     fn has_target(&self, test: impl Fn(&Target) -> bool) -> bool {

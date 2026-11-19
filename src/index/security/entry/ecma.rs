@@ -2142,24 +2142,30 @@ impl<'a> Context<'a> {
     /// The paths that a decorator argument gives: a path, a list of paths, or an object with the
     /// key `path`. No argument gives the empty path.
     fn decorator_paths(&self, unit: Unit<'_>, argument: Option<Node<'_>>) -> Vec<Vec<Part>> {
-        let Some(argument) = argument.map(unwrap) else {
-            return vec![Vec::new()];
-        };
-        match argument.kind() {
-            "array" => named_children(argument)
-                .into_iter()
-                .map(|element| self.path_of(unit, element, 0))
-                .collect(),
-            "object" => {
-                let path = object_properties(argument, unit.source)
-                    .into_iter()
-                    .find_map(|(key, value)| (key == "path").then_some(value));
-                match path {
-                    Some(path) => self.decorator_paths(unit, Some(path)),
-                    None => vec![Vec::new()],
+        let mut argument = argument;
+        // A loop in place of recursion, because objects in `path` can nest to any depth.
+        loop {
+            let Some(current) = argument.map(unwrap) else {
+                return vec![Vec::new()];
+            };
+            match current.kind() {
+                "array" => {
+                    return named_children(current)
+                        .into_iter()
+                        .map(|element| self.path_of(unit, element, 0))
+                        .collect()
                 }
+                "object" => {
+                    let path = object_properties(current, unit.source)
+                        .into_iter()
+                        .find_map(|(key, value)| (key == "path").then_some(value));
+                    match path {
+                        Some(path) => argument = Some(path),
+                        None => return vec![Vec::new()],
+                    }
+                }
+                _ => return vec![self.path_of(unit, current, 0)],
             }
-            _ => vec![self.path_of(unit, argument, 0)],
         }
     }
 
@@ -2613,6 +2619,19 @@ mod tests {
             .expect("an inline handler");
         assert_eq!(inline.enclosing.as_deref(), Some("src/c.ts#Server.setup"));
         assert_eq!(inline.range.start_line, 14);
+    }
+
+    /// `decorator_paths` reads each level of an object in the `path` of an object.
+    #[test]
+    fn a_nest_controller_with_a_deep_path_object() {
+        use crate::parser::deep::{nest, on_small_stack};
+        let source = format!(
+            "import {{ Controller, Get }} from '@nestjs/common';\n@Controller({})\nexport class Dogs {{\n  @Get('a')\n  one() {{}}\n}}\n",
+            nest("{ path: ", "'dogs'", " }")
+        );
+        let found = on_small_stack(move || paths(&[("src/dogs.ts", source.as_str())]));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1.as_deref(), Some("/dogs/a"));
     }
 
     #[test]

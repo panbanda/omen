@@ -871,31 +871,26 @@ fn extract_python_context(result: &parser::ParseResult) -> PythonContext {
         decorators: HashMap::new(),
     };
 
-    fn visit(node: tree_sitter::Node<'_>, source: &[u8], ctx: &mut PythonContext) {
+    parser::walk_preorder(root, |node| {
         match node.kind() {
             // Parse `__all__ = ["func1", "func2"]`
             "expression_statement" => {
-                try_extract_all_assignment(&node, source, ctx);
+                try_extract_all_assignment(&node, source, &mut ctx);
             }
             // Parse `if __name__ == "__main__":` blocks
             "if_statement" => {
                 if is_name_main_guard(&node, source) {
-                    collect_calls_in_subtree(&node, source, &mut ctx.name_main_calls);
+                    collect_calls_in_subtree(node, source, &mut ctx.name_main_calls);
                 }
             }
             // Parse decorated function definitions
             "decorated_definition" => {
-                extract_python_decorators(&node, source, ctx);
+                extract_python_decorators(&node, source, &mut ctx);
             }
             _ => {}
         }
-
-        for child in node.children(&mut node.walk()) {
-            visit(child, source, ctx);
-        }
-    }
-
-    visit(root, source, &mut ctx);
+        parser::Walk::Children
+    });
     ctx
 }
 
@@ -961,30 +956,30 @@ fn is_name_main_guard(node: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
 
 /// Collect all function/method call names within a subtree.
 fn collect_calls_in_subtree(
-    node: &tree_sitter::Node<'_>,
+    node: tree_sitter::Node<'_>,
     source: &[u8],
     calls: &mut HashSet<String>,
 ) {
-    if node.kind() == "call" {
-        // Get the function name from the call
-        if let Some(fn_node) = node.child_by_field_name("function") {
-            if fn_node.kind() == "identifier" {
-                if let Ok(name) = fn_node.utf8_text(source) {
-                    calls.insert(name.to_string());
-                }
-            } else if fn_node.kind() == "attribute" {
-                // obj.method() -- grab the attribute (method) name
-                if let Some(attr) = fn_node.child_by_field_name("attribute") {
-                    if let Ok(name) = attr.utf8_text(source) {
+    parser::walk_preorder(node, |node| {
+        if node.kind() == "call" {
+            // Get the function name from the call
+            if let Some(fn_node) = node.child_by_field_name("function") {
+                if fn_node.kind() == "identifier" {
+                    if let Ok(name) = fn_node.utf8_text(source) {
                         calls.insert(name.to_string());
+                    }
+                } else if fn_node.kind() == "attribute" {
+                    // obj.method() -- grab the attribute (method) name
+                    if let Some(attr) = fn_node.child_by_field_name("attribute") {
+                        if let Ok(name) = attr.utf8_text(source) {
+                            calls.insert(name.to_string());
+                        }
                     }
                 }
             }
         }
-    }
-    for child in node.children(&mut node.walk()) {
-        collect_calls_in_subtree(&child, source, calls);
-    }
+        parser::Walk::Children
+    });
 }
 
 /// Extract decorators from a `decorated_definition` node and associate them with the function.
@@ -1055,29 +1050,34 @@ fn extract_ruby_visibility(result: &parser::ParseResult) -> RubyVisibility {
         method_visibility: HashMap::new(),
     };
 
-    fn visit_class_body(node: tree_sitter::Node<'_>, source: &[u8], vis: &mut RubyVisibility) {
-        // Only process class/module bodies
-        if node.kind() != "class" && node.kind() != "module" && node.kind() != "singleton_class" {
-            // Recurse to find classes/modules
-            for child in node.children(&mut node.walk()) {
-                visit_class_body(child, source, vis);
+    // A stack in place of recursion, in the order of a recursive walk.
+    fn visit_class_body(root: tree_sitter::Node<'_>, source: &[u8], vis: &mut RubyVisibility) {
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            let children: Vec<_> = node.children(&mut node.walk()).collect();
+            // Only process class/module bodies
+            if node.kind() != "class" && node.kind() != "module" && node.kind() != "singleton_class"
+            {
+                // Search the children for classes/modules
+                pending.extend(children.into_iter().rev());
+                continue;
             }
-            return;
-        }
 
-        // Find the body node inside the class/module
-        if let Some(body) = node.child_by_field_name("body") {
-            process_body_for_visibility(&body, source, vis);
-        } else {
-            // Some grammars put children directly under class node
-            process_body_for_visibility(&node, source, vis);
-        }
-
-        // Recurse into nested classes
-        for child in node.children(&mut node.walk()) {
-            if child.kind() == "class" || child.kind() == "module" {
-                visit_class_body(child, source, vis);
+            // Find the body node inside the class/module
+            if let Some(body) = node.child_by_field_name("body") {
+                process_body_for_visibility(&body, source, vis);
+            } else {
+                // Some grammars put children directly under class node
+                process_body_for_visibility(&node, source, vis);
             }
+
+            // Visit nested classes
+            pending.extend(
+                children
+                    .into_iter()
+                    .rev()
+                    .filter(|child| child.kind() == "class" || child.kind() == "module"),
+            );
         }
     }
 
@@ -2431,6 +2431,47 @@ mod tests {
             assert!(fdc.usages.contains("x"));
             elapsed
         });
+    }
+
+    #[test]
+    fn test_python_context_of_deeply_nested_source() {
+        use crate::parser::deep;
+        let calls = deep::on_small_stack(|| {
+            for (_, parsed) in deep::parsed_deep_sources_of(Language::Python) {
+                extract_python_context(parsed);
+            }
+            let code = format!(
+                "if __name__ == \"__main__\":\n    main({})\n",
+                deep::nest("(", "1", ")")
+            );
+            let parsed = crate::parser::Parser::new()
+                .parse(code.as_bytes(), Language::Python, Path::new("a.py"))
+                .unwrap();
+            extract_python_context(&parsed).name_main_calls
+        });
+        assert_eq!(calls, HashSet::from(["main".to_string()]));
+    }
+
+    #[test]
+    fn test_ruby_visibility_of_deeply_nested_source() {
+        use crate::parser::deep;
+        let visibility = deep::on_small_stack(|| {
+            for (_, parsed) in deep::parsed_deep_sources_of(Language::Ruby) {
+                extract_ruby_visibility(parsed);
+            }
+            let code = format!(
+                "x = {}\nclass A\n  private\n  def f\n  end\nend\n",
+                deep::nest("[", "1", "]")
+            );
+            let parsed = crate::parser::Parser::new()
+                .parse(code.as_bytes(), Language::Ruby, Path::new("a.rb"))
+                .unwrap();
+            extract_ruby_visibility(&parsed).method_visibility
+        });
+        assert_eq!(
+            visibility,
+            HashMap::from([("f".to_string(), "private".to_string())])
+        );
     }
 
     #[test]

@@ -11,6 +11,8 @@ use std::rc::Rc;
 
 use tree_sitter::Node;
 
+use crate::parser::Walk;
+
 use super::calls::{split_type, Argument, Call, CallSyntax, LocalName, ValueSyntax, ValueUse};
 use super::lang;
 use super::members::{self, MemberFacts, PendingBlock, Recorder, SymbolRow};
@@ -665,27 +667,19 @@ pub fn language_spec(language: Language) -> &'static dyn LanguageSpec {
 
 /// The first descendant of `node`, or `node` itself, that has one of the kinds.
 pub fn find_descendant<'tree>(node: Node<'tree>, kinds: &[&str]) -> Option<Node<'tree>> {
-    if kinds.contains(&node.kind()) {
-        return Some(node);
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'tree>> = node.children(&mut cursor).collect();
-    children
-        .into_iter()
-        .find_map(|child| find_descendant(child, kinds))
+    crate::parser::find_preorder(node, |node| kinds.contains(&node.kind()))
 }
 
 /// The nearest nodes below `node` that have one of the kinds. The search does
 /// not go into a node that it collects.
 pub fn collect_outermost<'tree>(node: Node<'tree>, kinds: &[&str], out: &mut Vec<Node<'tree>>) {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if kinds.contains(&child.kind()) {
-            out.push(child);
-        } else {
-            collect_outermost(child, kinds, out);
+    crate::parser::walk_preorder(node, |descendant| {
+        if descendant != node && kinds.contains(&descendant.kind()) {
+            out.push(descendant);
+            return Walk::SkipChildren;
         }
-    }
+        Walk::Children
+    });
 }
 
 fn collapse_whitespace(text: &str) -> String {
@@ -1578,28 +1572,31 @@ pub fn link_files(files: &mut [FileSymbols]) {
 /// the global object, or a singleton class. These bindings are not symbols.
 /// Tells if a pattern of a parameter or a declaration binds `name`.
 fn pattern_binds(pattern: Node<'_>, name: &str, source: &[u8]) -> bool {
-    match pattern.kind() {
-        "identifier" | "shorthand_property_identifier_pattern" => {
-            source[pattern.byte_range()] == *name.as_bytes()
+    // A stack in place of recursion, because a pattern can nest to any depth.
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match pattern.kind() {
+            "identifier" | "shorthand_property_identifier_pattern" => {
+                if source[pattern.byte_range()] == *name.as_bytes() {
+                    return true;
+                }
+            }
+            "assignment_pattern" | "object_assignment_pattern" => {
+                pending.extend(pattern.child_by_field_name("left"));
+            }
+            "pair_pattern" => pending.extend(pattern.child_by_field_name("value")),
+            "required_parameter" | "optional_parameter" => {
+                pending.extend(pattern.child_by_field_name("pattern"));
+            }
+            "object_pattern" | "array_pattern" | "rest_pattern" | "formal_parameters" => {
+                let mut cursor = pattern.walk();
+                let children: Vec<Node<'_>> = pattern.named_children(&mut cursor).collect();
+                pending.extend(children.into_iter().rev());
+            }
+            _ => {}
         }
-        "assignment_pattern" | "object_assignment_pattern" => pattern
-            .child_by_field_name("left")
-            .is_some_and(|left| pattern_binds(left, name, source)),
-        "pair_pattern" => pattern
-            .child_by_field_name("value")
-            .is_some_and(|value| pattern_binds(value, name, source)),
-        "required_parameter" | "optional_parameter" => pattern
-            .child_by_field_name("pattern")
-            .is_some_and(|inner| pattern_binds(inner, name, source)),
-        "object_pattern" | "array_pattern" | "rest_pattern" | "formal_parameters" => {
-            let mut cursor = pattern.walk();
-            let found = pattern
-                .named_children(&mut cursor)
-                .any(|child| pattern_binds(child, name, source));
-            found
-        }
-        _ => false,
     }
+    false
 }
 
 /// The names of the global objects of ECMAScript.
@@ -2407,30 +2404,23 @@ mod tests {
                 .collect::<String>(),
             "}\n".repeat(size)
         );
-        std::thread::Builder::new()
-            .stack_size(1 << 30)
-            .spawn(move || {
-                let parsed = crate::parser::Parser::new()
-                    .parse(
-                        source.as_bytes(),
-                        Language::Java,
-                        std::path::Path::new("A.java"),
-                    )
-                    .unwrap();
-                let started = crate::index::timing::Stopwatch::start();
-                let symbols = super::extract_file(&parsed, "A.java");
-                let elapsed = started.elapsed();
-                let local = symbols
-                    .symbols
-                    .iter()
-                    .find(|symbol| symbol.name == "L1")
-                    .expect("L1");
-                assert_eq!(local.doc.as_deref(), Some("// L1"));
-                elapsed
-            })
-            .unwrap()
-            .join()
-            .unwrap()
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Java,
+                std::path::Path::new("A.java"),
+            )
+            .unwrap();
+        let started = crate::index::timing::Stopwatch::start();
+        let symbols = super::extract_file(&parsed, "A.java");
+        let elapsed = started.elapsed();
+        let local = symbols
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "L1")
+            .expect("L1");
+        assert_eq!(local.doc.as_deref(), Some("// L1"));
+        elapsed
     }
 
     #[test]
@@ -2445,19 +2435,12 @@ mod tests {
 
     /// The time of `extract_file` on `source`, without the parse.
     fn extract_time(language: Language, file: &'static str, source: String) -> std::time::Duration {
-        std::thread::Builder::new()
-            .stack_size(1 << 30)
-            .spawn(move || {
-                let parsed = crate::parser::Parser::new()
-                    .parse(source.as_bytes(), language, std::path::Path::new(file))
-                    .unwrap();
-                let started = crate::index::timing::Stopwatch::start();
-                super::extract_file(&parsed, file);
-                started.elapsed()
-            })
-            .unwrap()
-            .join()
-            .unwrap()
+        let parsed = crate::parser::Parser::new()
+            .parse(source.as_bytes(), language, std::path::Path::new(file))
+            .unwrap();
+        let started = crate::index::timing::Stopwatch::start();
+        super::extract_file(&parsed, file);
+        started.elapsed()
     }
 
     #[test]

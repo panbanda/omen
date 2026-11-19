@@ -5,6 +5,8 @@
 //! not say that the code has a vulnerability, and it does not follow data.
 
 pub mod analysis;
+#[cfg(test)]
+mod deep_tests;
 pub mod entry;
 mod matcher;
 pub mod reach;
@@ -281,21 +283,14 @@ mod tests {
 
     /// The time of the matcher on `size` nested objects, with the TLS option at the bottom.
     fn sinks_in_nested_objects_at(size: usize) -> std::time::Duration {
-        std::thread::Builder::new()
-            .stack_size(1 << 30)
-            .spawn(move || {
-                let source = format!(
-                    "const options = {}{{ rejectUnauthorized: false }}{};\n",
-                    "{ a: ".repeat(size),
-                    " }".repeat(size)
-                );
-                let (found, elapsed) = sinks_timed(Language::JavaScript, &[("a.js", &source)]);
-                assert_eq!(found.len(), 1);
-                elapsed
-            })
-            .unwrap()
-            .join()
-            .unwrap()
+        let source = format!(
+            "const options = {}{{ rejectUnauthorized: false }}{};\n",
+            "{ a: ".repeat(size),
+            " }".repeat(size)
+        );
+        let (found, elapsed) = sinks_timed(Language::JavaScript, &[("a.js", &source)]);
+        assert_eq!(found.len(), 1);
+        elapsed
     }
 
     #[test]
