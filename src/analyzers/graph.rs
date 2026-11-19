@@ -225,7 +225,6 @@ impl Analyzer {
         let sources: Vec<NodeIndex> = graph.node_indices().collect();
 
         struct BetweennessState {
-            totals: Vec<f64>,
             dist: Vec<i32>,
             sigma: Vec<f64>,
             delta: Vec<f64>,
@@ -237,7 +236,6 @@ impl Analyzer {
         impl BetweennessState {
             fn new(n: usize) -> Self {
                 Self {
-                    totals: vec![0.0; n],
                     dist: vec![-1; n],
                     sigma: vec![0.0; n],
                     delta: vec![0.0; n],
@@ -257,67 +255,84 @@ impl Analyzer {
                 self.stack.clear();
                 self.queue.clear();
             }
+
+            /// Adds the dependencies of each node on `source` to `totals`.
+            fn accumulate(
+                &mut self,
+                graph: &DiGraph<String, ()>,
+                source: NodeIndex,
+                totals: &mut [f64],
+            ) {
+                self.reset_scratch();
+                let source_idx = source.index();
+                self.dist[source_idx] = 0;
+                self.sigma[source_idx] = 1.0;
+                self.queue.push_back(source_idx);
+
+                // BFS
+                while let Some(v) = self.queue.pop_front() {
+                    self.stack.push(v);
+                    let v_dist = self.dist[v];
+
+                    for edge in graph.edges_directed(NodeIndex::new(v), Direction::Outgoing) {
+                        let w = edge.target().index();
+
+                        // First visit
+                        if self.dist[w] < 0 {
+                            self.dist[w] = v_dist + 1;
+                            self.queue.push_back(w);
+                        }
+
+                        // Shortest path via v
+                        if self.dist[w] == v_dist + 1 {
+                            self.sigma[w] += self.sigma[v];
+                            self.predecessors[w].push(v as u32);
+                        }
+                    }
+                }
+
+                // Accumulate dependencies
+                while let Some(w) = self.stack.pop() {
+                    for predecessor_index in 0..self.predecessors[w].len() {
+                        let v = self.predecessors[w][predecessor_index] as usize;
+                        let coeff = (self.sigma[v] / self.sigma[w]) * (1.0 + self.delta[w]);
+                        self.delta[v] += coeff;
+                    }
+                    if w != source_idx {
+                        totals[w] += self.delta[w];
+                    }
+                }
+            }
         }
 
-        // Fold source contributions into per-worker totals, then merge worker
-        // totals incrementally to keep peak memory proportional to worker count.
-        let state = sources
-            .par_iter()
-            .fold(
-                || BetweennessState::new(n),
-                |mut state, &source| {
-                    state.reset_scratch();
-                    let source_idx = source.index();
-                    state.dist[source_idx] = 0;
-                    state.sigma[source_idx] = 1.0;
-                    state.queue.push_back(source_idx);
-
-                    // BFS
-                    while let Some(v) = state.queue.pop_front() {
-                        state.stack.push(v);
-                        let v_dist = state.dist[v];
-
-                        for edge in graph.edges_directed(NodeIndex::new(v), Direction::Outgoing) {
-                            let w = edge.target().index();
-
-                            // First visit
-                            if state.dist[w] < 0 {
-                                state.dist[w] = v_dist + 1;
-                                state.queue.push_back(w);
-                            }
-
-                            // Shortest path via v
-                            if state.dist[w] == v_dist + 1 {
-                                state.sigma[w] += state.sigma[v];
-                                state.predecessors[w].push(v as u32);
-                            }
+        // A sum of floating-point numbers depends on the order of its terms.
+        // Thus each chunk of sources has a fixed size and is summed in source
+        // order, and the totals of the chunks are added in chunk order. The
+        // number of threads does not change any order. The chunks run in
+        // waves, so the memory is proportional to the size of a wave.
+        const SOURCES_PER_CHUNK: usize = 16;
+        const CHUNKS_PER_WAVE: usize = 64;
+        let mut totals = vec![0.0; n];
+        for wave in sources.chunks(SOURCES_PER_CHUNK * CHUNKS_PER_WAVE) {
+            let chunk_totals: Vec<Vec<f64>> = wave
+                .par_chunks(SOURCES_PER_CHUNK)
+                .map_init(
+                    || BetweennessState::new(n),
+                    |state, chunk| {
+                        let mut chunk_total = vec![0.0; n];
+                        for source in chunk {
+                            state.accumulate(graph, *source, &mut chunk_total);
                         }
-                    }
-
-                    // Accumulate dependencies
-                    while let Some(w) = state.stack.pop() {
-                        for predecessor_index in 0..state.predecessors[w].len() {
-                            let v = state.predecessors[w][predecessor_index] as usize;
-                            let coeff = (state.sigma[v] / state.sigma[w]) * (1.0 + state.delta[w]);
-                            state.delta[v] += coeff;
-                        }
-                        if w != source_idx {
-                            state.totals[w] += state.delta[w];
-                        }
-                    }
-
-                    state
-                },
-            )
-            .reduce(
-                || BetweennessState::new(n),
-                |mut left, right| {
-                    for (left_value, right_value) in left.totals.iter_mut().zip(right.totals) {
-                        *left_value += right_value;
-                    }
-                    left
-                },
-            );
+                        chunk_total
+                    },
+                )
+                .collect();
+            for chunk_total in chunk_totals {
+                for (total, value) in totals.iter_mut().zip(chunk_total) {
+                    *total += value;
+                }
+            }
+        }
 
         // Normalize betweenness scores
         let norm = if n > 2 {
@@ -328,7 +343,7 @@ impl Analyzer {
 
         let mut betweenness: HashMap<NodeIndex, f64> = graph
             .node_indices()
-            .map(|node| (node, state.totals[node.index()]))
+            .map(|node| (node, totals[node.index()]))
             .collect();
         for value in betweenness.values_mut() {
             *value *= norm;
@@ -731,6 +746,52 @@ mod tests {
         let graph: DiGraph<String, ()> = DiGraph::new();
         let betweenness = analyzer.calculate_betweenness(&graph);
         assert!(betweenness.is_empty());
+    }
+
+    /// A graph of `nodes` nodes with pseudo-random edges and many shortest
+    /// paths of equal length, so that the sums of the betweenness have many
+    /// terms of different sizes.
+    fn tangled_graph(nodes: usize) -> DiGraph<String, ()> {
+        let mut graph: DiGraph<String, ()> = DiGraph::new();
+        let indices: Vec<NodeIndex> = (0..nodes)
+            .map(|node| graph.add_node(format!("f{node}.rs")))
+            .collect();
+        let mut seed: u64 = 7;
+        for (position, from) in indices.iter().enumerate() {
+            for _ in 0..4 {
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let to = (seed >> 33) as usize % nodes;
+                if to != position {
+                    graph.add_edge(*from, indices[to], ());
+                }
+            }
+        }
+        graph
+    }
+
+    /// The betweenness of each node is the same bits for each number of
+    /// threads and for each run. A sum of floating-point numbers depends on
+    /// the order of its terms, thus the order must not depend on the threads.
+    #[test]
+    fn test_betweenness_is_identical_for_each_number_of_threads() {
+        let graph = tangled_graph(1_500);
+        let bits = |threads: usize| -> Vec<u64> {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            let betweenness = pool.install(|| Analyzer::new().calculate_betweenness(&graph));
+            graph
+                .node_indices()
+                .map(|node| betweenness[&node].to_bits())
+                .collect()
+        };
+        let expected = bits(1);
+        for threads in [2, 3, 4, 8, 2, 3, 4, 8] {
+            assert!(bits(threads) == expected, "{threads} threads");
+        }
     }
 
     #[test]
