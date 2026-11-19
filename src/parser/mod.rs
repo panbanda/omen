@@ -523,7 +523,7 @@ mod tests {
                 let result = Parser::new()
                     .parse(source.as_bytes(), Language::TypeScript, Path::new("a.ts"))
                     .unwrap();
-                let started = std::time::Instant::now();
+                let started = crate::index::timing::Stopwatch::start();
                 let functions = extract_functions(&result);
                 let elapsed = started.elapsed();
                 assert_eq!(functions.len(), size);

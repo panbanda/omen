@@ -960,6 +960,8 @@ struct Extractor<'a, 'tree> {
     values: Vec<(ValueUse<'tree>, Option<usize>, bool)>,
     locals: Vec<(LocalName, Option<usize>, Option<std::ops::Range<usize>>)>,
     block_kinds: Vec<&'static str>,
+    /// The ancestors of a kind in `block_kinds`, the nearest last.
+    blocks: Vec<Node<'tree>>,
     /// The local name and the exported name of each export of a name of this
     /// file under a different name.
     export_aliases: Vec<(String, String)>,
@@ -1347,11 +1349,7 @@ impl<'tree> Extractor<'_, 'tree> {
         {
             return None;
         }
-        self.ancestors
-            .iter()
-            .rev()
-            .find(|ancestor| self.block_kinds.contains(&ancestor.kind()))
-            .map(|block| block.byte_range())
+        self.blocks.last().map(|block| block.byte_range())
     }
 
     fn leave(&mut self, depth: usize) {
@@ -1399,6 +1397,9 @@ impl<'tree> Extractor<'_, 'tree> {
                     let owner = self.spec.return_owner(node, self.source);
                     self.return_owners.push(owner);
                 }
+                if self.block_kinds.contains(&node.kind()) {
+                    self.blocks.push(node);
+                }
                 test_code::push_ancestor(
                     node,
                     self.language,
@@ -1426,6 +1427,13 @@ impl<'tree> Extractor<'_, 'tree> {
                         .is_some_and(|owner| owner.node.id() == left.id())
                     {
                         self.return_owners.pop();
+                    }
+                    if self
+                        .blocks
+                        .last()
+                        .is_some_and(|block| block.id() == left.id())
+                    {
+                        self.blocks.pop();
                     }
                 }
                 test_code::pop_ancestor(&mut self.ancestors, &mut self.test_owners);
@@ -1921,6 +1929,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         values: Vec::new(),
         locals: Vec::new(),
         block_kinds: spec.block_kinds(),
+        blocks: Vec::new(),
         export_aliases: Vec::new(),
         language: parsed.language,
         members: Recorder::new(parsed.language),
@@ -2408,7 +2417,7 @@ mod tests {
                         std::path::Path::new("A.java"),
                     )
                     .unwrap();
-                let started = std::time::Instant::now();
+                let started = crate::index::timing::Stopwatch::start();
                 let symbols = super::extract_file(&parsed, "A.java");
                 let elapsed = started.elapsed();
                 let local = symbols
@@ -2442,13 +2451,22 @@ mod tests {
                 let parsed = crate::parser::Parser::new()
                     .parse(source.as_bytes(), language, std::path::Path::new(file))
                     .unwrap();
-                let started = std::time::Instant::now();
+                let started = crate::index::timing::Stopwatch::start();
                 super::extract_file(&parsed, file);
                 started.elapsed()
             })
             .unwrap()
             .join()
             .unwrap()
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_arrow_functions_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("arrow functions", 5_000, |size| {
+            let source = format!("const f = {}1;\n", "() => ".repeat(size));
+            extract_time(Language::TypeScript, "a.ts", source)
+        });
     }
 
     #[test]
