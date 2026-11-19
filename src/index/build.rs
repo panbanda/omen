@@ -542,6 +542,6 @@ mod manifest_timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_missing_extended_packages_are_probed_in_linear_time() {
-        assert_scales_linearly("missing packages", 2_000, missing_extended_packages_at);
+        assert_scales_linearly("missing packages", 8_000, missing_extended_packages_at);
     }
 }
