@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "language": "typescript",
+  "split": "development",
+  "oracle": "Author-reviewed. TypeScript merges the overload signatures of a method with the implementation that follows them. `tsc` did not run. The harness does not run the code.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "find_string", "category": "overload", "file": "repo.ts", "name": "find", "kind": "method", "container": "Repo", "start_line": 2, "end_line": 2, "exported": true},
+    {"label": "find_number", "category": "overload", "file": "repo.ts", "name": "find", "kind": "method", "container": "Repo", "start_line": 3, "end_line": 3, "exported": true},
+    {"label": "find_implementation", "category": "overload", "file": "repo.ts", "name": "find", "kind": "method", "container": "Repo", "start_line": 4, "end_line": 6, "exported": true},
+    {"label": "first", "category": "method", "file": "repo.ts", "name": "first", "kind": "method", "container": "Repo", "start_line": 8, "end_line": 10, "exported": true},
+    {"label": "run", "category": "free_function", "file": "main.ts", "name": "run", "kind": "function", "container": null, "start_line": 3, "end_line": 5, "exported": true}
+  ],
+  "calls": [
+    {"label": "overload_through_a_declared_type", "category": "declared_type_receiver", "caller": "run", "line": 4, "callee_text": "repo.find", "expected": ["find_implementation"]},
+    {"label": "overload_through_this", "category": "self_receiver", "caller": "first", "line": 9, "callee_text": "this.find", "expected": ["find_implementation"]}
+  ]
+}

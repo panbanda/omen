@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed against the methods of web/router.go. The syntax is valid Go. The chi package is not in the case. Group keeps its prefix in a field and calls its function, so a route inside gets the prefix and the guards of the group. Methods registers each method of its list. Combo keeps the pattern for each method of the chain. main.go mounts the router of api.Routes at /api, and serves its own router as the root. The harness does not build or run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "groups_home", "file": "main.go", "line": 15, "kind": "http_handler", "framework": "chi", "method": "ANY", "path": "/"},
+    {"label": "groups_users", "file": "api/api.go", "line": 23, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/api/v1/users", "guards": ["reqToken"]},
+    {"label": "groups_user_get", "file": "api/api.go", "line": 25, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/api/v1/users/{id}", "parameters": ["id"], "guards": ["reqToken", "loadUser"]},
+    {"label": "groups_user_post", "file": "api/api.go", "line": 26, "kind": "http_handler", "framework": "chi", "method": "POST", "path": "/api/v1/users/{id}", "parameters": ["id"], "guards": ["reqToken", "loadUser", "reqAdmin"]},
+    {"label": "groups_version", "file": "api/api.go", "line": 32, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/api/v1/version"},
+    {"label": "groups_ping_get", "file": "api/api.go", "line": 36, "kind": "http_handler", "framework": "chi", "method": "GET", "path": "/api/v1/ping"},
+    {"label": "groups_ping_head", "file": "api/api.go", "line": 36, "kind": "http_handler", "framework": "chi", "method": "HEAD", "path": "/api/v1/ping"},
+    {"label": "groups_main", "file": "main.go", "line": 19, "kind": "cli_main", "framework": "go"}
+  ]
+}

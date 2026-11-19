@@ -12,7 +12,12 @@
     {"label": "parse_float", "category": "free_function", "file": "app.ts", "name": "parseFloat", "kind": "function", "container": null, "start_line": 23, "end_line": 25, "exported": true},
     {"label": "shadowed", "category": "free_function", "file": "app.ts", "name": "shadowed", "kind": "function", "container": null, "start_line": 27, "end_line": 29, "exported": true},
     {"label": "parameter", "category": "free_function", "file": "app.ts", "name": "parameter", "kind": "function", "container": null, "start_line": 31, "end_line": 33, "exported": true},
-    {"label": "local_fetch", "category": "free_function", "file": "local.ts", "name": "fetch", "kind": "function", "container": null, "start_line": 1, "end_line": 1, "exported": true}
+    {"label": "local_fetch", "category": "free_function", "file": "local.ts", "name": "fetch", "kind": "function", "container": null, "start_line": 1, "end_line": 1, "exported": true},
+    {"label": "collect", "category": "free_function", "file": "app.ts", "name": "collect", "kind": "function", "container": null, "start_line": 35, "end_line": 39, "exported": true},
+    {"label": "nodes_set", "category": "type", "file": "nodes.ts", "name": "Set", "kind": "class", "container": null, "start_line": 1, "end_line": 5, "exported": true},
+    {"label": "nodes_set_constructor", "category": "constructor", "file": "nodes.ts", "name": "constructor", "kind": "constructor", "container": "Set", "start_line": 2, "end_line": 2, "exported": true},
+    {"label": "nodes_set_add", "category": "method", "file": "nodes.ts", "name": "add", "kind": "method", "container": "Set", "start_line": 4, "end_line": 4, "exported": true},
+    {"label": "build", "category": "free_function", "file": "uses.ts", "name": "build", "kind": "function", "container": null, "start_line": 3, "end_line": 5, "exported": true}
   ],
   "calls": [
     {"label": "global_object", "category": "external", "caller": "globals", "line": 5, "callee_text": "console.log", "expected": [], "status": "external"},
@@ -22,6 +27,10 @@
     {"label": "node_builtin_import", "category": "external", "caller": "imported", "line": 19, "callee_text": "readFileSync", "expected": [], "status": "external"},
     {"label": "imported_same_name_as_global", "category": "cross_file_import", "caller": "imported", "line": 20, "callee_text": "fetch", "expected": ["local_fetch"], "status": "not_external"},
     {"label": "function_hides_global", "category": "shadowing", "caller": "shadowed", "line": 28, "callee_text": "parseFloat", "expected": ["parse_float"], "status": "not_external"},
-    {"label": "parameter_hides_global", "category": "shadowing", "caller": "parameter", "line": 32, "callee_text": "console.log", "expected": [], "status": "not_external"}
+    {"label": "parameter_hides_global", "category": "shadowing", "caller": "parameter", "line": 32, "callee_text": "console.log", "expected": [], "status": "not_external"},
+    {"label": "global_class_with_a_repository_name", "category": "external", "caller": "collect", "line": 36, "callee_text": "Set", "expected": [], "status": "external"},
+    {"label": "member_of_a_global_class", "category": "wrong_receiver", "caller": "collect", "line": 37, "callee_text": "seen.add", "expected": []},
+    {"label": "global_date", "category": "external", "caller": "collect", "line": 38, "callee_text": "Date", "expected": [], "status": "external"},
+    {"label": "imported_class_with_a_global_name", "category": "constructor", "caller": "build", "line": 4, "callee_text": "Set", "expected": ["nodes_set_constructor"], "status": "not_external"}
   ]
 }
