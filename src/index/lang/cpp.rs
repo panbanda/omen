@@ -713,7 +713,7 @@ impl LanguageSpec for Cpp {
         }
         if is_function(node) {
             // A friend declaration names a function of a different scope.
-            let friend = c::function_holder(node)
+            let friend = c::function_holder(node, context)
                 .parent()
                 .is_some_and(|parent| parent.kind() == FRIEND_DECLARATION);
             if friend {
@@ -734,7 +734,7 @@ impl LanguageSpec for Cpp {
             draft.span = Span::of(&declaration);
             return true;
         }
-        if !c::refine(draft) {
+        if !c::refine(draft, context) {
             return false;
         }
         let node = draft.node;
@@ -836,7 +836,7 @@ impl LanguageSpec for Cpp {
             FIELD_IDENTIFIER => {
                 data_member(node, context).map_or(node, |(declaration, _)| declaration)
             }
-            _ => c::function_holder(node),
+            _ => c::function_holder(node, context),
         };
         match context.scopes.last() {
             Some(scope) if scope.role == ScopeRole::Type => {

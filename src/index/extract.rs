@@ -2434,6 +2434,67 @@ mod tests {
         );
     }
 
+    /// The time of `extract_file` on `source`, without the parse.
+    fn extract_time(language: Language, file: &'static str, source: String) -> std::time::Duration {
+        std::thread::Builder::new()
+            .stack_size(1 << 30)
+            .spawn(move || {
+                let parsed = crate::parser::Parser::new()
+                    .parse(source.as_bytes(), language, std::path::Path::new(file))
+                    .unwrap();
+                let started = std::time::Instant::now();
+                super::extract_file(&parsed, file);
+                started.elapsed()
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deeply_nested_go_closures_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go closures", 5_000, |size| {
+            let source = format!(
+                "package p\nfunc f() {{\n{}{}\n}}\n",
+                "func() {".repeat(size),
+                "}()".repeat(size)
+            );
+            extract_time(Language::Go, "a.go", source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deeply_nested_python_lambdas_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("python lambdas", 5_000, |size| {
+            let source = format!("def f():\n    return {}1\n", "lambda: ".repeat(size));
+            extract_time(Language::Python, "a.py", source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deeply_nested_php_arrow_functions_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("php arrow functions", 5_000, |size| {
+            let source = format!("<?php\n$f = {}1;\n", "fn() => ".repeat(size));
+            extract_time(Language::Php, "a.php", source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deep_c_pointer_declarators_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("c pointer declarators", 5_000, |size| {
+            let source = format!(
+                "int {}x;\nint {}f(void) {{ return 0; }}\n",
+                "*".repeat(size),
+                "*".repeat(size)
+            );
+            extract_time(Language::C, "a.c", source)
+        });
+    }
+
     #[test]
     fn test_var_loop_binding_belongs_to_the_function() {
         for source in [
