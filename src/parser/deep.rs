@@ -43,14 +43,15 @@ impl DeepSource {
 /// The size of the stack of `on_small_stack`.
 pub const SMALL_STACK: usize = 64 * 1024;
 
-/// Run `work` on a thread with a stack of `SMALL_STACK` bytes.
+/// Run `work` in a Rayon pool whose threads have a stack of `SMALL_STACK` bytes. The analysis
+/// runs parts of its work on the threads of the current pool, so each of these parts also has
+/// the small stack.
 pub fn on_small_stack<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
+    rayon::ThreadPoolBuilder::new()
         .stack_size(SMALL_STACK)
-        .spawn(work)
-        .expect("spawn")
-        .join()
-        .expect("no stack overflow")
+        .build()
+        .expect("pool")
+        .install(work)
 }
 
 /// `open` `DEPTH` times, then `middle`, then `close` `DEPTH` times.
