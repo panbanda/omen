@@ -189,8 +189,11 @@ fn exported_if(condition: bool) -> Exported {
 }
 
 fn collect_base_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<String>) {
+    // A stack in place of recursion, in the order of a recursive walk.
     let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
+    let mut pending: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+    pending.reverse();
+    while let Some(child) = pending.pop() {
         match child.kind() {
             ACCESS_SPECIFIER | TEMPLATE_ARGUMENT_LIST => {}
             c::TYPE_IDENTIFIER => out.push(context.text(child)),
@@ -203,7 +206,11 @@ fn collect_base_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<S
                 names.push(context.text(last));
                 out.push(names.join("::"));
             }
-            _ => collect_base_names(child, context, out),
+            _ => {
+                let mut cursor = child.walk();
+                let children: Vec<Node<'_>> = child.named_children(&mut cursor).collect();
+                pending.extend(children.into_iter().rev());
+            }
         }
     }
 }
@@ -405,26 +412,25 @@ const SMART_POINTER_MEMBERS: &[&str] = &[
 
 /// Adds the declared type of each declaration of `name` below `node`.
 fn declared_types_of(node: Node<'_>, name: &str, context: &Context<'_, '_>, out: &mut Vec<String>) {
-    let declares = [
-        c::DECLARATION,
-        c::PARAMETER_DECLARATION,
-        OPTIONAL_PARAMETER_DECLARATION,
-    ]
-    .contains(&node.kind());
-    if declares {
-        let mut names = Vec::new();
-        c::declared_names(node, context, &mut names);
-        out.extend(
-            names
-                .into_iter()
-                .filter(|local| local.name == name)
-                .map(|local| local.type_name.unwrap_or_default()),
-        );
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        declared_types_of(child, name, context, out);
-    }
+    crate::parser::walk_preorder(node, |node| {
+        let declares = [
+            c::DECLARATION,
+            c::PARAMETER_DECLARATION,
+            OPTIONAL_PARAMETER_DECLARATION,
+        ]
+        .contains(&node.kind());
+        if declares {
+            let mut names = Vec::new();
+            c::declared_names(node, context, &mut names);
+            out.extend(
+                names
+                    .into_iter()
+                    .filter(|local| local.name == name)
+                    .map(|local| local.type_name.unwrap_or_default()),
+            );
+        }
+        crate::parser::Walk::Children
+    });
 }
 
 /// Tells if the function that contains `call` declares `name` one or more
@@ -713,7 +719,7 @@ impl LanguageSpec for Cpp {
         }
         if is_function(node) {
             // A friend declaration names a function of a different scope.
-            let friend = c::function_holder(node)
+            let friend = c::function_holder(node, context)
                 .parent()
                 .is_some_and(|parent| parent.kind() == FRIEND_DECLARATION);
             if friend {
@@ -734,7 +740,7 @@ impl LanguageSpec for Cpp {
             draft.span = Span::of(&declaration);
             return true;
         }
-        if !c::refine(draft) {
+        if !c::refine(draft, context) {
             return false;
         }
         let node = draft.node;
@@ -836,7 +842,7 @@ impl LanguageSpec for Cpp {
             FIELD_IDENTIFIER => {
                 data_member(node, context).map_or(node, |(declaration, _)| declaration)
             }
-            _ => c::function_holder(node),
+            _ => c::function_holder(node, context),
         };
         match context.scopes.last() {
             Some(scope) if scope.role == ScopeRole::Type => {

@@ -97,28 +97,31 @@ pub(crate) fn function_name<'tree>(
     declarator: Node<'tree>,
     name_kinds: &[&str],
 ) -> Option<Node<'tree>> {
-    match declarator.kind() {
-        FUNCTION_DECLARATOR => {
-            let inner = declarator.child_by_field_name("declarator")?;
-            if name_kinds.contains(&inner.kind()) {
-                Some(inner)
-            } else {
-                function_name(inner, name_kinds)
+    let mut declarator = declarator;
+    loop {
+        declarator = match declarator.kind() {
+            FUNCTION_DECLARATOR => {
+                let inner = declarator.child_by_field_name("declarator")?;
+                if name_kinds.contains(&inner.kind()) {
+                    return Some(inner);
+                }
+                inner
             }
-        }
-        kind if WRAPPER_DECLARATORS.contains(&kind) => {
-            function_name(inner_declarator(declarator)?, name_kinds)
-        }
-        _ => None,
+            kind if WRAPPER_DECLARATORS.contains(&kind) => inner_declarator(declarator)?,
+            _ => return None,
+        };
     }
 }
 
 /// The declaration that a function declarator belongs to, when the declarator
 /// declares a function and does not define it.
-pub(crate) fn prototype_holder(declarator: Node<'_>) -> Option<Node<'_>> {
-    let mut current = declarator.parent()?;
+pub(crate) fn prototype_holder<'tree>(
+    declarator: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Option<Node<'tree>> {
+    let mut current = context.parent(declarator)?;
     while WRAPPER_DECLARATORS.contains(&current.kind()) || current.kind() == FUNCTION_DECLARATOR {
-        current = current.parent()?;
+        current = context.parent(current)?;
     }
     [DECLARATION, FIELD_DECLARATION]
         .contains(&current.kind())
@@ -164,7 +167,7 @@ pub(crate) fn name_node<'tree>(
     match node.kind() {
         FUNCTION_DEFINITION => function_name(node.child_by_field_name("declarator")?, name_kinds),
         FUNCTION_DECLARATOR => {
-            prototype_holder(node)?;
+            prototype_holder(node, context)?;
             // In a function body, the grammar reads `Type name(argument);` as a
             // prototype, but it is usually a variable with a constructor call.
             if context.in_function() {
@@ -179,9 +182,12 @@ pub(crate) fn name_node<'tree>(
 }
 
 /// The node that has the storage class and the range of a function symbol.
-pub(crate) fn function_holder(node: Node<'_>) -> Node<'_> {
+pub(crate) fn function_holder<'tree>(
+    node: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Node<'tree> {
     if node.kind() == FUNCTION_DECLARATOR {
-        prototype_holder(node).unwrap_or(node)
+        prototype_holder(node, context).unwrap_or(node)
     } else {
         node
     }
@@ -189,12 +195,12 @@ pub(crate) fn function_holder(node: Node<'_>) -> Node<'_> {
 
 /// Corrects the draft of a C or C++ symbol. If the result is `false`, the node
 /// is not a definition.
-pub(crate) fn refine(draft: &mut Draft<'_>) -> bool {
+pub(crate) fn refine<'tree>(draft: &mut Draft<'tree>, context: &Context<'_, 'tree>) -> bool {
     match draft.node.kind() {
         // `struct Name` without a body refers to a type. It does not define the type.
         STRUCT_SPECIFIER | UNION_SPECIFIER | ENUM_SPECIFIER => draft.body.is_some(),
         FUNCTION_DECLARATOR => {
-            draft.span = Span::of(&function_holder(draft.node));
+            draft.span = Span::of(&function_holder(draft.node, context));
             true
         }
         _ => true,
@@ -217,7 +223,7 @@ pub(crate) fn exported(draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported
     }
     match draft.node.kind() {
         FUNCTION_DEFINITION | FUNCTION_DECLARATOR => exported_if(!has_storage_class(
-            function_holder(draft.node),
+            function_holder(draft.node, context),
             "static",
             context,
         )),
@@ -282,8 +288,8 @@ impl LanguageSpec for C {
         name_node(node, &[IDENTIFIER], context)
     }
 
-    fn refine<'tree>(&self, draft: &mut Draft<'tree>, _context: &Context<'_, 'tree>) -> bool {
-        refine(draft)
+    fn refine<'tree>(&self, draft: &mut Draft<'tree>, context: &Context<'_, 'tree>) -> bool {
+        refine(draft, context)
     }
 
     fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {

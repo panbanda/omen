@@ -23,7 +23,6 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 
-use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use tree_sitter::Node;
 
@@ -1853,8 +1852,8 @@ impl<'a> Context<'a> {
                     graph.add_edge(parent, child, ());
                 }
             }
-            // `tarjan_scc` gives each component after the components that it has edges to.
-            let mut components = tarjan_scc(&graph);
+            // Tarjan's algorithm gives each component after the components that it has edges to.
+            let mut components = crate::index::graph::strongly_connected_components(&graph);
             components.reverse();
             let mut chains: HashMap<BindingKey, Vec<Vec<Part>>> = HashMap::new();
             let mut depths: HashMap<BindingKey, usize> = HashMap::new();
@@ -2143,24 +2142,30 @@ impl<'a> Context<'a> {
     /// The paths that a decorator argument gives: a path, a list of paths, or an object with the
     /// key `path`. No argument gives the empty path.
     fn decorator_paths(&self, unit: Unit<'_>, argument: Option<Node<'_>>) -> Vec<Vec<Part>> {
-        let Some(argument) = argument.map(unwrap) else {
-            return vec![Vec::new()];
-        };
-        match argument.kind() {
-            "array" => named_children(argument)
-                .into_iter()
-                .map(|element| self.path_of(unit, element, 0))
-                .collect(),
-            "object" => {
-                let path = object_properties(argument, unit.source)
-                    .into_iter()
-                    .find_map(|(key, value)| (key == "path").then_some(value));
-                match path {
-                    Some(path) => self.decorator_paths(unit, Some(path)),
-                    None => vec![Vec::new()],
+        let mut argument = argument;
+        // A loop in place of recursion, because objects in `path` can nest to any depth.
+        loop {
+            let Some(current) = argument.map(unwrap) else {
+                return vec![Vec::new()];
+            };
+            match current.kind() {
+                "array" => {
+                    return named_children(current)
+                        .into_iter()
+                        .map(|element| self.path_of(unit, element, 0))
+                        .collect()
                 }
+                "object" => {
+                    let path = object_properties(current, unit.source)
+                        .into_iter()
+                        .find_map(|(key, value)| (key == "path").then_some(value));
+                    match path {
+                        Some(path) => argument = Some(path),
+                        None => return vec![Vec::new()],
+                    }
+                }
+                _ => return vec![self.path_of(unit, current, 0)],
             }
-            _ => vec![self.path_of(unit, argument, 0)],
         }
     }
 
@@ -2528,6 +2533,33 @@ mod tests {
             .collect()
     }
 
+    /// The components of the mounts read a long chain of routers, each mounted in the next,
+    /// on a small stack.
+    #[test]
+    fn a_long_chain_of_mounted_routers_on_a_small_stack() {
+        const LENGTH: usize = 5_000;
+        let mut source = String::from("import express from 'express';\nconst app = express();\n");
+        for index in 0..LENGTH {
+            source.push_str(&format!("const r{index} = express.Router();\n"));
+        }
+        source.push_str(&format!("r{}.get('/x', list);\n", LENGTH - 1));
+        for index in 1..LENGTH {
+            source.push_str(&format!("r{}.use('/a', r{index});\n", index - 1));
+        }
+        source.push_str("app.use('/a', r0);\n");
+        let found = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || paths(&[("src/app.ts", source.as_str())]))
+            .expect("spawn")
+            .join()
+            .expect("no stack overflow");
+        // A chain of mounts deeper than `MAX_HOPS` gives a prefix that is not known.
+        assert_eq!(
+            found,
+            [("GET".to_string(), None, Some("/${...}/x".to_string()))]
+        );
+    }
+
     fn known(method: &str, path: &str) -> (String, Option<String>, Option<String>) {
         (method.to_string(), Some(path.to_string()), None)
     }
@@ -2587,6 +2619,19 @@ mod tests {
             .expect("an inline handler");
         assert_eq!(inline.enclosing.as_deref(), Some("src/c.ts#Server.setup"));
         assert_eq!(inline.range.start_line, 14);
+    }
+
+    /// `decorator_paths` reads each level of an object in the `path` of an object.
+    #[test]
+    fn a_nest_controller_with_a_deep_path_object() {
+        use crate::parser::deep::{nest, on_small_stack};
+        let source = format!(
+            "import {{ Controller, Get }} from '@nestjs/common';\n@Controller({})\nexport class Dogs {{\n  @Get('a')\n  one() {{}}\n}}\n",
+            nest("{ path: ", "'dogs'", " }")
+        );
+        let found = on_small_stack(move || paths(&[("src/dogs.ts", source.as_str())]));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1.as_deref(), Some("/dogs/a"));
     }
 
     #[test]

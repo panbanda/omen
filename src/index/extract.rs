@@ -11,6 +11,8 @@ use std::rc::Rc;
 
 use tree_sitter::Node;
 
+use crate::parser::Walk;
+
 use super::calls::{split_type, Argument, Call, CallSyntax, LocalName, ValueSyntax, ValueUse};
 use super::lang;
 use super::members::{self, MemberFacts, PendingBlock, Recorder, SymbolRow};
@@ -665,27 +667,19 @@ pub fn language_spec(language: Language) -> &'static dyn LanguageSpec {
 
 /// The first descendant of `node`, or `node` itself, that has one of the kinds.
 pub fn find_descendant<'tree>(node: Node<'tree>, kinds: &[&str]) -> Option<Node<'tree>> {
-    if kinds.contains(&node.kind()) {
-        return Some(node);
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'tree>> = node.children(&mut cursor).collect();
-    children
-        .into_iter()
-        .find_map(|child| find_descendant(child, kinds))
+    crate::parser::find_preorder(node, |node| kinds.contains(&node.kind()))
 }
 
 /// The nearest nodes below `node` that have one of the kinds. The search does
 /// not go into a node that it collects.
 pub fn collect_outermost<'tree>(node: Node<'tree>, kinds: &[&str], out: &mut Vec<Node<'tree>>) {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if kinds.contains(&child.kind()) {
-            out.push(child);
-        } else {
-            collect_outermost(child, kinds, out);
+    crate::parser::walk_preorder(node, |descendant| {
+        if descendant != node && kinds.contains(&descendant.kind()) {
+            out.push(descendant);
+            return Walk::SkipChildren;
         }
-    }
+        Walk::Children
+    });
 }
 
 fn collapse_whitespace(text: &str) -> String {
@@ -708,19 +702,17 @@ fn signature(draft: &Draft<'_>, source: &[u8]) -> String {
 }
 
 /// The comments that end on the line before the definition, with no line between them.
-fn doc(node: Node<'_>, comment_kinds: &[&str], source: &[u8]) -> Option<String> {
+fn doc(node: Node<'_>, comment_before: &HashMap<usize, Node<'_>>, source: &[u8]) -> Option<String> {
     let mut lines = Vec::new();
     let mut next_start_row = node.start_position().row;
-    let mut previous = node.prev_sibling();
+    let mut previous = comment_before.get(&node.id());
     while let Some(comment) = previous {
-        if !comment_kinds.contains(&comment.kind())
-            || comment.end_position().row + 1 != next_start_row
-        {
+        if comment.end_position().row + 1 != next_start_row {
             break;
         }
         lines.push(comment.utf8_text(source).unwrap_or("").to_string());
         next_start_row = comment.start_position().row;
-        previous = comment.prev_sibling();
+        previous = comment_before.get(&comment.id());
     }
     if lines.is_empty() {
         return None;
@@ -923,6 +915,9 @@ struct PendingDecorators {
 
 struct Extractor<'a, 'tree> {
     spec: &'a dyn LanguageSpec,
+    /// The comment before each node that follows a comment, by the id of the node.
+    /// `Node::prev_sibling` searches from the root, so the walk records the sibling.
+    comment_before: HashMap<usize, Node<'tree>>,
     rules: HashMap<&'static str, DefinitionRule>,
     file: &'a str,
     source: &'a [u8],
@@ -959,6 +954,8 @@ struct Extractor<'a, 'tree> {
     values: Vec<(ValueUse<'tree>, Option<usize>, bool)>,
     locals: Vec<(LocalName, Option<usize>, Option<std::ops::Range<usize>>)>,
     block_kinds: Vec<&'static str>,
+    /// The ancestors of a kind in `block_kinds`, the nearest last.
+    blocks: Vec<Node<'tree>>,
     /// The local name and the exported name of each export of a name of this
     /// file under a different name.
     export_aliases: Vec<(String, String)>,
@@ -968,6 +965,7 @@ struct Extractor<'a, 'tree> {
     test_mark_kinds: &'static [&'static str],
     /// The ancestors that have a kind of `test_code::owner_kinds`, the nearest last.
     test_owners: Vec<test_code::Owner<'tree>>,
+    test_callee_roots: test_code::CalleeRoots<'tree>,
     test_marks: Vec<TestMark>,
     in_test_file: bool,
 }
@@ -1194,6 +1192,7 @@ impl<'tree> Extractor<'_, 'tree> {
                     source: self.source,
                     ancestors: &self.ancestors,
                     owners: &self.test_owners,
+                    callee_roots: &self.test_callee_roots,
                     in_test_file: self.in_test_file,
                 },
                 &mut self.test_marks,
@@ -1344,11 +1343,7 @@ impl<'tree> Extractor<'_, 'tree> {
         {
             return None;
         }
-        self.ancestors
-            .iter()
-            .rev()
-            .find(|ancestor| self.block_kinds.contains(&ancestor.kind()))
-            .map(|block| block.byte_range())
+        self.blocks.last().map(|block| block.byte_range())
     }
 
     fn leave(&mut self, depth: usize) {
@@ -1380,13 +1375,24 @@ impl<'tree> Extractor<'_, 'tree> {
     fn walk(&mut self, root: Node<'tree>) {
         let mut cursor = root.walk();
         let mut depth = 0;
+        let comment_kinds = self.spec.comment_kinds();
+        let mut previous: Option<Node<'tree>> = None;
         loop {
             let node = cursor.node();
+            if let Some(comment) =
+                previous.filter(|sibling| comment_kinds.contains(&sibling.kind()))
+            {
+                self.comment_before.insert(node.id(), comment);
+            }
             self.enter(node, depth);
+            previous = None;
             if cursor.goto_first_child() {
                 if self.return_owner_kinds.contains(&node.kind()) {
                     let owner = self.spec.return_owner(node, self.source);
                     self.return_owners.push(owner);
+                }
+                if self.block_kinds.contains(&node.kind()) {
+                    self.blocks.push(node);
                 }
                 test_code::push_ancestor(
                     node,
@@ -1400,7 +1406,9 @@ impl<'tree> Extractor<'_, 'tree> {
             }
             loop {
                 self.leave(depth);
+                let left = cursor.node();
                 if cursor.goto_next_sibling() {
+                    previous = Some(left);
                     break;
                 }
                 if !cursor.goto_parent() {
@@ -1413,6 +1421,13 @@ impl<'tree> Extractor<'_, 'tree> {
                         .is_some_and(|owner| owner.node.id() == left.id())
                     {
                         self.return_owners.pop();
+                    }
+                    if self
+                        .blocks
+                        .last()
+                        .is_some_and(|block| block.id() == left.id())
+                    {
+                        self.blocks.pop();
                     }
                 }
                 test_code::pop_ancestor(&mut self.ancestors, &mut self.test_owners);
@@ -1557,28 +1572,31 @@ pub fn link_files(files: &mut [FileSymbols]) {
 /// the global object, or a singleton class. These bindings are not symbols.
 /// Tells if a pattern of a parameter or a declaration binds `name`.
 fn pattern_binds(pattern: Node<'_>, name: &str, source: &[u8]) -> bool {
-    match pattern.kind() {
-        "identifier" | "shorthand_property_identifier_pattern" => {
-            source[pattern.byte_range()] == *name.as_bytes()
+    // A stack in place of recursion, because a pattern can nest to any depth.
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match pattern.kind() {
+            "identifier" | "shorthand_property_identifier_pattern" => {
+                if source[pattern.byte_range()] == *name.as_bytes() {
+                    return true;
+                }
+            }
+            "assignment_pattern" | "object_assignment_pattern" => {
+                pending.extend(pattern.child_by_field_name("left"));
+            }
+            "pair_pattern" => pending.extend(pattern.child_by_field_name("value")),
+            "required_parameter" | "optional_parameter" => {
+                pending.extend(pattern.child_by_field_name("pattern"));
+            }
+            "object_pattern" | "array_pattern" | "rest_pattern" | "formal_parameters" => {
+                let mut cursor = pattern.walk();
+                let children: Vec<Node<'_>> = pattern.named_children(&mut cursor).collect();
+                pending.extend(children.into_iter().rev());
+            }
+            _ => {}
         }
-        "assignment_pattern" | "object_assignment_pattern" => pattern
-            .child_by_field_name("left")
-            .is_some_and(|left| pattern_binds(left, name, source)),
-        "pair_pattern" => pattern
-            .child_by_field_name("value")
-            .is_some_and(|value| pattern_binds(value, name, source)),
-        "required_parameter" | "optional_parameter" => pattern
-            .child_by_field_name("pattern")
-            .is_some_and(|inner| pattern_binds(inner, name, source)),
-        "object_pattern" | "array_pattern" | "rest_pattern" | "formal_parameters" => {
-            let mut cursor = pattern.walk();
-            let found = pattern
-                .named_children(&mut cursor)
-                .any(|child| pattern_binds(child, name, source));
-            found
-        }
-        _ => false,
     }
+    false
 }
 
 /// The names of the global objects of ECMAScript.
@@ -1877,6 +1895,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let spec = language_spec(parsed.language);
     let mut extractor = Extractor {
         spec,
+        comment_before: HashMap::new(),
         rules: spec
             .definitions()
             .into_iter()
@@ -1907,12 +1926,14 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         values: Vec::new(),
         locals: Vec::new(),
         block_kinds: spec.block_kinds(),
+        blocks: Vec::new(),
         export_aliases: Vec::new(),
         language: parsed.language,
         members: Recorder::new(parsed.language),
         memo: Memo::default(),
         test_mark_kinds: test_code::mark_kinds(parsed.language),
         test_owners: Vec::new(),
+        test_callee_roots: test_code::CalleeRoots::default(),
         test_marks: Vec::new(),
         in_test_file: test_code::is_test_path(file, parsed.language),
     };
@@ -1924,6 +1945,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let modules = extractor.modules;
     let export_aliases = extractor.export_aliases;
     let mut found = extractor.found;
+    let comment_before = extractor.comment_before;
     found.sort_by_key(|(draft, _)| (draft.span.start_byte, draft.span.end_byte));
     let positions: HashMap<usize, usize> = found
         .iter()
@@ -2019,7 +2041,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         symbols.push(Symbol {
             key: symbol_key(file, &draft.container_path, &draft.name, ordinal).into(),
             signature: signature(&draft, &parsed.source),
-            doc: doc(draft.node, spec.comment_kinds(), &parsed.source),
+            doc: doc(draft.node, &comment_before, &parsed.source),
             name: draft.name,
             kind: draft.kind,
             container: draft.container,
@@ -2370,6 +2392,108 @@ mod tests {
     fn timing_global_assignments_in_deeply_nested_blocks_are_linear() {
         let elapsed = global_assignments_in_deeply_nested_blocks_are_linear_at(50_000);
         assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    /// The time of `extract_file` on `size` nested blocks of a Java method, each with a local
+    /// class after a comment, without the parse.
+    fn deeply_nested_java_classes_at(size: usize) -> std::time::Duration {
+        let source = format!(
+            "class A {{\nvoid f() {{\n{}{}}}\n}}\n",
+            (0..size)
+                .map(|level| format!("{{\n// L{level}\nclass L{level} {{}}\n"))
+                .collect::<String>(),
+            "}\n".repeat(size)
+        );
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Java,
+                std::path::Path::new("A.java"),
+            )
+            .unwrap();
+        let started = crate::index::timing::Stopwatch::start();
+        let symbols = super::extract_file(&parsed, "A.java");
+        let elapsed = started.elapsed();
+        let local = symbols
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "L1")
+            .expect("L1");
+        assert_eq!(local.doc.as_deref(), Some("// L1"));
+        elapsed
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deeply_nested_classes_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "local classes in nested blocks",
+            5_000,
+            deeply_nested_java_classes_at,
+        );
+    }
+
+    /// The time of `extract_file` on `source`, without the parse.
+    fn extract_time(language: Language, file: &'static str, source: String) -> std::time::Duration {
+        let parsed = crate::parser::Parser::new()
+            .parse(source.as_bytes(), language, std::path::Path::new(file))
+            .unwrap();
+        let started = crate::index::timing::Stopwatch::start();
+        super::extract_file(&parsed, file);
+        started.elapsed()
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_arrow_functions_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("arrow functions", 5_000, |size| {
+            let source = format!("const f = {}1;\n", "() => ".repeat(size));
+            extract_time(Language::TypeScript, "a.ts", source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deeply_nested_go_closures_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go closures", 5_000, |size| {
+            let source = format!(
+                "package p\nfunc f() {{\n{}{}\n}}\n",
+                "func() {".repeat(size),
+                "}()".repeat(size)
+            );
+            extract_time(Language::Go, "a.go", source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deeply_nested_python_lambdas_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("python lambdas", 5_000, |size| {
+            let source = format!("def f():\n    return {}1\n", "lambda: ".repeat(size));
+            extract_time(Language::Python, "a.py", source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deeply_nested_php_arrow_functions_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("php arrow functions", 5_000, |size| {
+            let source = format!("<?php\n$f = {}1;\n", "fn() => ".repeat(size));
+            extract_time(Language::Php, "a.php", source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_deep_c_pointer_declarators_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("c pointer declarators", 5_000, |size| {
+            let source = format!(
+                "int {}x;\nint {}f(void) {{ return 0; }}\n",
+                "*".repeat(size),
+                "*".repeat(size)
+            );
+            extract_time(Language::C, "a.c", source)
+        });
     }
 
     #[test]

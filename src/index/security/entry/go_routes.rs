@@ -59,10 +59,25 @@ const GIN_ANY: [&str; 9] = [
     "GET", "POST", "PUT", "PATCH", "HEAD", "OPTIONS", "DELETE", "CONNECT", "TRACE",
 ];
 
-/// The methods that `Any` registers. echo v4.13.4 `methods`.
 /// The depth of a chain of calls that the walk reads.
-const EVAL_DEPTH_LIMIT: usize = 1000;
+pub(super) const EVAL_DEPTH_LIMIT: usize = 1000;
 
+/// The interpreter of the routes is a walk with recursion: `closure` reads a nested function
+/// literal, `walk_declared` reads a called factory, and `eval` reads the operand of a call,
+/// and each of them calls the others. An explicit stack in place of this recursion changes the
+/// order of the effects of the walk, such as the numbers of the routers and the order of the
+/// records. Thus these functions keep their recursion, and `on_grown_stack` gives them a new
+/// segment of stack on the heap when the stack of the thread is almost full. The interpreter
+/// of router types in `go_wrappers` has the same recursion in its `eval`.
+pub(super) fn on_grown_stack<T>(work: impl FnOnce() -> T) -> T {
+    // The largest use of the stack between two calls of this function, in a debug build, is
+    // less than the red zone.
+    const RED_ZONE: usize = 64 * 1024;
+    const SEGMENT: usize = 1024 * 1024;
+    stacker::maybe_grow(RED_ZONE, SEGMENT, work)
+}
+
+/// The methods that `Any` registers. echo v4.13.4 `methods`.
 pub(super) const ECHO_ANY: [&str; 11] = [
     "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PROPFIND", "PUT", "TRACE",
     "REPORT",
@@ -466,6 +481,115 @@ fn is_qualified(kind: &str, member: &str, qualifiers: &[String], pointer: bool) 
     })
 }
 
+/// The names that the walk binds, in nested scopes. Scope 0 is the scope of the package.
+///
+/// A search of each scope for a name costs the depth of the scopes, and nested closures make
+/// that quadratic. Thus each name keeps its bindings, the innermost last.
+#[derive(Default)]
+struct Scopes {
+    bindings: HashMap<String, Vec<(usize, Option<usize>)>>,
+    /// The names that each open scope binds.
+    names: Vec<Vec<String>>,
+    /// The scopes from 1 up to this scope are of a caller and out of view, while the walk
+    /// reads a declared function. A value of 1 hides nothing.
+    hidden_end: usize,
+    /// The previous values of `hidden_end`.
+    hidden_ends: Vec<usize>,
+}
+
+impl Scopes {
+    fn new() -> Self {
+        Self {
+            names: vec![Vec::new()],
+            hidden_end: 1,
+            ..Self::default()
+        }
+    }
+
+    fn push(&mut self) {
+        self.names.push(Vec::new());
+    }
+
+    fn pop(&mut self) {
+        let Some(names) = self.names.pop() else {
+            return;
+        };
+        for name in names {
+            if let Some(bindings) = self.bindings.get_mut(&name) {
+                bindings.pop();
+                if bindings.is_empty() {
+                    self.bindings.remove(&name);
+                }
+            }
+        }
+    }
+
+    fn top(&self) -> usize {
+        self.names.len() - 1
+    }
+
+    /// Puts the scopes of the caller out of view, and opens a scope above them.
+    fn hide_callers(&mut self) {
+        self.hidden_ends.push(self.hidden_end);
+        self.hidden_end = self.names.len();
+        self.push();
+    }
+
+    /// Closes the scopes above the scopes of the caller, and puts them back in view.
+    fn show_callers(&mut self) {
+        while self.names.len() > self.hidden_end {
+            self.pop();
+        }
+        self.hidden_end = self.hidden_ends.pop().unwrap_or(1);
+    }
+
+    fn is_visible(&self, scope: usize) -> bool {
+        scope == 0 || scope >= self.hidden_end
+    }
+
+    /// The innermost binding of the name in view, as the scope and the value. The hidden
+    /// scopes are in one run of the bindings, between the binding of the package and the
+    /// bindings of the scopes above them.
+    fn find(&self, name: &str) -> Option<(usize, Option<usize>)> {
+        let bindings = self.bindings.get(name)?;
+        let last = *bindings.last()?;
+        if self.is_visible(last.0) {
+            return Some(last);
+        }
+        bindings.first().copied().filter(|first| first.0 == 0)
+    }
+
+    fn lookup(&self, name: &str) -> Option<Option<usize>> {
+        self.find(name).map(|(_, value)| value)
+    }
+
+    /// The innermost scope in view that binds the name.
+    fn scope_of(&self, name: &str) -> Option<usize> {
+        self.find(name).map(|(scope, _)| scope)
+    }
+
+    fn insert(&mut self, scope: usize, name: &str, value: Option<usize>) {
+        let top = self.top();
+        let bindings = self.bindings.entry(name.to_string()).or_default();
+        // The binding of the package is the first one, and a different binding in view is the
+        // last one.
+        let current = if scope == 0 {
+            bindings.first_mut()
+        } else {
+            bindings.last_mut()
+        };
+        if let Some(binding) = current.filter(|binding| binding.0 == scope) {
+            binding.1 = value;
+            return;
+        }
+        // A new binding is in the innermost scope, or in the scope of the package when the name
+        // has no other binding. Thus the bindings stay in the order of their scopes.
+        debug_assert!(scope == top || bindings.is_empty());
+        bindings.push((scope, value));
+        self.names[scope].push(name.to_string());
+    }
+}
+
 #[derive(Clone)]
 struct Link {
     parent: usize,
@@ -558,6 +682,14 @@ struct Frame {
     pure: bool,
     /// The routers that the function body made.
     created: Vec<usize>,
+}
+
+/// The first part of the evaluation of a call.
+enum CallStep<'tree> {
+    /// The call gives this router, or no router.
+    Done(Option<usize>),
+    /// The router of the call depends on the router of this operand.
+    Operand(Node<'tree>),
 }
 
 #[derive(Default)]
@@ -730,11 +862,7 @@ impl<'a> Context<'a> {
 
     /// The name of a guard that a call or an identifier gives, as `auth` or `middleware.Auth`.
     fn go_guard_name(&self, node: Node<'_>) -> Option<String> {
-        match node.kind() {
-            "identifier" | "selector_expression" => Some(self.text(node).to_string()),
-            "call_expression" => self.go_guard_name(node.child_by_field_name("function")?),
-            _ => None,
-        }
+        Self::go_callee(node).map(|callee| self.text(callee).to_string())
     }
 
     /// The function of the repository that a node names, and the file of the function.
@@ -744,10 +872,13 @@ impl<'a> Context<'a> {
 
     /// The innermost function of a call such as `auth(cfg)(next)`.
     fn go_callee(function: Node<'_>) -> Option<Node<'_>> {
-        match function.kind() {
-            "identifier" | "selector_expression" => Some(function),
-            "call_expression" => Self::go_callee(function.child_by_field_name("function")?),
-            _ => None,
+        let mut function = function;
+        loop {
+            match function.kind() {
+                "identifier" | "selector_expression" => return Some(function),
+                "call_expression" => function = function.child_by_field_name("function")?,
+                _ => return None,
+            }
         }
     }
 
@@ -844,71 +975,106 @@ impl<'a> Context<'a> {
     }
 
     fn go_handler_at(&self, node: Node<'_>, kind: HandlerKind, direct: bool) -> Handler {
-        match node.kind() {
-            "identifier" | "selector_expression" => {
-                let symbol = if direct {
-                    self.handler_symbol(node)
-                } else {
-                    self.go_symbol(node)
-                        .filter(|(symbol, file)| self.is_go_handler_function(symbol, file, kind))
-                        .map(|(symbol, _)| symbol.key.to_string())
-                };
-                Handler {
-                    function_like: symbol.is_some(),
-                    symbol,
-                    ..Handler::default()
-                }
-            }
-            "func_literal" => Handler {
-                function_like: direct,
-                ..Handler::default()
-            },
-            "call_expression" => {
-                let Some(function) = node.child_by_field_name("function") else {
-                    return Handler::default();
-                };
-                let arguments = Self::arguments_of(node);
-                if self.is_go_adapter(function) {
-                    return match arguments.as_slice() {
-                        [only] => {
-                            let mut inner = self.go_handler_at(*only, kind, true);
-                            inner.function_like = inner.symbol.is_some();
-                            inner
-                        }
-                        _ => Handler::default(),
-                    };
-                }
-                let middleware = self.is_go_middleware(function, kind);
-                let mut inner: Vec<Handler> = arguments
-                    .into_iter()
-                    .map(|argument| self.go_handler_at(argument, kind, false))
-                    .filter(|handler| handler.function_like)
-                    .collect();
-                if inner.is_empty() {
-                    return Handler {
-                        unread_wrapper: !middleware,
-                        ..Handler::default()
-                    };
-                }
-                let nested_unread = inner.iter().any(|handler| handler.unread_wrapper);
-                let (symbol, nested) = match inner.pop() {
-                    Some(only) if inner.is_empty() => (only.symbol, only.guards),
-                    _ => (None, Vec::new()),
-                };
-                let mut guards = Vec::new();
-                if middleware {
-                    guards.extend(self.go_guard_name(function));
-                }
-                guards.extend(nested);
-                Handler {
-                    symbol,
-                    guards,
-                    unread_wrapper: !middleware || nested_unread,
-                    function_like: true,
-                }
-            }
-            _ => Handler::default(),
+        // An explicit stack in place of recursion, because wrapper calls can
+        // nest to any depth. `results` holds the handler of each argument
+        // that the walk read and did not yet combine.
+        enum Task<'tree> {
+            Read(Node<'tree>, bool),
+            /// The only argument of an adapter call is on top of `results`.
+            Adapt,
+            /// The handlers of the arguments of a wrapper call are on top of `results`.
+            Combine(Node<'tree>, usize),
         }
+        let mut tasks = vec![Task::Read(node, direct)];
+        let mut results: Vec<Handler> = Vec::new();
+        while let Some(task) = tasks.pop() {
+            match task {
+                Task::Read(node, direct) => match node.kind() {
+                    "identifier" | "selector_expression" => {
+                        let symbol = if direct {
+                            self.handler_symbol(node)
+                        } else {
+                            self.go_symbol(node)
+                                .filter(|(symbol, file)| {
+                                    self.is_go_handler_function(symbol, file, kind)
+                                })
+                                .map(|(symbol, _)| symbol.key.to_string())
+                        };
+                        results.push(Handler {
+                            function_like: symbol.is_some(),
+                            symbol,
+                            ..Handler::default()
+                        });
+                    }
+                    "func_literal" => results.push(Handler {
+                        function_like: direct,
+                        ..Handler::default()
+                    }),
+                    "call_expression" => {
+                        let Some(function) = node.child_by_field_name("function") else {
+                            results.push(Handler::default());
+                            continue;
+                        };
+                        let arguments = Self::arguments_of(node);
+                        if self.is_go_adapter(function) {
+                            match arguments.as_slice() {
+                                [only] => {
+                                    tasks.push(Task::Adapt);
+                                    tasks.push(Task::Read(*only, true));
+                                }
+                                _ => results.push(Handler::default()),
+                            }
+                            continue;
+                        }
+                        tasks.push(Task::Combine(function, arguments.len()));
+                        tasks.extend(
+                            arguments
+                                .into_iter()
+                                .rev()
+                                .map(|argument| Task::Read(argument, false)),
+                        );
+                    }
+                    _ => results.push(Handler::default()),
+                },
+                Task::Adapt => {
+                    if let Some(inner) = results.last_mut() {
+                        inner.function_like = inner.symbol.is_some();
+                    }
+                }
+                Task::Combine(function, count) => {
+                    let middleware = self.is_go_middleware(function, kind);
+                    let mut inner: Vec<Handler> = results
+                        .split_off(results.len() - count)
+                        .into_iter()
+                        .filter(|handler| handler.function_like)
+                        .collect();
+                    if inner.is_empty() {
+                        results.push(Handler {
+                            unread_wrapper: !middleware,
+                            ..Handler::default()
+                        });
+                        continue;
+                    }
+                    let nested_unread = inner.iter().any(|handler| handler.unread_wrapper);
+                    let (symbol, nested) = match inner.pop() {
+                        Some(only) if inner.is_empty() => (only.symbol, only.guards),
+                        _ => (None, Vec::new()),
+                    };
+                    let mut guards = Vec::new();
+                    if middleware {
+                        guards.extend(self.go_guard_name(function));
+                    }
+                    guards.extend(nested);
+                    results.push(Handler {
+                        symbol,
+                        guards,
+                        unread_wrapper: !middleware || nested_unread,
+                        function_like: true,
+                    });
+                }
+            }
+        }
+        results.pop().unwrap_or_default()
     }
 
     /// A call that converts a function to a handler, as `http.HandlerFunc(show)`. It is not a guard.
@@ -2445,7 +2611,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             packages,
             routers: Vec::new(),
             records: Vec::new(),
-            scopes: vec![HashMap::new()],
+            scopes: Scopes::new(),
             consumed: HashSet::new(),
             route_calls: HashMap::new(),
             functions: HashMap::new(),
@@ -2476,16 +2642,19 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             dry,
             function_key: None,
             factory_keys: Vec::new(),
+            subrouter_operands: HashSet::new(),
         })
     }
 }
 
 struct Routes<'c, 'a, 't> {
     context: &'c Context<'a>,
+    /// The ids of the calls that `is_subrouter_operand` accepts.
+    subrouter_operands: HashSet<usize>,
     packages: Vec<(String, Framework)>,
     routers: Vec<Router>,
     records: Vec<Record>,
-    scopes: Vec<HashMap<String, Option<usize>>>,
+    scopes: Scopes,
     consumed: HashSet<usize>,
     /// The router that a call of `Route` made, by the node of the call.
     route_calls: HashMap<usize, usize>,
@@ -2550,6 +2719,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn run(&mut self, root: Node<'t>) {
+        self.subrouter_operands = self.find_subrouter_operands(root);
         let children = Self::named_children(root);
         for child in &children {
             if child.kind() == "function_declaration" {
@@ -2565,8 +2735,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             self.visit(*child);
         }
         for name in self.assigned_globals(root) {
-            if self.scopes[0].contains_key(&name) {
-                self.scopes[0].insert(name, None);
+            if self.scopes.scope_of(&name) == Some(0) {
+                self.scopes.insert(0, &name, None);
             }
         }
         for child in children
@@ -2676,7 +2846,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 return;
             }
             "block" => {
-                self.scopes.push(HashMap::new());
+                self.scopes.push();
                 stack.push(Step::LeaveBlock);
                 Self::push_children(node, None, stack);
                 return;
@@ -2708,6 +2878,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     /// Reads the body of a function in a scope of its own, one time. `declared` is the name
     /// of the function. A pure function that returns a router it made gets a summary.
     fn walk_declared(&mut self, node: Node<'t>, declared: Option<&str>) {
+        on_grown_stack(|| self.read_declared(node, declared))
+    }
+
+    fn read_declared(&mut self, node: Node<'t>, declared: Option<&str>) {
         if let Some(name) = declared {
             if !self.walked.insert(name.to_string()) {
                 return;
@@ -2720,8 +2894,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 .and_then(|name| self.context.symbol_at(name)),
         );
         // The scope of the package stays in place, and the scopes of the caller wait aside.
-        let saved = self.scopes.split_off(1);
-        self.scopes.push(HashMap::new());
+        self.scopes.hide_callers();
         self.owners += 1;
         let owner = self.owners;
         self.frames.push(Frame {
@@ -2746,8 +2919,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         if let Some(name) = declared {
             self.in_progress.remove(name);
         }
-        self.scopes.truncate(1);
-        self.scopes.extend(saved);
+        self.scopes.show_callers();
         let Some(frame) = frame else {
             return;
         };
@@ -2874,7 +3046,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 }
             }
             "parenthesized_expression" | "unary_expression" => {
-                if let Some(inner) = expression.named_child(0) {
+                let mut inner = expression.named_child(0);
+                while let Some(node) = inner.filter(|node| {
+                    matches!(node.kind(), "parenthesized_expression" | "unary_expression")
+                }) {
+                    inner = node.named_child(0);
+                }
+                if let Some(inner) = inner {
                     self.escape(inner);
                 }
             }
@@ -2940,22 +3118,20 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn literal_values(node: Node<'t>, out: &mut Vec<Node<'t>>) {
-        match node.kind() {
-            "identifier" | "call_expression" => out.push(node),
-            "literal_value"
-            | "literal_element"
-            | "parenthesized_expression"
-            | "unary_expression" => {
-                for child in Self::named_children(node) {
-                    Self::literal_values(child, out);
+        // A stack in place of recursion, in the order of a recursive walk.
+        let mut pending = vec![node];
+        while let Some(node) = pending.pop() {
+            match node.kind() {
+                "identifier" | "call_expression" => out.push(node),
+                "literal_value"
+                | "literal_element"
+                | "parenthesized_expression"
+                | "unary_expression" => {
+                    pending.extend(Self::named_children(node).into_iter().rev());
                 }
+                "keyed_element" => pending.extend(Self::named_children(node).pop()),
+                _ => {}
             }
-            "keyed_element" => {
-                if let Some(value) = Self::named_children(node).pop() {
-                    Self::literal_values(value, out);
-                }
-            }
-            _ => {}
         }
     }
 
@@ -3051,7 +3227,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn closure(&mut self, literal: Node<'t>, bound: Option<usize>) {
-        self.scopes.push(HashMap::new());
+        on_grown_stack(|| self.read_closure(literal, bound))
+    }
+
+    fn read_closure(&mut self, literal: Node<'t>, bound: Option<usize>) {
+        self.scopes.push();
         let owner = self.current_owner();
         self.frames.push(Frame {
             function: false,
@@ -3152,10 +3332,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn lookup(&self, name: &str) -> Option<Option<usize>> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name).copied())
+        self.scopes.lookup(name)
     }
 
     fn bind(&mut self, name: &str, router: Option<usize>, define: bool) {
@@ -3163,12 +3340,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return;
         }
         let index = if define {
-            self.scopes.len() - 1
+            self.scopes.top()
         } else {
             self.scopes
-                .iter()
-                .rposition(|scope| scope.contains_key(name))
-                .unwrap_or(self.scopes.len() - 1)
+                .scope_of(name)
+                .unwrap_or_else(|| self.scopes.top())
         };
         if index == 0 && !self.frames.is_empty() {
             self.mark_impure();
@@ -3177,7 +3353,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             }
             return;
         }
-        self.scopes[index].insert(name.to_string(), router);
+        self.scopes.insert(index, name, router);
     }
 
     fn make_root(&mut self, framework: Framework) -> usize {
@@ -3389,55 +3565,101 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     /// The router that an expression gives, when the syntax proves it.
+    ///
+    /// A parenthesis and each call of a chain such as `r.Group("/a").Group("/b")` are one
+    /// level of `eval_depth` each. The levels wait on a stack and not in recursion, so a long
+    /// chain does not overflow the stack of the thread.
     fn eval(&mut self, expression: Node<'t>) -> Option<usize> {
+        on_grown_stack(|| self.eval_levels(expression))
+    }
+
+    fn eval_levels(&mut self, expression: Node<'t>) -> Option<usize> {
+        enum Level<'tree> {
+            Parenthesis,
+            Call(Node<'tree>),
+        }
         // A call has one result. A chain that is deeper than the limit gives no router, so each
         // route on it gives no entry, and each call of it is read one time.
-        let is_call = expression.kind() == "call_expression";
-        if is_call {
-            if let Some(known) = self.eval_memo.get(&expression.id()) {
-                return *known;
-            }
-        }
-        if self.eval_depth >= EVAL_DEPTH_LIMIT {
+        let mut levels: Vec<(Level<'t>, usize)> = Vec::new();
+        let mut expression = expression;
+        let mut router = loop {
+            let is_call = expression.kind() == "call_expression";
             if is_call {
-                self.eval_memo.insert(expression.id(), None);
+                if let Some(known) = self.eval_memo.get(&expression.id()) {
+                    break *known;
+                }
             }
-            return None;
-        }
-        self.eval_depth += 1;
-        let router = match expression.kind() {
-            "parenthesized_expression" => {
-                expression.named_child(0).and_then(|inner| self.eval(inner))
+            if self.eval_depth >= EVAL_DEPTH_LIMIT {
+                if is_call {
+                    self.eval_memo.insert(expression.id(), None);
+                }
+                break None;
             }
-            "identifier" => self.lookup(self.text(expression)).flatten(),
-            "call_expression" => self.eval_call(expression),
-            _ => None,
+            let depth = self.eval_depth;
+            self.eval_depth += 1;
+            let found = match expression.kind() {
+                "parenthesized_expression" => match expression.named_child(0) {
+                    Some(inner) => {
+                        levels.push((Level::Parenthesis, depth));
+                        expression = inner;
+                        continue;
+                    }
+                    None => None,
+                },
+                "identifier" => self.lookup(self.text(expression)).flatten(),
+                "call_expression" => match self.eval_call(expression) {
+                    CallStep::Done(found) => found,
+                    CallStep::Operand(operand) => {
+                        levels.push((Level::Call(expression), depth));
+                        expression = operand;
+                        continue;
+                    }
+                },
+                _ => None,
+            };
+            self.eval_depth = depth;
+            if is_call {
+                self.eval_memo.insert(expression.id(), found);
+            }
+            break found;
         };
-        self.eval_depth -= 1;
-        if is_call {
-            self.eval_memo.insert(expression.id(), router);
+        while let Some((level, depth)) = levels.pop() {
+            if let Level::Call(call) = level {
+                self.eval_depth = depth + 1;
+                router = router.and_then(|parent| self.eval_method(call, parent));
+                self.eval_memo.insert(call.id(), router);
+            }
+            self.eval_depth = depth;
         }
         router
     }
 
-    fn eval_call(&mut self, call: Node<'t>) -> Option<usize> {
-        let function = call.child_by_field_name("function")?;
-        let arguments = Context::arguments_of(call);
+    /// The first part of the evaluation of a call: the result, or the operand that the
+    /// evaluation reads before `eval_method` applies the method of the call.
+    fn eval_call(&mut self, call: Node<'t>) -> CallStep<'t> {
+        let Some(function) = call.child_by_field_name("function") else {
+            return CallStep::Done(None);
+        };
         if function.kind() == "identifier" {
             let name = self.text(function);
-            return match self.lookup(name) {
+            return CallStep::Done(match self.lookup(name) {
                 Some(_) => None,
                 None => self.call_function(name),
-            };
+            });
         }
         if function.kind() != "selector_expression" {
-            return None;
+            return CallStep::Done(None);
         }
-        let name = self.text(function.child_by_field_name("field")?);
-        let operand = function.child_by_field_name("operand")?;
+        let (Some(field), Some(operand)) = (
+            function.child_by_field_name("field"),
+            function.child_by_field_name("operand"),
+        ) else {
+            return CallStep::Done(None);
+        };
+        let name = self.text(field);
         if operand.kind() == "identifier" {
             if let Some(framework) = self.framework_of(operand) {
-                return self.construct(framework, name);
+                return CallStep::Done(self.construct(framework, name));
             }
         }
         if name == "Subrouter" {
@@ -3445,9 +3667,17 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             if child.is_none() {
                 self.push_unread_subrouter(operand, Span::of(&call));
             }
-            return child;
+            return CallStep::Done(child);
         }
-        let parent = self.eval(operand)?;
+        CallStep::Operand(operand)
+    }
+
+    /// The second part of the evaluation of a call: the method of the call applied to the
+    /// router `parent` that its operand gives.
+    fn eval_method(&mut self, call: Node<'t>, parent: usize) -> Option<usize> {
+        let function = call.child_by_field_name("function")?;
+        let name = self.text(function.child_by_field_name("field")?);
+        let arguments = Context::arguments_of(call);
         match (self.routers[parent].framework, name) {
             (Framework::Chi, "With") => {
                 let guards = self.guard_names(&arguments);
@@ -3853,30 +4083,44 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
 
     /// Tells if a call is a part of a chain that ends in `Subrouter`.
     fn is_subrouter_operand(&self, call: Node<'t>) -> bool {
-        let mut current = call;
+        self.subrouter_operands.contains(&call.id())
+    }
+
+    /// The calls that are the operand of a `Subrouter` selector, directly or through a chain of
+    /// matcher calls, as in `router.PathPrefix("/a").Subrouter()`. The search goes down from each
+    /// `Subrouter` call, because `Node::parent` searches down from the root for each call.
+    fn find_subrouter_operands(&self, root: Node<'t>) -> HashSet<usize> {
+        let mut operands = HashSet::new();
+        let mut cursor = root.walk();
         loop {
-            let Some(selector) = current.parent().filter(|parent| {
-                parent.kind() == "selector_expression"
-                    && parent.child_by_field_name("operand") == Some(current)
-            }) else {
-                return false;
-            };
-            let Some(outer) = selector
-                .parent()
-                .filter(|parent| parent.kind() == "call_expression")
-            else {
-                return false;
-            };
-            let name = selector
-                .child_by_field_name("field")
-                .map_or("", |field| self.text(field));
-            if name == "Subrouter" {
-                return true;
+            let node = cursor.node();
+            let selector = (node.kind() == "call_expression")
+                .then(|| node.child_by_field_name("function"))
+                .flatten()
+                .filter(|function| {
+                    function.kind() == "selector_expression"
+                        && function
+                            .child_by_field_name("field")
+                            .is_some_and(|field| self.text(field) == "Subrouter")
+                });
+            let mut operand = selector.and_then(|selector| selector.child_by_field_name("operand"));
+            while let Some(call) = operand.filter(|call| call.kind() == "call_expression") {
+                // The calls below a call in the set are in the set already.
+                if !operands.insert(call.id()) || !self.is_mux_matcher_call(call) {
+                    break;
+                }
+                operand = call
+                    .child_by_field_name("function")
+                    .and_then(|function| function.child_by_field_name("operand"));
             }
-            if !self.is_mux_matcher_call(outer) {
-                return false;
+            if cursor.goto_first_child() {
+                continue;
             }
-            current = outer;
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    return operands;
+                }
+            }
         }
     }
 

@@ -361,43 +361,36 @@ fn walk<'a>(
     path: &Path,
     out: &mut Vec<RawFinding<'a>>,
 ) {
-    if match_not_implemented(node, source, lang, path) {
-        out.push(RawFinding {
-            node,
-            kind: RawKind::NotImplemented,
-        });
-    } else if match_empty_body(node, source, lang, path) {
-        out.push(RawFinding {
-            node,
-            kind: RawKind::EmptyBody,
-        });
-    } else if is_comment_kind(node.kind(), lang) {
-        if let Ok(text) = node.utf8_text(source) {
-            if !is_doc_comment_text(text, lang) {
-                if ELISION_STRONG_RE.is_match(text) {
-                    out.push(RawFinding {
-                        node,
-                        kind: RawKind::Elision { strong: true },
-                    });
-                } else if ELISION_WEAK_RE.is_match(text) {
-                    out.push(RawFinding {
-                        node,
-                        kind: RawKind::Elision { strong: false },
-                    });
+    crate::parser::walk_preorder(node, |node| {
+        if match_not_implemented(node, source, lang, path) {
+            out.push(RawFinding {
+                node,
+                kind: RawKind::NotImplemented,
+            });
+        } else if match_empty_body(node, source, lang, path) {
+            out.push(RawFinding {
+                node,
+                kind: RawKind::EmptyBody,
+            });
+        } else if is_comment_kind(node.kind(), lang) {
+            if let Ok(text) = node.utf8_text(source) {
+                if !is_doc_comment_text(text, lang) {
+                    if ELISION_STRONG_RE.is_match(text) {
+                        out.push(RawFinding {
+                            node,
+                            kind: RawKind::Elision { strong: true },
+                        });
+                    } else if ELISION_WEAK_RE.is_match(text) {
+                        out.push(RawFinding {
+                            node,
+                            kind: RawKind::Elision { strong: false },
+                        });
+                    }
                 }
             }
         }
-    }
-
-    let mut cursor = node.walk();
-    if cursor.goto_first_child() {
-        loop {
-            walk(cursor.node(), source, lang, path, out);
-            if !cursor.goto_next_sibling() {
-                break;
-            }
-        }
-    }
+        crate::parser::Walk::Children
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1297,6 +1290,31 @@ fn empty_body_ruby(node: Node, source: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_stubs_in_deeply_nested_source() {
+        use crate::parser::deep;
+        let stubs = deep::on_small_stack(|| {
+            for (source, parsed) in deep::parsed_deep_sources() {
+                let mut raws = Vec::new();
+                let path = Path::new(&source.file);
+                walk(
+                    parsed.root_node(),
+                    &parsed.source,
+                    source.language,
+                    path,
+                    &mut raws,
+                );
+            }
+            let code = format!(
+                "fn f() {{ let x = {}; }}\nfn g() {{ todo!() }}\n",
+                deep::nest("(", "1", ")")
+            );
+            let file = SourceFile::from_content("a.rs", Language::Rust, code.into_bytes());
+            Analyzer::new().analyze_file(&file).len()
+        });
+        assert_eq!(stubs, 1);
+    }
 
     #[test]
     fn test_stubs_are_in_the_order_of_the_severity_and_then_of_the_place() {

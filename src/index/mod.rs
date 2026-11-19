@@ -4,6 +4,8 @@
 
 pub mod build;
 pub mod calls;
+#[cfg(test)]
+mod deep_tests;
 pub mod dependencies;
 pub mod extract;
 pub mod graph;

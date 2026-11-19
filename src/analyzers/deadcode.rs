@@ -565,6 +565,7 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
     // A declaration without a body, as a trait method or a prototype does, has no
     // code to remove, and a call can reach it through a different definition.
     let is_stub_file = facts.file.ends_with(".pyi");
+    let object_members = object_member_ranges(result);
     let functions: Vec<&Symbol> = facts
         .symbols
         .iter()
@@ -572,7 +573,7 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
             symbol.is_callable()
                 && symbol.kind != SymbolKind::Constructor
                 && (symbol.body_range.is_some() || facts.language == Language::Ruby)
-                && !is_member_of_an_object(result, symbol)
+                && !object_members.contains(&(symbol.range.start_byte, symbol.range.end_byte))
                 // A stub file declares the functions of a different file. It has no code to remove.
                 && !is_stub_file
         })
@@ -737,23 +738,39 @@ fn allows_dead_code(path: &str, arguments: &str) -> bool {
             .any(|word| word == "dead_code" || word == "unused")
 }
 
-/// The path and the arguments of each outer attribute of an item. A comment
-/// between two attributes, or between an attribute and the item, does not end the list.
-fn preceding_attributes<'a>(
-    node: &tree_sitter::Node<'_>,
+/// The path and the arguments of an attribute.
+type Attribute<'a> = (&'a str, &'a str);
+
+/// Each child of `node`, with the path and the arguments of each outer attribute of
+/// the child, the nearest first. A comment between two attributes, or between an
+/// attribute and the child, does not end the list. Only a child of a kind in `items`
+/// gets its attributes.
+///
+/// The children are read in order. `Node::prev_sibling` searches from the root, so
+/// a search back from each item takes quadratic time in a deep tree.
+fn children_with_attributes<'tree, 'a>(
+    node: &tree_sitter::Node<'tree>,
+    items: &[&str],
     source: &'a [u8],
-) -> Vec<(&'a str, &'a str)> {
-    let mut attributes = Vec::new();
-    let mut previous = node.prev_sibling();
-    while let Some(sibling) = previous {
-        match sibling.kind() {
-            "attribute_item" => attributes.extend(rust_attribute_text(sibling, source)),
-            "line_comment" | "block_comment" => {}
-            _ => break,
-        }
-        previous = sibling.prev_sibling();
-    }
-    attributes
+) -> Vec<(tree_sitter::Node<'tree>, Vec<Attribute<'a>>)> {
+    let mut run: Vec<Attribute<'a>> = Vec::new();
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .map(|child| {
+            let mut attributes = Vec::new();
+            match child.kind() {
+                "attribute_item" => run.extend(rust_attribute_text(child, source)),
+                "line_comment" | "block_comment" => {}
+                kind => {
+                    if items.contains(&kind) {
+                        attributes = run.iter().rev().copied().collect();
+                    }
+                    run.clear();
+                }
+            }
+            (child, attributes)
+        })
+        .collect()
 }
 
 /// An inner attribute of the block, as `#![allow(dead_code)]` is, permits dead code.
@@ -789,9 +806,12 @@ fn extract_rust_function_attributes(
 ) -> HashMap<usize, RustFunctionInfo> {
     let mut info: HashMap<usize, RustFunctionInfo> = HashMap::new();
     let source: &[u8] = &result.source;
-    // Each entry is a node, the trait flag of its block, and the lint flag of its scope.
-    let mut stack = vec![(result.root_node(), false, false)];
-    while let Some((node, in_trait_impl, allows_dead)) = stack.pop() {
+    const ITEMS: [&str; 4] = ["function_item", "mod_item", "impl_item", "trait_item"];
+    // Each entry is a node, the trait flag of its block, the lint flag of its scope,
+    // and the outer attributes of the node.
+    let mut stack: Vec<(tree_sitter::Node<'_>, bool, bool, Vec<Attribute<'_>>)> =
+        vec![(result.root_node(), false, false, Vec::new())];
+    while let Some((node, in_trait_impl, allows_dead, attributes)) = stack.pop() {
         let mut in_trait_impl = in_trait_impl;
         let mut allows_dead = allows_dead;
         match node.kind() {
@@ -802,8 +822,7 @@ fn extract_rust_function_attributes(
             _ => {}
         }
         let is_function = node.kind() == "function_item";
-        if is_function || matches!(node.kind(), "mod_item" | "impl_item" | "trait_item") {
-            let attributes = preceding_attributes(&node, source);
+        if ITEMS.contains(&node.kind()) {
             allows_dead = allows_dead
                 || attributes
                     .iter()
@@ -833,10 +852,10 @@ fn extract_rust_function_attributes(
                 );
             }
         }
-        let mut cursor = node.walk();
         stack.extend(
-            node.children(&mut cursor)
-                .map(|child| (child, in_trait_impl, allows_dead)),
+            children_with_attributes(&node, &ITEMS, source)
+                .into_iter()
+                .map(|(child, attributes)| (child, in_trait_impl, allows_dead, attributes)),
         );
     }
     info
@@ -852,31 +871,26 @@ fn extract_python_context(result: &parser::ParseResult) -> PythonContext {
         decorators: HashMap::new(),
     };
 
-    fn visit(node: tree_sitter::Node<'_>, source: &[u8], ctx: &mut PythonContext) {
+    parser::walk_preorder(root, |node| {
         match node.kind() {
             // Parse `__all__ = ["func1", "func2"]`
             "expression_statement" => {
-                try_extract_all_assignment(&node, source, ctx);
+                try_extract_all_assignment(&node, source, &mut ctx);
             }
             // Parse `if __name__ == "__main__":` blocks
             "if_statement" => {
                 if is_name_main_guard(&node, source) {
-                    collect_calls_in_subtree(&node, source, &mut ctx.name_main_calls);
+                    collect_calls_in_subtree(node, source, &mut ctx.name_main_calls);
                 }
             }
             // Parse decorated function definitions
             "decorated_definition" => {
-                extract_python_decorators(&node, source, ctx);
+                extract_python_decorators(&node, source, &mut ctx);
             }
             _ => {}
         }
-
-        for child in node.children(&mut node.walk()) {
-            visit(child, source, ctx);
-        }
-    }
-
-    visit(root, source, &mut ctx);
+        parser::Walk::Children
+    });
     ctx
 }
 
@@ -942,30 +956,30 @@ fn is_name_main_guard(node: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
 
 /// Collect all function/method call names within a subtree.
 fn collect_calls_in_subtree(
-    node: &tree_sitter::Node<'_>,
+    node: tree_sitter::Node<'_>,
     source: &[u8],
     calls: &mut HashSet<String>,
 ) {
-    if node.kind() == "call" {
-        // Get the function name from the call
-        if let Some(fn_node) = node.child_by_field_name("function") {
-            if fn_node.kind() == "identifier" {
-                if let Ok(name) = fn_node.utf8_text(source) {
-                    calls.insert(name.to_string());
-                }
-            } else if fn_node.kind() == "attribute" {
-                // obj.method() -- grab the attribute (method) name
-                if let Some(attr) = fn_node.child_by_field_name("attribute") {
-                    if let Ok(name) = attr.utf8_text(source) {
+    parser::walk_preorder(node, |node| {
+        if node.kind() == "call" {
+            // Get the function name from the call
+            if let Some(fn_node) = node.child_by_field_name("function") {
+                if fn_node.kind() == "identifier" {
+                    if let Ok(name) = fn_node.utf8_text(source) {
                         calls.insert(name.to_string());
+                    }
+                } else if fn_node.kind() == "attribute" {
+                    // obj.method() -- grab the attribute (method) name
+                    if let Some(attr) = fn_node.child_by_field_name("attribute") {
+                        if let Ok(name) = attr.utf8_text(source) {
+                            calls.insert(name.to_string());
+                        }
                     }
                 }
             }
         }
-    }
-    for child in node.children(&mut node.walk()) {
-        collect_calls_in_subtree(&child, source, calls);
-    }
+        parser::Walk::Children
+    });
 }
 
 /// Extract decorators from a `decorated_definition` node and associate them with the function.
@@ -1036,29 +1050,34 @@ fn extract_ruby_visibility(result: &parser::ParseResult) -> RubyVisibility {
         method_visibility: HashMap::new(),
     };
 
-    fn visit_class_body(node: tree_sitter::Node<'_>, source: &[u8], vis: &mut RubyVisibility) {
-        // Only process class/module bodies
-        if node.kind() != "class" && node.kind() != "module" && node.kind() != "singleton_class" {
-            // Recurse to find classes/modules
-            for child in node.children(&mut node.walk()) {
-                visit_class_body(child, source, vis);
+    // A stack in place of recursion, in the order of a recursive walk.
+    fn visit_class_body(root: tree_sitter::Node<'_>, source: &[u8], vis: &mut RubyVisibility) {
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            let children: Vec<_> = node.children(&mut node.walk()).collect();
+            // Only process class/module bodies
+            if node.kind() != "class" && node.kind() != "module" && node.kind() != "singleton_class"
+            {
+                // Search the children for classes/modules
+                pending.extend(children.into_iter().rev());
+                continue;
             }
-            return;
-        }
 
-        // Find the body node inside the class/module
-        if let Some(body) = node.child_by_field_name("body") {
-            process_body_for_visibility(&body, source, vis);
-        } else {
-            // Some grammars put children directly under class node
-            process_body_for_visibility(&node, source, vis);
-        }
-
-        // Recurse into nested classes
-        for child in node.children(&mut node.walk()) {
-            if child.kind() == "class" || child.kind() == "module" {
-                visit_class_body(child, source, vis);
+            // Find the body node inside the class/module
+            if let Some(body) = node.child_by_field_name("body") {
+                process_body_for_visibility(&body, source, vis);
+            } else {
+                // Some grammars put children directly under class node
+                process_body_for_visibility(&node, source, vis);
             }
+
+            // Visit nested classes
+            pending.extend(
+                children
+                    .into_iter()
+                    .rev()
+                    .filter(|child| child.kind() == "class" || child.kind() == "module"),
+            );
         }
     }
 
@@ -1217,12 +1236,12 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         }
         while token_tree_depths
             .last()
-            .is_some_and(|depth| *depth >= cursor.depth())
+            .is_some_and(|depth| *depth as usize >= ancestors.len())
         {
             token_tree_depths.pop();
         }
         if lang == Language::Rust && kind == "token_tree" {
-            token_tree_depths.push(cursor.depth());
+            token_tree_depths.push(ancestors.len() as u32);
         }
 
         // Track function context. The name may live on the binding rather
@@ -1232,7 +1251,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         if is_function_node(kind) {
             scopes.push((
                 ancestors.len() as u32,
-                parser::function_binding_name(&node, source, lang),
+                parser::function_binding_name(&node, ancestors.iter().rev().copied(), source, lang),
             ));
         }
 
@@ -1814,27 +1833,21 @@ fn is_generated_file(path: &str) -> bool {
     false
 }
 
-/// Whether the definition is a function that an object literal or an assignment
-/// to a property holds, in the JavaScript family. A framework or a caller
-/// outside of the analysis reaches it by its name on an object, thus the
-/// analysis cannot call it dead.
-fn is_member_of_an_object(result: &parser::ParseResult, symbol: &Symbol) -> bool {
+/// The ranges of the functions that an object literal or an assignment to a
+/// property holds, in the JavaScript family. A framework or a caller outside
+/// of the analysis reaches such a function by its name on an object, thus the
+/// analysis cannot call it dead. Each node with the range of a symbol is a node
+/// of the symbol, thus a symbol whose range is in the set is such a function.
+fn object_member_ranges(result: &parser::ParseResult) -> HashSet<(usize, usize)> {
+    let mut ranges = HashSet::new();
     if !matches!(
         result.language,
         Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx
     ) {
-        return false;
+        return ranges;
     }
-    let Some(mut node) = result
-        .tree
-        .root_node()
-        .descendant_for_byte_range(symbol.range.start_byte, symbol.range.end_byte)
-    else {
-        return false;
-    };
-    while node.start_byte() == symbol.range.start_byte && node.end_byte() == symbol.range.end_byte {
-        let parent = node.parent();
-        let holds_a_property = match node.kind() {
+    let holds_a_property =
+        |node: tree_sitter::Node<'_>, parent: Option<tree_sitter::Node<'_>>| match node.kind() {
             "pair" => true,
             "assignment_expression" => node
                 .child_by_field_name("left")
@@ -1851,15 +1864,29 @@ fn is_member_of_an_object(result: &parser::ParseResult, symbol: &Symbol) -> bool
             }
             _ => false,
         };
-        if holds_a_property {
-            return true;
+    // The ancestors of the node of the cursor, the nearest last. `Node::parent` searches from
+    // the root, so a call for each node takes quadratic time in a deep tree.
+    let mut ancestors: Vec<tree_sitter::Node<'_>> = Vec::new();
+    let mut cursor = result.tree.root_node().walk();
+    loop {
+        let node = cursor.node();
+        if holds_a_property(node, ancestors.last().copied()) {
+            ranges.insert((node.start_byte(), node.end_byte()));
         }
-        match parent {
-            Some(p) => node = p,
-            None => return false,
+        if cursor.goto_first_child() {
+            ancestors.push(node);
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return ranges;
+            }
+            ancestors.pop();
         }
     }
-    false
 }
 
 /// Whether the syntax lets a file other than the file of the definition name it.
@@ -2317,6 +2344,66 @@ pub struct AnalysisSummary {
 mod tests {
     use super::*;
 
+    /// The time of `collect_file_data` on `depth` nested TypeScript functions, each a symbol.
+    fn file_data_of_nested_functions_at(depth: usize) -> std::time::Duration {
+        let source = format!("{}{}\n", "function f() {".repeat(depth), "}".repeat(depth));
+        let result = parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::TypeScript,
+                std::path::Path::new("a.ts"),
+            )
+            .expect("parse");
+        let facts = crate::index::extract::extract_file(&result, "a.ts");
+        let started = crate::index::timing::Stopwatch::start();
+        let data = collect_file_data(&result, &facts);
+        let elapsed = started.elapsed();
+        assert_eq!(data.definitions.len(), depth);
+        elapsed
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_definitions_of_nested_functions_are_read_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "nested functions",
+            2_500,
+            file_data_of_nested_functions_at,
+        );
+    }
+
+    /// The time of `extract_rust_function_attributes` on `depth` nested modules.
+    fn attributes_of_nested_modules_at(depth: usize) -> std::time::Duration {
+        let source = format!(
+            "{}#[allow(dead_code)]\nfn f() {{}}{}\n",
+            "#[cfg(test)]\nmod m {".repeat(depth),
+            "}".repeat(depth)
+        );
+        let result = parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Rust,
+                std::path::Path::new("a.rs"),
+            )
+            .expect("parse");
+        let started = crate::index::timing::Stopwatch::start();
+        let info = extract_rust_function_attributes(&result);
+        let elapsed = started.elapsed();
+        assert_eq!(info.len(), 1);
+        assert!(info.values().all(|function| function.runtime_entry));
+        elapsed
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_attributes_of_nested_modules_are_read_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "attributes of nested modules",
+            5_000,
+            attributes_of_nested_modules_at,
+        );
+    }
+
     /// `x + x + ... + x` is a left-deep tree, as deep as the number of terms.
     /// The walk of the uses must not search up the tree from each node.
     #[test]
@@ -2344,6 +2431,47 @@ mod tests {
             assert!(fdc.usages.contains("x"));
             elapsed
         });
+    }
+
+    #[test]
+    fn test_python_context_of_deeply_nested_source() {
+        use crate::parser::deep;
+        let calls = deep::on_small_stack(|| {
+            for (_, parsed) in deep::parsed_deep_sources_of(Language::Python) {
+                extract_python_context(parsed);
+            }
+            let code = format!(
+                "if __name__ == \"__main__\":\n    main({})\n",
+                deep::nest("(", "1", ")")
+            );
+            let parsed = crate::parser::Parser::new()
+                .parse(code.as_bytes(), Language::Python, Path::new("a.py"))
+                .unwrap();
+            extract_python_context(&parsed).name_main_calls
+        });
+        assert_eq!(calls, HashSet::from(["main".to_string()]));
+    }
+
+    #[test]
+    fn test_ruby_visibility_of_deeply_nested_source() {
+        use crate::parser::deep;
+        let visibility = deep::on_small_stack(|| {
+            for (_, parsed) in deep::parsed_deep_sources_of(Language::Ruby) {
+                extract_ruby_visibility(parsed);
+            }
+            let code = format!(
+                "x = {}\nclass A\n  private\n  def f\n  end\nend\n",
+                deep::nest("[", "1", "]")
+            );
+            let parsed = crate::parser::Parser::new()
+                .parse(code.as_bytes(), Language::Ruby, Path::new("a.rb"))
+                .unwrap();
+            extract_ruby_visibility(&parsed).method_visibility
+        });
+        assert_eq!(
+            visibility,
+            HashMap::from([("f".to_string(), "private".to_string())])
+        );
     }
 
     #[test]
