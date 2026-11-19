@@ -11,6 +11,7 @@ pub mod external;
 mod function_references;
 #[cfg(test)]
 mod go_calls;
+mod local_blocks;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
@@ -263,6 +264,9 @@ struct Resolver<'a> {
     /// source order. Many functions of a file can bind one name, and a lookup
     /// reads only the names of one function.
     locals_by_owner: Vec<HashMap<&'a str, PositionsByOwner>>,
+    /// For each file, the index of the blocks of the local names of one owner and one name,
+    /// when the owner binds the name many times.
+    local_blocks: Vec<HashMap<(&'a str, Option<usize>), local_blocks::LocalBlocks>>,
     /// For each file, the positions of the references by start byte, in source order.
     references_by_start: Vec<HashMap<usize, Vec<usize>>>,
     /// For each Ruby type, the types that have it as a direct parent type.
@@ -343,6 +347,10 @@ type TypeQuery = (usize, String, Option<String>);
 /// The positions of the local names of one name, by the definition that binds them.
 type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
 
+/// The number of bindings of one name by one owner from which the resolver builds an index of
+/// their blocks. A look at fewer bindings costs less than the index.
+const LOCAL_BLOCKS_MINIMUM: usize = 16;
+
 /// The packages of the files: the files of the package of each file, and
 /// the symbols of each group of files by name.
 struct Packages<'a> {
@@ -404,6 +412,33 @@ impl<'a> Resolver<'a> {
                 }
                 positions
             })
+            .collect();
+        let local_blocks = files
+            .iter()
+            .zip(&locals_by_owner)
+            .map(
+                |(facts, by_name): (&FileSymbols, &HashMap<&str, PositionsByOwner>)| {
+                    let mut index = HashMap::new();
+                    for (name, by_owner) in by_name {
+                        for (owner, positions) in by_owner {
+                            if positions.len() < LOCAL_BLOCKS_MINIMUM {
+                                continue;
+                            }
+                            let bindings: Vec<local_blocks::Binding<'_>> = positions
+                                .iter()
+                                .map(|position| {
+                                    let local = &facts.locals[*position];
+                                    (local.block.as_ref(), local.name.value_start)
+                                })
+                                .collect();
+                            if let Some(blocks) = local_blocks::LocalBlocks::new(&bindings) {
+                                index.insert((*name, *owner), blocks);
+                            }
+                        }
+                    }
+                    index
+                },
+            )
             .collect();
         let locals_by_name = files
             .iter()
@@ -499,6 +534,7 @@ impl<'a> Resolver<'a> {
             by_file,
             locals_by_name,
             locals_by_owner,
+            local_blocks,
             references_by_start,
             ruby_children: OnceLock::new(),
             go_embedders: OnceLock::new(),
@@ -1445,6 +1481,15 @@ impl<'a> Resolver<'a> {
     fn local(&self, chain: &[Id], file: usize, name: &str, at: Option<usize>) -> Option<&'a Local> {
         let owners = chain.iter().map(|id| Some(id.1)).chain([None]);
         for owner in owners {
+            if let Some(blocks) = self.local_blocks[file].get(&(name, owner)) {
+                match blocks.nearest(at) {
+                    Some(rank) => {
+                        let position = self.locals_by_owner[file][name][&owner][rank];
+                        return Some(&self.files[file].locals[position]);
+                    }
+                    None => continue,
+                }
+            }
             let found = self
                 .locals_of(file, owner, name)
                 .filter(|local| {
@@ -1480,6 +1525,9 @@ impl<'a> Resolver<'a> {
     /// not in scope after the block.
     fn is_local_value(&self, chain: &[Id], file: usize, name: &str, start: usize) -> bool {
         chain.iter().any(|id| {
+            if let Some(blocks) = self.local_blocks[file].get(&(name, Some(id.1))) {
+                return blocks.has_binding_in_scope(start);
+            }
             self.locals_of(file, Some(id.1), name).any(|local| {
                 local.name.value_start.is_none_or(|value| value < start)
                     && local
@@ -5375,6 +5423,42 @@ mod false_edge_tests {
             resolver.packages().entries() <= 3 * symbols,
             "{} entries for {symbols} symbols",
             resolver.packages().entries()
+        );
+    }
+
+    /// One Go function with `depth` nested closures. Each closure has a parameter `r`, and
+    /// calls its method after the closure inside it, so that the nearest block of each use is far from
+    /// the last block that starts before it. Each `r` is a local name of the function.
+    fn nested_closures_resolve_at(depth: usize) -> std::time::Duration {
+        let mut source = String::from(
+            "package p\n\ntype T struct{}\n\nfunc (T) Run() {}\n\nfunc Run() {\n\t_ = ",
+        );
+        source.push_str(&"func(r T) {\n\t_ = ".repeat(depth));
+        source.push_str("0\n");
+        source.push_str(&"\tr.Run()\n}\n".repeat(depth));
+        source.push_str("}\n");
+        let files = [("p/run.go", source.as_str())];
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        let locals = facts[0]
+            .locals
+            .iter()
+            .filter(|local| local.name.name == "r")
+            .count();
+        assert_eq!(locals, depth);
+        let started = crate::index::timing::Stopwatch::start();
+        super::resolve_references_with(&mut facts, &manifests);
+        started.elapsed()
+    }
+
+    /// The nearest local name of many names of one function is found without a look at each
+    /// of them.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_the_locals_of_nested_closures_resolve_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "nested closures",
+            16_000,
+            nested_closures_resolve_at,
         );
     }
 
