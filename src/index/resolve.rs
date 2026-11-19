@@ -227,7 +227,7 @@ struct Resolver<'a> {
     exported_cache: RwLock<HashMap<ExportQuery, Arc<Vec<Id>>>>,
     /// For each file, the files of its package. Files of one package share
     /// one list.
-    packages: OnceLock<Vec<Arc<Vec<usize>>>>,
+    packages: OnceLock<Packages<'a>>,
     visible_cache: RwLock<HashMap<usize, Arc<Vec<usize>>>>,
     /// The `cfg` twins that `twin_members` found, or an empty list when the
     /// members are not twins.
@@ -268,6 +268,17 @@ type TypeQuery = (usize, String, Option<String>);
 
 /// The positions of the local names of one name, by the definition that binds them.
 type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
+
+/// The packages of the files: the files of the package of each file, and
+/// the symbols of each group of files by name.
+struct Packages<'a> {
+    /// For each file, the files of its package.
+    files: Vec<Arc<Vec<usize>>>,
+    /// For each file, the groups whose files are its package.
+    groups: Vec<Vec<usize>>,
+    /// The symbols of the files of each group, by the group and the name.
+    named: HashMap<(usize, &'a str), Vec<Id>>,
+}
 
 impl<'a> Resolver<'a> {
     fn new(files: &'a [FileSymbols], manifests: &'a Manifests) -> Self {
@@ -403,14 +414,14 @@ impl<'a> Resolver<'a> {
     /// The symbols with this name in the language family of `file`.
     /// The symbols with this name in one file. The symbols of a name are in
     /// the order of the files, thus a binary search finds the file.
-    fn named_in(&self, name: &str, file: usize) -> impl Iterator<Item = Id> + '_ {
+    fn named_in(&self, name: &str, file: usize) -> impl Iterator<Item = Id> + use<'_, 'a> {
         let all = self.by_name.get(name).map_or(&[][..], Vec::as_slice);
         let start = all.partition_point(|id| id.0 < file);
         let end = all.partition_point(|id| id.0 <= file);
         all[start..end].iter().copied()
     }
 
-    fn named(&self, name: &str, file: usize) -> impl Iterator<Item = Id> + '_ {
+    fn named(&self, name: &str, file: usize) -> impl Iterator<Item = Id> + use<'_, 'a> {
         let family = self.family(file);
         self.by_name
             .get(name)
@@ -459,59 +470,112 @@ impl<'a> Resolver<'a> {
     }
 
     /// The files of the same package as `file`, with `file`.
+    #[cfg(test)]
     fn package_files(&self, file: usize) -> Arc<Vec<usize>> {
-        let packages = self.packages.get_or_init(|| self.packages_of_files());
-        Arc::clone(&packages[file])
+        Arc::clone(&self.packages().files[file])
+    }
+
+    /// Whether `other` is a file of the package of `file`.
+    fn in_package(&self, file: usize, other: usize) -> bool {
+        self.packages().files[file].binary_search(&other).is_ok()
+    }
+
+    /// The symbols `name` of the files of the package of `file`, in the order
+    /// of the files and of the symbols, without a look at each file.
+    fn package_named(&self, file: usize, name: &str) -> Vec<Id> {
+        let packages = self.packages();
+        let mut found: Vec<Id> = packages.groups[file]
+            .iter()
+            .flat_map(|group| packages.named.get(&(*group, name)).into_iter().flatten())
+            .copied()
+            .collect();
+        if packages.groups[file].len() > 1 {
+            found.sort_unstable();
+            found.dedup();
+        }
+        found
+    }
+
+    fn packages(&self) -> &Packages<'a> {
+        self.packages.get_or_init(|| self.packages_of_files())
     }
 
     /// For each file, the files `other` for which `same_package(file, other)`
-    /// is true, in the order of the files. Files with one key share one list,
-    /// thus the cost is linear in the number of files.
-    fn packages_of_files(&self) -> Vec<Arc<Vec<usize>>> {
-        let mut by_directory: HashMap<&str, Vec<usize>> = HashMap::new();
-        let mut by_module: HashMap<&str, Vec<usize>> = HashMap::new();
-        for (file, facts) in self.files.iter().enumerate() {
-            by_directory
-                .entry(directory(&facts.file))
-                .or_default()
-                .push(file);
-            for module in &facts.modules {
-                let files = by_module.entry(module.as_str()).or_default();
-                if files.last() != Some(&file) {
-                    files.push(file);
+    /// is true, in the order of the files. The files of one directory (Go) or
+    /// of one package name (Java, C#, PHP) are a group, and the files of one
+    /// group share one list. Thus the cost is linear in the number of files.
+    fn packages_of_files(&self) -> Packages<'a> {
+        let mut by_directory: HashMap<&str, usize> = HashMap::new();
+        let mut by_module: HashMap<&str, usize> = HashMap::new();
+        let mut members: Vec<Vec<usize>> = Vec::new();
+        let mut group_of = |key: &'a str, groups: &mut HashMap<&'a str, usize>| {
+            *groups.entry(key).or_insert_with(|| {
+                members.push(Vec::new());
+                members.len() - 1
+            })
+        };
+        let mut directory_groups = Vec::with_capacity(self.files.len());
+        let mut module_groups: Vec<Vec<usize>> = Vec::with_capacity(self.files.len());
+        for facts in self.files {
+            directory_groups.push(group_of(directory(&facts.file), &mut by_directory));
+            let mut groups: Vec<usize> = facts
+                .modules
+                .iter()
+                .map(|module| group_of(module.as_str(), &mut by_module))
+                .collect();
+            groups.sort_unstable();
+            groups.dedup();
+            module_groups.push(groups);
+        }
+        for (file, (directory_group, groups)) in
+            directory_groups.iter().zip(&module_groups).enumerate()
+        {
+            members[*directory_group].push(file);
+            for group in groups {
+                members[*group].push(file);
+            }
+        }
+        let mut named: HashMap<(usize, &'a str), Vec<Id>> = HashMap::new();
+        for (group, files) in members.iter().enumerate() {
+            for file in files {
+                for (position, symbol) in self.files[*file].symbols.iter().enumerate() {
+                    named
+                        .entry((group, symbol.name.as_str()))
+                        .or_default()
+                        .push((*file, position));
                 }
             }
         }
-        let by_directory: HashMap<&str, Arc<Vec<usize>>> = by_directory
-            .into_iter()
-            .map(|(key, files)| (key, Arc::new(files)))
-            .collect();
-        let by_module: HashMap<&str, Arc<Vec<usize>>> = by_module
-            .into_iter()
-            .map(|(key, files)| (key, Arc::new(files)))
-            .collect();
+        let shared: Vec<Arc<Vec<usize>>> = members.into_iter().map(Arc::new).collect();
         let empty = Arc::new(Vec::new());
-        self.files
-            .iter()
-            .enumerate()
-            .map(|(file, facts)| match self.family(file) {
-                Family::Go => Arc::clone(&by_directory[directory(&facts.file)]),
-                Family::Java | Family::CSharp | Family::Php => match facts.modules.as_slice() {
-                    [] => Arc::clone(&empty),
-                    [module] => Arc::clone(&by_module[module.as_str()]),
-                    modules => {
-                        let mut files: Vec<usize> = modules
+        let (files, groups) = (0..self.files.len())
+            .map(|file| match self.family(file) {
+                Family::Go => {
+                    let group = directory_groups[file];
+                    (Arc::clone(&shared[group]), vec![group])
+                }
+                Family::Java | Family::CSharp | Family::Php => match module_groups[file].as_slice()
+                {
+                    [] => (Arc::clone(&empty), Vec::new()),
+                    [group] => (Arc::clone(&shared[*group]), vec![*group]),
+                    groups => {
+                        let mut files: Vec<usize> = groups
                             .iter()
-                            .flat_map(|module| by_module[module.as_str()].iter().copied())
+                            .flat_map(|group| shared[*group].iter().copied())
                             .collect();
                         files.sort_unstable();
                         files.dedup();
-                        Arc::new(files)
+                        (Arc::new(files), groups.to_vec())
                     }
                 },
-                _ => Arc::clone(&empty),
+                _ => (Arc::clone(&empty), Vec::new()),
             })
-            .collect()
+            .unzip();
+        Packages {
+            files,
+            groups,
+            named,
+        }
     }
 
     fn files_through_loads(&self, file: usize) -> Vec<usize> {
@@ -545,8 +609,12 @@ impl<'a> Resolver<'a> {
         files
             .iter()
             .flat_map(|&file| self.named_in(name, file))
-            .filter(|id| self.symbol(*id).container.is_none() && self.facts(*id).parent.is_none())
+            .filter(|id| self.is_top_level(*id))
             .collect()
+    }
+
+    fn is_top_level(&self, id: Id) -> bool {
+        self.symbol(id).container.is_none() && self.facts(id).parent.is_none()
     }
 
     /// The top-level definition `name` of a file, or the definition that the
@@ -799,7 +867,11 @@ impl<'a> Resolver<'a> {
         if !found.is_empty() || outside {
             return found;
         }
-        let found = in_files(&self.package_files(file));
+        let found: Vec<Id> = self
+            .package_named(file, name)
+            .into_iter()
+            .filter(|id| self.family(id.0) == self.family(file) && is_type(id))
+            .collect();
         if !found.is_empty() {
             return found;
         }
@@ -1227,7 +1299,7 @@ impl<'a> Resolver<'a> {
                     .named(&name, file)
                     .filter(|id| {
                         self.symbol(*id).kind == SymbolKind::TypeAlias
-                            && (id.0 == file || self.package_files(file).contains(&id.0))
+                            && (id.0 == file || self.in_package(file, id.0))
                     })
                     .collect();
                 let [alias] = aliases.as_slice() else {
@@ -2227,15 +2299,10 @@ impl<'a> Resolver<'a> {
             let imported = binding.imported_name.as_deref().unwrap_or(name);
             return self.imported(binding, imported, arity);
         }
-        let package: Vec<usize> = self
-            .package_files(file)
-            .iter()
-            .copied()
-            .filter(|other| *other != file)
-            .collect();
         let found: Vec<Id> = self
-            .top_level(name, &package)
+            .package_named(file, name)
             .into_iter()
+            .filter(|id| id.0 != file && self.is_top_level(*id))
             .filter(callable)
             .collect();
         if let Some(outcome) = Outcome::of(Basis::SamePackage, self.preferred(found, arity)) {
@@ -4637,6 +4704,19 @@ mod false_edge_tests {
                 "{}",
                 facts[file].file
             );
+            for other in &facts {
+                for symbol in &other.symbols {
+                    let name = symbol.name.as_str();
+                    let expected: Vec<super::Id> = expected
+                        .iter()
+                        .flat_map(|package_file| resolver.named_in(name, *package_file))
+                        .collect();
+                    assert_eq!(resolver.package_named(file, name), expected, "{name}");
+                }
+            }
+            for other in 0..facts.len() {
+                assert_eq!(resolver.in_package(file, other), expected.contains(&other));
+            }
         }
         assert!(facts.iter().any(|file| file.modules.len() > 1));
     }
@@ -4687,5 +4767,55 @@ mod false_edge_tests {
             8_000,
             calls_of_one_method_name_in_many_classes_resolve_at,
         );
+    }
+
+    /// One Go package of `files` files, in which each file calls a function
+    /// of the next file and a function `New` that each package of a
+    /// different directory also has.
+    fn calls_in_one_large_package_resolve_at(files: usize) -> std::time::Duration {
+        let mut sources: Vec<(String, String)> = vec![(
+            "go.mod".to_string(),
+            "module example.com/shop\n".to_string(),
+        )];
+        for position in 0..files {
+            sources.push((
+                format!("shop/f{position}.go"),
+                format!(
+                    "package shop\n\nfunc f{position}() {{\n\tf{}()\n\tNew()\n}}\n",
+                    (position + 1) % files
+                ),
+            ));
+            sources.push((
+                format!("other{position}/new.go"),
+                format!("package other{position}\n\nfunc New() {{}}\n"),
+            ));
+        }
+        sources.push((
+            "shop/new.go".to_string(),
+            "package shop\n\nfunc New() {}\n".to_string(),
+        ));
+        let inputs: Vec<(&str, &str)> = sources
+            .iter()
+            .map(|(path, source)| (path.as_str(), source.as_str()))
+            .collect();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&inputs);
+        let started = std::time::Instant::now();
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let unique = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| reference.resolution.status == super::Status::UniqueCandidate)
+            .count();
+        assert_eq!(unique, files * 2);
+        elapsed
+    }
+
+    /// A lookup of a name in a package does not read each file of the
+    /// package, nor each definition of the name in the repository.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_calls_in_one_large_package_resolve_in_linear_time() {
+        assert_doubles_at_most("files", 16_000, calls_in_one_large_package_resolve_at);
     }
 }
