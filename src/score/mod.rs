@@ -1,5 +1,9 @@
 //! Composite health score analyzer.
 
+#[cfg(test)]
+mod configuration_tests;
+#[cfg(test)]
+mod coupling_tests;
 mod debt;
 #[cfg(test)]
 mod determinism_tests;
@@ -19,6 +23,9 @@ pub struct Analyzer {
     /// Churn window handed to the defect analyzer, so scoring honours the
     /// configured window rather than always using the default.
     defect_churn_days: u32,
+    /// The `[duplicates]` table, for the duplication component and for the
+    /// duplication factor of the defect component.
+    duplicates: crate::analyzers::duplicates::Config,
 }
 
 impl Default for Analyzer {
@@ -26,6 +33,7 @@ impl Default for Analyzer {
         Self {
             weights: ScoreWeights::default(),
             defect_churn_days: crate::config::DefectConfig::default().since.days(),
+            duplicates: crate::analyzers::duplicates::Config::default(),
         }
     }
 }
@@ -46,12 +54,26 @@ impl Analyzer {
     /// churn window wherever it runs -- the subcommand, the gate, MCP, and
     /// each trend sample.
     pub fn from_config(config: &crate::config::Config) -> Self {
-        Self::default().with_defect_churn_days(config.defect.since.days())
+        let mut analyzer = Self::default().with_defect_churn_days(config.defect.since.days());
+        analyzer.duplicates = crate::analyzers::duplicates::Analyzer::from_config(config)
+            .config()
+            .clone();
+        analyzer
     }
 
     pub fn with_defect_churn_days(mut self, days: u32) -> Self {
         self.defect_churn_days = days;
         self
+    }
+
+    fn duplicates_analyzer(&self) -> crate::analyzers::duplicates::Analyzer {
+        crate::analyzers::duplicates::Analyzer::new().with_config(self.duplicates.clone())
+    }
+
+    fn defect_analyzer(&self) -> crate::analyzers::defect::Analyzer {
+        crate::analyzers::defect::Analyzer::new()
+            .with_churn_days(self.defect_churn_days)
+            .with_duplicates(self.duplicates_analyzer())
     }
 }
 
@@ -161,7 +183,7 @@ impl AnalyzerTrait for Analyzer {
         run_analyzer!(
             "duplication",
             self.weights.duplicates,
-            crate::analyzers::duplicates::Analyzer::new(),
+            self.duplicates_analyzer(),
             calculate_duplicates_score,
             |r: &crate::analyzers::duplicates::Analysis| format!(
                 "Found {} clones, {:.1}% duplication",
@@ -195,7 +217,7 @@ impl AnalyzerTrait for Analyzer {
         run_analyzer!(
             "defect",
             self.weights.defect,
-            crate::analyzers::defect::Analyzer::new().with_churn_days(self.defect_churn_days),
+            self.defect_analyzer(),
             calculate_defect_score,
             |r: &crate::analyzers::defect::Analysis| format!(
                 "{} high-risk files, avg probability: {:.1}%",
@@ -1656,106 +1678,6 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_coupling_score_uses_hub_concentration() {
-        // A repo with low avg degree but extreme hub nodes should score lower
-        // than one with uniform low degree
-        let uniform = crate::analyzers::graph::Analysis {
-            nodes: (0..100)
-                .map(|i| crate::analyzers::graph::Node {
-                    file: format!("file{i}.rs"),
-                    pagerank: 0.01,
-                    betweenness: 0.01,
-                    in_degree: 1,
-                    out_degree: 1,
-                    instability: 0.5,
-                })
-                .collect(),
-            edges: vec![],
-            cycles: vec![],
-            summary: crate::analyzers::graph::AnalysisSummary {
-                total_nodes: 100,
-                total_edges: 100,
-                avg_degree: 2.0,
-                cycle_count: 0,
-            },
-        };
-        let hub_heavy = crate::analyzers::graph::Analysis {
-            nodes: {
-                let mut nodes: Vec<_> = (0..100)
-                    .map(|i| crate::analyzers::graph::Node {
-                        file: format!("file{i}.rs"),
-                        pagerank: 0.01,
-                        betweenness: 0.01,
-                        in_degree: 0,
-                        out_degree: 0,
-                        instability: 0.5,
-                    })
-                    .collect();
-                // One mega-hub with 141 connections
-                nodes[0].in_degree = 70;
-                nodes[0].out_degree = 71;
-                nodes
-            },
-            edges: vec![],
-            cycles: vec![],
-            summary: crate::analyzers::graph::AnalysisSummary {
-                total_nodes: 100,
-                total_edges: 141,
-                avg_degree: 1.41, // low avg because most nodes are 0
-                cycle_count: 0,
-            },
-        };
-        let uniform_score = calculate_coupling_score(&uniform);
-        let hub_score = calculate_coupling_score(&hub_heavy);
-        assert!(
-            uniform_score > hub_score,
-            "uniform coupling should score higher than hub-heavy: uniform={uniform_score}, hub={hub_score}"
-        );
-    }
-
-    #[test]
-    fn test_calculate_coupling_score_not_always_near_100() {
-        // A repo with 4835 nodes, 1 cycle, avg_degree 1.2, but extreme hubs
-        // should not just score 95
-        let result = crate::analyzers::graph::Analysis {
-            nodes: {
-                let mut nodes: Vec<_> = (0..4835)
-                    .map(|i| crate::analyzers::graph::Node {
-                        file: format!("file{i}.rs"),
-                        pagerank: 0.0002,
-                        betweenness: 0.0,
-                        in_degree: 0,
-                        out_degree: 0,
-                        instability: 0.5,
-                    })
-                    .collect();
-                // Top hubs from real data
-                nodes[0].in_degree = 70;
-                nodes[0].out_degree = 71;
-                nodes[1].in_degree = 57;
-                nodes[1].out_degree = 57;
-                nodes[2].in_degree = 50;
-                nodes[2].out_degree = 55;
-                nodes
-            },
-            edges: vec![],
-            cycles: vec![vec!["a".into(), "b".into()]],
-            summary: crate::analyzers::graph::AnalysisSummary {
-                total_nodes: 4835,
-                total_edges: 2907,
-                avg_degree: 1.2,
-                cycle_count: 1,
-            },
-        };
-        let score = calculate_coupling_score(&result);
-        // Should reflect the hub concentration, not just avg_degree
-        assert!(
-            score < 90.0,
-            "hub-heavy graph should not score 95, got {score}"
-        );
-    }
-
-    #[test]
     fn test_score_module_line_count_acceptable() {
         let source = include_str!("mod.rs");
         let line_count = source.lines().count();
@@ -1783,18 +1705,5 @@ mod tests {
         };
         let score = calculate_defect_score(&result);
         assert!(score < 40.0);
-    }
-
-    #[test]
-    fn test_score_forwards_the_configured_defect_window() {
-        // The window used to reach only the score gate; ordinary `omen
-        // score`, MCP and each trend sample built the analyzer with defaults.
-        let mut config = crate::config::Config::default();
-        config.defect.since = crate::config::HistoryWindow::parse("365d").unwrap();
-        assert_eq!(Analyzer::from_config(&config).defect_churn_days, 365);
-        assert_eq!(
-            Analyzer::default().defect_churn_days,
-            crate::config::DefectConfig::default().since.days()
-        );
     }
 }
