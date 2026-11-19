@@ -129,9 +129,12 @@ fn is_closure(node: Node<'_>) -> bool {
 }
 
 /// The variable to which an assignment binds a closure.
-fn closure_variable(closure: Node<'_>) -> Option<Node<'_>> {
-    let assignment = closure
-        .parent()
+fn closure_variable<'tree>(
+    closure: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Option<Node<'tree>> {
+    let assignment = context
+        .parent(closure)
         .filter(|parent| parent.kind() == ASSIGNMENT_EXPRESSION)?;
     if assignment.child_by_field_name("right") != Some(closure) {
         return None;
@@ -409,7 +412,7 @@ impl LanguageSpec for Php {
             ASSIGNMENT_EXPRESSION => return assigned_property(node, context),
             _ => {}
         }
-        let variable = closure_variable(node)?;
+        let variable = closure_variable(node, context)?;
         bare_name(variable)
     }
 
@@ -470,7 +473,7 @@ impl LanguageSpec for Php {
         }
         if is_closure(node) {
             draft.function_value = true;
-            if let Some(variable) = closure_variable(node) {
+            if let Some(variable) = closure_variable(node, context) {
                 draft.span = Span::between(&variable, &node);
             }
             return true;
