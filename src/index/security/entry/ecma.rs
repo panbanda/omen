@@ -23,7 +23,6 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 
-use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use tree_sitter::Node;
 
@@ -1853,8 +1852,8 @@ impl<'a> Context<'a> {
                     graph.add_edge(parent, child, ());
                 }
             }
-            // `tarjan_scc` gives each component after the components that it has edges to.
-            let mut components = tarjan_scc(&graph);
+            // Tarjan's algorithm gives each component after the components that it has edges to.
+            let mut components = crate::index::graph::strongly_connected_components(&graph);
             components.reverse();
             let mut chains: HashMap<BindingKey, Vec<Vec<Part>>> = HashMap::new();
             let mut depths: HashMap<BindingKey, usize> = HashMap::new();
@@ -2526,6 +2525,33 @@ mod tests {
                 (route.method, route.path, route.path_template)
             })
             .collect()
+    }
+
+    /// The components of the mounts read a long chain of routers, each mounted in the next,
+    /// on a small stack.
+    #[test]
+    fn a_long_chain_of_mounted_routers_on_a_small_stack() {
+        const LENGTH: usize = 5_000;
+        let mut source = String::from("import express from 'express';\nconst app = express();\n");
+        for index in 0..LENGTH {
+            source.push_str(&format!("const r{index} = express.Router();\n"));
+        }
+        source.push_str(&format!("r{}.get('/x', list);\n", LENGTH - 1));
+        for index in 1..LENGTH {
+            source.push_str(&format!("r{}.use('/a', r{index});\n", index - 1));
+        }
+        source.push_str("app.use('/a', r0);\n");
+        let found = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || paths(&[("src/app.ts", source.as_str())]))
+            .expect("spawn")
+            .join()
+            .expect("no stack overflow");
+        // A chain of mounts deeper than `MAX_HOPS` gives a prefix that is not known.
+        assert_eq!(
+            found,
+            [("GET".to_string(), None, Some("/${...}/x".to_string()))]
+        );
     }
 
     fn known(method: &str, path: &str) -> (String, Option<String>, Option<String>) {
