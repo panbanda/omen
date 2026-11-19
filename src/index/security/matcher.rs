@@ -345,7 +345,7 @@ pub(super) fn file_sinks(
     };
     let mut sinks = Vec::new();
     let covered = context.reference_sinks(&mut sinks);
-    context.tree_sinks(parsed.root_node(), &mut sinks, &covered);
+    context.tree_sinks(parsed.root_node(), &mut Vec::new(), &mut sinks, &covered);
     sinks.sort_by_key(|sink| (sink.range.start_byte, sink.category));
     sinks.dedup_by_key(|sink| (sink.range.start_byte, sink.category));
     sinks
@@ -995,7 +995,15 @@ impl FileContext<'_> {
     }
 
     /// Walks the tree for the sinks that are not calls.
-    fn tree_sinks(&self, node: Node<'_>, sinks: &mut Vec<Sink>, covered: &HashSet<usize>) {
+    /// `ancestors` holds the ancestors of `node`, the nearest last. `Node::parent` searches
+    /// from the root, so the walk gives the ancestors that it knows.
+    fn tree_sinks<'tree>(
+        &self,
+        node: Node<'tree>,
+        ancestors: &mut Vec<Node<'tree>>,
+        sinks: &mut Vec<Sink>,
+        covered: &HashSet<usize>,
+    ) {
         let kind = node.kind();
         if self.syntax.string_kinds.contains(&kind) {
             let literal = syntax::text(node, self.source);
@@ -1027,7 +1035,7 @@ impl FileContext<'_> {
             return;
         }
         if self.syntax.keyed_kinds.contains(&kind) {
-            self.keyed_field(node, sinks);
+            self.keyed_field(node, ancestors, sinks);
         }
         if self.syntax.assignment_kinds.contains(&kind) {
             if self.has_target(|target| matches!(target, Target::MemberAssignment { .. })) {
@@ -1041,19 +1049,21 @@ impl FileContext<'_> {
             self.attribute(node, sinks);
         }
         if self.syntax.property_kinds.contains(&kind) {
-            self.object_property(node, sinks, covered);
+            self.object_property(node, ancestors.last().copied(), sinks, covered);
         }
+        ancestors.push(node);
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.tree_sinks(child, sinks, covered);
+            self.tree_sinks(child, ancestors, sinks, covered);
         }
+        ancestors.pop();
     }
 
     fn has_target(&self, test: impl Fn(&Target) -> bool) -> bool {
         self.specs.iter().any(|spec| test(&spec.target))
     }
 
-    fn keyed_field(&self, node: Node<'_>, sinks: &mut Vec<Sink>) {
+    fn keyed_field(&self, node: Node<'_>, ancestors: &[Node<'_>], sinks: &mut Vec<Sink>) {
         let Some((key, _)) = syntax::key_value(node, self.source) else {
             return;
         };
@@ -1074,7 +1084,7 @@ impl FileContext<'_> {
             {
                 if key == wanted_key.to_lowercase()
                     && syntax::holds(&spec.predicate, &[value], self.source, &self.syntax)
-                    && self.literal_has_type(node, module, owner)
+                    && self.literal_has_type(node, ancestors, module, owner)
                 {
                     // A value can hold a literal, and a literal can be a secret. Thus the text
                     // of the sink has the value only when the value is a chain of names.
@@ -1101,9 +1111,14 @@ impl FileContext<'_> {
 
     /// The nearest composite literal around the node has the type `owner` of the module,
     /// and the imports resolve the type. A map literal has no such type.
-    fn literal_has_type(&self, node: Node<'_>, module: &str, owner: &str) -> bool {
-        let mut parent = node.parent();
-        while let Some(candidate) = parent {
+    fn literal_has_type(
+        &self,
+        node: Node<'_>,
+        ancestors: &[Node<'_>],
+        module: &str,
+        owner: &str,
+    ) -> bool {
+        for &candidate in ancestors.iter().rev() {
             if candidate.kind() == "composite_literal" {
                 let Some(declared) = candidate.child_by_field_name("type") else {
                     return false;
@@ -1129,7 +1144,6 @@ impl FileContext<'_> {
                     Owner::Repository | Owner::Unknown => false,
                 };
             }
-            parent = candidate.parent();
         }
         false
     }
@@ -1212,8 +1226,14 @@ impl FileContext<'_> {
 
     /// Reports a property of an object literal that a row names, unless the object is an
     /// argument of a call that the call rows read.
-    fn object_property(&self, node: Node<'_>, sinks: &mut Vec<Sink>, covered: &HashSet<usize>) {
-        let Some(object) = node.parent().filter(|parent| parent.kind() == "object") else {
+    fn object_property(
+        &self,
+        node: Node<'_>,
+        parent: Option<Node<'_>>,
+        sinks: &mut Vec<Sink>,
+        covered: &HashSet<usize>,
+    ) {
+        let Some(object) = parent.filter(|parent| parent.kind() == "object") else {
             return;
         };
         if covered.contains(&object.start_byte()) {
