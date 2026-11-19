@@ -116,17 +116,19 @@ impl Parser {
 
 /// A node of the tree in `range` is an error, or a node that the parser added.
 fn has_error_in(node: tree_sitter::Node<'_>, range: &std::ops::Range<usize>) -> bool {
-    if !node.has_error() || node.end_byte() <= range.start || node.start_byte() >= range.end {
-        return false;
+    let can_hold = |node: &tree_sitter::Node<'_>| {
+        node.has_error() && node.end_byte() > range.start && node.start_byte() < range.end
+    };
+    // A stack in place of recursion, because a template expression can nest to any depth.
+    let mut pending: Vec<tree_sitter::Node<'_>> = Some(node).filter(can_hold).into_iter().collect();
+    while let Some(node) = pending.pop() {
+        if node.is_error() || node.is_missing() {
+            return true;
+        }
+        let mut cursor = node.walk();
+        pending.extend(node.children(&mut cursor).filter(can_hold));
     }
-    if node.is_error() || node.is_missing() {
-        return true;
-    }
-    let mut cursor = node.walk();
-    let found = node
-        .children(&mut cursor)
-        .any(|child| has_error_in(child, range));
-    found
+    false
 }
 
 /// Result of parsing a source file.
@@ -694,6 +696,28 @@ mod tests {
             .unwrap()
             .contains("does not parse"));
         assert!(!result.root_node().has_error());
+    }
+
+    #[test]
+    fn test_a_deeply_nested_template_error_abstains_without_recursion() {
+        use super::deep::{nest, on_small_stack};
+        let content = format!(
+            "<template><p>{{{{ {} }}}}</p></template>\n<script setup lang=\"ts\">\nconst a = 1\n</script>\n",
+            nest("(", "a +", ")")
+        );
+        let abstention = on_small_stack(move || {
+            Parser::new()
+                .parse(
+                    content.as_bytes(),
+                    Language::TypeScript,
+                    Path::new("App.vue"),
+                )
+                .unwrap()
+                .component
+                .unwrap()
+                .abstention
+        });
+        assert!(abstention.unwrap().contains("does not parse"));
     }
 
     #[test]
