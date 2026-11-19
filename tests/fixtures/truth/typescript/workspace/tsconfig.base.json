@@ -1,0 +1,6 @@
+{
+  // The options of each package.
+  "compilerOptions": {
+    "strict": true,
+  },
+}

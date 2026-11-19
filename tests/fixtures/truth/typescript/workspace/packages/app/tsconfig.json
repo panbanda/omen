@@ -1,0 +1,7 @@
+{
+  "extends": ["../../tsconfig.base.json"],
+  "compilerOptions": {
+    /* The source directory has an alias. */
+    "paths": { "@/*": ["./src/*"], },
+  },
+}

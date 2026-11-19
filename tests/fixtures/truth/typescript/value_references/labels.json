@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "language": "typescript",
+  "split": "development",
+  "oracle": "Author-reviewed. A shorthand property, the value of a property, and an argument use a function as a value. Dead code analysis counts these uses. `tsc` did not run. The harness does not run the code.",
+  "closed_world": false,
+  "references": [
+    {"label": "shorthand_property", "user": "tools.ts#makeDeferral", "line": 10, "name": "supportsModel", "expected": ["tools.ts#supportsModel"]},
+    {"label": "property_value", "user": "tools.ts#makeDeferral", "line": 10, "name": "prepareTools", "expected": ["tools.ts#prepareTools"]},
+    {"label": "callback_argument", "user": "tools.ts#register", "line": 14, "name": "prepareTools", "expected": ["tools.ts#prepareTools"]}
+  ]
+}

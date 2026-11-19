@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "language": "typescript",
+  "split": "development",
+  "oracle": "Author-reviewed. A method of a parent class implements the method of an interface that the class names. A class that extends the result of a call has a parent class that the index does not know, thus `new` makes an object of the class itself. `tsc` did not run. The harness does not run the code.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "hooks_read", "category": "method", "file": "types.ts", "name": "read", "kind": "method", "container": "Hooks", "start_line": 2, "end_line": 2, "exported": true},
+    {"label": "base_read", "category": "method", "file": "types.ts", "name": "read", "kind": "method", "container": "Base", "start_line": 6, "end_line": 8, "exported": true},
+    {"label": "failure_constructor", "category": "constructor", "file": "types.ts", "name": "constructor", "kind": "constructor", "container": "Failure", "start_line": 14, "end_line": 16, "exported": true},
+    {"label": "node", "category": "type", "file": "main.ts", "name": "Node", "kind": "class", "container": null, "start_line": 3, "end_line": 3, "exported": false},
+    {"label": "run", "category": "free_function", "file": "main.ts", "name": "run", "kind": "function", "container": null, "start_line": 5, "end_line": 8, "exported": true}
+  ],
+  "calls": [
+    {"label": "method_of_a_parent_class_over_an_interface", "category": "declared_type_receiver", "caller": "run", "line": 7, "callee_text": "hook.read", "expected": ["base_read"]},
+    {"label": "class_that_extends_a_call", "category": "constructor", "caller": "run", "line": 6, "callee_text": "Node", "expected": ["node"]}
+  ]
+}

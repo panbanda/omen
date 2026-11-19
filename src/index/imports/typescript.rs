@@ -1,0 +1,741 @@
+//! The facts of the project files of TypeScript and JavaScript:
+//! `tsconfig.json`, `tsconfig.*.json`, and `jsconfig.json`. The index reads
+//! them as JSON with comments and trailing commas. It does not run `tsc`.
+//!
+//! The index uses these options:
+//!
+//! - `extends`, as one path or as a list. A later config replaces the options
+//!   of an earlier config, and the options of the file replace both.
+//! - `baseUrl` and `paths`, which map a module name to a file.
+//! - `outDir` and `rootDir`, which map a build output to its source file.
+//!
+//! A path in an option is relative to the config that has the option.
+//! `${configDir}` is the directory of the config that the tool reads first.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
+
+use super::{directory, file_name, join, NodePackage};
+
+/// The extensions of the source files of a module, in the order of the search.
+pub const SOURCE_EXTENSIONS: &[&str] = &["ts", "tsx", "d.ts", "js", "jsx", "mjs", "cjs"];
+
+/// The extensions of the build output of a source file. The longest comes first.
+const OUTPUT_EXTENSIONS: &[&str] = &[".d.mts", ".d.cts", ".d.ts", ".mjs", ".cjs", ".jsx", ".js"];
+
+/// The extensions of a source file that can give a build output.
+const BUILD_SOURCE_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
+
+/// The patterns of `paths` of one config. The configs that inherit them
+/// share them.
+pub type PathPatterns = Arc<PatternTable<Vec<String>>>;
+
+/// Patterns with at most one `*`, as the keys of `paths` of a config and of
+/// `exports` of a package, each with a value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatternTable<V> {
+    /// The patterns without `*`, sorted by the pattern.
+    exact: Vec<(String, V)>,
+    /// The patterns with one `*`, by the text before `*`. For each prefix,
+    /// the text after `*` in reverse order of its characters, sorted.
+    wildcard: HashMap<String, Vec<(String, V)>>,
+}
+
+impl<V> PatternTable<V> {
+    pub fn new(patterns: impl IntoIterator<Item = (String, V)>) -> Self {
+        let mut table = Self {
+            exact: Vec::new(),
+            wildcard: HashMap::new(),
+        };
+        for (pattern, substitutions) in patterns {
+            match pattern.split_once('*') {
+                None => table.exact.push((pattern, substitutions)),
+                Some((prefix, suffix)) if !suffix.contains('*') => {
+                    let reversed = suffix.chars().rev().collect();
+                    table
+                        .wildcard
+                        .entry(prefix.to_string())
+                        .or_default()
+                        .push((reversed, substitutions));
+                }
+                // TypeScript does not accept a pattern with two `*`.
+                Some(_) => {}
+            }
+        }
+        table.exact.sort_by(|left, right| left.0.cmp(&right.0));
+        for group in table.wildcard.values_mut() {
+            group.sort_by(|left, right| left.0.cmp(&right.0));
+        }
+        table
+    }
+
+    /// The value of the pattern that applies to `module`, the text that `*`
+    /// matches, and if the pattern is `*` alone. An exact pattern applies
+    /// first.
+    pub fn find<'m>(&self, module: &'m str) -> Option<(&V, &'m str, bool)> {
+        if let Ok(position) = self
+            .exact
+            .binary_search_by(|(pattern, _)| pattern.as_str().cmp(module))
+        {
+            return Some((&self.exact[position].1, "", false));
+        }
+        self.find_wildcard(module)
+    }
+
+    /// Like `find`, for the patterns with `*` only. The pattern with the
+    /// longest prefix applies, and of these, the pattern with the longest
+    /// suffix, as in TypeScript and Node.js. The cost does not grow with the
+    /// number of patterns.
+    pub fn find_wildcard<'m>(&self, module: &'m str) -> Option<(&V, &'m str, bool)> {
+        (0..=module.len())
+            .rev()
+            .filter(|length| module.is_char_boundary(*length))
+            .find_map(|length| {
+                let group = self.wildcard.get(&module[..length])?;
+                let tail = &module[length..];
+                let reversed: String = tail.chars().rev().collect();
+                (0..=reversed.len())
+                    .rev()
+                    .filter(|end| reversed.is_char_boundary(*end))
+                    .find_map(|end| {
+                        let suffix = &reversed[..end];
+                        let position = group
+                            .binary_search_by(|(text, _)| text.as_str().cmp(suffix))
+                            .ok()?;
+                        let matched = &tail[..tail.len() - end];
+                        Some((&group[position].1, matched, length == 0 && end == 0))
+                    })
+            })
+    }
+}
+
+/// The options of one project file, as the file gives them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectConfig {
+    pub extends: Vec<String>,
+    pub base_url: Option<String>,
+    pub paths: Option<PathPatterns>,
+    pub out_dir: Option<String>,
+    pub root_dir: Option<String>,
+}
+
+/// The options of a project file after `extends`. Each path is relative to
+/// the root of the repository.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectOptions {
+    pub base_url: Option<String>,
+    /// The patterns of `paths`, and the directory of the config that has them.
+    paths: Option<(PathPatterns, String)>,
+    /// The directory of the config, which is the value of `${configDir}`.
+    config_directory: String,
+    pub out_dir: Option<String>,
+    pub root_dir: Option<String>,
+}
+
+impl ProjectOptions {
+    /// The directory to which the substitutions of `paths` are relative:
+    /// `baseUrl`, else the directory of the config that has `paths`.
+    fn paths_base(&self) -> Option<&str> {
+        let (_, directory) = self.paths.as_ref()?;
+        Some(self.base_url.as_deref().unwrap_or(directory))
+    }
+
+    /// The paths that `paths` gives for a module name, relative to the root
+    /// of the repository, in the order in which TypeScript tries them. An
+    /// exact pattern comes before a pattern with `*`. Of the patterns with
+    /// `*`, the pattern with the longest text before `*` applies.
+    ///
+    /// The second value tells if the pattern that applies is `*` alone, which
+    /// matches each module name, also the name of a package.
+    pub fn mapped(&self, module: &str) -> (Vec<String>, bool) {
+        let (Some((patterns, _)), Some(base)) = (&self.paths, self.paths_base()) else {
+            return (Vec::new(), false);
+        };
+        let Some((substitutions, matched, catch_all)) = patterns.find(module) else {
+            return (Vec::new(), false);
+        };
+        // A substitution that starts with `${configDir}` is a path from the
+        // directory of the config, not from `baseUrl`.
+        let paths = substitutions
+            .iter()
+            .filter_map(|substitution| {
+                let substitution = substitution.replace('*', matched);
+                match substitution.strip_prefix("${configDir}") {
+                    Some(rest) => join(&self.config_directory, rest.trim_start_matches('/')),
+                    None => join(base, &substitution),
+                }
+            })
+            .collect();
+        (paths, catch_all)
+    }
+}
+
+/// Tells if a file with this name is a project file of TypeScript or JavaScript.
+pub fn is_project_file(name: &str) -> bool {
+    name == "jsconfig.json"
+        || name == "tsconfig.json"
+        || (name.starts_with("tsconfig.") && name.ends_with(".json"))
+}
+
+/// Removes the comments and the trailing commas of JSON with comments. A
+/// comment becomes a space, thus the result is valid JSON when the input is
+/// valid JSON with comments.
+pub fn strip_comments(text: &str) -> String {
+    let characters: Vec<char> = text.chars().collect();
+    let mut without_comments = String::with_capacity(text.len());
+    let mut position = 0;
+    let mut in_string = false;
+    while position < characters.len() {
+        let character = characters[position];
+        let next = characters.get(position + 1).copied();
+        if in_string {
+            without_comments.push(character);
+            if character == '\\' {
+                if let Some(escaped) = next {
+                    without_comments.push(escaped);
+                    position += 1;
+                }
+            } else if character == '"' {
+                in_string = false;
+            }
+            position += 1;
+            continue;
+        }
+        match (character, next) {
+            ('"', _) => {
+                in_string = true;
+                without_comments.push(character);
+                position += 1;
+            }
+            ('/', Some('/')) => {
+                while position < characters.len() && !['\n', '\r'].contains(&characters[position]) {
+                    position += 1;
+                }
+                without_comments.push(' ');
+            }
+            ('/', Some('*')) => {
+                position += 2;
+                while position < characters.len()
+                    && !(characters[position] == '*' && characters.get(position + 1) == Some(&'/'))
+                {
+                    position += 1;
+                }
+                position += 2;
+                without_comments.push(' ');
+            }
+            _ => {
+                without_comments.push(character);
+                position += 1;
+            }
+        }
+    }
+    // A comma before `}` or `]` is a trailing comma.
+    let characters: Vec<char> = without_comments.chars().collect();
+    let mut result = String::with_capacity(characters.len());
+    let mut in_string = false;
+    let mut position = 0;
+    while position < characters.len() {
+        let character = characters[position];
+        if in_string {
+            if character == '\\' {
+                result.push(character);
+                position += 1;
+                if let Some(escaped) = characters.get(position) {
+                    result.push(*escaped);
+                }
+            } else {
+                in_string = character != '"';
+                result.push(character);
+            }
+            position += 1;
+            continue;
+        }
+        if character == '"' {
+            in_string = true;
+        }
+        if character == ',' {
+            let following = characters[position + 1..]
+                .iter()
+                .find(|character| !character.is_whitespace());
+            if matches!(following, Some('}' | ']')) {
+                position += 1;
+                continue;
+            }
+        }
+        result.push(character);
+        position += 1;
+    }
+    result
+}
+
+/// Reads a project file. The result is `None` when the text is not JSON with comments.
+pub fn project_config(text: &str) -> Option<ProjectConfig> {
+    let value: serde_json::Value = serde_json::from_str(&strip_comments(text)).ok()?;
+    let extends = match value.get("extends") {
+        Some(serde_json::Value::String(path)) => vec![path.clone()],
+        Some(serde_json::Value::Array(paths)) => paths
+            .iter()
+            .filter_map(|path| path.as_str().map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let options = value.get("compilerOptions");
+    let text_option = |name: &str| {
+        options
+            .and_then(|options| options.get(name))
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    };
+    let paths = options
+        .and_then(|options| options.get("paths"))
+        .and_then(|paths| paths.as_object())
+        .map(|paths| {
+            paths
+                .iter()
+                .map(|(pattern, substitutions)| {
+                    let substitutions = substitutions
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|substitution| substitution.as_str().map(str::to_string))
+                        .collect();
+                    (pattern.clone(), substitutions)
+                })
+                .collect()
+        })
+        .map(|paths: Vec<(String, Vec<String>)>| Arc::new(PatternTable::new(paths)));
+    Some(ProjectConfig {
+        extends,
+        base_url: text_option("baseUrl"),
+        paths,
+        out_dir: text_option("outDir"),
+        root_dir: text_option("rootDir"),
+    })
+}
+
+/// The project files of the repository, by their path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectConfigs {
+    configs: BTreeMap<String, ProjectConfig>,
+    /// The paths of the configs, by their directory.
+    directories: BTreeMap<String, Vec<String>>,
+}
+
+/// The options of a config after `extends`, before `${configDir}` has a
+/// value. Each path keeps the directory of the config that has it.
+#[derive(Debug, Clone, Default)]
+pub struct Inherited {
+    base_url: Option<Located>,
+    paths: Option<(PathPatterns, String)>,
+    out_dir: Option<Located>,
+    root_dir: Option<Located>,
+}
+
+/// The text of a path option and the directory of the config that has it.
+#[derive(Debug, Clone)]
+struct Located {
+    directory: String,
+    text: String,
+}
+
+/// The options of each config after `extends`, by the path of the config,
+/// and if a cycle of `extends` can be reached from the config.
+pub type InheritedMemo = RwLock<HashMap<String, (Arc<Inherited>, bool)>>;
+
+/// The packages whose name is `module` or a prefix of `module` before a
+/// `/`, and the rest of `module` after the name. `packages` is sorted by
+/// the name.
+pub fn packages_of<'a, 'm>(
+    packages: &'a [NodePackage],
+    module: &'m str,
+) -> impl Iterator<Item = (&'a NodePackage, &'m str)> + 'a
+where
+    'm: 'a,
+{
+    module
+        .match_indices('/')
+        .map(|(position, _)| position)
+        .chain([module.len()])
+        .flat_map(move |end| {
+            let name = &module[..end];
+            let first = packages.partition_point(|package| package.name.as_str() < name);
+            packages[first..]
+                .iter()
+                .take_while(move |package| package.name == name)
+                .map(move |package| (package, &module[end..]))
+        })
+}
+
+impl ProjectConfigs {
+    pub fn insert(&mut self, path: String, config: ProjectConfig) {
+        let paths = self
+            .directories
+            .entry(directory(&path).to_string())
+            .or_default();
+        if let Err(position) = paths.binary_search(&path) {
+            paths.insert(position, path.clone());
+        }
+        self.configs.insert(path, config);
+    }
+
+    /// The path of the config that `extends` names in the config at `from`.
+    /// A name that is not a relative path names a file of a package. The
+    /// result is `None` when the repository does not have the file.
+    /// `packages` is sorted by the name.
+    pub fn extended(&self, from: &str, name: &str, packages: &[NodePackage]) -> Option<String> {
+        let candidates: Vec<String> = if name.starts_with('.') {
+            join(directory(from), name).into_iter().collect()
+        } else {
+            packages_of(packages, name)
+                .filter_map(|(package, rest)| match rest {
+                    "" => join(&package.directory, &package.tsconfig),
+                    rest => join(&package.directory, rest.strip_prefix('/')?),
+                })
+                .collect()
+        };
+        let found: Vec<String> = candidates
+            .into_iter()
+            .flat_map(|path| [format!("{path}.json"), path])
+            .filter(|path| self.configs.contains_key(path))
+            .collect();
+        match found.as_slice() {
+            [only] => Some(only.clone()),
+            // `name` and `name.json` can both exist. TypeScript reads `name`.
+            [with_extension, exact] if *with_extension == format!("{exact}.json") => {
+                Some(exact.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// The paths that `extends` of the config at `path` names and that the
+    /// repository can have, but that the index did not read. `packages` is
+    /// sorted by the name.
+    pub fn unread(&self, packages: &[NodePackage]) -> Vec<String> {
+        let mut unread = Vec::new();
+        for (path, config) in &self.configs {
+            for name in &config.extends {
+                if self.extended(path, name, packages).is_some() {
+                    continue;
+                }
+                if name.starts_with('.') {
+                    if let Some(target) = join(directory(path), name) {
+                        unread.push(format!("{target}.json"));
+                        unread.push(target);
+                    }
+                    continue;
+                }
+                for (package, rest) in packages_of(packages, name) {
+                    let target = match rest {
+                        "" => join(&package.directory, &package.tsconfig),
+                        rest => rest
+                            .strip_prefix('/')
+                            .and_then(|rest| join(&package.directory, rest)),
+                    };
+                    if let Some(target) = target {
+                        unread.push(format!("{target}.json"));
+                        unread.push(target);
+                    }
+                }
+            }
+        }
+        unread.sort();
+        unread.dedup();
+        unread
+    }
+
+    /// The names of the packages that `extends` names and that the index
+    /// does not know. `packages` is sorted by the name.
+    pub fn unknown_packages(&self, packages: &[NodePackage]) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .configs
+            .values()
+            .flat_map(|config| &config.extends)
+            .filter(|name| !name.starts_with('.'))
+            .filter_map(|name| {
+                let mut parts = name.split('/');
+                let first = parts.next()?;
+                let package = if first.starts_with('@') {
+                    format!("{first}/{}", parts.next()?)
+                } else {
+                    first.to_string()
+                };
+                let known = packages
+                    .binary_search_by(|known| known.name.as_str().cmp(&package))
+                    .is_ok();
+                (!known).then_some(package)
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// The options of the config at `path`, after `extends`. `memo` keeps
+    /// the options of each config of a chain of `extends`, thus each config
+    /// is read one time. `packages` is sorted by the name.
+    pub fn options(
+        &self,
+        path: &str,
+        packages: &[NodePackage],
+        memo: &InheritedMemo,
+    ) -> ProjectOptions {
+        let (inherited, _) = self.inherited(path, packages, memo);
+        let leaf = directory(path);
+        let located = |option: &Option<Located>| -> Option<String> {
+            let Located { directory, text } = option.as_ref()?;
+            let text = text.replace("${configDir}", &relative_to(directory, leaf));
+            if text.starts_with('/') {
+                return None;
+            }
+            join(directory, &text)
+        };
+        ProjectOptions {
+            base_url: located(&inherited.base_url),
+            paths: inherited.paths.clone(),
+            config_directory: leaf.to_string(),
+            out_dir: located(&inherited.out_dir),
+            root_dir: located(&inherited.root_dir),
+        }
+    }
+
+    /// The options of the config at `path` after `extends`, and tells if a
+    /// cycle of `extends` can be reached from the config. A cycle is an error
+    /// of `tsc`, thus a parent that reaches a cycle gives no options. Then
+    /// the result depends only on the config, not on the config where the
+    /// search starts, and `memo` keeps each result. The search visits each
+    /// config one time, and it does not use recursion, because a chain of
+    /// `extends` can be long.
+    fn inherited(
+        &self,
+        path: &str,
+        packages: &[NodePackage],
+        memo: &InheritedMemo,
+    ) -> (Arc<Inherited>, bool) {
+        struct Frame<'c> {
+            path: String,
+            config: &'c ProjectConfig,
+            parents: Vec<String>,
+            next: usize,
+            options: Inherited,
+            reaches_cycle: bool,
+        }
+        // The configs that the search has entered and not left.
+        let mut searching: HashSet<String> = HashSet::new();
+        let mut stack: Vec<Frame> = Vec::new();
+        let mut entering = Some(path.to_string());
+        let mut returned: Option<(Arc<Inherited>, bool)> = None;
+        loop {
+            if let Some(path) = entering.take() {
+                if let Some((found, cycle)) = memo.read().get(&path) {
+                    returned = Some((Arc::clone(found), *cycle));
+                } else if let Some(config) = self.configs.get(&path) {
+                    if searching.insert(path.clone()) {
+                        let parents = config
+                            .extends
+                            .iter()
+                            .filter_map(|name| self.extended(&path, name, packages))
+                            .collect();
+                        stack.push(Frame {
+                            path,
+                            config,
+                            parents,
+                            next: 0,
+                            options: Inherited::default(),
+                            reaches_cycle: false,
+                        });
+                    } else {
+                        // The config is in a cycle with the current config.
+                        returned = Some((Arc::default(), true));
+                    }
+                } else {
+                    returned = Some((Arc::default(), false));
+                }
+            }
+            if let Some((inherited, cycle)) = returned.take() {
+                let Some(frame) = stack.last_mut() else {
+                    return (inherited, cycle);
+                };
+                if cycle {
+                    frame.reaches_cycle = true;
+                } else {
+                    let inherited = Arc::unwrap_or_clone(inherited);
+                    let options = &mut frame.options;
+                    options.base_url = inherited.base_url.or(options.base_url.take());
+                    options.paths = inherited.paths.or(options.paths.take());
+                    options.out_dir = inherited.out_dir.or(options.out_dir.take());
+                    options.root_dir = inherited.root_dir.or(options.root_dir.take());
+                }
+            }
+            let Some(frame) = stack.last_mut() else {
+                unreachable!("the search returns when the stack is empty");
+            };
+            if frame.next < frame.parents.len() {
+                entering = Some(frame.parents[frame.next].clone());
+                frame.next += 1;
+                continue;
+            }
+            let frame = stack.pop().expect("a frame");
+            searching.remove(&frame.path);
+            let options = Arc::new(own_options(&frame.path, frame.config, frame.options));
+            memo.write()
+                .insert(frame.path, (Arc::clone(&options), frame.reaches_cycle));
+            returned = Some((options, frame.reaches_cycle));
+        }
+    }
+
+    /// The configs in the directory `directory`.
+    pub fn in_directory<'a>(&'a self, directory: &str) -> impl Iterator<Item = &'a str> + 'a {
+        self.directories
+            .get(directory)
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+    }
+
+    /// The config that applies to `file`: the nearest `tsconfig.json`, else
+    /// the nearest `jsconfig.json`, in the directory of the file or above it.
+    pub fn nearest(&self, file: &str) -> Option<&str> {
+        let mut here = directory(file);
+        loop {
+            for name in ["tsconfig.json", "jsconfig.json"] {
+                let path = if here.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{here}/{name}")
+                };
+                if let Some((found, _)) = self.configs.get_key_value(&path) {
+                    return Some(found.as_str());
+                }
+            }
+            if here.is_empty() {
+                return None;
+            }
+            here = directory(here);
+        }
+    }
+}
+
+/// The options of `config` at `path` over the options that it inherits.
+fn own_options(path: &str, config: &ProjectConfig, mut options: Inherited) -> Inherited {
+    let here = directory(path);
+    let located = |text: &Option<String>| {
+        text.as_ref().map(|text| Located {
+            directory: here.to_string(),
+            text: text.clone(),
+        })
+    };
+    if config.base_url.is_some() {
+        options.base_url = located(&config.base_url);
+    }
+    if let Some(paths) = &config.paths {
+        options.paths = Some((Arc::clone(paths), here.to_string()));
+    }
+    if config.out_dir.is_some() {
+        options.out_dir = located(&config.out_dir);
+    }
+    if config.root_dir.is_some() {
+        options.root_dir = located(&config.root_dir);
+    }
+    options
+}
+
+/// The relative path from `from` to `to`. Both are directories relative to
+/// the root of the repository.
+fn relative_to(from: &str, to: &str) -> String {
+    let from: Vec<&str> = from.split('/').filter(|part| !part.is_empty()).collect();
+    let to: Vec<&str> = to.split('/').filter(|part| !part.is_empty()).collect();
+    let common = from
+        .iter()
+        .zip(&to)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut parts: Vec<&str> = vec![".."; from.len() - common];
+    parts.extend(&to[common..]);
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
+}
+
+/// The path of a build output without its extension, and tells if the path
+/// had an extension. A path without an extension, as `dist/index`, can name
+/// a directory with an index file.
+pub fn output_stem(path: &str) -> (&str, bool) {
+    let name = file_name(path);
+    for extension in OUTPUT_EXTENSIONS {
+        if name.len() > extension.len() {
+            if let Some(stem) = path.strip_suffix(extension) {
+                return (stem, true);
+            }
+        }
+    }
+    (path, false)
+}
+
+/// The paths of the source files that can give the build output with this
+/// stem, in the order of the search.
+pub fn source_candidates(stem: &str, had_extension: bool) -> Vec<String> {
+    let mut candidates: Vec<String> = BUILD_SOURCE_EXTENSIONS
+        .iter()
+        .map(|extension| format!("{stem}.{extension}"))
+        .collect();
+    if !had_extension {
+        candidates.extend(
+            BUILD_SOURCE_EXTENSIONS
+                .iter()
+                .map(|extension| format!("{stem}/index.{extension}")),
+        );
+    }
+    candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_comments_keeps_strings() {
+        let text =
+            "{\n  // a\n  \"a\": \"//x/*y*/\", /* b */\n  \"b\": [1, 2,],\n  \"c\": \"\\\"\",\n}\n";
+        let value: serde_json::Value = serde_json::from_str(&strip_comments(text)).unwrap();
+        assert_eq!(value["a"], "//x/*y*/");
+        assert_eq!(value["b"], serde_json::json!([1, 2]));
+        assert_eq!(value["c"], "\"");
+    }
+
+    #[test]
+    fn test_strip_comments_ends_a_line_comment_at_a_carriage_return() {
+        let text = "{\r  // a\r  \"a\": 1\r}\r";
+        let value: serde_json::Value = serde_json::from_str(&strip_comments(text)).unwrap();
+        assert_eq!(value["a"], 1);
+    }
+
+    #[test]
+    fn test_project_file_names() {
+        assert!(is_project_file("tsconfig.json"));
+        assert!(is_project_file("tsconfig.build.esm.json"));
+        assert!(is_project_file("jsconfig.json"));
+        assert!(!is_project_file("package.json"));
+        assert!(!is_project_file("tsconfig.jsonc"));
+    }
+
+    #[test]
+    fn test_relative_to() {
+        assert_eq!(relative_to("a/b", "a/c"), "../c");
+        assert_eq!(relative_to("a", "a"), ".");
+        assert_eq!(relative_to("", "a/b"), "a/b");
+    }
+
+    #[test]
+    fn test_output_stem() {
+        assert_eq!(output_stem("dist/index.d.ts"), ("dist/index", true));
+        assert_eq!(output_stem("dist/a.d.mts"), ("dist/a", true));
+        assert_eq!(output_stem("dist/a.mjs"), ("dist/a", true));
+        assert_eq!(output_stem("dist/index"), ("dist/index", false));
+        assert_eq!(output_stem("dist/.js"), ("dist/.js", false));
+    }
+}
