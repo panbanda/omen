@@ -379,13 +379,18 @@ pub enum ResolutionBasis {
     ReceiverDeclaredType,
     QualifiedPath,
     SamePackage,
+    /// The candidates of a call through an interface: the method of the
+    /// interface and the methods of the types that implement it. The
+    /// syntax does not tell the type of the value, thus no candidate is an edge.
+    Implementation,
     NameOnly,
 }
 
 impl ResolutionBasis {
     /// Each basis, from the weakest evidence to the strongest evidence.
-    pub const RANKED: [Self; 11] = [
+    pub const RANKED: [Self; 12] = [
         Self::NameOnly,
+        Self::Implementation,
         Self::SamePackage,
         Self::ImportedModule,
         Self::QualifiedPath,
@@ -410,6 +415,7 @@ impl ResolutionBasis {
     pub fn name(self) -> &'static str {
         match self {
             Self::NameOnly => "name_only",
+            Self::Implementation => "implementation",
             Self::SamePackage => "same_package",
             Self::ImportedModule => "imported_module",
             Self::QualifiedPath => "qualified_path",

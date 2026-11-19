@@ -21,7 +21,12 @@ const COMPOSITE_LITERAL: &str = "composite_literal";
 const UNARY_EXPRESSION: &str = "unary_expression";
 
 const CALL_SYNTAX: CallSyntax = CallSyntax {
-    calls: &[("call_expression", "function", "arguments")],
+    // `f[T](x)` with one argument has the syntax of a conversion to a
+    // generic type. It has no argument list.
+    calls: &[
+        ("call_expression", "function", "arguments"),
+        ("type_conversion_expression", "type", ""),
+    ],
     constructions: &[],
     members: &[("selector_expression", "operand", "field")],
     paths: &[],
@@ -49,6 +54,10 @@ const SHORT_VAR_DECLARATION: &str = "short_var_declaration";
 const VAR_SPEC: &str = "var_spec";
 const IDENTIFIER: &str = "identifier";
 const TYPE_IDENTIFIER: &str = "type_identifier";
+const FIELD_DECLARATION: &str = "field_declaration";
+const QUALIFIED_TYPE: &str = "qualified_type";
+const GENERIC_TYPE: &str = "generic_type";
+const TYPE_ELEMENT: &str = "type_elem";
 
 const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new(
@@ -65,12 +74,9 @@ const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new(TYPE_SPEC, SymbolKind::TypeAlias, NameRule::Field("name")),
     DefinitionRule::new("type_alias", SymbolKind::TypeAlias, NameRule::Field("name")),
     DefinitionRule::new(FUNCTION_LITERAL, SymbolKind::Function, NameRule::Hook),
-    // A declaration with two or more names gives the first name only.
-    DefinitionRule::new(
-        "field_declaration",
-        SymbolKind::Field,
-        NameRule::Field("name"),
-    ),
+    // A declaration with two or more names gives the first name only. An
+    // embedded field has the name of its type.
+    DefinitionRule::new(FIELD_DECLARATION, SymbolKind::Field, NameRule::Hook),
 ];
 
 impl LanguageSpec for Go {
@@ -220,6 +226,10 @@ impl LanguageSpec for Go {
             VAR_SPEC,
             IDENTIFIER,
             TYPE_IDENTIFIER,
+            FIELD_DECLARATION,
+            QUALIFIED_TYPE,
+            GENERIC_TYPE,
+            TYPE_ELEMENT,
         ]
     }
 
@@ -233,6 +243,11 @@ impl LanguageSpec for Go {
         node: Node<'tree>,
         context: &Context<'_, 'tree>,
     ) -> Option<Node<'tree>> {
+        if node.kind() == FIELD_DECLARATION {
+            return node
+                .child_by_field_name("name")
+                .or_else(|| embedded_type_name(node));
+        }
         let values = node
             .parent()
             .filter(|list| list.kind() == EXPRESSION_LIST)?;
@@ -274,8 +289,21 @@ impl LanguageSpec for Go {
             TYPE_SPEC => {
                 let definition = draft.node.child_by_field_name("type");
                 match definition.map(|definition| definition.kind()) {
-                    Some(STRUCT_TYPE) => draft.kind = SymbolKind::Struct,
-                    Some(INTERFACE_TYPE) => draft.kind = SymbolKind::Interface,
+                    Some(STRUCT_TYPE) => {
+                        draft.kind = SymbolKind::Struct;
+                        // The methods of an embedded field are methods of the struct.
+                        draft.supertypes = definition
+                            .and_then(|structure| structure.named_child(0))
+                            .map(|fields| embedded_types(fields, context))
+                            .unwrap_or_default();
+                    }
+                    Some(INTERFACE_TYPE) => {
+                        draft.kind = SymbolKind::Interface;
+                        // The methods of an embedded interface are methods of the interface.
+                        draft.supertypes = definition
+                            .map(|interface| embedded_interfaces(interface, context))
+                            .unwrap_or_default();
+                    }
                     // The type that a name is based on, for example a slice. A
                     // defined type has its own methods.
                     _ => {
@@ -334,6 +362,54 @@ fn var_values(
             local.type_name.get_or_insert(literal);
         }
     }
+}
+
+/// The type name of an embedded field, as `Base` in `*web.Base` and in
+/// `Base[T]`. A field with a name gives `None`.
+fn embedded_type_name(field: Node<'_>) -> Option<Node<'_>> {
+    if field.child_by_field_name("name").is_some() {
+        return None;
+    }
+    let mut declared = field.child_by_field_name("type")?;
+    if declared.kind() == GENERIC_TYPE {
+        declared = declared.child_by_field_name("type")?;
+    }
+    match declared.kind() {
+        TYPE_IDENTIFIER => Some(declared),
+        QUALIFIED_TYPE => declared.child_by_field_name("name"),
+        _ => None,
+    }
+}
+
+/// The types of the embedded fields of a field list, as the source has them
+/// without `*`.
+fn embedded_types(fields: Node<'_>, context: &Context<'_, '_>) -> Vec<String> {
+    let mut cursor = fields.walk();
+    let found: Vec<String> = fields
+        .named_children(&mut cursor)
+        .filter(|field| field.kind() == FIELD_DECLARATION)
+        .filter(|field| embedded_type_name(*field).is_some())
+        .filter_map(|field| field.child_by_field_name("type"))
+        .map(|declared| context.text(declared))
+        .collect();
+    found
+}
+
+/// The interfaces that an interface embeds, as `io.Reader` in
+/// `interface { io.Reader; Close() error }`. A union or an approximation of
+/// types, as `~int | string`, is a constraint and not an interface.
+fn embedded_interfaces(interface: Node<'_>, context: &Context<'_, '_>) -> Vec<String> {
+    let mut cursor = interface.walk();
+    let found: Vec<String> = interface
+        .named_children(&mut cursor)
+        .filter(|element| element.kind() == TYPE_ELEMENT && element.named_child_count() == 1)
+        .filter_map(|element| element.named_child(0))
+        .filter(|embedded| {
+            [TYPE_IDENTIFIER, QUALIFIED_TYPE, GENERIC_TYPE].contains(&embedded.kind())
+        })
+        .map(|embedded| context.text(embedded))
+        .collect();
+    found
 }
 
 /// The type that a composite literal names: `Type{...}` or `&Type{...}`.
@@ -494,6 +570,45 @@ mod tests {
         );
     }
 
+    /// A `_test.go` file is not a part of the package that an import gives.
+    /// Only the external tests of the same directory see the test files of the
+    /// package, as `export_test.go`.
+    #[test]
+    fn test_import_does_not_give_the_test_files_of_the_package() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            ("go.mod", "module example.com/shop\n"),
+            ("a/a.go", "package a\n"),
+            (
+                "a/a_test.go",
+                "package a\n\nimport \"example.com/shop/b\"\n",
+            ),
+            ("a/export_test.go", "package a\n"),
+            (
+                "a/external_test.go",
+                "package a_test\n\nimport \"example.com/shop/a\"\n",
+            ),
+            ("a/other_test.go", "package a_test\n"),
+            ("b/b.go", "package b\n\nimport \"example.com/shop/a\"\n"),
+            (
+                "b/b_test.go",
+                "package b\n\nimport \"example.com/shop/a\"\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "b/b.go"),
+            ["3 Module example.com/shop/a a->a a/a.go"]
+        );
+        assert_eq!(
+            rows(&files, "b/b_test.go"),
+            ["3 Module example.com/shop/a a->a a/a.go"]
+        );
+        assert_eq!(
+            rows(&files, "a/external_test.go"),
+            ["3 Module example.com/shop/a a->a package(a/a.go,a/a_test.go,a/export_test.go)"]
+        );
+    }
+
     #[test]
     fn test_import_without_a_go_mod_file_is_unresolved() {
         use crate::index::imports::testing::rows;
@@ -562,7 +677,7 @@ mod tests {
                 "17 run>apply UniqueCandidate SameFile [main.go#apply]",
                 "17 run>local UniqueCandidate SameFile [main.go#local]",
                 "19 run>add UniqueCandidate LexicalScope [main.go#run.add]",
-                "19 run>len Unresolved - []",
+                "19 run>len External - []",
             ]
         );
     }
@@ -575,7 +690,7 @@ mod tests {
             [
                 "23 apply>f Unresolved - []",
                 "27 measure>size.Area UniqueCandidate ReceiverDeclaredType [shapes/shapes.go#Square.Area]",
-                "27 measure>shape.Area Ambiguous NameOnly [shapes/shapes.go#Circle.Area, shapes/shapes.go#Shape.Area, shapes/shapes.go#Square.Area]",
+                "27 measure>shape.Area Ambiguous Implementation [shapes/shapes.go#Circle.Area, shapes/shapes.go#Shape.Area, shapes/shapes.go#Square.Area]",
                 "32 shadow>Helper UniqueCandidate LexicalScope [main.go#shadow.Helper]",
                 "37 external>b.WriteString External - []",
                 "38 external>unknown.Area Unresolved - []",
@@ -698,7 +813,7 @@ mod tests {
                 "31 Cart.Run>item.Name UniqueCandidate ReceiverDeclaredType [a.go#Item.Name]",
                 "33 Cart.Run>c.Find UniqueCandidate ReceiverDeclaredType [a.go#Cart.Find]",
                 "34 Cart.Run>found.Name UniqueCandidate ReceiverDeclaredType [a.go#Item.Name]",
-                "35 Cart.Run>err.Error Unresolved - []",
+                "35 Cart.Run>err.Error External - []",
                 "36 Cart.Run>c.items::Name Unresolved - []",
                 "37 Cart.Run>c.count::Name Unresolved - []",
                 "38 Cart.Run>c.missing::Name Ambiguous NameOnly [a.go#Item.Name]",
