@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed. Go 1.27 accepts a method with type parameters. The local toolchain is Go 1.26, thus `go vet` did not check the case. The harness does not run the code. tree-sitter-go 0.25.0 does not parse such a method, and the ledger lists each fact that it loses.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "flash", "category": "type", "file": "flash.go", "name": "Flash", "kind": "struct", "container": null, "start_line": 3, "end_line": 3, "exported": true},
+    {"label": "flash_error", "category": "method", "file": "flash.go", "name": "Error", "kind": "method", "container": "Flash", "start_line": 5, "end_line": 7, "exported": true},
+    {"label": "flash_reset", "category": "method", "file": "flash.go", "name": "Reset", "kind": "method", "container": "Flash", "start_line": 9, "end_line": 11, "exported": true},
+    {"label": "use", "category": "free_function", "file": "flash.go", "name": "use", "kind": "function", "container": null, "start_line": 13, "end_line": 16, "exported": false}
+  ],
+  "calls": [
+    {"label": "generic_method", "category": "declared_type_receiver", "caller": "use", "line": 14, "callee_text": "f.Error", "expected": ["flash_error"]},
+    {"label": "method_after_a_generic_method", "category": "declared_type_receiver", "caller": "use", "line": 15, "callee_text": "f.Reset", "expected": ["flash_reset"]}
+  ]
+}
