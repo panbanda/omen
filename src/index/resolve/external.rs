@@ -53,13 +53,16 @@ pub enum Modules {
 }
 
 impl Modules {
-    fn provides(self, module: &str, name: &str) -> bool {
-        match self {
-            Self::Table(table) => table
-                .iter()
-                .any(|(path, names)| *path == module && names.contains(&name)),
-            Self::NotApplicable(_) => false,
-        }
+    /// The names that `module` provides.
+    fn provided_by(self, module: &str) -> impl Iterator<Item = &'static str> + '_ {
+        let table = match self {
+            Self::Table(table) => table,
+            Self::NotApplicable(_) => &[][..],
+        };
+        table
+            .iter()
+            .filter(move |(path, _)| *path == module)
+            .flat_map(|(_, names)| names.iter().copied())
     }
 }
 
@@ -267,6 +270,94 @@ const ECMA_TYPES: &[&str] = &[
     "number",
     "string",
 ];
+
+/// The global classes, namespaces, and objects of ECMAScript, of Node.js, and
+/// of the browser. A module of the repository that declares one of these
+/// names does not make that declaration global. Thus a file uses the
+/// repository declaration only when it imports or declares the name.
+pub(super) const ECMA_GLOBAL_NAMES: &[&str] = &[
+    "AbortController",
+    "AbortSignal",
+    "AggregateError",
+    "Array",
+    "ArrayBuffer",
+    "Atomics",
+    "BigInt",
+    "BigInt64Array",
+    "BigUint64Array",
+    "Blob",
+    "Boolean",
+    "Buffer",
+    "DOMException",
+    "DataView",
+    "Date",
+    "Document",
+    "Element",
+    "Error",
+    "EvalError",
+    "Event",
+    "EventTarget",
+    "File",
+    "FinalizationRegistry",
+    "Float32Array",
+    "Float64Array",
+    "FormData",
+    "Function",
+    "HTMLElement",
+    "Headers",
+    "Int16Array",
+    "Int32Array",
+    "Int8Array",
+    "Intl",
+    "JSON",
+    "Map",
+    "Math",
+    "MessageChannel",
+    "Number",
+    "Object",
+    "Promise",
+    "Proxy",
+    "RangeError",
+    "ReadableStream",
+    "ReferenceError",
+    "Reflect",
+    "RegExp",
+    "Request",
+    "Response",
+    "Set",
+    "SharedArrayBuffer",
+    "String",
+    "Symbol",
+    "SyntaxError",
+    "TextDecoder",
+    "TextEncoder",
+    "TypeError",
+    "URIError",
+    "URL",
+    "URLSearchParams",
+    "Uint16Array",
+    "Uint32Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "WeakMap",
+    "WeakRef",
+    "WeakSet",
+    "WebAssembly",
+    "WebSocket",
+    "Worker",
+    "WritableStream",
+    "console",
+    "document",
+    "globalThis",
+    "navigator",
+    "process",
+    "window",
+];
+
+/// Tells if `name` is a global of ECMAScript, Node.js, or the browser.
+pub(super) fn is_ecma_global(name: &str) -> bool {
+    ECMA_GLOBAL_NAMES.binary_search(&name).is_ok()
+}
 
 const JAVA_RECEIVERS: &[&str] = &[
     "Boolean",
@@ -652,10 +743,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn binding_of(&self, file: usize, name: &str) -> Option<&'a ImportBinding> {
-        self.files[file]
-            .imports
-            .iter()
-            .find(|binding| binding.local_name.as_deref() == Some(name))
+        self.imports_named(file, name).next()
     }
 
     fn is_external_binding(&self, binding: &ImportBinding) -> bool {
@@ -669,9 +757,16 @@ impl<'a> Resolver<'a> {
     /// A wildcard import of the file names a module of the repository. The
     /// module can bind any name, also with an assignment that is not a symbol.
     fn has_repository_wildcard(&self, file: usize) -> bool {
-        self.files[file].imports.iter().any(|binding| {
-            binding.kind == ImportKind::Wildcard && !self.is_external_binding(binding)
-        })
+        self.repository_wildcards.get_or_init(|| {
+            self.files
+                .iter()
+                .map(|facts| {
+                    facts.imports.iter().any(|binding| {
+                        binding.kind == ImportKind::Wildcard && !self.is_external_binding(binding)
+                    })
+                })
+                .collect()
+        })[file]
     }
 
     /// A file of the repository binds the name again with a macro, an alias,
@@ -692,8 +787,14 @@ impl<'a> Resolver<'a> {
     fn is_free_type_name(&self, file: usize, name: &str) -> bool {
         let php_name = self.files[file].language == Language::Php
             && self.php_names.contains(&name.to_ascii_lowercase());
+        // A declaration of an ECMAScript global in a different module is not global.
+        let declared = if self.family(file) == super::Family::Ecma && is_ecma_global(name) {
+            self.named_in(name, file).next().is_some()
+        } else {
+            self.by_name.contains_key(name)
+        };
         let taken = self.is_rebound(file, name)
-            || self.by_name.contains_key(name)
+            || declared
             || php_name
             || self.binding_of(file, name).is_some()
             || self.has_repository_wildcard(file);
@@ -707,10 +808,23 @@ impl<'a> Resolver<'a> {
     }
 
     /// An import of the file, from outside the repository, provides the name.
-    fn is_provided(&self, file: usize, name: &str, rules: Rules) -> bool {
-        self.files[file].imports.iter().any(|binding| {
-            self.is_external_binding(binding) && rules.modules.provides(&binding.module_path, name)
-        })
+    /// The rules are those of the language of the file.
+    fn is_provided(&self, file: usize, name: &str) -> bool {
+        let provided = self.provided_names.get_or_init(|| {
+            self.files
+                .iter()
+                .map(|facts| {
+                    let modules = rules(facts.language).modules;
+                    facts
+                        .imports
+                        .iter()
+                        .filter(|binding| self.is_external_binding(binding))
+                        .flat_map(|binding| modules.provided_by(&binding.module_path))
+                        .collect()
+                })
+                .collect()
+        });
+        provided[file].contains(name)
     }
 
     /// A class, a namespace, or an object that the language or an imported
@@ -720,7 +834,7 @@ impl<'a> Resolver<'a> {
             return self.is_external_binding(binding);
         }
         self.is_free_name(scope, name)
-            && (rules.receivers.contains(name) || self.is_provided(scope.file, name, rules))
+            && (rules.receivers.contains(name) || self.is_provided(scope.file, name))
     }
 
     fn external_bare(&self, scope: Scope<'_>, name: &str, rules: Rules) -> bool {
@@ -744,7 +858,7 @@ impl<'a> Resolver<'a> {
         } else {
             name.to_string()
         };
-        rules.bare.contains(&name) || self.is_provided(scope.file, &name, rules)
+        rules.bare.contains(&name) || self.is_provided(scope.file, &name)
     }
 
     fn external_qualifier(&self, scope: Scope<'_>, qualifier: &str, rules: Rules) -> bool {
@@ -768,7 +882,7 @@ impl<'a> Resolver<'a> {
                     || self.is_declared_dependency(scope.file, head));
         }
         !self.has_repository_wildcard(scope.file)
-            && (rules.receivers.contains(head) || self.is_provided(scope.file, head, rules))
+            && (rules.receivers.contains(head) || self.is_provided(scope.file, head))
     }
 
     /// The head of the qualifier has no import, and a function or a method of
@@ -942,7 +1056,7 @@ impl<'a> Resolver<'a> {
                 Some(binding) => self.is_external_binding(binding),
                 None => {
                     self.is_free_type_name(file, &name)
-                        && (rules.types.contains(&name) || self.is_provided(file, &name, rules))
+                        && (rules.types.contains(&name) || self.is_provided(file, &name))
                 }
             },
         }
@@ -1016,6 +1130,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_ecma_global_names_are_sorted_and_unique() {
+        let mut sorted = ECMA_GLOBAL_NAMES.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, ECMA_GLOBAL_NAMES);
+        assert!(is_ecma_global("Set"));
+        assert!(!is_ecma_global("Circle"));
     }
 
     #[test]

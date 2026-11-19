@@ -26,3 +26,9 @@ export function shadowed() {
 export function parameter(console) {
   console.log("x");
 }
+
+export function collect() {
+  const seen = new Set();
+  seen.add("a");
+  return new Date().getTime() + seen.size;
+}

@@ -170,10 +170,9 @@ fn observed_symbol(file: &str, symbol: Symbol) -> Option<ObservedSymbol> {
 /// Reads each `go.mod` file and each `.gemspec` file below `dir`.
 fn read_manifests(root: &Path, dir: &Path, manifests: &mut Manifests) {
     for path in sorted_entries(dir) {
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
         if path.is_dir() {
             read_manifests(root, &path, manifests);
-        } else if name == "go.mod" || name == "Cargo.toml" || name.ends_with(".gemspec") {
+        } else if omen::index::build::is_manifest(&path) {
             let text = std::fs::read_to_string(&path).unwrap();
             manifests.add(&relative(root, &path), &text);
         }
@@ -303,7 +302,7 @@ fn observed_entry_points(
             kind: entry.kind.name().to_string(),
             framework: entry.framework,
             method: entry.route.as_ref().map(|route| route.method.clone()),
-            path: entry.route.as_ref().map(|route| route.path.clone()),
+            path: entry.route.as_ref().and_then(|route| route.path.clone()),
             parameters: entry
                 .route
                 .map(|route| route.parameters)
@@ -737,6 +736,7 @@ fn observed_imports_keep_each_target_of_a_grouped_import() {
         local_name: Some(name.to_string()),
         target_file: ImportTarget::Resolved(target.to_string()),
         target_symbol: None,
+        type_only: false,
     };
     let bindings = [
         binding("left", "pkg/left.py"),

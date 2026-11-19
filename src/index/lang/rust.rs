@@ -1303,4 +1303,85 @@ mod tests {
             ]
         );
     }
+
+    /// `depth` nested inline modules with one item at each level: a function, or a unit struct
+    /// with a name of the same length. The search for the `cfg` attributes of a function reads
+    /// each module around it.
+    fn deep_modules_at(depth: usize, functions: bool) -> std::time::Duration {
+        let mut source = String::new();
+        for level in 0..depth {
+            let item = if functions {
+                format!("fn f{level}() {{}}")
+            } else {
+                format!("struct S{level};")
+            };
+            source.push_str(&format!("mod m{level} {{\n{item}\n"));
+        }
+        source.push_str(&"}\n".repeat(depth));
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Rust,
+                std::path::Path::new("lib.rs"),
+            )
+            .unwrap();
+        let started = std::time::Instant::now();
+        let file = crate::index::extract::extract_file(&parsed, "lib.rs");
+        let elapsed = started.elapsed();
+        assert_eq!(file.symbols.len(), depth * 2);
+        elapsed
+    }
+
+    #[test]
+    fn a_cfg_attribute_far_above_a_function_is_a_part_of_its_condition() {
+        let mut source = String::from("#[cfg(unix)]\nmod top {\n");
+        for level in 0..20 {
+            source.push_str(&format!("mod m{level} {{\n"));
+        }
+        source.push_str("#[cfg(test)]\nfn inner() {}\n");
+        source.push_str(&"}\n".repeat(21));
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Rust,
+                std::path::Path::new("lib.rs"),
+            )
+            .unwrap();
+        let file = crate::index::extract::extract_file(&parsed, "lib.rs");
+        let position = file
+            .symbols
+            .iter()
+            .position(|symbol| symbol.name == "inner")
+            .unwrap();
+        let condition = file.link_facts[position].condition.as_ref().unwrap();
+        assert_eq!(condition.attributes.len(), 2);
+    }
+
+    #[test]
+    fn deep_modules_give_each_item() {
+        deep_modules_at(40, true);
+        deep_modules_at(40, false);
+    }
+
+    /// The keys of the items have the names of each module around them, so the time of this
+    /// input grows with the square of the depth for each kind of item. The search for the
+    /// `cfg` attributes of a function must not add a factor of the depth to that: functions
+    /// must take about the time of structs. The runs of the two kinds alternate, so a change
+    /// in the speed of the machine changes both.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_functions_in_deep_modules_take_the_time_of_structs() {
+        let depth = 1_000;
+        let mut structs = std::time::Duration::MAX;
+        let mut functions = std::time::Duration::MAX;
+        for _ in 0..3 {
+            structs = structs.min(deep_modules_at(depth, false));
+            functions = functions.min(deep_modules_at(depth, true));
+        }
+        let allowed = structs.max(std::time::Duration::from_millis(100)) * 2;
+        assert!(
+            functions < allowed,
+            "structs {structs:?}, functions {functions:?} at {depth}"
+        );
+    }
 }

@@ -12,7 +12,7 @@ mod function_references;
 #[cfg(test)]
 mod go_calls;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::RwLock;
@@ -177,6 +177,51 @@ fn is_union(text: &str) -> bool {
     })
 }
 
+/// The result type of a constructor type without spaces, from the text
+/// after `new`: `T` for `(make:()=>T)=>T`. The arrow of the result follows
+/// the parameter list, thus an arrow in a parameter or in the result does
+/// not count.
+fn constructor_result(text: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    for (position, character) in text.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return text[position + 1..].strip_prefix("=>");
+                }
+            }
+            _ if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The parts of the text of a type at each `|` that is not in brackets. The
+/// `>` of an arrow `=>` does not close a bracket.
+fn top_level_union(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start, mut previous) = (0usize, 0usize, ' ');
+    for (position, character) in text.char_indices() {
+        match character {
+            '(' | '[' | '{' | '<' => depth += 1,
+            '>' if previous == '=' => {}
+            ')' | ']' | '}' | '>' => depth = depth.saturating_sub(1),
+            '|' if depth == 0 => {
+                parts.push(text[start..position].trim());
+                start = position + 1;
+            }
+            _ => {}
+        }
+        previous = character;
+    }
+    parts.push(text[start..].trim());
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
 fn is_callable(symbol: &Symbol) -> bool {
     matches!(
         symbol.kind,
@@ -209,6 +254,8 @@ struct Resolver<'a> {
     /// type that contains them.
     constructors_by_container: Vec<HashMap<&'a str, Vec<usize>>>,
     by_name: HashMap<&'a str, Vec<Id>>,
+    /// The symbols by the name of their container and their own name.
+    by_container: HashMap<(&'a str, &'a str), Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
     locals_by_name: Vec<HashMap<&'a str, Vec<usize>>>,
@@ -238,6 +285,23 @@ struct Resolver<'a> {
     twin_members_cache: RwLock<HashMap<TwinQuery, Arc<Vec<Id>>>>,
     /// The results of `module_scopes`, by the file.
     module_scopes_cache: RwLock<HashMap<usize, Arc<ModuleScopes>>>,
+    /// For each file, the positions of its imports by their local name, in
+    /// source order.
+    imports_by_local: Vec<HashMap<&'a str, Vec<usize>>>,
+    /// For each file, the positions of its imports by the segments of their
+    /// module path, in source order.
+    imports_by_path: Vec<HashMap<Vec<&'a str>, Vec<usize>>>,
+    /// For each file, if a wildcard import names a module of the repository.
+    repository_wildcards: OnceLock<Vec<bool>>,
+    /// For each file, the names that its imports from outside the repository
+    /// provide by the rules of its language.
+    provided_names: OnceLock<Vec<HashSet<&'static str>>>,
+    /// The results of `constructor_position`, by the function and the type
+    /// parameter.
+    constructor_position_cache: RwLock<HashMap<(Id, String), Option<usize>>>,
+    /// The results of `alias_constructs`, by the alias, the position of the
+    /// type parameter, and the depth.
+    alias_constructs_cache: RwLock<HashMap<(Id, usize, usize), bool>>,
 }
 
 /// The traits whose methods `Arc` and `Rc` have only when the trait is in
@@ -280,6 +344,7 @@ type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
 impl<'a> Resolver<'a> {
     fn new(files: &'a [FileSymbols], manifests: &'a Manifests) -> Self {
         let mut by_name: HashMap<&str, Vec<Id>> = HashMap::new();
+        let mut by_container: HashMap<(&str, &str), Vec<Id>> = HashMap::new();
         let mut by_file = HashMap::new();
         for (file, facts) in files.iter().enumerate() {
             by_file.insert(facts.file.as_str(), file);
@@ -288,6 +353,12 @@ impl<'a> Resolver<'a> {
                     .entry(symbol.name.as_str())
                     .or_default()
                     .push((file, position));
+                if let Some(container) = &symbol.container {
+                    by_container
+                        .entry((container.as_str(), symbol.name.as_str()))
+                        .or_default()
+                        .push((file, position));
+                }
             }
         }
         let locals_by_owner = files
@@ -367,13 +438,35 @@ impl<'a> Resolver<'a> {
                 by_container
             })
             .collect();
+        let mut imports_by_local = Vec::with_capacity(files.len());
+        let mut imports_by_path = Vec::with_capacity(files.len());
+        for facts in files {
+            let mut by_local: HashMap<&str, Vec<usize>> = HashMap::new();
+            let mut by_path: HashMap<Vec<&str>, Vec<usize>> = HashMap::new();
+            for (position, binding) in facts.imports.iter().enumerate() {
+                if let Some(local) = binding.local_name.as_deref() {
+                    by_local.entry(local).or_default().push(position);
+                }
+                by_path
+                    .entry(segments(&binding.module_path))
+                    .or_default()
+                    .push(position);
+            }
+            imports_by_local.push(by_local);
+            imports_by_path.push(by_path);
+        }
         Self {
             files,
             manifests,
             rebound,
+            imports_by_local,
+            imports_by_path,
+            repository_wildcards: OnceLock::new(),
+            provided_names: OnceLock::new(),
             php_names,
             constructors_by_container,
             by_name,
+            by_container,
             by_file,
             locals_by_name,
             locals_by_owner,
@@ -385,10 +478,26 @@ impl<'a> Resolver<'a> {
             types_cache: RwLock::new(HashMap::new()),
             twin_members_cache: RwLock::new(HashMap::new()),
             module_scopes_cache: RwLock::new(HashMap::new()),
+            constructor_position_cache: RwLock::new(HashMap::new()),
+            alias_constructs_cache: RwLock::new(HashMap::new()),
             exported_cache: RwLock::new(HashMap::new()),
             package_cache: RwLock::new(HashMap::new()),
             visible_cache: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// The imports of `file` whose local name is `name`, in source order.
+    fn imports_named(
+        &self,
+        file: usize,
+        name: &str,
+    ) -> impl Iterator<Item = &'a ImportBinding> + '_ {
+        let imports = &self.files[file].imports;
+        self.imports_by_local[file]
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(move |position| &imports[*position])
     }
 
     fn symbol(&self, id: Id) -> &'a Symbol {
@@ -708,10 +817,7 @@ impl<'a> Resolver<'a> {
     /// of `file`. Then the import selects the files of the type.
     fn is_import_qualifier(&self, qualifier: &str, file: usize) -> bool {
         let last = segments(qualifier).last().copied().unwrap_or(qualifier);
-        self.files[file]
-            .imports
-            .iter()
-            .any(|binding| binding.local_name.as_deref() == Some(last))
+        self.imports_named(file, last).next().is_some()
     }
 
     fn types_by_name(&self, name: &str, qualifier: Option<&str>, file: usize) -> Vec<Id> {
@@ -721,14 +827,9 @@ impl<'a> Resolver<'a> {
                 .filter(|id| files.contains(&id.0) && is_type(id))
                 .collect()
         };
-        let facts = &self.files[file];
         if let Some(qualifier) = qualifier {
             let last = segments(qualifier).last().copied().unwrap_or(qualifier);
-            let mut bindings = facts
-                .imports
-                .iter()
-                .filter(|binding| binding.local_name.as_deref() == Some(last))
-                .peekable();
+            let mut bindings = self.imports_named(file, last).peekable();
             // A qualifier that is an import selects only the files of that
             // import. A file can export a type with a different name, as
             // `pub use inner::Original as Public`.
@@ -757,10 +858,10 @@ impl<'a> Resolver<'a> {
         let mut found = Vec::new();
         let mut outside = false;
         // An import of a name does not apply to a name with a qualifier.
-        for binding in facts.imports.iter().filter(|_| qualifier.is_none()) {
-            if binding.local_name.as_deref() != Some(name) {
-                continue;
-            }
+        for binding in self
+            .imports_named(file, name)
+            .filter(|_| qualifier.is_none())
+        {
             let imported = binding.imported_name.as_deref().unwrap_or(name);
             let targets = self.target_files(binding);
             outside |= targets.is_empty();
@@ -777,6 +878,12 @@ impl<'a> Resolver<'a> {
         // name. A type of the repository with the same name is a different type.
         if !found.is_empty() || outside {
             return found;
+        }
+        // An ECMAScript global is the global, unless the file imports or
+        // declares the name. A module of the repository with a class `Set`
+        // does not change the global `Set`.
+        if self.family(file) == Family::Ecma && external::is_ecma_global(name) {
+            return Vec::new();
         }
         let found = in_files(&self.package_files(file));
         if !found.is_empty() {
@@ -869,7 +976,18 @@ impl<'a> Resolver<'a> {
                 frame.next = 0;
                 continue;
             }
-            returned = Some(std::mem::take(&mut frame.collected));
+            let mut collected = std::mem::take(&mut frame.collected);
+            // A TypeScript method of a parent class implements the method
+            // of an interface that the class names. The method of the
+            // interface has no body.
+            if self.family(frame.owner.0) == Family::Ecma
+                && collected
+                    .iter()
+                    .any(|id| self.symbol(*id).body_range.is_some())
+            {
+                collected.retain(|id| self.symbol(*id).body_range.is_some());
+            }
+            returned = Some(collected);
             stack.pop();
         }
     }
@@ -891,13 +1009,20 @@ impl<'a> Resolver<'a> {
         let type_symbol = self.symbol(owner);
         let namespace = type_symbol.kind == SymbolKind::Module;
         let owner_path = self.member_path(owner);
+        // Only a symbol whose container has the name of the type can be a
+        // member of the type.
+        let family = self.family(owner.0);
         let found: Vec<Id> = self
-            .named(name, owner.0)
+            .by_container
+            .get(&(type_symbol.name.as_str(), name))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|id| self.family(id.0) == family)
             .filter(|id| {
                 let member = self.symbol(*id);
                 let member_path = &self.facts(*id).container_path;
                 is_callable(member)
-                    && member.container.as_deref() == Some(type_symbol.name.as_str())
                     // Two types can have one name. A member in the same file
                     // belongs to this type when its path is the path of the
                     // type. A member in a different file belongs to this type
@@ -922,6 +1047,30 @@ impl<'a> Resolver<'a> {
             }
         };
         keep(&mut found, &|id| !self.facts(*id).trait_implementation);
+        // A TypeScript overload signature has no body. The implementation with
+        // the same name in the same container runs for each signature.
+        let implemented: HashSet<_> = found
+            .iter()
+            .filter(|id| self.symbol(**id).body_range.is_some())
+            .map(|id| {
+                let facts = self.facts(*id);
+                (
+                    id.0,
+                    self.symbol(*id).name.as_str(),
+                    facts.container_path.as_slice(),
+                )
+            })
+            .collect();
+        found.retain(|id| {
+            let symbol = self.symbol(*id);
+            symbol.body_range.is_some()
+                || self.family(id.0) != Family::Ecma
+                || !implemented.contains(&(
+                    id.0,
+                    symbol.name.as_str(),
+                    self.facts(*id).container_path.as_slice(),
+                ))
+        });
         // A definition replaces the declaration that it defines. A
         // declaration of a different overload stays.
         let defined = found.clone();
@@ -1405,6 +1554,21 @@ impl<'a> Resolver<'a> {
             };
         }
         let declared = self.facts(*callee).return_type.as_deref()?;
+        // A type parameter of a TypeScript function is not a type of the
+        // repository. Only an argument that is a class gives its value.
+        let result_name = required_type(declared);
+        if self
+            .facts(*callee)
+            .type_parameters
+            .iter()
+            .any(|parameter| parameter == result_name)
+        {
+            if !whole {
+                return None;
+            }
+            let site = &facts.reference_facts[position];
+            return self.class_of_constructor_argument(file, site, *callee, result_name);
+        }
         let mut declared = one_result(declared, index)?;
         // Rust `call()?` gives the value of a `Result` or of an `Option`.
         // The other ways to get the value give no type.
@@ -1424,6 +1588,142 @@ impl<'a> Resolver<'a> {
             return if element { None } else { own_type() };
         }
         Some(self.types_of_text(declared, callee.0, element))
+    }
+
+    /// The class that a call of a generic function gives, when the result
+    /// type is the type parameter `parameter` and one parameter of the
+    /// function is a constructor of `parameter`. The argument at that
+    /// position must be the name of a class, as `Container.get(Service)` has.
+    fn class_of_constructor_argument(
+        &self,
+        file: usize,
+        site: &ReferenceFacts,
+        callee: Id,
+        parameter: &str,
+    ) -> Option<Vec<Id>> {
+        let position = self.constructor_position(callee, parameter)?;
+        let Some(Argument::Name(argument)) = site.arguments.get(position) else {
+            return None;
+        };
+        // A local value can hold a different class.
+        let chain = self.chain(file, site.owner);
+        if self
+            .local(&chain, file, argument, Some(site.start_byte))
+            .is_some()
+        {
+            return None;
+        }
+        let classes: Vec<Id> = self
+            .types(argument, None, file)
+            .into_iter()
+            .filter(|id| self.symbol(*id).kind == SymbolKind::Class)
+            .collect();
+        (!classes.is_empty()).then_some(classes)
+    }
+
+    /// The type aliases that `name` names in `file`: a type alias of the file,
+    /// else the type alias that an import of the name gives.
+    fn type_aliases(&self, name: &str, file: usize) -> Vec<Id> {
+        let is_alias = |id: &Id| self.symbol(*id).kind == SymbolKind::TypeAlias;
+        let own: Vec<Id> = self
+            .top_level(name, &[file])
+            .into_iter()
+            .filter(is_alias)
+            .collect();
+        if !own.is_empty() {
+            return own;
+        }
+        self.imports_named(file, name)
+            .flat_map(|binding| {
+                let imported = binding.imported_name.as_deref().unwrap_or(name);
+                self.target_files(binding)
+                    .into_iter()
+                    .flat_map(move |target| self.exported(target, imported).to_vec())
+            })
+            .filter(is_alias)
+            .collect()
+    }
+
+    /// The one position of a parameter of `callee` whose type constructs the
+    /// type parameter `parameter`. Each call of one function asks for the
+    /// same position, thus the cache keeps it.
+    fn constructor_position(&self, callee: Id, parameter: &str) -> Option<usize> {
+        let key = (callee, parameter.to_string());
+        if let Some(found) = self.constructor_position_cache.read().get(&key) {
+            return *found;
+        }
+        let positions: Vec<usize> = self
+            .facts(callee)
+            .parameter_types
+            .iter()
+            .flatten()
+            .enumerate()
+            .filter(|(_, text)| self.constructs(text, parameter, callee.0, 0))
+            .map(|(position, _)| position)
+            .collect();
+        let found = match positions.as_slice() {
+            [position] => Some(*position),
+            _ => None,
+        };
+        self.constructor_position_cache.write().insert(key, found);
+        found
+    }
+
+    /// Tells if the type alias `alias` constructs its type parameter at the
+    /// position `at`. A union can name one alias many times, and aliases can
+    /// form layers, thus the cache keeps each result. The depth is part of
+    /// the key, because the limit of the depth changes the result.
+    fn alias_constructs(&self, alias: Id, at: usize, depth: usize) -> bool {
+        let key = (alias, at, depth);
+        if let Some(found) = self.alias_constructs_cache.read().get(&key) {
+            return *found;
+        }
+        let facts = self.facts(alias);
+        let found = match (facts.return_type.as_deref(), facts.type_parameters.get(at)) {
+            (Some(aliased), Some(inner)) => self.constructs(aliased, inner, alias.0, depth),
+            _ => false,
+        };
+        self.alias_constructs_cache.write().insert(key, found);
+        found
+    }
+
+    /// Tells if the declared type `text` in `file` is a constructor of the
+    /// type parameter `parameter`: `new (...) => T`, `abstract new (...) => T`,
+    /// a type alias of a constructor, or a union of these.
+    fn constructs(&self, text: &str, parameter: &str, file: usize, depth: usize) -> bool {
+        if depth > 4 {
+            return false;
+        }
+        let text: String = required_type(text).split_whitespace().collect();
+        let parts = top_level_union(&text);
+        !parts.is_empty()
+            && parts.iter().all(|part| {
+                let part = part.strip_prefix("abstract").unwrap_or(part);
+                if let Some(rest) = part.strip_prefix("new") {
+                    return constructor_result(rest) == Some(parameter);
+                }
+                // An alias with type arguments, as `ServiceIdentifier<T>`.
+                let Some((alias, arguments)) =
+                    part.strip_suffix('>').and_then(|part| part.split_once('<'))
+                else {
+                    return false;
+                };
+                let arguments = split_list(arguments);
+                let at: Vec<usize> = arguments
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, argument)| **argument == parameter)
+                    .map(|(position, _)| position)
+                    .collect();
+                let [at] = at.as_slice() else {
+                    return false;
+                };
+                let aliases = self.type_aliases(alias, file);
+                let [alias] = aliases.as_slice() else {
+                    return false;
+                };
+                self.alias_constructs(*alias, *at, depth + 1)
+            })
     }
 
     /// The members with the name `name` of the types, when they are `cfg`
@@ -1889,10 +2189,7 @@ impl<'a> Resolver<'a> {
             return Outcome::of(Basis::LexicalScope, vec![closure])
                 .unwrap_or_else(|| Outcome::none(Status::Unresolved));
         }
-        let binding = self.files[file]
-            .imports
-            .iter()
-            .find(|binding| binding.local_name.as_deref() == Some(x));
+        let binding = self.imports_named(file, x).next();
         // `const a = require('b')` is an import and a local name of the file.
         // The import gives the files.
         let local = self
@@ -1958,6 +2255,27 @@ impl<'a> Resolver<'a> {
                 return Outcome::of(Basis::ImportedModule, self.preferred(found, arity))
                     .unwrap_or_else(|| Outcome::none(Status::Unresolved));
             }
+            // The import can name a variable at the top level of the module, as
+            // `export const container = new Container()` is. The declared type
+            // or the first value of the variable gives its type.
+            let imported = imported.unwrap_or(x);
+            let variables: Vec<(usize, &Local)> = self
+                .target_files(binding)
+                .into_iter()
+                .flat_map(|target| {
+                    self.locals_of(target, None, imported)
+                        .filter(|local| local.block.is_none())
+                        .map(move |local| (target, local))
+                })
+                .collect();
+            if let [(target, variable)] = variables.as_slice() {
+                let types = self
+                    .local_types(variable, *target, depth)
+                    .filter(|types| !types.is_empty());
+                if let Some(types) = types {
+                    return self.on_types(&types, name, arity, Basis::ReceiverDeclaredType, file);
+                }
+            }
         }
         let types = self.types(x, None, file);
         if types.is_empty() {
@@ -2002,11 +2320,24 @@ impl<'a> Resolver<'a> {
         let qualifier = expanded.as_deref().unwrap_or(qualifier);
         let path = segments(qualifier);
         let facts = &self.files[file];
-        let binding = facts.imports.iter().find(|binding| {
-            binding.local_name.as_deref() == Some(qualifier)
-                || segments(&binding.module_path) == path
-                || (path.len() == 1 && binding.local_name.as_deref() == Some(path[0]))
-        });
+        // The first import whose local name is the qualifier, or whose module
+        // path is the path, or whose local name is the one name of the path.
+        let first_named = |name: &str| {
+            self.imports_by_local[file]
+                .get(name)
+                .and_then(|positions| positions.first())
+        };
+        let binding = [
+            first_named(qualifier),
+            self.imports_by_path[file]
+                .get(&path)
+                .and_then(|positions| positions.first()),
+            (path.len() == 1).then(|| first_named(path[0])).flatten(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .map(|position| &facts.imports[*position]);
         if let Some(binding) = binding {
             // The import can name a type, for example with an alias. Then
             // the call is a call of a member of that type.
@@ -2201,10 +2532,9 @@ impl<'a> Resolver<'a> {
         if let Some(outcome) = Outcome::of(Basis::SameFile, linked) {
             return outcome;
         }
-        let binding = self.files[file].imports.iter().find(|binding| {
-            binding.local_name.as_deref() == Some(name)
-                && matches!(binding.kind, ImportKind::Named | ImportKind::ReExportNamed)
-        });
+        let binding = self
+            .imports_named(file, name)
+            .find(|binding| matches!(binding.kind, ImportKind::Named | ImportKind::ReExportNamed));
         if let Some(binding) = binding {
             let imported = binding.imported_name.as_deref().unwrap_or(name);
             return self.imported(binding, imported, arity);
@@ -4766,5 +5096,496 @@ mod false_edge_tests {
         let rows = rows(&[("Item.cs", source)], "Item.cs");
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0].ends_with("[Item.cs#Item.Item]"), "{rows:?}");
+    }
+}
+
+#[cfg(test)]
+mod ecma_tests {
+    use super::testing::rows;
+
+    /// The rows of `file` whose callee is `callee`.
+    fn rows_for(files: &[(&str, &str)], file: &str, callee: &str) -> Vec<String> {
+        rows(files, file)
+            .into_iter()
+            .filter(|row| {
+                row.split(' ')
+                    .nth(1)
+                    .is_some_and(|call| call.ends_with(&format!(">{callee}")))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_global_builtin_does_not_bind_to_a_repository_type() {
+        let node = "export class Set {\n  constructor() {}\n  static of(): Set {\n    return new Set();\n  }\n}\nexport class Date {\n  constructor() {}\n}\n";
+        for extension in ["ts", "js", "tsx", "jsx"] {
+            let app = "export function run() {\n  const seen = new Set();\n  Set.of();\n  return new Date();\n}\n";
+            let imports = "import { Set } from './nodes/Set.node';\nexport function run() {\n  return new Set();\n}\n";
+            let declares = "class Date {\n  constructor() {}\n}\nexport function run() {\n  return new Date();\n}\n";
+            let node_file = format!("nodes/Set.node.{extension}");
+            let app_file = format!("app.{extension}");
+            let imports_file = format!("imports.{extension}");
+            let declares_file = format!("declares.{extension}");
+            let files = [
+                (node_file.as_str(), node),
+                (app_file.as_str(), app),
+                (imports_file.as_str(), imports),
+                (declares_file.as_str(), declares),
+            ];
+            for callee in ["Set", "Date"] {
+                let found = rows_for(&files, &app_file, callee);
+                assert!(
+                    !found.is_empty() && found.iter().all(|row| row.contains(" External - []")),
+                    "{extension} {callee}: {found:?}"
+                );
+            }
+            // A repository method `of` can be a static member that the source adds to `Set`.
+            let found = rows_for(&files, &app_file, "Set.of");
+            assert_eq!(found, ["3 run>Set.of Unresolved - []"], "{extension}");
+            let found = rows_for(&files, &imports_file, "Set");
+            assert_eq!(
+                found,
+                [format!(
+                    "3 run>Set UniqueCandidate QualifiedPath [{node_file}#Set.constructor]"
+                )],
+                "{extension}"
+            );
+            let found = rows_for(&files, &declares_file, "Date");
+            assert_eq!(
+                found,
+                [format!(
+                    "5 run>Date UniqueCandidate QualifiedPath [{declares_file}#Date.constructor]"
+                )],
+                "{extension}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod ecma_overload_tests {
+    use super::testing::rows;
+
+    #[test]
+    fn test_overload_signatures_merge_with_the_implementation_typescript() {
+        let repo = "export class Repo {\n  find(id: string): string;\n  find(id: number, all: boolean): string;\n  find(id: unknown, all?: boolean): string {\n    return String(id);\n  }\n  run(): string {\n    return this.find('a');\n  }\n}\n";
+        let util = "export function format(value: number): string;\nexport function format(value: string): string;\nexport function format(value: unknown): string {\n  return String(value);\n}\n";
+        let main = "import { Repo } from './repo';\nimport { format } from './util';\n\nexport function run(repo: Repo): string {\n  return repo.find(1, true) + format(2) + new Repo().find('b');\n}\n";
+        for extension in ["ts", "tsx"] {
+            let repo_file = format!("repo.{extension}");
+            let util_file = format!("util.{extension}");
+            let main_file = format!("main.{extension}");
+            let files = [
+                (repo_file.as_str(), repo),
+                (util_file.as_str(), util),
+                (main_file.as_str(), main),
+            ];
+            let implementation = format!("[repo.{extension}#Repo.find~3]");
+            let found = rows(&files, &main_file);
+            assert!(
+                found.contains(&format!(
+                    "5 run>repo.find UniqueCandidate ReceiverDeclaredType {implementation}"
+                )),
+                "{found:?}"
+            );
+            assert!(
+                found.contains(&format!(
+                    "5 run>format UniqueCandidate ImportedName [util.{extension}#format~3]"
+                )),
+                "{found:?}"
+            );
+            let found = rows(&files, &repo_file);
+            assert!(
+                found.contains(&format!(
+                    "8 Repo.run>self.find UniqueCandidate EnclosingType {implementation}"
+                )),
+                "{found:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod ecma_generic_tests {
+    use super::testing::rows;
+
+    const DI: &str = "export type Constructable<T = unknown> = new (...args: any[]) => T;\nexport type AbstractConstructable<T = unknown> = abstract new (...args: any[]) => T;\nexport type ServiceIdentifier<T = unknown> = Constructable<T> | AbstractConstructable<T>;\n\nclass ContainerClass {\n  get<T>(type: ServiceIdentifier<T>): T {\n    return undefined as T;\n  }\n\n  make<T>(factory: () => T): T {\n    return factory();\n  }\n\n  first<T>(items: T[]): T {\n    return items[0];\n  }\n\n  build<T>(type: new () => T): T {\n    return new type();\n  }\n}\n\nexport const Container = new ContainerClass();\n";
+    const SERVICES: &str = "export class Repo {\n  plain(): number {\n    return 1;\n  }\n}\n\nexport class T {\n  plain(): number {\n    return 2;\n  }\n}\n";
+    const MAIN: &str = "import { Container } from './di';\nimport { Repo } from './services';\n\nexport function run(): number {\n  const a = Container.get(Repo).plain();\n  const b = Container.make(() => new Repo()).plain();\n  const c = Container.first([new Repo()]).plain();\n  const d = Container.build(Repo).plain();\n  return a + b + c + d;\n}\n";
+
+    /// `new () => () => T` makes a function, not a `T`, thus the argument
+    /// does not give the type of the result.
+    #[test]
+    fn test_constructor_of_a_function_does_not_give_the_result_typescript() {
+        let di = "export type Factory<T> = new () => () => T;\nexport type Direct<T> = new (make: () => T) => T;\n\nclass ContainerClass {\n  wrapped<T>(type: Factory<T>): T {\n    return undefined as T;\n  }\n\n  direct<T>(type: Direct<T>): T {\n    return undefined as T;\n  }\n}\n\nexport const Container = new ContainerClass();\n";
+        let main = "import { Container } from './di';\nimport { Repo } from './services';\n\nexport function run(): number {\n  return Container.wrapped(Repo).plain() + Container.direct(Repo).plain();\n}\n";
+        for extension in ["ts", "tsx"] {
+            let di_file = format!("di.{extension}");
+            let services = format!("services.{extension}");
+            let main_file = format!("main.{extension}");
+            let files = [
+                (di_file.as_str(), di),
+                (services.as_str(), SERVICES),
+                (main_file.as_str(), main),
+            ];
+            let found: Vec<String> = rows(&files, &main_file)
+                .into_iter()
+                .filter(|row| row.contains(">(..).plain "))
+                .collect();
+            let repo = format!("[services.{extension}#Repo.plain]");
+            assert_eq!(found.len(), 2, "{found:?}");
+            assert!(!found[0].ends_with(&repo), "{found:?}");
+            assert!(found[1].ends_with(&repo), "{found:?}");
+        }
+    }
+
+    #[test]
+    fn test_generic_result_of_a_constructor_argument_typescript() {
+        for extension in ["ts", "tsx"] {
+            let di = format!("di.{extension}");
+            let services = format!("services.{extension}");
+            let main = format!("main.{extension}");
+            let files = [
+                (di.as_str(), DI),
+                (services.as_str(), SERVICES),
+                (main.as_str(), MAIN),
+            ];
+            let found: Vec<String> = rows(&files, &main)
+                .into_iter()
+                .filter(|row| row.contains(">(..).plain ") || row.contains(">Container."))
+                .collect();
+            let repo = format!("[services.{extension}#Repo.plain]");
+            let get = format!("[di.{extension}#ContainerClass.get]");
+            let build = format!("[di.{extension}#ContainerClass.build]");
+            assert!(
+                found.contains(&format!(
+                    "5 run>Container.get UniqueCandidate ReceiverDeclaredType {get}"
+                )),
+                "{found:?}"
+            );
+            assert!(
+                found.contains(&format!(
+                    "5 run>(..).plain UniqueCandidate ReceiverDeclaredType {repo}"
+                )),
+                "{found:?}"
+            );
+            assert!(
+                found.contains(&format!(
+                    "8 run>Container.build UniqueCandidate ReceiverDeclaredType {build}"
+                )),
+                "{found:?}"
+            );
+            assert!(
+                found.contains(&format!(
+                    "8 run>(..).plain UniqueCandidate ReceiverDeclaredType {repo}"
+                )),
+                "{found:?}"
+            );
+            // The type parameter `T` is not the class `T`, and a value argument gives no type.
+            for line in ["6", "7"] {
+                assert!(
+                    found
+                        .iter()
+                        .any(|row| row.starts_with(&format!("{line} run>(..).plain "))
+                            && !row.contains("UniqueCandidate")),
+                    "{line}: {found:?}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod ecma_decorator_tests {
+    use super::testing::rows;
+
+    #[test]
+    fn test_decorator_call_has_the_decorated_definition_as_its_caller_typescript() {
+        let decorators = "export function RestController(path: string) {\n  return (target: unknown) => target;\n}\n\nexport function Get(path: string) {\n  return (target: unknown, key: string) => key;\n}\n";
+        let typed = "import { RestController, Get } from './decorators';\n\n@RestController('/x')\nexport class Controller {\n  @Get('/list')\n  list(): number {\n    return 1;\n  }\n}\n\n@RestController('/y')\nclass Other {}\n";
+        let plain = typed.replace("(): number", "()");
+        let untyped_decorators = decorators.replace(": string", "").replace(": unknown", "");
+        for extension in ["ts", "tsx", "js", "jsx"] {
+            let typescript = extension.starts_with('t');
+            let controller = if typescript { typed } else { plain.as_str() };
+            let decorators = if typescript {
+                decorators
+            } else {
+                untyped_decorators.as_str()
+            };
+            let decorators_file = format!("decorators.{extension}");
+            let controller_file = format!("controller.{extension}");
+            let files = [
+                (decorators_file.as_str(), decorators),
+                (controller_file.as_str(), controller),
+            ];
+            let found = rows(&files, &controller_file);
+            let rest = format!("[decorators.{extension}#RestController]");
+            let get = format!("[decorators.{extension}#Get]");
+            assert_eq!(
+                found,
+                [
+                    format!("3 Controller>RestController UniqueCandidate ImportedName {rest}"),
+                    format!("5 Controller.list>Get UniqueCandidate ImportedName {get}"),
+                    format!("11 Other>RestController UniqueCandidate ImportedName {rest}"),
+                ],
+                "{extension}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod ecma_decorator_owner_tests {
+    use super::testing::rows;
+
+    /// A comment between a decorator and its method, and a function that a
+    /// decorator argument defines, do not change the caller of a call.
+    #[test]
+    fn test_decorator_caller_keeps_comments_and_nested_functions_typescript() {
+        let source = "function helper(): number {\n  return 1;\n}\n\nfunction Wrap(value: unknown) {\n  return (target: unknown) => target;\n}\n\n@Wrap(() => { function inner() { helper(); } })\nexport class Service {\n  @Wrap(1) /* note */\n  list(): void {}\n\n  @Wrap(() => { function deep() { helper(); } })\n  show(): void {}\n}\n";
+        for extension in ["ts", "tsx"] {
+            let file = format!("service.{extension}");
+            let found = rows(&[(file.as_str(), source)], &file);
+            let wrap = format!("[service.{extension}#Wrap]");
+            let helper = format!("[service.{extension}#helper]");
+            assert_eq!(
+                found,
+                [
+                    format!("9 Service>Wrap UniqueCandidate SameFile {wrap}"),
+                    format!("9 inner>helper UniqueCandidate SameFile {helper}"),
+                    format!("11 Service.list>Wrap UniqueCandidate SameFile {wrap}"),
+                    format!("14 Service.show>Wrap UniqueCandidate SameFile {wrap}"),
+                    format!("14 Service.deep>helper UniqueCandidate SameFile {helper}"),
+                ],
+                "{extension}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod ecma_timing_tests {
+    use super::testing::rows;
+    use crate::index::timing::assert_scales_linearly;
+
+    const DI: &str = "export type Constructable<T = unknown> = new (...args: any[]) => T;\nexport type ServiceIdentifier<T = unknown> = Constructable<T>;\n\nclass ContainerClass {\n  get<T>(type: ServiceIdentifier<T>): T {\n    return undefined as T;\n  }\n}\n\nexport const Container = new ContainerClass();\n";
+
+    /// A file with the class `S{position}`, which has `plain`, and a call of
+    /// `plain` on the result of `Container.get(S{position})`.
+    fn container_file(position: usize) -> String {
+        format!("import {{ Container }} from './di';\n\nexport class S{position} {{\n  plain(): void {{}}\n}}\nexport function run(): void {{\n  Container.get(S{position}).plain();\n}}\n")
+    }
+
+    /// One class with `size` overload signatures of `find`, and ten calls of
+    /// `find`. Each call has each signature as a candidate.
+    fn overloads_at(size: usize) -> std::time::Duration {
+        let mut source = String::from("export class Repo {\n");
+        for position in 0..size {
+            source.push_str(&format!(
+                "  find(id: number, n{position}: string): string;\n"
+            ));
+        }
+        source.push_str("  find(id: unknown, ...rest: unknown[]): string {\n    return '';\n  }\n\n  run(): void {\n");
+        for _ in 0..10 {
+            source.push_str("    this.find(1, 'a');\n");
+        }
+        source.push_str("  }\n}\n");
+        let started = std::time::Instant::now();
+        let found = rows(&[("repo.ts", &source)], "repo.ts");
+        let elapsed = started.elapsed();
+        assert_eq!(found.len(), 10);
+        assert!(
+            found[9].ends_with(&format!(
+                " UniqueCandidate EnclosingType [repo.ts#Repo.find~{}]",
+                size + 1
+            )),
+            "{}",
+            found[9]
+        );
+        elapsed
+    }
+
+    /// `size` methods, each with a decorator, and one method with `size`
+    /// decorators.
+    fn decorators_at(size: usize) -> std::time::Duration {
+        let mut source = String::from("function mark(name: string) {\n  return (target: unknown) => target;\n}\n\nexport class Service {\n");
+        for position in 0..size {
+            source.push_str(&format!("  @mark('a')\n  method{position}(): void {{}}\n"));
+        }
+        for _ in 0..size {
+            source.push_str("  @mark('b')\n");
+        }
+        source.push_str("  last(): void {}\n}\n");
+        let started = std::time::Instant::now();
+        let found = rows(&[("service.ts", &source)], "service.ts");
+        let elapsed = started.elapsed();
+        assert_eq!(found.len(), 2 * size);
+        assert!(found[0].contains(" Service.method0>mark "), "{}", found[0]);
+        assert!(
+            found[2 * size - 1].contains(" Service.last>mark "),
+            "{}",
+            found[2 * size - 1]
+        );
+        elapsed
+    }
+
+    /// `size` classes, and one `Container.get` call of each class.
+    fn container_calls_at(size: usize) -> std::time::Duration {
+        let mut owned = vec![("di.ts".to_string(), DI.to_string())];
+        // Each file has one import, thus the cost of a call does not depend
+        // on the number of imports of its file.
+        for position in 0..size {
+            owned.push((format!("s{position}.ts"), container_file(position)));
+        }
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let last = format!("s{}.ts", size - 1);
+        let started = std::time::Instant::now();
+        let found = rows(&files, &last);
+        let elapsed = started.elapsed();
+        // Each class has `plain`, thus only the class argument gives the edge.
+        let edge = format!(
+            "7 run>(..).plain UniqueCandidate ReceiverDeclaredType [{last}#S{}.plain]",
+            size - 1
+        );
+        assert!(found.contains(&edge), "{found:?}");
+        elapsed
+    }
+
+    /// Three layers of type aliases, each a union of `size` copies of the
+    /// alias of the next layer, over a constructor type, and `size` calls of
+    /// a generic `get` whose parameter has the first alias.
+    fn branching_aliases_at(size: usize) -> std::time::Duration {
+        let union = |next: &str| vec![format!("{next}<T>"); size].join(" | ");
+        let di = format!(
+            "export type E<T> = new () => T;\nexport type C<T> = {};\nexport type B<T> = {};\nexport type A<T> = {};\n\nclass ContainerClass {{\n  get<T>(type: A<T>): T {{\n    return undefined as T;\n  }}\n}}\n\nexport const Container = new ContainerClass();\n",
+            union("E"),
+            union("C"),
+            union("B")
+        );
+        let mut owned = vec![("di.ts".to_string(), di)];
+        for position in 0..size {
+            owned.push((format!("s{position}.ts"), container_file(position)));
+        }
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let last = format!("s{}.ts", size - 1);
+        let started = std::time::Instant::now();
+        let found = rows(&files, &last);
+        let elapsed = started.elapsed();
+        // Each class has `plain`, thus only the class argument gives the edge.
+        let edge = format!(
+            "7 run>(..).plain UniqueCandidate ReceiverDeclaredType [{last}#S{}.plain]",
+            size - 1
+        );
+        assert!(found.contains(&edge), "{found:?}");
+        elapsed
+    }
+
+    /// One file with `2 * size` imports, `size` classes and `size`
+    /// functions, and a call of each function and of a method of each class.
+    fn imports_in_one_file_at(size: usize) -> std::time::Duration {
+        let mut owned = vec![("di.ts".to_string(), DI.to_string())];
+        let mut main = String::from("import { Container } from './di';\n");
+        let mut body = String::from("\nexport function run(): void {\n");
+        for position in 0..size {
+            owned.push((
+                format!("s{position}.ts"),
+                format!("export class S{position} {{\n  plain(): void {{}}\n}}\nexport function f{position}(): void {{}}\n"),
+            ));
+            main.push_str(&format!(
+                "import {{ S{position} }} from './s{position}';\nimport {{ f{position} }} from './s{position}';\n"
+            ));
+            body.push_str(&format!(
+                "  Container.get(S{position}).plain();\n  f{position}();\n"
+            ));
+        }
+        main.push_str(&body);
+        main.push_str("}\n");
+        owned.push(("main.ts".to_string(), main));
+        let files: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let started = std::time::Instant::now();
+        let found = rows(&files, "main.ts");
+        let elapsed = started.elapsed();
+        let last = size - 1;
+        let line = 2 * size + 4 + 2 * last;
+        for edge in [
+            format!("{line} run>(..).plain UniqueCandidate ReceiverDeclaredType [s{last}.ts#S{last}.plain]"),
+            format!("{} run>f{last} UniqueCandidate ImportedName [s{last}.ts#f{last}]", line + 1),
+        ] {
+            assert!(found.contains(&edge), "{edge} {:?}", &found[found.len() - 3..]);
+        }
+        elapsed
+    }
+
+    #[test]
+    fn test_ecma_timing_cases_resolve() {
+        overloads_at(50);
+        decorators_at(50);
+        container_calls_at(50);
+        branching_aliases_at(20);
+        imports_in_one_file_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_typescript_overloads_resolve_in_linear_time() {
+        assert_scales_linearly("overloads", 2_000, overloads_at);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_typescript_decorators_resolve_in_linear_time() {
+        assert_scales_linearly("decorators", 10_000, decorators_at);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_typescript_container_calls_resolve_in_linear_time() {
+        assert_scales_linearly("container calls", 5_000, container_calls_at);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_typescript_imports_in_one_file_resolve_in_linear_time() {
+        assert_scales_linearly("imports in one file", 5_000, imports_in_one_file_at);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_typescript_branching_aliases_resolve_in_linear_time() {
+        assert_scales_linearly("branching aliases", 1_000, branching_aliases_at);
+    }
+}
+
+#[cfg(test)]
+mod ecma_interface_tests {
+    use super::testing::rows;
+
+    #[test]
+    fn test_member_of_a_parent_class_implements_the_member_of_an_interface_typescript() {
+        let types = "export interface Hooks {\n  read(name: string): string;\n}\n\nexport abstract class Base {\n  read(name: string): string {\n    return name;\n  }\n}\n\nexport class Hook extends Base implements Hooks {}\n";
+        let main = "import { Hook } from './types';\n\nexport function run(hook: Hook): string {\n  return hook.read('a');\n}\n";
+        for extension in ["ts", "tsx"] {
+            let types_file = format!("types.{extension}");
+            let main_file = format!("main.{extension}");
+            let files = [(types_file.as_str(), types), (main_file.as_str(), main)];
+            let found = rows(&files, &main_file);
+            assert_eq!(
+                found,
+                [
+                    format!("4 run>hook.read UniqueCandidate ReceiverDeclaredType [types.{extension}#Base.read]"),
+                ],
+                "{extension}"
+            );
+        }
     }
 }

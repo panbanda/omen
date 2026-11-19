@@ -1,0 +1,1 @@
+{ "name": "my-lib", "type": "module", "exports": { ".": { "import": "./dist/index.mjs", "require": "./dist/index.cjs" } } }
