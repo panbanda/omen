@@ -3,6 +3,9 @@
 pub mod queries;
 
 #[cfg(test)]
+pub(crate) mod deep;
+
+#[cfg(test)]
 mod kind_lint;
 
 use std::cell::RefCell;
@@ -151,33 +154,67 @@ pub fn extract_functions(result: &ParseResult) -> Vec<FunctionNode> {
 
     let function_types = get_function_node_types(result.language);
 
-    fn visit(
-        node: tree_sitter::Node<'_>,
-        source: &[u8],
-        lang: Language,
-        function_types: &[&str],
-        functions: &mut Vec<FunctionNode>,
-    ) {
+    walk_preorder(root, |node| {
         if function_types.contains(&node.kind()) {
-            if let Some(func) = extract_function_info(&node, source, lang) {
+            if let Some(func) = extract_function_info(&node, &result.source, result.language) {
                 functions.push(func);
             }
         }
-
-        for child in node.children(&mut node.walk()) {
-            visit(child, source, lang, function_types, functions);
-        }
-    }
-
-    visit(
-        root,
-        &result.source,
-        result.language,
-        &function_types,
-        &mut functions,
-    );
+        Walk::Children
+    });
 
     functions
+}
+
+/// What a walk does after it visits a node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Walk {
+    /// Go into the children of the node.
+    Children,
+    /// Do not go into the children of the node.
+    SkipChildren,
+    /// Stop the walk.
+    Stop,
+}
+
+/// Visit `root` and each node below it in pre-order, which is the order of a
+/// recursive walk. The walk uses a cursor and not recursion, because generated
+/// source can have a very deep tree.
+pub fn walk_preorder<'tree>(
+    root: tree_sitter::Node<'tree>,
+    mut visit: impl FnMut(tree_sitter::Node<'tree>) -> Walk,
+) {
+    let mut cursor = root.walk();
+    loop {
+        match visit(cursor.node()) {
+            Walk::Stop => return,
+            Walk::Children if cursor.goto_first_child() => continue,
+            _ => {}
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return;
+            }
+        }
+    }
+}
+
+/// The first node in pre-order, `root` or a node below it, for which `test`
+/// is true.
+pub fn find_preorder<'tree>(
+    root: tree_sitter::Node<'tree>,
+    mut test: impl FnMut(tree_sitter::Node<'tree>) -> bool,
+) -> Option<tree_sitter::Node<'tree>> {
+    let mut found = None;
+    walk_preorder(root, |node| {
+        if test(node) {
+            found = Some(node);
+            Walk::Stop
+        } else {
+            Walk::Children
+        }
+    });
+    found
 }
 
 /// Get the AST node kinds that represent a function/method definition in
@@ -441,27 +478,32 @@ pub fn function_body_byte_range(node: &tree_sitter::Node<'_>) -> Option<(usize, 
 /// `identifier`.
 fn extract_c_function_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     fn recurse_declarator(decl: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-        match decl.kind() {
-            "identifier" => decl.utf8_text(source).ok().map(|s| s.to_string()),
-            "function_declarator"
-            | "pointer_declarator"
-            | "reference_declarator"
-            | "abstract_declarator" => {
-                // Try the named `declarator` field first, then first named child
-                if let Some(inner) = decl.child_by_field_name("declarator") {
-                    return recurse_declarator(inner, source);
-                }
-                for child in decl.children(&mut decl.walk()) {
-                    if child.is_named() {
-                        if let Some(name) = recurse_declarator(child, source) {
-                            return Some(name);
-                        }
+        // A stack in place of recursion, because a declarator can have any
+        // number of pointer levels.
+        let mut pending = vec![decl];
+        while let Some(decl) = pending.pop() {
+            match decl.kind() {
+                "identifier" => {
+                    if let Ok(name) = decl.utf8_text(source) {
+                        return Some(name.to_string());
                     }
                 }
-                None
+                "function_declarator"
+                | "pointer_declarator"
+                | "reference_declarator"
+                | "abstract_declarator" => {
+                    // Try the named `declarator` field first, then each named child
+                    if let Some(inner) = decl.child_by_field_name("declarator") {
+                        pending.push(inner);
+                    } else {
+                        let children: Vec<_> = decl.named_children(&mut decl.walk()).collect();
+                        pending.extend(children.into_iter().rev());
+                    }
+                }
+                _ => {}
             }
-            _ => None,
         }
+        None
     }
 
     // Walk the `declarator` field of the function_definition
@@ -685,6 +727,33 @@ mod tests {
 
         let functions = extract_functions(&result);
         assert_eq!(functions.len(), 1);
+    }
+
+    #[test]
+    fn test_extract_functions_in_deeply_nested_source() {
+        deep::on_small_stack(|| {
+            for (_, parsed) in deep::parsed_deep_sources() {
+                extract_functions(parsed);
+            }
+        });
+    }
+
+    /// The function name is at the end of a chain of `DEPTH` pointer declarators.
+    #[test]
+    fn test_c_function_name_below_deeply_nested_pointers() {
+        let names = deep::on_small_stack(|| {
+            [(Language::C, "a.c"), (Language::Cpp, "a.cpp")].map(|(language, file)| {
+                let source = format!("int {}f(void) {{ return 0; }}\n", "*".repeat(deep::DEPTH));
+                let parsed = Parser::new()
+                    .parse(source.as_bytes(), language, Path::new(file))
+                    .unwrap();
+                extract_functions(&parsed)
+                    .into_iter()
+                    .map(|function| function.name)
+                    .collect::<Vec<_>>()
+            })
+        });
+        assert_eq!(names, [vec!["f".to_string()], vec!["f".to_string()]]);
     }
 
     #[test]

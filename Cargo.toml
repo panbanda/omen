@@ -61,6 +61,9 @@ gix = { version = "0.87", default-features = false, features = ["sha1", "paralle
 # Parallelism
 rayon = "1.10"
 
+# Stack growth for the Go route interpreter, which recurses through nested closures
+stacker = "0.1.25"
+
 # File operations
 ignore = "0.4"
 globset = "0.4"

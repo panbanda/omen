@@ -5,6 +5,8 @@
 //! not say that the code has a vulnerability, and it does not follow data.
 
 pub mod analysis;
+#[cfg(test)]
+mod deep_tests;
 pub mod entry;
 mod matcher;
 pub mod reach;
