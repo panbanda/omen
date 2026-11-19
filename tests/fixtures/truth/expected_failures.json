@@ -40,6 +40,11 @@
     "tracking": "tree-sitter-go 0.25.0 does not parse a method with type parameters"
   },
   {
+    "id": "php/namespace_lookup/calls/unqualified_parent_in_namespace/no_false_edge",
+    "reason": "false edge to Tools.php:currentUser:7",
+    "tracking": "the PHP resolver gives an unqualified class name in a namespace a type of another namespace; PHP resolves it only in the current namespace or through `use`"
+  },
+  {
     "id": "ruby/constant_lookup/symbols/deep_job/container",
     "reason": "expected Some(\"Deep\"), got None: `class Deep::Job` has `Deep` in its container path, but the index reports no container",
     "tracking": "the Ruby index does not report the qualifier of a compact `class A::B` as the container of the class"
