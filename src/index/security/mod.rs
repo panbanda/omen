@@ -67,7 +67,7 @@ pub fn symbol_security(analysis: &analysis::Analysis, symbol_key: &str) -> Symbo
             route: entry
                 .route
                 .as_ref()
-                .map(|route| format!("{} {}", route.method, route.path)),
+                .map(|route| format!("{} {}", route.method, route.path_text())),
             guards: entry.guards.clone(),
             guards_complete: entry.guards_complete,
             guards_unknown_reason: entry

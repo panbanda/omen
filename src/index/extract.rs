@@ -111,6 +111,8 @@ pub struct Draft<'tree> {
     pub owner: Option<usize>,
     /// The declared type of the result, as the source has it.
     pub return_type: Option<String>,
+    /// The names of the type parameters of a generic definition, in order.
+    pub type_parameters: Vec<String>,
     /// The definition implements a member of a trait or an interface in a
     /// block that is not the body of its type, as a Rust `impl Trait for Type` does.
     pub trait_implementation: bool,
@@ -163,6 +165,8 @@ pub struct LinkFacts {
     /// contains the symbol.
     pub parent: Option<usize>,
     pub return_type: Option<String>,
+    /// The names of the type parameters of a generic definition, in order.
+    pub type_parameters: Vec<String>,
     pub trait_implementation: bool,
     pub default_export: bool,
     pub function_value: bool,
@@ -276,10 +280,19 @@ fn value_path(source: &[u8], start: usize) -> Option<Vec<String>> {
         .iter()
         .position(|byte| !(byte.is_ascii_alphanumeric() || b"_$@.".contains(byte)))
         .unwrap_or(rest.len());
-    let after = rest[length..]
+    let blank = rest[length..]
         .iter()
-        .find(|byte| !matches!(byte, b' ' | b'\t'));
-    if !after.is_none_or(|byte| b"\n\r;,){}:".contains(byte)) {
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count();
+    let after = &rest[length + blank..];
+    let comment = ["//", "/*", "#"]
+        .iter()
+        .any(|start| after.starts_with(start.as_bytes()));
+    if !comment
+        && !after
+            .first()
+            .is_none_or(|byte| b"\n\r;,){}:".contains(byte))
+    {
         return None;
     }
     name_path(std::str::from_utf8(&rest[..length]).ok()?)
@@ -341,9 +354,6 @@ pub struct ReturnOwner<'tree> {
 /// many children once, and not for each child.
 pub type Memo = RefCell<HashMap<(usize, u8), Rc<dyn Any>>>;
 
-/// How many of the nearest ancestors `Context::parent` examines.
-const NEAR_ANCESTORS: usize = 8;
-
 pub struct Context<'a, 'tree> {
     /// The path of the file, as the keys have it.
     pub file: &'a str,
@@ -363,24 +373,42 @@ pub struct Context<'a, 'tree> {
 
 impl<'tree> Context<'_, 'tree> {
     /// The parent of `node`. The walk knows the parent of its current node
-    /// and the nearest ancestors. For a different node, the tree searches
-    /// from the root, which costs the depth of the node.
+    /// and of each ancestor. For a different node, the tree searches from the
+    /// root, which costs the depth of the node.
     pub fn parent(&self, node: Node<'tree>) -> Option<Node<'tree>> {
         if let Some((current, parent)) = self.current {
             if current == node.id() {
                 return parent;
             }
         }
-        let nearest = self.ancestors.len().saturating_sub(NEAR_ANCESTORS);
-        match self.ancestors[nearest..]
-            .iter()
-            .rposition(|ancestor| ancestor.id() == node.id())
-        {
-            Some(0) if nearest == 0 => None,
-            Some(0) => node.parent(),
-            Some(position) => Some(self.ancestors[nearest + position - 1]),
+        match self.ancestor_position(node) {
+            Some(0) => None,
+            Some(position) => Some(self.ancestors[position - 1]),
             None => node.parent(),
         }
+    }
+
+    /// The position of `node` in `ancestors`. Each ancestor contains the next
+    /// one, so the ancestors are in the order of their start, and then in the
+    /// reverse order of their end. A binary search finds the ancestors with
+    /// the range of the node. Only a few nodes can have the same range,
+    /// because a grammar cannot nest nodes without text without limit.
+    fn ancestor_position(&self, node: Node<'tree>) -> Option<usize> {
+        let range = |ancestor: &Node<'_>| {
+            (
+                ancestor.start_byte(),
+                std::cmp::Reverse(ancestor.end_byte()),
+            )
+        };
+        let wanted = range(&node);
+        let first = self
+            .ancestors
+            .partition_point(|ancestor| range(ancestor) < wanted);
+        self.ancestors[first..]
+            .iter()
+            .take_while(|ancestor| range(ancestor) == wanted)
+            .position(|ancestor| ancestor.id() == node.id())
+            .map(|offset| first + offset)
     }
 
     pub fn text(&self, node: Node<'_>) -> String {
@@ -421,6 +449,7 @@ impl<'tree> Context<'_, 'tree> {
             local_name,
             target_file: ImportTarget::Unresolved,
             target_symbol: None,
+            type_only: false,
         }
     }
 
@@ -870,6 +899,28 @@ impl ValueSites {
     }
 }
 
+/// A decorator of an `export` statement that declares a class.
+struct Decorated {
+    depth: usize,
+    /// The node ID of the class.
+    class: Option<usize>,
+    /// The owner of the decorator itself, outside the class.
+    owner: Option<usize>,
+}
+
+/// A run of decorators in the body of a class, and the lengths of the
+/// collected facts when the run began.
+struct PendingDecorators {
+    /// The node ID of the body of the class.
+    body: usize,
+    body_depth: usize,
+    /// The owner of the calls of the run before the walk enters the method.
+    owner: Option<usize>,
+    calls: usize,
+    values: usize,
+    locals: usize,
+}
+
 struct Extractor<'a, 'tree> {
     spec: &'a dyn LanguageSpec,
     rules: HashMap<&'static str, DefinitionRule>,
@@ -886,6 +937,11 @@ struct Extractor<'a, 'tree> {
     scope_owners: Vec<Option<usize>>,
     /// The depths of the function values that have no name and contain the current node.
     closure_depths: Vec<usize>,
+    /// The decorators of `export` statements that contain the current node.
+    decorators: Vec<Decorated>,
+    /// The runs of decorators in the body of a class whose method the walk
+    /// has not entered.
+    pending_decorators: Vec<PendingDecorators>,
     call_kinds: Vec<&'static str>,
     local_kinds: Vec<&'static str>,
     /// One entry for each kind ID that the walk found.
@@ -965,6 +1021,76 @@ impl<'tree> Extractor<'_, 'tree> {
         self.scope_owners.iter().rev().flatten().next().copied()
     }
 
+    /// Gives the calls in a decorator the definition that it decorates as
+    /// their caller, when the decorator is outside the node of that
+    /// definition. TypeScript puts the decorator of
+    /// `@Decorator() export class Name` in the `export` statement, and the
+    /// decorator of a method in the body of the class before the method.
+    ///
+    /// The method is not known until the walk enters it. Thus the calls of
+    /// a run of decorators in the body of a class first have the class as
+    /// their caller, and the walk changes the caller when it enters the
+    /// method that follows the run.
+    fn track_decorators(&mut self, node: Node<'tree>, depth: usize) {
+        let parent = self.ancestors.last().copied();
+        let in_parent =
+            |run: &PendingDecorators| parent.is_some_and(|parent| parent.id() == run.body);
+        let consumes = !["decorator", "comment"].contains(&node.kind());
+        if consumes && self.pending_decorators.last().is_some_and(in_parent) {
+            let run = self.pending_decorators.pop().expect("a pending run");
+            if node.kind() == "method_definition" {
+                // A definition in a decorator argument stays the caller of
+                // the calls in its body.
+                let method = Some(node.id());
+                for call in &mut self.calls[run.calls..] {
+                    if call.2 == run.owner {
+                        call.2 = method;
+                    }
+                }
+                for value in &mut self.values[run.values..] {
+                    if value.1 == run.owner {
+                        value.1 = method;
+                    }
+                }
+                for local in &mut self.locals[run.locals..] {
+                    if local.1 == run.owner {
+                        local.1 = method;
+                    }
+                }
+            }
+        }
+        if node.kind() != "decorator" {
+            return;
+        }
+        let Some(parent) = parent else {
+            return;
+        };
+        match parent.kind() {
+            "export_statement" => {
+                let class = parent
+                    .child_by_field_name("declaration")
+                    .filter(|declaration| declaration.kind().ends_with("class_declaration"))
+                    .map(|declaration| declaration.id());
+                self.decorators.push(Decorated {
+                    depth,
+                    class,
+                    owner: self.owner(),
+                });
+            }
+            "class_body" if !self.pending_decorators.last().is_some_and(in_parent) => {
+                self.pending_decorators.push(PendingDecorators {
+                    body: parent.id(),
+                    body_depth: depth - 1,
+                    owner: self.owner(),
+                    calls: self.calls.len(),
+                    values: self.values.len(),
+                    locals: self.locals.len(),
+                });
+            }
+            _ => {}
+        }
+    }
+
     fn draft(&self, node: Node<'tree>, rule: &DefinitionRule) -> Option<(Draft<'tree>, Exported)> {
         let context = Context {
             file: self.file,
@@ -1007,6 +1133,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 .then(|| node.child_by_field_name(self.return_type_field))
                 .flatten()
                 .map(|result| context.text(result)),
+            type_parameters: Vec::new(),
             trait_implementation: false,
             default_export: false,
             function_value: false,
@@ -1047,6 +1174,7 @@ impl<'tree> Extractor<'_, 'tree> {
         if !node.is_named() {
             return;
         }
+        self.track_decorators(node, depth);
         let KindFacts {
             imports,
             module,
@@ -1114,6 +1242,13 @@ impl<'tree> Extractor<'_, 'tree> {
                 memo: &self.memo,
             };
             let owner = self.owner();
+            // A definition in the decorator argument stays the owner.
+            let owner = self
+                .decorators
+                .last()
+                .filter(|decorated| decorated.owner == owner)
+                .and_then(|decorated| decorated.class)
+                .or(owner);
             if let Some(call) = call.then(|| self.spec.call(node, &context)).flatten() {
                 let via_closure = !self.closure_depths.is_empty();
                 let receiver = self.spec.call_syntax().receiver_range(node);
@@ -1224,6 +1359,20 @@ impl<'tree> Extractor<'_, 'tree> {
         }
         if self.closure_depths.last() == Some(&depth) {
             self.closure_depths.pop();
+        }
+        if self
+            .decorators
+            .last()
+            .is_some_and(|decorated| decorated.depth == depth)
+        {
+            self.decorators.pop();
+        }
+        if self
+            .pending_decorators
+            .last()
+            .is_some_and(|run| run.body_depth == depth)
+        {
+            self.pending_decorators.pop();
         }
     }
 
@@ -1744,6 +1893,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         modules: Vec::new(),
         scope_owners: Vec::new(),
         closure_depths: Vec::new(),
+        decorators: Vec::new(),
+        pending_decorators: Vec::new(),
         call_kinds: spec.call_kinds(),
         local_kinds: spec.local_kinds(),
         facts_of_kinds: Vec::new(),
@@ -1887,6 +2038,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             parameter_types: draft.parameter_types,
             parent,
             return_type: draft.return_type,
+            type_parameters: draft.type_parameters,
             trait_implementation: draft.trait_implementation,
             default_export: draft.default_export,
             function_value: draft.function_value,
@@ -2117,6 +2269,18 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
 mod tests {
     use super::testing::rows;
     use crate::core::Language;
+
+    /// A comment after a chain of names does not change the value.
+    #[test]
+    fn test_value_path_before_a_comment() {
+        let path = |source: &str| super::value_path(source.as_bytes(), 0);
+        let expected = Some(vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(path("a.b // note\n"), expected);
+        assert_eq!(path("a.b /* note */\n"), expected);
+        assert_eq!(path("a.b # note\n"), expected);
+        assert_eq!(path("a.b / 2\n"), None);
+        assert_eq!(path("a.b\n"), expected);
+    }
 
     fn rebound_in(source: &str) -> Vec<String> {
         let parsed = crate::parser::Parser::new()

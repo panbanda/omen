@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "language": "javascript",
+  "split": "development",
+  "oracle": "Author-reviewed. The case is a workspace without build output: `my-lib` names only files in `dist`. The harness does not run the code.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "main", "category": "free_function", "file": "packages/app/src/main.js", "name": "main", "kind": "function", "container": null, "start_line": 4, "end_line": 6, "exported": true},
+    {"label": "app_svc", "category": "type", "file": "packages/app/src/svc/svc.js", "name": "Svc", "kind": "class", "container": null, "start_line": 1, "end_line": 5, "exported": true},
+    {"label": "lib_fn", "category": "free_function", "file": "packages/lib/src/index.js", "name": "libFn", "kind": "function", "container": null, "start_line": 1, "end_line": 3, "exported": true}
+  ],
+  "calls": [
+    {"label": "package_exports_in_dist", "category": "cross_file_import", "caller": "main", "line": 5, "callee_text": "libFn", "expected": ["lib_fn"]},
+    {"label": "jsconfig_path_alias", "category": "constructor", "caller": "main", "line": 5, "callee_text": "Svc", "expected": ["app_svc"]}
+  ],
+  "imports": [
+    {"label": "workspace_exports_in_dist", "category": "package", "file": "packages/app/src/main.js", "line": 1, "path": "my-lib", "names": [{"name": "libFn", "alias": null}], "required_file": "packages/lib/src/index.js"},
+    {"label": "jsconfig_path_alias", "category": "named", "file": "packages/app/src/main.js", "line": 2, "path": "@/svc/svc.js", "names": [{"name": "Svc", "alias": null}], "required_file": "packages/app/src/svc/svc.js"}
+  ]
+}

@@ -63,13 +63,13 @@ const GIN_ANY: [&str; 9] = [
 /// The depth of a chain of calls that the walk reads.
 const EVAL_DEPTH_LIMIT: usize = 1000;
 
-const ECHO_ANY: [&str; 11] = [
+pub(super) const ECHO_ANY: [&str; 11] = [
     "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PROPFIND", "PUT", "TRACE",
     "REPORT",
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Framework {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Framework {
     Chi,
     Echo,
     Mux,
@@ -77,9 +77,9 @@ enum Framework {
 }
 
 impl Framework {
-    const ALL: [Self; 4] = [Self::Chi, Self::Echo, Self::Mux, Self::Gin];
+    pub(super) const ALL: [Self; 4] = [Self::Chi, Self::Echo, Self::Mux, Self::Gin];
 
-    fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
             Self::Chi => "chi",
             Self::Echo => "echo",
@@ -89,7 +89,7 @@ impl Framework {
     }
 
     /// The package name of the module, which an import without an alias binds.
-    fn package(self) -> &'static str {
+    pub(super) fn package(self) -> &'static str {
         match self {
             Self::Chi => "chi",
             Self::Echo => "echo",
@@ -98,7 +98,7 @@ impl Framework {
         }
     }
 
-    fn owns(self, module: &str) -> bool {
+    pub(super) fn owns(self, module: &str) -> bool {
         let base = match self {
             Self::Chi => "github.com/go-chi/chi",
             Self::Echo => "github.com/labstack/echo",
@@ -114,7 +114,7 @@ impl Framework {
                 })
     }
 
-    fn router_types(self) -> &'static [&'static str] {
+    pub(super) fn router_types(self) -> &'static [&'static str] {
         match self {
             Self::Chi => &["Router", "Mux"],
             Self::Echo => &["Echo", "Group"],
@@ -235,7 +235,7 @@ impl Framework {
 
     /// The path of a route, from the prefixes of its routers and its own path. The rules
     /// are the rules of each library. None means that the library rejects the route.
-    fn compose(self, prefixes: &[String], path: &str) -> Option<String> {
+    pub(super) fn compose(self, prefixes: &[String], path: &str) -> Option<String> {
         let parts = || prefixes.iter().map(String::as_str).chain([path]);
         match self {
             // chi and gorilla/mux need a leading slash. They trim the slashes at the
@@ -321,9 +321,9 @@ pub(super) enum HandlerKind {
 }
 
 /// The parameter types and the result of a function, as the source writes them.
-struct Signature {
-    parameters: Vec<String>,
-    result: String,
+pub(super) struct Signature {
+    pub(super) parameters: Vec<String>,
+    pub(super) result: String,
 }
 
 /// Splits a text at the commas that are not inside a bracket.
@@ -413,7 +413,7 @@ fn parse_parameters(text: &str, open: usize) -> Option<(Vec<String>, &str)> {
 }
 
 /// The parameters and the result of the function that a symbol declares.
-fn parse_signature(signature: &str, name: &str) -> Option<Signature> {
+pub(super) fn parse_signature(signature: &str, name: &str) -> Option<Signature> {
     let open = signature.find(&format!("{name}("))? + name.len();
     let (parameters, result) = parse_parameters(signature, open)?;
     Some(Signature {
@@ -445,7 +445,11 @@ fn imports_a_framework(file: &FileSymbols) -> bool {
 }
 
 /// The names that the imports of a file give to a package.
-fn package_names(file: &FileSymbols, owns: impl Fn(&str) -> bool, package: &str) -> Vec<String> {
+pub(super) fn package_names(
+    file: &FileSymbols,
+    owns: impl Fn(&str) -> bool,
+    package: &str,
+) -> Vec<String> {
     file.imports
         .iter()
         .filter(|binding| binding.kind == ImportKind::Module)
@@ -952,7 +956,7 @@ const CHI_METHODS: [&str; 10] = [
 ];
 
 /// The names of the parameters in the path of a route, by the syntax of the framework.
-fn path_parameters(framework: Framework, path: &str) -> Vec<String> {
+pub(super) fn path_parameters(framework: Framework, path: &str) -> Vec<String> {
     let bytes = path.as_bytes();
     let mut names = Vec::new();
     match framework {
@@ -1381,7 +1385,7 @@ fn decode_go_string(literal: &str) -> Option<String> {
 }
 
 /// The directory of a file. The files of one directory are the files of one Go package.
-fn directory_of(file: &str) -> &str {
+pub(super) fn directory_of(file: &str) -> &str {
     file.rsplit_once('/').map_or("", |(directory, _)| directory)
 }
 
@@ -1975,7 +1979,7 @@ impl CallSites {
                     &tree.source,
                     &symbol_names,
                 ));
-                let context = Context::new(tree, file, files, trees, &[]);
+                let context = Context::new(position, tree, file, files, trees, &[]);
                 let _ = context.go_declared.set(Arc::clone(&sets[package.as_str()]));
                 for (name, alias) in collect_aliases(tree.root_node(), &tree.source) {
                     let entry = types
@@ -2105,7 +2109,7 @@ impl CallSites {
                 );
                 continue;
             };
-            let context = Context::new(&tree, file, files, trees, &[]);
+            let context = Context::new(position, &tree, file, files, trees, &[]);
             let package = (
                 directory_of(&file.file).to_string(),
                 package_name(tree.root_node(), &tree.source),
@@ -2225,11 +2229,15 @@ impl<'t, 'c> FileUses<'t, 'c> {
             bad: HashMap::new(),
             bad_strict: HashMap::new(),
         };
-        let mut pending = vec![root];
-        while let Some(node) = pending.pop() {
-            if node.kind() == "identifier" && uses.is_bad_use(node, true) {
+        // The walk keeps the ancestors of each node. `Node::parent` searches down from the root,
+        // so a call for each name costs time in proportion to the depth.
+        let mut ancestors: Vec<Node<'t>> = Vec::new();
+        let mut pending = vec![(root, 0)];
+        while let Some((node, depth)) = pending.pop() {
+            ancestors.truncate(depth);
+            if node.kind() == "identifier" && uses.is_bad_use(node, &ancestors, true) {
                 let name = uses.text(node).to_string();
-                if uses.is_bad_use(node, false) {
+                if uses.is_bad_use(node, &ancestors, false) {
                     uses.bad
                         .entry(name.clone())
                         .or_default()
@@ -2242,7 +2250,8 @@ impl<'t, 'c> FileUses<'t, 'c> {
             }
             let mut cursor = node.walk();
             let children: Vec<Node<'t>> = node.named_children(&mut cursor).collect();
-            pending.extend(children.into_iter().rev());
+            pending.extend(children.into_iter().rev().map(|child| (child, depth + 1)));
+            ancestors.push(node);
         }
         uses
     }
@@ -2275,7 +2284,12 @@ impl<'t, 'c> FileUses<'t, 'c> {
 
     /// Tells if a selector is a call of a method that registers a route, or that serves the
     /// router, on the node. A call that adds middleware changes the guards of the routes.
-    fn is_router_call(&self, selector: Node<'t>, operand: Node<'t>) -> bool {
+    fn is_router_call(
+        &self,
+        selector: Node<'t>,
+        operand: Node<'t>,
+        call: Option<Node<'t>>,
+    ) -> bool {
         const SERVING: [&str; 7] = [
             "Run",
             "RunTLS",
@@ -2286,7 +2300,7 @@ impl<'t, 'c> FileUses<'t, 'c> {
             "Walk",
         ];
         selector.child_by_field_name("operand") == Some(operand)
-            && selector.parent().is_some_and(|call| {
+            && call.is_some_and(|call| {
                 call.kind() == "call_expression"
                     && call.child_by_field_name("function") == Some(selector)
             })
@@ -2318,22 +2332,25 @@ impl<'t, 'c> FileUses<'t, 'c> {
 
     /// Tells if a use of a name is not a use as a router that the walk understands. A router
     /// that a variable holds is only a receiver of a call, or the root handler of a server.
-    fn is_bad_use(&self, node: Node<'t>, strict: bool) -> bool {
+    /// `ancestors` holds the ancestors of the node, with its parent last.
+    fn is_bad_use(&self, node: Node<'t>, ancestors: &[Node<'t>], strict: bool) -> bool {
         let mut child = node;
-        let mut parent = child.parent();
+        let mut up = ancestors.iter().rev().copied();
+        let mut parent = up.next();
         while let Some(found) = parent.filter(|found| found.kind() == "parenthesized_expression") {
             child = found;
-            parent = found.parent();
+            parent = up.next();
         }
         let Some(parent) = parent else {
             return false;
         };
+        let grand = up.next();
         match parent.kind() {
-            "selector_expression" => strict || !self.is_router_call(parent, child),
-            "argument_list" => !self.is_sink(parent.parent()),
+            "selector_expression" => strict || !self.is_router_call(parent, child, grand),
+            "argument_list" => !self.is_sink(grand),
             "var_spec" => parent.child_by_field_name("value") == Some(child),
             "expression_list" => {
-                let Some(grand) = parent.parent() else {
+                let Some(grand) = grand else {
                     return false;
                 };
                 match grand.kind() {
@@ -2345,11 +2362,11 @@ impl<'t, 'c> FileUses<'t, 'c> {
                 }
             }
             "literal_element" | "keyed_element" | "literal_value" => {
-                let mut up = parent.parent();
-                while let Some(found) = up.filter(|found| found.kind() != "composite_literal") {
-                    up = found.parent();
-                }
-                !up.is_some_and(|literal| self.is_server_literal(literal))
+                let literal = std::iter::once(grand)
+                    .flatten()
+                    .chain(up)
+                    .find(|found| found.kind() == "composite_literal");
+                !literal.is_some_and(|literal| self.is_server_literal(literal))
             }
             "block" | "statement_list" | "expression_statement" | "source_file" => false,
             _ => true,
@@ -2386,7 +2403,7 @@ impl<'t, 'c> FileUses<'t, 'c> {
         };
         match parent.kind() {
             "expression_statement" => false,
-            "selector_expression" => strict || !self.is_router_call(parent, value),
+            "selector_expression" => strict || !self.is_router_call(parent, value, parent.parent()),
             "argument_list" => !self.is_sink(parent.parent()),
             "literal_element" | "keyed_element" => {
                 let mut up = parent.parent();
@@ -4697,11 +4714,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 route: Some(Route {
                     method: record.method.clone(),
                     parameters: path_parameters(framework, &path),
-                    path,
+                    path: Some(path),
+                    path_template: None,
                 }),
                 guards,
                 basis: EntryBasis::Registered,
                 variant: None,
+                inline_handler: None,
                 unknown: record
                     .unread_wrapper
                     .then_some(GuardsUnknownReason::UnreadMiddleware),
@@ -5008,7 +5027,7 @@ impl Drop for Chain {
 }
 
 /// Tells if a text is an HTTP token, as a method name must be.
-fn is_http_token(text: &str) -> bool {
+pub(super) fn is_http_token(text: &str) -> bool {
     !text.is_empty()
         && text
             .bytes()
@@ -5170,7 +5189,7 @@ fn mux_order(
             if record.opaque {
                 return None;
             }
-            let path = draft.route.as_ref()?.path.as_str();
+            let path = draft.route.as_ref()?.path.as_deref()?;
             let (literal, kind) = mux_literal(path, record.prefix);
             Some((literal, kind, record.method.as_str()))
         };
@@ -5374,7 +5393,7 @@ fn echo_precedence(
                 return None;
             }
             let (draft, _) = drafts[index].as_ref()?;
-            let path = &draft.route.as_ref()?.path;
+            let path = draft.route.as_ref()?.path.as_deref()?;
             Some((root, echo_tokens(path)))
         })
         .collect();
