@@ -40,6 +40,11 @@
     "tracking": "tree-sitter-go 0.25.0 does not parse a method with type parameters"
   },
   {
+    "id": "ruby/constant_lookup/symbols/deep_job/container",
+    "reason": "expected Some(\"Deep\"), got None: `class Deep::Job` has `Deep` in its container path, but the index reports no container",
+    "tracking": "the Ruby index does not report the qualifier of a compact `class A::B` as the container of the class"
+  },
+  {
     "id": "ruby/idioms/calls/attr_accessor_call/no_missed_edge",
     "reason": "no edge to store.rb:limit:3",
     "tracking": "the Ruby index does not read the methods that `attr_reader` and `attr_accessor` define"
