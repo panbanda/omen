@@ -265,12 +265,17 @@ struct Resolver<'a> {
     locals_by_owner: Vec<SortedPositions<(&'a str, Option<usize>)>>,
     /// For each file, the positions of the references by start byte, in source order.
     references_by_start: Vec<SortedPositions<usize>>,
+    /// For each file, the positions of the references by start byte and end
+    /// byte, in source order. A chain of calls has many calls with one start.
+    references_by_span: Vec<SortedPositions<(usize, usize)>>,
     /// For each Ruby type, the types that have it as a direct parent type.
     ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// For each Go type, the Go structs that embed it.
     go_embedders: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// For each Go type, the methods that it has itself.
     go_methods: OnceLock<BTreeMap<Id, Vec<Id>>>,
+    /// For each file, the test runners of its packages.
+    test_runners: OnceLock<Vec<crate::index::imports::TestRunners>>,
     /// The results of `implementations`, by the interface.
     implementations_cache: RwLock<HashMap<Id, Arc<ImplementationsByName>>>,
     /// The results of `types`, `package_files`, and `visible_files`. The
@@ -368,6 +373,14 @@ impl<K: Ord> SortedPositions<K> {
         let end = self.keys.partition_point(|key| compare(key).is_le());
         &self.positions[first..end]
     }
+
+    /// The positions of the keys from `low` to `high`, both included, in the
+    /// order of the key and then in source order.
+    fn between(&self, low: &K, high: &K) -> &[usize] {
+        let first = self.keys.partition_point(|key| key < low);
+        let end = self.keys.partition_point(|key| key <= high);
+        &self.positions[first..end.max(first)]
+    }
 }
 
 /// The packages of the files: the files of the package of each file, and
@@ -445,6 +458,17 @@ impl<'a> Resolver<'a> {
                 )
             })
             .collect();
+        let references_by_span = files
+            .iter()
+            .map(|facts| {
+                SortedPositions::new(
+                    facts
+                        .reference_facts
+                        .iter()
+                        .map(|reference| (reference.start_byte, reference.end_byte)),
+                )
+            })
+            .collect();
         let rebound = files
             .iter()
             .flat_map(|facts| {
@@ -514,9 +538,11 @@ impl<'a> Resolver<'a> {
             locals_by_name,
             locals_by_owner,
             references_by_start,
+            references_by_span,
             ruby_children: OnceLock::new(),
             go_embedders: OnceLock::new(),
             go_methods: OnceLock::new(),
+            test_runners: OnceLock::new(),
             implementations_cache: RwLock::new(HashMap::new()),
             types_cache: RwLock::new(HashMap::new()),
             twin_members_cache: RwLock::new(HashMap::new()),
@@ -1448,6 +1474,21 @@ impl<'a> Resolver<'a> {
     /// The references of `file` that start at the byte `start`, in source order.
     fn references_at(&self, file: usize, start: usize) -> &[usize] {
         self.references_by_start[file].matching(|key| key.cmp(&start))
+    }
+
+    /// The references of `file` that start at `start` and end at or before
+    /// `end`, in the order of the end byte and then in source order.
+    fn references_within(&self, file: usize, start: usize, end: usize) -> &[usize] {
+        self.references_by_span[file].between(&(start, 0), &(start, end))
+    }
+
+    /// The first reference in source order that has exactly the bytes
+    /// `start` to `end`.
+    fn reference_spanning(&self, file: usize, start: usize, end: usize) -> Option<usize> {
+        self.references_by_span[file]
+            .matching(|key| key.cmp(&(start, end)))
+            .first()
+            .copied()
     }
 
     /// The local name `name` that a reference at the byte `at` sees. When two
@@ -3331,7 +3372,6 @@ impl<'a> Resolver<'a> {
         site: &ReferenceFacts,
         depth: usize,
     ) -> Outcome {
-        let facts = &self.files[file];
         let chain = self.chain(file, site.owner);
         let name = reference.name.as_str();
         let arity = reference.arity;
@@ -3430,12 +3470,8 @@ impl<'a> Resolver<'a> {
             Some(Receiver::Expression) => {
                 // A receiver that is a call has the type of the result of that call.
                 let receiver = site.receiver;
-                let call = receiver.and_then(|(start, end)| {
-                    self.references_at(file, start)
-                        .iter()
-                        .copied()
-                        .find(|other| facts.reference_facts[*other].end_byte == end)
-                });
+                let call =
+                    receiver.and_then(|(start, end)| self.reference_spanning(file, start, end));
                 // A receiver that is a chain of names has the declared type
                 // of its last field.
                 let types = match call {
@@ -3689,6 +3725,18 @@ pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests)
 #[cfg(test)]
 mod tests {
     use super::testing::rows;
+
+    #[test]
+    fn sorted_positions_between_two_keys_are_in_key_order_then_source_order() {
+        // The spans of a chain of calls: each call starts at byte 0.
+        let spans = [(0, 9), (0, 4), (5, 9), (0, 4), (0, 12)];
+        let table = super::SortedPositions::new(spans.iter().copied());
+        assert_eq!(table.between(&(0, 0), &(0, 9)), [1, 3, 0]);
+        assert_eq!(table.between(&(0, 0), &(0, 12)), [1, 3, 0, 4]);
+        assert_eq!(table.between(&(0, 5), &(0, 8)), [] as [usize; 0]);
+        assert_eq!(table.between(&(5, 0), &(5, 9)), [2]);
+        assert_eq!(table.between(&(0, 9), &(0, 4)), [] as [usize; 0]);
+    }
 
     #[test]
     fn sorted_positions_give_the_positions_of_a_key_in_source_order() {

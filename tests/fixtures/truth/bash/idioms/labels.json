@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "language": "bash",
+  "split": "development",
+  "oracle": "Author-reviewed. `bash -n` (GNU bash 5.3.15\n25.4.0) accepts each script. `VERBOSE=1 bash -c 'source ./main.sh; run'` in the case directory prints `hi`, `verbose`, `helper: command not found` for line 31, and `lib`. Thus the alias calls `greet`, `command` does not call the function `helper`, and the subshell calls `lib_func`. `source lib.sh` has no slash: bash searches PATH and then the working directory at run time, so no file of the case is a certain target. The harness does not run the code.",
+  "closed_world": true,
+  "symbols": [
+    {
+      "label": "greet",
+      "category": "free_function",
+      "file": "main.sh",
+      "name": "greet",
+      "kind": "function",
+      "container": null,
+      "start_line": 6,
+      "end_line": 8,
+      "exported": true
+    },
+    {
+      "label": "countdown",
+      "category": "free_function",
+      "file": "main.sh",
+      "name": "countdown",
+      "kind": "function",
+      "container": null,
+      "start_line": 10,
+      "end_line": 14,
+      "exported": true
+    },
+    {
+      "label": "report",
+      "category": "conditional_definition",
+      "file": "main.sh",
+      "name": "report",
+      "kind": "function",
+      "container": null,
+      "start_line": 17,
+      "end_line": 19,
+      "exported": true
+    },
+    {
+      "label": "helper",
+      "category": "free_function",
+      "file": "main.sh",
+      "name": "helper",
+      "kind": "function",
+      "container": null,
+      "start_line": 22,
+      "end_line": 24,
+      "exported": true
+    },
+    {
+      "label": "run",
+      "category": "free_function",
+      "file": "main.sh",
+      "name": "run",
+      "kind": "function",
+      "container": null,
+      "start_line": 27,
+      "end_line": 33,
+      "exported": true
+    },
+    {
+      "label": "lib_func",
+      "category": "free_function",
+      "file": "lib.sh",
+      "name": "lib_func",
+      "kind": "function",
+      "container": null,
+      "start_line": 1,
+      "end_line": 3,
+      "exported": true
+    }
+  ],
+  "calls": [
+    {
+      "label": "alias_call",
+      "category": "alias",
+      "caller": "run",
+      "line": 28,
+      "callee_text": "greet_alias",
+      "expected": [
+        "greet"
+      ]
+    },
+    {
+      "label": "bare_local_recursive_definition",
+      "category": "bare_local",
+      "caller": "run",
+      "line": 29,
+      "callee_text": "countdown",
+      "expected": [
+        "countdown"
+      ]
+    },
+    {
+      "label": "conditional_definition",
+      "category": "conditional_definition",
+      "caller": "run",
+      "line": 30,
+      "callee_text": "report",
+      "expected": [
+        "report"
+      ]
+    },
+    {
+      "label": "command_skips_functions",
+      "category": "command_builtin",
+      "caller": "run",
+      "line": 31,
+      "callee_text": "helper",
+      "expected": []
+    },
+    {
+      "label": "subshell_call",
+      "category": "cross_file_import",
+      "caller": "run",
+      "line": 32,
+      "callee_text": "lib_func",
+      "expected": [
+        "lib_func"
+      ]
+    },
+    {
+      "label": "recursion",
+      "category": "recursion",
+      "caller": "countdown",
+      "line": 12,
+      "callee_text": "countdown",
+      "expected": [
+        "countdown"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "label": "source_through_path",
+      "category": "package",
+      "file": "main.sh",
+      "line": 1,
+      "path": "lib.sh",
+      "names": [],
+      "required_file": null
+    },
+    {
+      "label": "source_relative_contrast",
+      "category": "relative",
+      "file": "main.sh",
+      "line": 2,
+      "path": "./lib.sh",
+      "names": [],
+      "required_file": "lib.sh"
+    }
+  ]
+}
