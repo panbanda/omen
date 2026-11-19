@@ -59,7 +59,6 @@ const GIN_ANY: [&str; 9] = [
     "GET", "POST", "PUT", "PATCH", "HEAD", "OPTIONS", "DELETE", "CONNECT", "TRACE",
 ];
 
-/// The methods that `Any` registers. echo v4.13.4 `methods`.
 /// The depth of a chain of calls that the walk reads.
 pub(super) const EVAL_DEPTH_LIMIT: usize = 1000;
 
@@ -68,8 +67,9 @@ pub(super) const EVAL_DEPTH_LIMIT: usize = 1000;
 /// and each of them calls the others. An explicit stack in place of this recursion changes the
 /// order of the effects of the walk, such as the numbers of the routers and the order of the
 /// records. Thus these functions keep their recursion, and `on_grown_stack` gives them a new
-/// segment of stack on the heap when the stack of the thread is almost full.
-fn on_grown_stack<T>(work: impl FnOnce() -> T) -> T {
+/// segment of stack on the heap when the stack of the thread is almost full. The interpreter
+/// of router types in `go_wrappers` has the same recursion in its `eval`.
+pub(super) fn on_grown_stack<T>(work: impl FnOnce() -> T) -> T {
     // The largest use of the stack between two calls of this function, in a debug build, is
     // less than the red zone.
     const RED_ZONE: usize = 64 * 1024;
@@ -77,6 +77,7 @@ fn on_grown_stack<T>(work: impl FnOnce() -> T) -> T {
     stacker::maybe_grow(RED_ZONE, SEGMENT, work)
 }
 
+/// The methods that `Any` registers. echo v4.13.4 `methods`.
 pub(super) const ECHO_ANY: [&str; 11] = [
     "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PROPFIND", "PUT", "TRACE",
     "REPORT",

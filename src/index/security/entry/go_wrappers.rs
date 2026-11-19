@@ -1798,7 +1798,7 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
             return None;
         }
         self.depth += 1;
-        let value = self.eval_inner(node);
+        let value = super::go_routes::on_grown_stack(|| self.eval_inner(node));
         self.depth -= 1;
         value
     }
