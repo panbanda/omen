@@ -1,5 +1,6 @@
 //! The security analysis of a set of files: the sinks, the entry points, and the paths.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -18,7 +19,7 @@ use crate::core::Language;
 use crate::index::build::{list_directory, CodeIndex, ListDirectory, ReadFile};
 use crate::index::extract::FileSymbols;
 use crate::index::headers;
-use crate::index::model::{Reference, ResolutionBasis};
+use crate::index::model::{Reference, ResolutionBasis, Span, SymbolKind};
 use crate::index::view::{CallView, FunctionValue, DEFAULT_MIN_BASIS};
 use crate::parser::ParseResult;
 
@@ -137,7 +138,7 @@ fn analyze_in_scope(
             |content| headers::parse(path, file.language, content),
         )
     };
-    let (all_sinks, comments, entry_points, kept) =
+    let (all_sinks, comments, entry_points, kept, blocks) =
         match findings_one_tree_at_a_time(index, &parse_file, options, scope)? {
             Some(findings) => findings,
             None => findings_with_all_trees(index, &parse_file, options, scope)?,
@@ -151,8 +152,10 @@ fn analyze_in_scope(
         .map(|position| index.files[*position].file.clone())
         .collect();
     let (sinks, suppressed, invalid_suppressions) = suppress::split(all_sinks, &names, comments);
-    let view =
-        CallView::from_index_with_function_values(index, &inline_handlers(index, &entry_points));
+    let view = CallView::from_index_with_function_values(
+        index,
+        &inline_handlers(index, &entry_points, &blocks),
+    );
     let reach = reachability(&view, &sinks, &entry_points, options.min_basis);
     let mut languages: Vec<Language> = Vec::new();
     for position in &kept {
@@ -174,7 +177,11 @@ fn analyze_in_scope(
 /// The inline handlers of the entry points, in the order of the file and the start. Each call
 /// and each function reference that the index gives to the symbol around a handler belongs to
 /// the innermost handler that contains it.
-fn inline_handlers<'i>(index: &'i CodeIndex, entries: &[EntryPoint]) -> Vec<FunctionValue<'i>> {
+fn inline_handlers<'i>(
+    index: &'i CodeIndex,
+    entries: &[EntryPoint],
+    blocks: &[BodyBlock],
+) -> Vec<FunctionValue<'i>> {
     let mut values: Vec<FunctionValue<'i>> = Vec::new();
     let mut value_of_entry: Vec<Option<usize>> = vec![None; entries.len()];
     let mut by_key: BTreeMap<&str, usize> = BTreeMap::new();
@@ -212,7 +219,63 @@ fn inline_handlers<'i>(index: &'i CodeIndex, entries: &[EntryPoint]) -> Vec<Func
         });
         value_of_entry[position] = Some(value);
     }
-    let regions = InlineRegions::new(entries, |position, _| value_of_entry[position]);
+    // A block that is an inline handler too, as a Sinatra route of a class body, is the handler.
+    let handled: BTreeSet<(&str, &str, usize, usize)> = entries
+        .iter()
+        .filter_map(|entry| {
+            let inline = entry.inline_handler.as_ref()?;
+            Some((
+                entry.file.as_str(),
+                inline.enclosing.as_deref()?,
+                inline.range.start_byte,
+                inline.range.end_byte,
+            ))
+        })
+        .collect();
+    let mut value_of_block: Vec<Option<usize>> = vec![None; blocks.len()];
+    for (position, block) in blocks.iter().enumerate() {
+        let place = (
+            block.file.as_str(),
+            block.enclosing.as_str(),
+            block.range.start_byte,
+            block.range.end_byte,
+        );
+        if handled.contains(&place) || by_key.contains_key(block.key.as_str()) {
+            continue;
+        }
+        values.push(FunctionValue {
+            key: block.key.clone(),
+            file: block.file.clone(),
+            range: block.range,
+            enclosing: Some(block.enclosing.clone()),
+            parent: None,
+            references: Vec::new(),
+            function_references: Vec::new(),
+            is_test: block.is_test,
+        });
+        value_of_block[position] = Some(values.len() - 1);
+    }
+    let handlers = entries.iter().enumerate().filter_map(|(position, entry)| {
+        let inline = entry.inline_handler.as_ref()?;
+        Some((
+            entry.file.as_str(),
+            inline.enclosing.as_deref(),
+            inline.range,
+            value_of_entry[position]?,
+        ))
+    });
+    let block_places = blocks
+        .iter()
+        .zip(&value_of_block)
+        .filter_map(|(block, value)| {
+            Some((
+                block.file.as_str(),
+                Some(block.enclosing.as_str()),
+                block.range,
+                (*value)?,
+            ))
+        });
+    let regions = InlineRegions::of_places(handlers.chain(block_places));
     let parents: Vec<Option<String>> = values
         .iter()
         .map(|value| {
@@ -248,7 +311,103 @@ fn inline_handlers<'i>(index: &'i CodeIndex, entries: &[EntryPoint]) -> Vec<Func
 }
 
 type Comments = Vec<(Vec<suppress::Allow>, Vec<InvalidSuppression>)>;
-type Findings = (Vec<Sink>, Comments, Vec<EntryPoint>, Vec<usize>);
+type Findings = (
+    Vec<Sink>,
+    Comments,
+    Vec<EntryPoint>,
+    Vec<usize>,
+    Vec<BodyBlock>,
+);
+
+/// The findings of one file: its sinks, its suppression comments, its entry points, and the
+/// blocks of its Ruby class bodies.
+type FileFindings = (
+    Vec<Sink>,
+    (Vec<suppress::Allow>, Vec<InvalidSuppression>),
+    Vec<EntryPoint>,
+    Vec<BodyBlock>,
+);
+
+/// A block or a lambda in the body of a Ruby class or module, outside each method. The class
+/// registers it, as `after_save do` and `scope :name, -> {}` do, and the code runs later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct BodyBlock {
+    key: String,
+    file: String,
+    range: Span,
+    /// The key of the class or the module.
+    enclosing: String,
+    is_test: bool,
+}
+
+const RUBY_BLOCKS: &[&str] = &["block", "do_block", "lambda"];
+const RUBY_METHODS: &[&str] = &["method", "singleton_method"];
+
+/// The outermost blocks and lambdas of the class and module bodies of a Ruby file. A block in
+/// a method belongs to the method, and a lambda that the index makes a definition is that
+/// definition.
+fn ruby_body_blocks(tree: &ParseResult, file: &FileSymbols) -> Vec<BodyBlock> {
+    if file.language != Language::Ruby {
+        return Vec::new();
+    }
+    let mut symbols: Vec<&crate::index::model::Symbol> = file.symbols.iter().collect();
+    symbols.sort_by_key(|symbol| (symbol.range.start_byte, Reverse(symbol.range.end_byte)));
+    let mut next = 0;
+    let mut open: Vec<&crate::index::model::Symbol> = Vec::new();
+    let mut found = Vec::new();
+    // The walk visits the nodes in source order, thus the symbols open in that order too.
+    let mut cursor = tree.root_node().walk();
+    loop {
+        let node = cursor.node();
+        let mut descend = !RUBY_METHODS.contains(&node.kind());
+        if RUBY_BLOCKS.contains(&node.kind()) {
+            let start = node.start_byte();
+            while let Some(symbol) = symbols
+                .get(next)
+                .filter(|symbol| symbol.range.start_byte <= start)
+            {
+                while open
+                    .last()
+                    .is_some_and(|last| last.range.end_byte <= symbol.range.start_byte)
+                {
+                    open.pop();
+                }
+                open.push(symbol);
+                next += 1;
+            }
+            while open.last().is_some_and(|last| last.range.end_byte <= start) {
+                open.pop();
+            }
+            let class = open
+                .last()
+                .filter(|symbol| matches!(symbol.kind, SymbolKind::Class | SymbolKind::Module));
+            if let Some(class) = class {
+                let position = node.start_position();
+                found.push(BodyBlock {
+                    key: format!(
+                        "{}.<block@{}:{}>",
+                        class.key,
+                        position.row + 1,
+                        position.column
+                    ),
+                    file: file.file.clone(),
+                    range: Span::of(&node),
+                    enclosing: class.key.to_string(),
+                    is_test: class.is_test(),
+                });
+                descend = false;
+            }
+        }
+        if descend && cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return found;
+            }
+        }
+    }
+}
 
 /// The sinks, the suppression comments, and the entry points of all files. The function
 /// parses each file in the thread that uses it, and it drops the tree after use. Thus
@@ -265,7 +424,7 @@ fn findings_one_tree_at_a_time(
     let files = &index.files;
     let repository = Repository::new(files);
     let trees = OnDemandTrees::new(parse_file);
-    let per_file: Vec<Option<(Vec<Sink>, _, Vec<EntryPoint>)>> = (0..files.len())
+    let per_file: Vec<Option<FileFindings>> = (0..files.len())
         .into_par_iter()
         .map(|position| {
             let Some(tree) = parse_file(position)? else {
@@ -284,6 +443,7 @@ fn findings_one_tree_at_a_time(
                 sinks,
                 comments,
                 entry_points_of_file(position, &tree, files, &trees, &options.entry_rules),
+                ruby_body_blocks(&tree, file),
             )))
         })
         .collect::<crate::core::Result<_>>()?;
@@ -291,19 +451,22 @@ fn findings_one_tree_at_a_time(
     let mut sinks = Vec::new();
     let mut comments = Vec::new();
     let mut entry_points = Vec::new();
+    let mut blocks = Vec::new();
     for found in per_file {
-        let Some((file_sinks, file_comments, file_entries)) = found else {
+        let Some((file_sinks, file_comments, file_entries, file_blocks)) = found else {
             return Ok(None);
         };
         sinks.extend(file_sinks);
         comments.push(file_comments);
         entry_points.extend(file_entries);
+        blocks.extend(file_blocks);
     }
     Ok(Some((
         sinks,
         comments,
         entry_points,
         (0..files.len()).collect(),
+        blocks,
     )))
 }
 
@@ -356,7 +519,12 @@ fn findings_with_all_trees(
         })
         .collect();
     let entry_points = find_entry_points_with(&trees, &kept, &options.entry_rules);
-    Ok((sinks, comments, entry_points, positions))
+    let blocks = trees
+        .par_iter()
+        .zip(&kept)
+        .flat_map_iter(|(tree, file)| ruby_body_blocks(tree, file))
+        .collect();
+    Ok((sinks, comments, entry_points, positions, blocks))
 }
 
 /// What the security analysis says about the symbol `key`, as `symbol_security` gives it from
@@ -493,11 +661,11 @@ mod tests {
         };
         let options = Options::default();
 
-        let (sinks, comments, entries, kept) =
+        let (sinks, comments, entries, kept, blocks) =
             findings_one_tree_at_a_time(&index, &parse_file, &options, &SinkScope::All)
                 .unwrap()
                 .unwrap();
-        let (all_sinks, all_comments, all_entries, all_kept) =
+        let (all_sinks, all_comments, all_entries, all_kept, all_blocks) =
             findings_with_all_trees(&index, &parse_file, &options, &SinkScope::All).unwrap();
 
         assert!(!sinks.is_empty());
@@ -505,6 +673,7 @@ mod tests {
         assert_eq!(sinks, all_sinks);
         assert_eq!(entries, all_entries);
         assert_eq!(kept, all_kept);
+        assert_eq!(blocks, all_blocks);
         let counts = |comments: &Comments| -> Vec<(usize, usize)> {
             comments
                 .iter()
@@ -589,7 +758,7 @@ mod tests {
         )
         .unwrap()
         .is_none());
-        let (sinks, _, entries, kept) =
+        let (sinks, _, entries, kept, _) =
             findings_with_all_trees(&index, &no_tree, &Options::default(), &SinkScope::All)
                 .unwrap();
         assert!(sinks.is_empty() && entries.is_empty() && kept.is_empty());
@@ -806,6 +975,97 @@ mod tests {
         let analysis = run(&[("app.py", APP)], ResolutionBasis::Scip);
         assert!(analysis.reachability.paths.is_empty());
         assert_eq!(analysis.reachability.no_known_entry.len(), 2);
+    }
+
+    /// `Name.new` runs `initialize`. The class body runs once, when the file
+    /// loads, thus `Name.new` does not reach a call or a sink of the class
+    /// body. A block or a lambda in the class body is code that a callback,
+    /// a scope, or a method that the body defines runs later: the class
+    /// registers it, and the path shows that step as a function reference.
+    #[test]
+    fn a_ruby_construction_does_not_reach_the_class_body() {
+        let routes =
+            "Rails.application.routes.draw do\n  post \"/run\", to: \"commands#run\"\nend\n";
+        let controller = "class CommandsController < ApplicationController\n  def run\n    Audit.new\n    Loader.new\n    Child.new(params[:cmd])\n    Shell.new(params[:cmd])\n    Hook.new\n    Finder.new\n    Fields.new\n  end\nend\n";
+        let helper = "class Helper\n  def self.boot\n    system(ENV[\"BOOT\"])\n  end\nend\n";
+        let audit = "class Audit\n  Helper.boot\nend\n";
+        let loader = "class Loader\n  system(ENV[\"LOAD\"])\nend\n";
+        let base = "class Base\n  def initialize(command)\n    system(command)\n  end\nend\n";
+        let child = "class Child < Base\n  Helper.boot\nend\n";
+        let shell = "class Shell\n  def initialize(command)\n    system(command)\n  end\nend\n";
+        let hook = "class Hook\n  after_save do\n    system(ENV[\"HOOK\"])\n  end\nend\n";
+        let runner = "class Runner\n  def self.go(name)\n    system(name)\n  end\nend\n";
+        let finder = "class Finder\n  scope :named, ->(name) { Runner.go(name) }\nend\n";
+        let task = "class Task\n  def self.run\n    system(ENV[\"TASK\"])\n  end\nend\n";
+        let fields =
+            "class Fields\n  %w[a b].each { |name| define_method(name) { Task.run } }\nend\n";
+        let analysis = analyze_sources(
+            &[
+                ("config/routes.rb", routes),
+                ("app/controllers/commands_controller.rb", controller),
+                ("app/models/helper.rb", helper),
+                ("app/models/audit.rb", audit),
+                ("app/models/loader.rb", loader),
+                ("app/models/base.rb", base),
+                ("app/models/child.rb", child),
+                ("app/models/shell.rb", shell),
+                ("app/models/hook.rb", hook),
+                ("app/models/runner.rb", runner),
+                ("app/models/finder.rb", finder),
+                ("app/models/task.rb", task),
+                ("app/models/fields.rb", fields),
+            ],
+            DEFAULT_MIN_BASIS,
+        );
+        let paths = &analysis.reachability.paths;
+        let sinks: BTreeSet<&str> = paths
+            .iter()
+            .map(|path| path.sink.split(':').next().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            sinks,
+            BTreeSet::from([
+                "app/models/base.rb",
+                "app/models/hook.rb",
+                "app/models/runner.rb",
+                "app/models/shell.rb",
+                "app/models/task.rb",
+            ])
+        );
+        // The class gives the block a function reference: it registers the
+        // block and does not call it.
+        for (file, block) in [
+            ("app/models/hook.rb", "app/models/hook.rb#Hook.<block@2:13>"),
+            (
+                "app/models/runner.rb",
+                "app/models/finder.rb#Finder.<block@2:16>",
+            ),
+            (
+                "app/models/task.rb",
+                "app/models/fields.rb#Fields.<block@2:15>",
+            ),
+        ] {
+            let path = paths
+                .iter()
+                .find(|path| path.sink.starts_with(file))
+                .unwrap();
+            let step = path
+                .steps
+                .iter()
+                .position(|step| step.symbol == block)
+                .unwrap_or_else(|| panic!("{path:?}"));
+            assert_eq!(
+                path.steps[step].edge,
+                EdgeKind::FunctionReference,
+                "{path:?}"
+            );
+            assert_eq!(
+                path.steps[step].basis,
+                Some(ResolutionBasis::LexicalScope),
+                "{path:?}"
+            );
+            assert_eq!(path.function_references, 1, "{path:?}");
+        }
     }
 
     #[test]
@@ -1091,6 +1351,47 @@ mod tests {
         );
     }
 
+    /// `size` classes, each with a callback block in its body. Only the steps of the blocks are
+    /// measured: the walk of the tree, the function values, and the view.
+    fn class_body_blocks_resolve_at(size: usize) -> std::time::Duration {
+        let mut text = String::new();
+        for index in 0..size {
+            text.push_str(&format!(
+                "class Hook{index}\n  after_save do\n    system(ENV[\"HOOK\"])\n  end\nend\n"
+            ));
+        }
+        let path = Path::new("hooks.rb");
+        let paths = [path.to_path_buf()];
+        let read = |_: &Path| Ok(text.as_bytes().to_vec());
+        let index = CodeIndex::build(Path::new(""), &paths, &read, &|_| Vec::new());
+        let tree = headers::parse(path, Language::Ruby, text.as_bytes()).unwrap();
+        let start = crate::index::timing::Stopwatch::start();
+        let blocks = ruby_body_blocks(&tree, &index.files[0]);
+        let view = CallView::from_index_with_function_values(
+            &index,
+            &inline_handlers(&index, &[], &blocks),
+        );
+        let took = start.elapsed();
+        assert_eq!(blocks.len(), size);
+        assert_eq!(view.function_value_places().len(), size);
+        took
+    }
+
+    #[test]
+    fn each_callback_block_of_a_class_body_is_reached() {
+        class_body_blocks_resolve_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing test: run in release with --ignored"]
+    fn timing_class_body_blocks_resolve_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "class body blocks",
+            2_000,
+            class_body_blocks_resolve_at,
+        );
+    }
+
     #[test]
     #[ignore = "timing test: run in release with --ignored"]
     fn timing_inline_handlers_resolve_in_linear_time() {
@@ -1118,7 +1419,7 @@ mod tests {
             let start = crate::index::timing::Stopwatch::start();
             let view = CallView::from_index_with_function_values(
                 &index,
-                &inline_handlers(&index, &analysis.entry_points),
+                &inline_handlers(&index, &analysis.entry_points, &[]),
             );
             let found = reachability(
                 &view,
@@ -1426,16 +1727,17 @@ func (c *Combo) Post(h ...any) *Combo {
         };
         let options = Options::default();
         let (scope, _) = scope_of(&fixture, "web/server.js#boot");
-        let (sinks, comments, entries, kept) =
+        let (sinks, comments, entries, kept, blocks) =
             findings_one_tree_at_a_time(&fixture.index, &parse_file, &options, &scope)
                 .unwrap()
                 .unwrap();
-        let (all_sinks, all_comments, all_entries, all_kept) =
+        let (all_sinks, all_comments, all_entries, all_kept, all_blocks) =
             findings_with_all_trees(&fixture.index, &parse_file, &options, &scope).unwrap();
         assert!(!sinks.is_empty());
         assert_eq!(sinks, all_sinks);
         assert_eq!(entries, all_entries);
         assert_eq!(kept, all_kept);
+        assert_eq!(blocks, all_blocks);
         assert_eq!(comments.len(), all_comments.len());
     }
 }

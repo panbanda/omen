@@ -19,6 +19,7 @@
 //! it, because it gives the handler as a value.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::path::Path;
 
 use petgraph::algo::dominators::simple_fast;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -28,8 +29,8 @@ use serde::{Deserialize, Serialize};
 use super::entry::EntryPoint;
 use super::{Sink, SinkCategory};
 use crate::core::Language;
-use crate::index::model::{ResolutionBasis, Span};
-use crate::index::view::CallView;
+use crate::index::model::{ResolutionBasis, Span, SymbolKind};
+use crate::index::view::{CallView, ViewSymbol};
 
 /// How one symbol on a path leads to the next symbol.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -242,6 +243,16 @@ fn edges_of(
     min_basis: ResolutionBasis,
 ) -> BTreeMap<usize, (ResolutionBasis, EdgeKind)> {
     let mut edges: BTreeMap<usize, (ResolutionBasis, EdgeKind)> = BTreeMap::new();
+    if is_ruby_body(&view.symbols[symbol]) {
+        // The body registers its blocks, and a callback, a scope, or a defined method runs
+        // them later. Its own calls run when the file loads.
+        for (target, basis) in view.function_reference_edges(symbol) {
+            if basis.rank() >= min_basis.rank() && view.is_made_by(*target, symbol) {
+                edges.insert(*target, (*basis, EdgeKind::FunctionReference));
+            }
+        }
+        return edges;
+    }
     let kinds = [
         (EdgeKind::Call, view.callee_edges(symbol)),
         (
@@ -261,6 +272,16 @@ fn edges_of(
         }
     }
     edges
+}
+
+/// Tells if the code of `symbol` is the body of a Ruby class or module. Ruby
+/// runs that body once, when it loads the file, and `Name.new` runs only
+/// `initialize`. The index gives the calls and the sinks of the body to the
+/// class, and a call of the class must not reach them. A block of the body
+/// is a function value of its own.
+fn is_ruby_body(symbol: &ViewSymbol) -> bool {
+    matches!(symbol.kind, SymbolKind::Class | SymbolKind::Module)
+        && Language::detect(Path::new(&symbol.file)) == Some(Language::Ruby)
 }
 
 fn search(view: &CallView, start: usize, min_basis: ResolutionBasis) -> Search {
@@ -367,24 +388,38 @@ pub(super) struct InlineRegions<'e> {
 impl<'e> InlineRegions<'e> {
     /// The regions of the entries for which `value_of` gives a value. Of two entries with one
     /// range, the first one gives the value.
+    #[cfg(test)]
     pub(super) fn new(
         entries: &'e [EntryPoint],
         value_of: impl Fn(usize, &EntryPoint) -> Option<usize>,
     ) -> Self {
+        Self::of_places(entries.iter().enumerate().filter_map(|(index, entry)| {
+            let inline = entry.inline_handler.as_ref()?;
+            let value = value_of(index, entry)?;
+            Some((
+                entry.file.as_str(),
+                inline.enclosing.as_deref(),
+                inline.range,
+                value,
+            ))
+        }))
+    }
+
+    /// The regions of function values: the file, the symbol around the value, its range, and
+    /// the value that the caller gives. Of two regions with one range, the first one gives
+    /// the value.
+    pub(super) fn of_places(
+        places: impl IntoIterator<Item = (&'e str, Option<&'e str>, Span, usize)>,
+    ) -> Self {
         let mut by_place: BTreeMap<(&'e str, Option<&'e str>), Place> = BTreeMap::new();
-        for (index, entry) in entries.iter().enumerate() {
-            let (Some(inline), Some(value)) =
-                (entry.inline_handler.as_ref(), value_of(index, entry))
-            else {
-                continue;
-            };
+        for (file, enclosing, range, value) in places {
             by_place
-                .entry((entry.file.as_str(), inline.enclosing.as_deref()))
+                .entry((file, enclosing))
                 .or_default()
                 .regions
                 .push(Region {
-                    start: inline.range.start_byte,
-                    end: inline.range.end_byte,
+                    start: range.start_byte,
+                    end: range.end_byte,
                     parent: None,
                     value,
                 });
@@ -459,21 +494,39 @@ pub fn reachability(
     entries: &[EntryPoint],
     min_basis: ResolutionBasis,
 ) -> Reachability {
-    let regions = InlineRegions::new(entries, |_, entry| {
-        entry
-            .symbol
-            .as_deref()
-            .and_then(|key| view.position_of(key))
+    // A function value of the view that is not an inline handler, as a block of a Ruby class
+    // body, holds its sinks too.
+    let handlers = entries.iter().filter_map(|entry| {
+        let inline = entry.inline_handler.as_ref()?;
+        let value = view.position_of(entry.symbol.as_deref()?)?;
+        Some((
+            entry.file.as_str(),
+            inline.enclosing.as_deref(),
+            inline.range,
+            value,
+        ))
     });
+    let values = view.function_value_places().iter().map(|place| {
+        (
+            place.file.as_str(),
+            place.enclosing.as_deref(),
+            place.range,
+            place.position,
+        )
+    });
+    let regions = InlineRegions::of_places(handlers.chain(values));
     let sink_symbols: Vec<(&Sink, Option<usize>)> = sinks
         .iter()
         .filter(|sink| !sink.flags.in_test && !sink.flags.in_generated)
         .map(|sink| {
-            let symbol = regions.holder(sink).or_else(|| {
-                sink.enclosing
-                    .as_deref()
-                    .and_then(|key| view.position_of(key))
-            });
+            let symbol = regions
+                .holder(sink)
+                .or_else(|| {
+                    sink.enclosing
+                        .as_deref()
+                        .and_then(|key| view.position_of(key))
+                })
+                .filter(|symbol| !is_ruby_body(&view.symbols[*symbol]));
             (sink, symbol)
         })
         .collect();

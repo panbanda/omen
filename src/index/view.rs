@@ -189,6 +189,18 @@ pub struct FunctionValue<'r> {
     pub is_test: bool,
 }
 
+/// Where a function value of the view is, and its position in the view.
+#[derive(Debug, Clone)]
+pub struct FunctionValuePlace {
+    pub file: String,
+    /// The key of the definition that contains the function value.
+    pub enclosing: Option<String>,
+    pub range: Span,
+    pub position: usize,
+    /// The position of the definition or the function value that makes it.
+    pub maker: Option<usize>,
+}
+
 pub struct CallView {
     /// The definitions, in the order of the file and the position. A field
     /// is not in the view.
@@ -206,6 +218,8 @@ pub struct CallView {
     function_references: Vec<Vec<(usize, ResolutionBasis)>>,
     stored_calls: Vec<StoredCall>,
     call_resolution_ranges: Vec<Range<usize>>,
+    /// The function values that `add_function_values` added, with their place.
+    function_value_places: Vec<FunctionValuePlace>,
     /// The counts of all call sites of the input, also of the calls that
     /// are not in a definition.
     summary: ResolutionSummary,
@@ -364,6 +378,7 @@ impl CallView {
                 .collect(),
             stored_calls,
             call_resolution_ranges,
+            function_value_places: Vec::new(),
             summary,
             sources: index.files.len(),
             fingerprint: None,
@@ -432,15 +447,22 @@ impl CallView {
             }
             self.function_references
                 .push(functions.into_iter().collect());
-            if let Some(maker) = value
+            let maker = value
                 .parent
                 .as_deref()
                 .or(value.enclosing.as_deref())
-                .and_then(|key| self.by_key.get(key).copied())
-            {
+                .and_then(|key| self.by_key.get(key).copied());
+            if let Some(maker) = maker {
                 self.function_references[maker].push((position, ResolutionBasis::LexicalScope));
                 makers.insert(maker);
             }
+            self.function_value_places.push(FunctionValuePlace {
+                file: value.file.clone(),
+                enclosing: value.enclosing.clone(),
+                range: value.range,
+                position,
+                maker,
+            });
         }
         for target in touched {
             self.callers[target].sort_unstable();
@@ -518,6 +540,20 @@ impl CallView {
     /// of each name. These edges are not calls, and `callee_edges` does not have them.
     pub fn function_reference_edges(&self, symbol: usize) -> &[(usize, ResolutionBasis)] {
         &self.function_references[symbol]
+    }
+
+    /// The function values that the view adds to the definitions of the index, in the order
+    /// of their position.
+    pub fn function_value_places(&self) -> &[FunctionValuePlace] {
+        &self.function_value_places
+    }
+
+    /// Tells if `value` is a function value that `maker` makes.
+    pub fn is_made_by(&self, value: usize, maker: usize) -> bool {
+        let places = &self.function_value_places;
+        places
+            .binary_search_by_key(&value, |place| place.position)
+            .is_ok_and(|found| places[found].maker == Some(maker))
     }
 
     /// The call sites in the body of one definition, in source order.
