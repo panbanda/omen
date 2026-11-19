@@ -1,9 +1,11 @@
 //! Graph algorithms that the analyzers share.
 //!
-//! This module has the only PageRank implementation and the only call to Tarjan's algorithm.
+//! This module has the only PageRank implementation and the only implementation of Tarjan's
+//! algorithm.
 //! The results depend only on the node order and the edge order of the graph.
 
-use petgraph::algo::tarjan_scc;
+use std::num::NonZeroUsize;
+
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
@@ -75,8 +77,90 @@ pub fn pagerank<N, E>(graph: &DiGraph<N, E>, options: &PageRankOptions) -> Vec<f
 /// Finds the strongly connected components with Tarjan's algorithm.
 ///
 /// The components are in reverse topological order.
+///
+/// This is the algorithm of `petgraph::algo::tarjan_scc`, the variant of David J. Pierce, with
+/// an explicit stack in place of recursion, because a long chain of edges overflows the stack
+/// of the thread. The order of the components and of the nodes in each component is the same.
 pub fn strongly_connected_components<N, E>(graph: &DiGraph<N, E>) -> Vec<Vec<NodeIndex>> {
-    tarjan_scc(graph)
+    struct Visit<'graph, E> {
+        node: NodeIndex,
+        neighbors: petgraph::graph::Neighbors<'graph, E>,
+        local_root: bool,
+    }
+    // Each value of `root_index` is the index of a visit, or, after its component is complete,
+    // the number of the component. The numbers of the components count down from `usize::MAX`,
+    // so they are larger than each index of a visit.
+    let mut root_index: Vec<Option<NonZeroUsize>> = vec![None; graph.node_count()];
+    let mut next_index = 1usize;
+    let mut component_number = usize::MAX;
+    let mut waiting: Vec<NodeIndex> = Vec::new();
+    let mut components = Vec::new();
+    let mut visits: Vec<Visit<'_, E>> = Vec::new();
+    for start in graph.node_indices() {
+        if root_index[start.index()].is_some() {
+            continue;
+        }
+        root_index[start.index()] = NonZeroUsize::new(next_index);
+        next_index += 1;
+        visits.push(Visit {
+            node: start,
+            neighbors: graph.neighbors(start),
+            local_root: true,
+        });
+        while let Some(visit) = visits.last_mut() {
+            let node = visit.node;
+            if let Some(next) = visit.neighbors.next() {
+                if root_index[next.index()].is_none() {
+                    root_index[next.index()] = NonZeroUsize::new(next_index);
+                    next_index += 1;
+                    visits.push(Visit {
+                        node: next,
+                        neighbors: graph.neighbors(next),
+                        local_root: true,
+                    });
+                } else if root_index[next.index()] < root_index[node.index()] {
+                    root_index[node.index()] = root_index[next.index()];
+                    visit.local_root = false;
+                }
+                continue;
+            }
+            let local_root = visit.local_root;
+            visits.pop();
+            if local_root {
+                let mut adjustment = 1;
+                let number = NonZeroUsize::new(component_number);
+                let start = waiting
+                    .iter()
+                    .rposition(|&other| {
+                        if root_index[node.index()] > root_index[other.index()] {
+                            true
+                        } else {
+                            root_index[other.index()] = number;
+                            adjustment += 1;
+                            false
+                        }
+                    })
+                    .map_or(0, |position| position + 1);
+                root_index[node.index()] = number;
+                waiting.push(node);
+                components.push(waiting[start..].to_vec());
+                waiting.truncate(start);
+                next_index -= adjustment;
+                component_number -= 1;
+            } else {
+                waiting.push(node);
+            }
+            // The parent of `node` reads the result of `node` as the recursion does after the
+            // call returns.
+            if let Some(parent) = visits.last_mut() {
+                if root_index[node.index()] < root_index[parent.node.index()] {
+                    root_index[parent.node.index()] = root_index[node.index()];
+                    parent.local_root = false;
+                }
+            }
+        }
+    }
+    components
 }
 
 /// Finds the strongly connected components that contain a cycle.
@@ -367,6 +451,50 @@ mod tests {
                 case.cycles,
                 "{}",
                 case.name
+            );
+        }
+    }
+
+    /// A chain of nodes deeper than a small stack can hold with one frame for each node.
+    #[test]
+    fn test_components_of_a_long_chain_on_a_small_stack() {
+        const LENGTH: usize = 5_000;
+        let components = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut graph: DiGraph<(), ()> = DiGraph::new();
+                let nodes: Vec<NodeIndex> = (0..LENGTH).map(|_| graph.add_node(())).collect();
+                for pair in nodes.windows(2) {
+                    graph.add_edge(pair[0], pair[1], ());
+                }
+                strongly_connected_components(&graph)
+            })
+            .expect("spawn")
+            .join()
+            .expect("no stack overflow");
+        let expected: Vec<Vec<NodeIndex>> = (0..LENGTH)
+            .rev()
+            .map(|position| vec![NodeIndex::new(position)])
+            .collect();
+        assert_eq!(components, expected);
+    }
+
+    proptest::proptest! {
+        /// The components and the order of the components and of their nodes are those of
+        /// `petgraph::algo::tarjan_scc`.
+        #[test]
+        fn test_components_match_petgraph_tarjan(
+            node_count in 1usize..40,
+            edges in proptest::collection::vec((0usize..40, 0usize..40), 0..120),
+        ) {
+            let mut graph: DiGraph<(), ()> = DiGraph::new();
+            let nodes: Vec<NodeIndex> = (0..node_count).map(|_| graph.add_node(())).collect();
+            for (source, target) in edges {
+                graph.add_edge(nodes[source % node_count], nodes[target % node_count], ());
+            }
+            proptest::prop_assert_eq!(
+                strongly_connected_components(&graph),
+                petgraph::algo::tarjan_scc(&graph)
             );
         }
     }
