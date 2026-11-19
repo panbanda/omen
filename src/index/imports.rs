@@ -1533,7 +1533,8 @@ pub(crate) mod testing {
                 manifests.add_project(file, source);
                 continue;
             }
-            let language = Language::detect(Path::new(file)).unwrap();
+            let language =
+                Language::detect_with_content(Path::new(file), source.as_bytes()).unwrap();
             let parsed = Parser::new()
                 .parse(source.as_bytes(), language, Path::new(file))
                 .unwrap();

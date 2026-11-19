@@ -26,7 +26,7 @@ use crate::index::calls::{one_result, required_type};
 const MAXIMUM_DEPTH: usize = 4;
 
 /// The version of the lists in this module.
-pub const LIST_VERSION: u32 = 2;
+pub const LIST_VERSION: u32 = 3;
 
 /// A list of names, or the reason why the rule does not apply to the language.
 #[derive(Debug, Clone, Copy)]
@@ -231,6 +231,18 @@ const ECMA_BUILTINS: &[&str] = &[
     "setInterval",
     "setTimeout",
     "structuredClone",
+];
+
+/// The compiler of Vue replaces these calls in the script of a component.
+/// No module gives them, and no import binds them.
+const VUE_COMPILER_MACROS: &[&str] = &[
+    "defineEmits",
+    "defineExpose",
+    "defineModel",
+    "defineOptions",
+    "defineProps",
+    "defineSlots",
+    "withDefaults",
 ];
 
 const ECMA_RECEIVERS: &[&str] = &[
@@ -856,7 +868,9 @@ impl<'a> Resolver<'a> {
         } else {
             name.to_string()
         };
-        rules.bare.contains(&name) || self.is_provided(scope.file, &name)
+        let compiler_macro = self.files[scope.file].component.is_some()
+            && VUE_COMPILER_MACROS.contains(&name.as_str());
+        rules.bare.contains(&name) || compiler_macro || self.is_provided(scope.file, &name)
     }
 
     fn external_qualifier(&self, scope: Scope<'_>, qualifier: &str, rules: Rules) -> bool {
@@ -1147,7 +1161,7 @@ mod tests {
 
     #[test]
     fn test_list_version_is_one() {
-        assert_eq!(LIST_VERSION, 2);
+        assert_eq!(LIST_VERSION, 3);
     }
 
     #[test]

@@ -455,8 +455,29 @@ impl AnalyzerTrait for Analyzer {
             items.push(item);
         }
 
+        // A template that the analysis cannot read completely can use each
+        // definition of its script.
+        let components_not_analyzed: Vec<ComponentNotAnalyzed> = index
+            .files
+            .iter()
+            .filter_map(|facts| {
+                let reason = facts.component.as_ref()?.abstention.as_ref()?;
+                Some(ComponentNotAnalyzed {
+                    file: facts.file.clone(),
+                    reason: reason.clone(),
+                })
+            })
+            .collect();
+        let not_analyzed: HashSet<&str> = components_not_analyzed
+            .iter()
+            .map(|component| component.file.as_str())
+            .collect();
+
         // Add tree-sitter detected dead code, skipping items already reported by cargo
         for (key, def) in &all_definitions {
+            if not_analyzed.contains(def.file.as_str()) {
+                continue;
+            }
             // Skip generated files -- they participate in the call graph for
             // reachability but their definitions should not be reported.
             if is_generated_file(&def.file) {
@@ -533,6 +554,7 @@ impl AnalyzerTrait for Analyzer {
                 total_definitions: all_definitions.len(),
                 reachable_count: reachable.len(),
                 unresolved_paths,
+                components_not_analyzed,
             },
         };
 
@@ -2311,6 +2333,16 @@ pub struct AnalysisSummary {
     /// each function with the last name of such a path alive.
     #[serde(default)]
     pub unresolved_paths: usize,
+    /// The Vue components whose templates the analysis cannot read
+    /// completely. No definition of their scripts is reported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components_not_analyzed: Vec<ComponentNotAnalyzed>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComponentNotAnalyzed {
+    pub file: String,
+    pub reason: String,
 }
 
 #[cfg(test)]
@@ -4689,6 +4721,63 @@ mod index_tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    fn analysis_of_files(files: &[(&str, &str)]) -> Analysis {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut names: Vec<PathBuf> = Vec::new();
+        for (name, text) in files {
+            let path = directory.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            names.push(PathBuf::from(name));
+        }
+        names.sort();
+        let files = FileSet::from_files(directory.path().to_path_buf(), names);
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(directory.path()));
+        Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap()
+    }
+
+    #[test]
+    fn test_a_definition_that_only_the_template_uses_is_alive() {
+        let app = "<template>\n  <Card :title=\"title()\" @click=\"save\">\n    <li v-for=\"item in items\" @click=\"open(item)\">{{ item }}</li>\n  </Card>\n</template>\n\n<script setup lang=\"ts\">\nimport Card from './Card.vue';\nconst items = [1];\nfunction title() { return 'a'; }\nfunction save() {}\nfunction open(value: number) { return value; }\nfunction item() {}\nfunction unused() {}\n</script>\n";
+        let card = "<template><p>{{ title }}</p></template>\n<script setup lang=\"ts\">\ndefineProps<{ title: string }>();\n</script>\n";
+        let result = analysis_of_files(&[("src/App.vue", app), ("src/Card.vue", card)]);
+        let mut reported: Vec<&str> = result.items.iter().map(|item| item.name.as_str()).collect();
+        reported.sort();
+        assert_eq!(reported, ["item", "unused"]);
+        assert!(result.summary.components_not_analyzed.is_empty());
+    }
+
+    #[test]
+    fn test_a_definition_of_a_component_that_abstains_is_alive() {
+        let dynamic = "<template><component :is=\"current\"/></template>\n<script setup lang=\"ts\">\nimport Card from './Card.vue';\nconst current = Card;\nfunction helper() {}\n</script>\n";
+        let card = "<template><p/></template>\n<script setup lang=\"ts\">\nfunction unused() {}\n</script>\n";
+        let result = analysis_of_files(&[("src/Dynamic.vue", dynamic), ("src/Card.vue", card)]);
+        let reported: Vec<&str> = result.items.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(reported, ["unused"]);
+        let abstentions: Vec<(&str, &str)> = result
+            .summary
+            .components_not_analyzed
+            .iter()
+            .map(|component| (component.file.as_str(), component.reason.as_str()))
+            .collect();
+        assert_eq!(
+            abstentions,
+            [("src/Dynamic.vue", "the template has a dynamic component")]
+        );
+    }
+
+    #[test]
+    fn test_a_summary_without_components_has_no_component_field() {
+        let result = analysis_of_files(&[("a.ts", "function unused() {}\n")]);
+        let json = serde_json::to_value(&result.summary).unwrap();
+        assert!(json.get("components_not_analyzed").is_none(), "{json}");
     }
 
     /// The names of the reported definitions, each with its `is_test` value.
