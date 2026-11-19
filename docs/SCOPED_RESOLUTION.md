@@ -203,3 +203,53 @@ These repositories are development data, not a held-out evaluation.
 - A twin in a different file, as `#[cfg(unix)] mod imp;` with two files gives,
   is not a twin for the index.
 - A trait method call and a function value are not a part of this change.
+
+## Go packages, embedded fields, and interfaces
+
+### Rules
+
+- A Go qualifier of a type is always the name of an imported package. When
+  no import of the file has the qualifier as its name, the package is not in
+  the repository, and the type is not a repository type.
+- A struct has the methods and the fields of each field that it embeds. An
+  interface has the methods of each interface that it embeds. Two embedded
+  types at one depth with the same method make the call ambiguous.
+- A `_test.go` file is not a part of the package that an import gives. Only
+  a test file of the same directory sees it, and a `_test` package is a
+  different package. A bare name follows the same rules.
+- `f[T](x)` with one argument has the syntax of a conversion to a generic
+  type. It is a call of `f`. A name that is a type gives no edge.
+- Only a local name, an import, or a definition of the package hides a Go
+  builtin. A call of a predeclared type, as `string(x)`, is external.
+- Go has no extension methods. A call on a value of a type of an external
+  package is external, also when a repository method has the name.
+
+### Calls through an interface
+
+A call on a value whose declared type is a Go interface of the repository
+gives no edge. The syntax does not tell the dynamic type, and a wrong edge
+is worse than no edge. The call is ambiguous, with the basis
+`implementation`. The candidates are:
+
+- The method of the interface.
+- The method of each repository type that implements the interface.
+
+A type implements the interface when it has each method name of the
+interface: its own method, or a method that an embedded field promotes.
+An embedded interface of the repository gives the methods that it declares.
+The rule does not compare the signatures, and an embedded interface outside the
+repository adds no name. Thus the candidates can include a type that the
+compiler does not accept. The argument types and the `cfg` twins do not
+select one candidate. Dead code counts each candidate as used.
+
+Dead code also keeps a method alive when its type has each method name of an
+interface of the repository that has the name of the method.
+
+### Limits
+
+- tree-sitter-go 0.25.0 does not parse a method with type parameters, as
+  Go 1.27 permits: `func (f *Flash) Error[T string | template.HTML](...)`.
+  The method is not in the index, and the calls of it have no edge. The case
+  `tests/fixtures/truth/go/generic_methods` and the ledger record this.
+- `new(f())`, as Go 1.26 permits, has the syntax of a type. The call of `f`
+  in it is not recorded.
