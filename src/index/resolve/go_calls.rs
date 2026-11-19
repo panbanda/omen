@@ -260,7 +260,7 @@ fn interface_calls_resolve_at(types: usize, calls: usize, chain: bool) -> std::t
         ("storage/storage.go", storage.as_str()),
         ("main.go", main.as_str()),
     ];
-    let started = std::time::Instant::now();
+    let started = crate::index::timing::Stopwatch::start();
     let found = rows(&files, "main.go");
     let elapsed = started.elapsed();
     assert_eq!(found.len(), calls);
@@ -270,7 +270,7 @@ fn interface_calls_resolve_at(types: usize, calls: usize, chain: bool) -> std::t
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_interface_calls_resolve_in_linear_time() {
-    use super::function_references::assert_scales_linearly;
+    use crate::index::timing::assert_scales_linearly;
     assert_scales_linearly("calls", 8_000, |size| {
         interface_calls_resolve_at(10, size, false)
     });
@@ -298,7 +298,7 @@ fn calls_of_each_interface_method_resolve_at(methods: usize) -> std::time::Durat
         ("go.mod", "module example.com/shop\n"),
         ("storage/storage.go", storage.as_str()),
     ];
-    let started = std::time::Instant::now();
+    let started = crate::index::timing::Stopwatch::start();
     let found = rows(&files, "storage/storage.go");
     let elapsed = started.elapsed();
     assert_eq!(found.len(), methods);
@@ -308,7 +308,7 @@ fn calls_of_each_interface_method_resolve_at(methods: usize) -> std::time::Durat
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_calls_of_many_interface_methods_resolve_in_linear_time() {
-    super::function_references::assert_scales_linearly(
+    crate::index::timing::assert_scales_linearly(
         "methods",
         4_000,
         calls_of_each_interface_method_resolve_at,

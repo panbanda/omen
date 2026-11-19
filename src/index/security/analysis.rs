@@ -949,7 +949,7 @@ mod tests {
             })
             .collect();
         let regions = InlineRegions::new(&entries, |position, _| Some(position));
-        let start = std::time::Instant::now();
+        let start = crate::index::timing::Stopwatch::start();
         for byte in depth + 1..2 * depth + 1 {
             assert_eq!(regions.innermost("a.ts", None, byte), Some(0));
         }
@@ -996,7 +996,7 @@ mod tests {
             let index = CodeIndex::build(Path::new(""), &paths, &read, &|_| Vec::new());
             let analysis = run(&[("server.js", text.as_str())], DEFAULT_MIN_BASIS);
             assert_eq!(analysis.reachability.paths.len(), size);
-            let start = std::time::Instant::now();
+            let start = crate::index::timing::Stopwatch::start();
             let view = CallView::from_index_with_function_values(
                 &index,
                 &inline_handlers(&index, &analysis.entry_points),

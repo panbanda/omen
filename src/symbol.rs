@@ -1302,7 +1302,7 @@ mod tests {
 #[cfg(test)]
 mod timing {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     /// A view of one file with `size` definitions of `helper` and `size`
     /// other names.
@@ -1323,7 +1323,7 @@ mod timing {
     /// The time of an ambiguous lookup and of an unknown lookup.
     fn lookups(size: usize) -> Duration {
         let (_directory, view) = view(size);
-        let started = Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let ambiguous = select(&view, "helper", None).unwrap_err();
         let unknown = select(&view, "nothing_agrees", None).unwrap_err();
         let elapsed = started.elapsed();
@@ -1337,10 +1337,11 @@ mod timing {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_lookup_failures_are_linear_in_the_number_of_definitions() {
-        let small = lookups(5_000);
-        let large = lookups(10_000);
-        let floor = Duration::from_millis(50);
-        eprintln!("5000: {small:?}, 10000: {large:?}");
-        assert!(large < 3 * small.max(floor), "{small:?}, then {large:?}");
+        crate::index::timing::assert_scales_linearly_above(
+            "definitions",
+            5_000,
+            Duration::from_millis(50),
+            lookups,
+        );
     }
 }
