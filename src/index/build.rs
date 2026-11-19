@@ -527,7 +527,7 @@ mod manifest_timing_tests {
                 .ok_or_else(|| crate::core::Error::git("no such file".to_string()))
         };
         let list = |directory: &Path| listings.get(directory).cloned().unwrap_or_default();
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = manifest_files(Path::new("."), &files, &read, &list);
         let elapsed = started.elapsed();
         assert_eq!(found.len(), 2 * size);

@@ -18,7 +18,7 @@ use super::syntax;
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
 use crate::index::model::{ResolutionBasis, ResolutionStatus, Span, Symbol, SymbolKind};
-use crate::parser::ParseResult;
+use crate::parser::{ParseResult, Walk};
 
 mod ecma;
 mod fastapi;
@@ -636,6 +636,12 @@ fn python_function_guards(root: Node<'_>, source: &[u8], range: &Span) -> Vec<St
 
 /// Tells if a declaration or a typed parameter binds `name` to a text with a marker.
 fn bound_to_marker(node: Node<'_>, source: &[u8], name: &str, markers: &[&str]) -> bool {
+    crate::parser::find_preorder(node, |node| binds_to_marker(node, source, name, markers))
+        .is_some()
+}
+
+/// Tells if `node` itself binds `name` to a text with one of the markers.
+fn binds_to_marker(node: Node<'_>, source: &[u8], name: &str, markers: &[&str]) -> bool {
     const BINDINGS: [(&str, &[&str], &[&str]); 5] = [
         ("variable_declarator", &["name"], &["value"]),
         ("assignment", &["left"], &["right"]),
@@ -694,11 +700,7 @@ fn bound_to_marker(node: Node<'_>, source: &[u8], name: &str, markers: &[&str]) 
             }
         }
     }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
-    children
-        .into_iter()
-        .any(|child| bound_to_marker(child, source, name, markers))
+    false
 }
 
 /// The local bindings of a Go file, by name.
@@ -823,14 +825,18 @@ impl<'a> Context<'a> {
 
     /// The first string literal in the node, or in its descendants.
     fn first_string(&self, node: Node<'_>) -> Option<String> {
-        if self.is_string(node) {
-            return Some(self.string_of(node));
-        }
-        let mut cursor = node.walk();
-        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-        children
-            .into_iter()
-            .find_map(|child| self.first_string(child))
+        let mut found = None;
+        crate::parser::walk_preorder(node, |descendant| {
+            if descendant != node && !descendant.is_named() {
+                Walk::SkipChildren
+            } else if self.is_string(descendant) {
+                found = Some(self.string_of(descendant));
+                Walk::Stop
+            } else {
+                Walk::Children
+            }
+        });
+        found
     }
 
     fn imports(&self, module: &str) -> bool {
@@ -2152,28 +2158,30 @@ impl<'a> Context<'a> {
     }
 
     fn method_router<'t>(&self, node: Node<'t>, out: &mut Vec<(String, Option<Node<'t>>)>) {
-        if node.kind() != "call_expression" {
-            return;
-        }
-        let Some(function) = node.child_by_field_name("function") else {
-            return;
-        };
-        let handler = Self::arguments_of(node).first().copied();
-        match function.kind() {
-            "identifier" if HTTP_VERBS.contains(&self.text(function)) => {
-                out.push((self.text(function).to_uppercase(), handler));
-            }
-            "field_expression" => {
-                if let Some(field) = function.child_by_field_name("field") {
-                    if HTTP_VERBS.contains(&self.text(field)) {
-                        out.push((self.text(field).to_uppercase(), handler));
+        let mut node = node;
+        while node.kind() == "call_expression" {
+            let Some(function) = node.child_by_field_name("function") else {
+                return;
+            };
+            let handler = Self::arguments_of(node).first().copied();
+            match function.kind() {
+                "identifier" if HTTP_VERBS.contains(&self.text(function)) => {
+                    out.push((self.text(function).to_uppercase(), handler));
+                    return;
+                }
+                "field_expression" => {
+                    if let Some(field) = function.child_by_field_name("field") {
+                        if HTTP_VERBS.contains(&self.text(field)) {
+                            out.push((self.text(field).to_uppercase(), handler));
+                        }
                     }
+                    let Some(value) = function.child_by_field_name("value") else {
+                        return;
+                    };
+                    node = value;
                 }
-                if let Some(value) = function.child_by_field_name("value") {
-                    self.method_router(value, out);
-                }
+                _ => return,
             }
-            _ => {}
         }
     }
 
@@ -2273,15 +2281,16 @@ impl<'a> Context<'a> {
 }
 
 fn collect_strings(node: Node<'_>, context: &Context<'_>, out: &mut Vec<String>) {
-    if context.is_string(node) {
-        out.push(context.string_of(node));
-        return;
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-    for child in children {
-        collect_strings(child, context, out);
-    }
+    crate::parser::walk_preorder(node, |descendant| {
+        if descendant != node && !descendant.is_named() {
+            Walk::SkipChildren
+        } else if context.is_string(descendant) {
+            out.push(context.string_of(descendant));
+            Walk::SkipChildren
+        } else {
+            Walk::Children
+        }
+    });
 }
 
 #[cfg(test)]
@@ -2293,8 +2302,131 @@ pub(super) mod tests {
     use crate::index::extract::{extract_file, link_files};
     use crate::index::imports::{resolve_imports, Manifests};
     use crate::index::resolve::resolve_references;
-    pub(super) use crate::index::timing::assert_scales_linearly;
+    pub(super) use crate::index::timing::{assert_scales_linearly, assert_scales_linearly_above};
     use crate::parser::Parser;
+
+    /// The entry points of one file, found on a thread with a small stack.
+    fn deep_entries(language: Language, file: &'static str, source: String) -> Vec<EntryPoint> {
+        crate::parser::deep::on_small_stack(move || entries(language, &[(file, source.as_str())]))
+    }
+
+    fn frameworks(found: &[EntryPoint]) -> Vec<String> {
+        found.iter().map(|entry| entry.framework.clone()).collect()
+    }
+
+    /// `bound_to_marker` reads each node of a file with deep nesting.
+    #[test]
+    fn an_axum_router_in_a_variable_beside_deep_nesting() {
+        use crate::parser::deep::nest;
+        let source = format!(
+            "use axum::routing::get;\n\nasync fn list() {{}}\n\nfn deep() -> i32 {{ {} }}\n\nfn app() {{\n    let router = Router::new();\n    router.route(\"/x\", get(list));\n}}\n",
+            nest("(", "1", ")")
+        );
+        deep_entries(Language::Rust, "main.rs", source);
+    }
+
+    /// `method_router` reads each call of a long chain of methods.
+    #[test]
+    fn an_axum_route_with_a_long_chain_of_methods() {
+        let source = format!(
+            "use axum::{{routing::get, Router}};\n\nasync fn list() {{}}\n\npub fn app() -> Router {{\n    Router::new().route(\"/x\", get(list){})\n}}\n",
+            ".post(list)".repeat(crate::parser::deep::DEPTH)
+        );
+        let found = deep_entries(Language::Rust, "main.rs", source);
+        assert!(frameworks(&found).contains(&"axum".to_string()));
+    }
+
+    /// `first_string` reads each level of a deep annotation argument.
+    #[test]
+    fn a_spring_mapping_with_a_deep_path() {
+        use crate::parser::deep::nest;
+        let source = format!(
+            "@RestController\npublic class UserController {{\n    @GetMapping({})\n    public String show() {{\n        return \"\";\n    }}\n}}\n",
+            nest("(", "\"/users\"", ")")
+        );
+        deep_entries(Language::Java, "UserController.java", source);
+    }
+
+    /// `collect_strings` reads each level of the methods of a Flask route.
+    #[test]
+    fn a_flask_route_with_deep_methods() {
+        use crate::parser::deep::nest;
+        let source = format!(
+            "from flask import Flask\n\napp = Flask(__name__)\n\n@app.route(\"/x\", methods={})\ndef update():\n    return 1\n",
+            nest("[", "\"POST\"", "]")
+        );
+        deep_entries(Language::Python, "app.py", source);
+    }
+
+    fn go_main(body: &str) -> String {
+        format!(
+            "package main\n\nimport \"net/http\"\n\nfunc health(w http.ResponseWriter, r *http.Request) {{}}\n\nfunc auth(next http.Handler) http.Handler {{ return next }}\n\nfunc main() {{\n\tmux := http.NewServeMux()\n{body}\n\thttp.ListenAndServe(\":80\", mux)\n}}\n"
+        )
+    }
+
+    /// `go_handler_at` reads each wrapper call around a handler.
+    #[test]
+    fn a_go_handler_inside_deep_wrapper_calls() {
+        use crate::parser::deep::nest;
+        let body = format!("\tmux.Handle(\"/c\", {})", nest("wrap(", "health", ")"));
+        deep_entries(Language::Go, "main.go", go_main(&body));
+    }
+
+    /// `go_callee` and `go_guard_name` read each call of a chain of calls.
+    #[test]
+    fn a_go_handler_wrapped_by_a_long_chain_of_calls() {
+        let body = format!(
+            "\tmux.Handle(\"/c\", auth{}(http.HandlerFunc(health)))",
+            "()".repeat(crate::parser::deep::DEPTH)
+        );
+        deep_entries(Language::Go, "main.go", go_main(&body));
+    }
+
+    fn gin_main(body: &str) -> String {
+        format!(
+            "package main\n\nimport \"github.com/gin-gonic/gin\"\n\nfunc show(c *gin.Context) {{}}\n\nfunc main() {{\n\trouter := gin.Default()\n{body}\n\trouter.GET(\"/a\", show)\n}}\n"
+        )
+    }
+
+    /// `escape` reads each parenthesis around an argument.
+    #[test]
+    fn a_go_router_inside_deep_parentheses() {
+        use crate::parser::deep::nest;
+        let body = format!("\tuse({})", nest("(", "router", ")"));
+        deep_entries(Language::Go, "main.go", gin_main(&body));
+    }
+
+    /// `literal_values` reads each level of a composite literal.
+    #[test]
+    fn a_go_router_inside_a_deep_composite_literal() {
+        use crate::parser::deep::nest;
+        let body = format!(
+            "\tvalues := []any{{{}}}\n\t_ = values",
+            nest("{", "router", "}")
+        );
+        deep_entries(Language::Go, "main.go", gin_main(&body));
+    }
+
+    /// `eval` reads each call of a long chain of groups.
+    #[test]
+    fn a_go_router_with_a_long_chain_of_groups() {
+        let body = format!(
+            "\trouter{}.GET(\"/b\", show)",
+            ".Group(\"/g\")".repeat(crate::parser::deep::DEPTH)
+        );
+        deep_entries(Language::Go, "main.go", gin_main(&body));
+    }
+
+    /// `eval` reads each parenthesis around the value of a router.
+    #[test]
+    fn a_go_router_made_inside_deep_parentheses() {
+        use crate::parser::deep::nest;
+        let body = format!(
+            "\tother := {}\n\tother.GET(\"/b\", show)",
+            nest("(", "gin.Default()", ")")
+        );
+        deep_entries(Language::Go, "main.go", gin_main(&body));
+    }
 
     #[test]
     fn concurrent_requests_for_one_file_parse_it_once() {
@@ -2356,7 +2488,7 @@ pub(super) mod tests {
             resolve_imports(&mut index, &test_manifests());
             resolve_references(&mut index);
         }
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = find_entry_points(&parsed, &index);
         (found, started.elapsed())
     }
@@ -2832,6 +2964,97 @@ func makeHandler(callback func(error)) http.Handler { return nil }
     }
 
     const CHI: &str = "\"github.com/go-chi/chi/v5\"";
+
+    /// The Go routes of `source` on a thread with a small stack, and the same routes on a
+    /// thread with a stack of 1 GiB.
+    fn go_routes_on_small_and_large_stack(source: String) -> (Vec<String>, Vec<String>) {
+        let copy = source.clone();
+        let small =
+            crate::parser::deep::on_small_stack(move || go_routes(&[("main.go", copy.as_str())]));
+        let large = std::thread::Builder::new()
+            .stack_size(1 << 30)
+            .spawn(move || go_routes(&[("main.go", source.as_str())]))
+            .expect("spawn")
+            .join()
+            .expect("no stack overflow");
+        (small, large)
+    }
+
+    /// The nesting depth of the tests of the Go interpreter. In a debug build, the recursion of
+    /// the interpreter without `stacker` overflows the stack of `on_small_stack` at a depth of 50.
+    const INTERPRETER_DEPTH: usize = 200;
+
+    fn interpreter_nest(open: &str, middle: &str, close: &str) -> String {
+        crate::parser::deep::nest_to(INTERPRETER_DEPTH, open, middle, close)
+    }
+
+    /// `closure` reads a function literal inside each level of nested function literals.
+    #[test]
+    fn go_routes_inside_deeply_nested_closures() {
+        let body = format!(
+            "func routes() http.Handler {{\n\tr := chi.NewRouter()\n\t{}\n\treturn r\n}}\n",
+            interpreter_nest("func() {\n", "r.Get(\"/x\", list)\n", "}()\n")
+        );
+        let (small, large) = go_routes_on_small_and_large_stack(go_source(&[CHI], &body));
+        assert_eq!(small, large);
+    }
+
+    /// `chi_route` reads the callback of each level of nested `Route` calls.
+    #[test]
+    fn go_routes_inside_deeply_nested_chi_routes() {
+        let body = format!(
+            "func routes() http.Handler {{\n\tr := chi.NewRouter()\n\t{}\n\treturn r\n}}\n",
+            interpreter_nest(
+                "r.Route(\"/a\", func(r chi.Router) {\n",
+                "r.Get(\"/x\", list)\n",
+                "})\n"
+            )
+        );
+        let (small, large) = go_routes_on_small_and_large_stack(go_source(&[CHI], &body));
+        assert_eq!(small, large);
+        assert!(
+            small
+                .iter()
+                .any(|route| route.contains(&format!("{}/x", "/a".repeat(INTERPRETER_DEPTH)))),
+            "{:?}",
+            small.first()
+        );
+    }
+
+    /// `chi_group` reads the callback of each level of nested `Group` calls.
+    #[test]
+    fn go_routes_inside_deeply_nested_chi_groups() {
+        let body = format!(
+            "func routes() http.Handler {{\n\tr := chi.NewRouter()\n\t{}\n\treturn r\n}}\n",
+            interpreter_nest(
+                "r.Group(func(r chi.Router) {\n",
+                "r.Get(\"/x\", list)\n",
+                "})\n"
+            )
+        );
+        let (small, large) = go_routes_on_small_and_large_stack(go_source(&[CHI], &body));
+        assert_eq!(small, large);
+        assert!(!small.is_empty());
+    }
+
+    /// `eval`, `call_function`, and `walk_declared` read a chain of more factories than the
+    /// limit of the evaluation.
+    #[test]
+    fn go_routes_from_a_chain_of_factories_longer_than_the_limit() {
+        let count = super::go_routes::EVAL_DEPTH_LIMIT + 100;
+        let mut body = String::new();
+        for index in 0..count {
+            body.push_str(&format!(
+                "func f{index}() chi.Router {{ return f{}() }}\n",
+                index + 1
+            ));
+        }
+        body.push_str(&format!(
+            "func f{count}() chi.Router {{ return chi.NewRouter() }}\n\nfunc routes() http.Handler {{\n\tr := f0()\n\tr.Get(\"/x\", list)\n\treturn r\n}}\n"
+        ));
+        let (small, large) = go_routes_on_small_and_large_stack(go_source(&[CHI], &body));
+        assert_eq!(small, large);
+    }
     const ECHO: &str = "\"github.com/labstack/echo/v4\"";
     const MUX: &str = "\"github.com/gorilla/mux\"";
     const GIN: &str = "\"github.com/gin-gonic/gin\"";
@@ -5277,16 +5500,6 @@ func routes() {
         assert_eq!(run(small * 2).0, expected(small * 2));
     }
 
-    fn assert_linear_growth(small: usize, run: fn(usize) -> Search) {
-        let (_, first) = run(small);
-        let (_, second) = run(small * 2);
-        let floor = std::time::Duration::from_millis(300);
-        assert!(
-            second < 3 * first.max(floor),
-            "{first:?} for {small}, then {second:?}"
-        );
-    }
-
     // The ratio check runs only in the release timing step: a debug or coverage
     // build on a shared runner is too slow and too noisy for a ratio of times.
     macro_rules! go_timing {
@@ -5299,7 +5512,12 @@ func routes() {
             #[test]
             #[ignore = "timing: run in release"]
             fn $large_test() {
-                assert_linear_growth($small, $scenario);
+                assert_scales_linearly_above(
+                    stringify!($scenario),
+                    $small,
+                    std::time::Duration::from_millis(300),
+                    |size| $scenario(size).1,
+                );
                 let (_, took) = $scenario($large);
                 assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
             }
@@ -5533,7 +5751,7 @@ func routes() {
         for index in 0..count {
             pattern.push_str(&format!("/{{p{index}}}"));
         }
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         assert!(go_routes::servemux_pattern(&pattern).is_some());
         (1, started.elapsed())
     }
@@ -6784,6 +7002,37 @@ func routes() {
         );
     }
 
+    /// The walks of the Rails routes, callbacks, and configuration stop at a depth of 1,000.
+    /// Deeper nesting in each of these files does not overflow a small stack.
+    #[test]
+    fn rails_files_with_deep_nesting() {
+        use crate::parser::deep::{nest, on_small_stack};
+        let ifs = nest("if a\n", "x\n", "end\n");
+        let parentheses = nest("(", "1", ")");
+        let routes = format!(
+            "Rails.application.routes.draw do\n{ifs}  resources :users\n  get {parentheses}, to: \"users#show\"\nend\n"
+        );
+        let controller = format!(
+            "class UsersController < ApplicationController\n{ifs}  before_action :auth, only: {parentheses}\n  def show; end\nend\n"
+        );
+        let application = format!(
+            "module App\n  class Application < Rails::Application\n{ifs}    config.api_only = {parentheses}\n  end\nend\n"
+        );
+        let inflections = format!(
+            "ActiveSupport::Inflector.inflections(:en) do |inflect|\n{ifs}  inflect.irregular {parentheses}, \"x\"\nend\n"
+        );
+        on_small_stack(move || {
+            rails_routes(
+                &routes,
+                &[
+                    ("controllers/users_controller.rb", controller.as_str()),
+                    ("config/application.rb", application.as_str()),
+                    ("config/initializers/inflections.rb", inflections.as_str()),
+                ],
+            );
+        });
+    }
+
     fn rails_routes(routes: &str, controllers: &[(&str, &str)]) -> Vec<EntryPoint> {
         let mut files = vec![("config/routes.rb", routes)];
         files.extend_from_slice(controllers);
@@ -7586,6 +7835,27 @@ func routes() {
         assert!(!has_symbol("inline"));
         assert_eq!(symbol_of("odd"), None);
         assert!(has_symbol("plain"));
+    }
+
+    #[test]
+    fn an_acronym_after_an_inflections_block_of_another_locale_is_read() {
+        let routes =
+            "Rails.application.routes.draw do\n  get \"/u\", to: \"api/users#show\"\nend\n";
+        let upper = "module API\n  class UsersController\n    before_action :upper\n    def show; end\n  end\nend\n";
+        let lower = "module Api\n  class UsersController\n    before_action :lower\n    def show; end\n  end\nend\n";
+        let inflections = "ActiveSupport::Inflector.inflections(:fr) do |inflect|\n  inflect.plural \"x\", \"y\"\nend\nActiveSupport::Inflector.inflections(:en) do |inflect|\n  inflect.acronym \"API\"\nend\n";
+        let found = rails_routes(
+            routes,
+            &[
+                ("controllers/upper.rb", upper),
+                ("controllers/lower.rb", lower),
+                ("config/initializers/inflections.rb", inflections),
+            ],
+        );
+        assert_eq!(
+            found[0].symbol.as_deref(),
+            Some("controllers/upper.rb#API.UsersController.show")
+        );
     }
 
     #[test]

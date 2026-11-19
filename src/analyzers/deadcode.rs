@@ -852,31 +852,26 @@ fn extract_python_context(result: &parser::ParseResult) -> PythonContext {
         decorators: HashMap::new(),
     };
 
-    fn visit(node: tree_sitter::Node<'_>, source: &[u8], ctx: &mut PythonContext) {
+    parser::walk_preorder(root, |node| {
         match node.kind() {
             // Parse `__all__ = ["func1", "func2"]`
             "expression_statement" => {
-                try_extract_all_assignment(&node, source, ctx);
+                try_extract_all_assignment(&node, source, &mut ctx);
             }
             // Parse `if __name__ == "__main__":` blocks
             "if_statement" => {
                 if is_name_main_guard(&node, source) {
-                    collect_calls_in_subtree(&node, source, &mut ctx.name_main_calls);
+                    collect_calls_in_subtree(node, source, &mut ctx.name_main_calls);
                 }
             }
             // Parse decorated function definitions
             "decorated_definition" => {
-                extract_python_decorators(&node, source, ctx);
+                extract_python_decorators(&node, source, &mut ctx);
             }
             _ => {}
         }
-
-        for child in node.children(&mut node.walk()) {
-            visit(child, source, ctx);
-        }
-    }
-
-    visit(root, source, &mut ctx);
+        parser::Walk::Children
+    });
     ctx
 }
 
@@ -942,30 +937,30 @@ fn is_name_main_guard(node: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
 
 /// Collect all function/method call names within a subtree.
 fn collect_calls_in_subtree(
-    node: &tree_sitter::Node<'_>,
+    node: tree_sitter::Node<'_>,
     source: &[u8],
     calls: &mut HashSet<String>,
 ) {
-    if node.kind() == "call" {
-        // Get the function name from the call
-        if let Some(fn_node) = node.child_by_field_name("function") {
-            if fn_node.kind() == "identifier" {
-                if let Ok(name) = fn_node.utf8_text(source) {
-                    calls.insert(name.to_string());
-                }
-            } else if fn_node.kind() == "attribute" {
-                // obj.method() -- grab the attribute (method) name
-                if let Some(attr) = fn_node.child_by_field_name("attribute") {
-                    if let Ok(name) = attr.utf8_text(source) {
+    parser::walk_preorder(node, |node| {
+        if node.kind() == "call" {
+            // Get the function name from the call
+            if let Some(fn_node) = node.child_by_field_name("function") {
+                if fn_node.kind() == "identifier" {
+                    if let Ok(name) = fn_node.utf8_text(source) {
                         calls.insert(name.to_string());
+                    }
+                } else if fn_node.kind() == "attribute" {
+                    // obj.method() -- grab the attribute (method) name
+                    if let Some(attr) = fn_node.child_by_field_name("attribute") {
+                        if let Ok(name) = attr.utf8_text(source) {
+                            calls.insert(name.to_string());
+                        }
                     }
                 }
             }
         }
-    }
-    for child in node.children(&mut node.walk()) {
-        collect_calls_in_subtree(&child, source, calls);
-    }
+        parser::Walk::Children
+    });
 }
 
 /// Extract decorators from a `decorated_definition` node and associate them with the function.
@@ -1036,29 +1031,34 @@ fn extract_ruby_visibility(result: &parser::ParseResult) -> RubyVisibility {
         method_visibility: HashMap::new(),
     };
 
-    fn visit_class_body(node: tree_sitter::Node<'_>, source: &[u8], vis: &mut RubyVisibility) {
-        // Only process class/module bodies
-        if node.kind() != "class" && node.kind() != "module" && node.kind() != "singleton_class" {
-            // Recurse to find classes/modules
-            for child in node.children(&mut node.walk()) {
-                visit_class_body(child, source, vis);
+    // A stack in place of recursion, in the order of a recursive walk.
+    fn visit_class_body(root: tree_sitter::Node<'_>, source: &[u8], vis: &mut RubyVisibility) {
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            let children: Vec<_> = node.children(&mut node.walk()).collect();
+            // Only process class/module bodies
+            if node.kind() != "class" && node.kind() != "module" && node.kind() != "singleton_class"
+            {
+                // Search the children for classes/modules
+                pending.extend(children.into_iter().rev());
+                continue;
             }
-            return;
-        }
 
-        // Find the body node inside the class/module
-        if let Some(body) = node.child_by_field_name("body") {
-            process_body_for_visibility(&body, source, vis);
-        } else {
-            // Some grammars put children directly under class node
-            process_body_for_visibility(&node, source, vis);
-        }
-
-        // Recurse into nested classes
-        for child in node.children(&mut node.walk()) {
-            if child.kind() == "class" || child.kind() == "module" {
-                visit_class_body(child, source, vis);
+            // Find the body node inside the class/module
+            if let Some(body) = node.child_by_field_name("body") {
+                process_body_for_visibility(&body, source, vis);
+            } else {
+                // Some grammars put children directly under class node
+                process_body_for_visibility(&node, source, vis);
             }
+
+            // Visit nested classes
+            pending.extend(
+                children
+                    .into_iter()
+                    .rev()
+                    .filter(|child| child.kind() == "class" || child.kind() == "module"),
+            );
         }
     }
 
@@ -1196,6 +1196,11 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
     let mut token_tree_depths: Vec<u32> = Vec::new();
     let mut value_uses: BTreeSet<(String, String, bool, bool)> = BTreeSet::new();
     let mut path_uses: Vec<PathUse> = Vec::new();
+    // The nodes from the root to the parent of the current node. The walk
+    // keeps them because `Node::parent` searches from the root and
+    // `TreeCursor::depth` counts the cursor stack, so a call for each node is
+    // quadratic in a deep tree.
+    let mut ancestors: Vec<tree_sitter::Node<'_>> = Vec::new();
 
     // Iterative pre-order traversal
     loop {
@@ -1206,7 +1211,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         // left behind.
         while scopes
             .last()
-            .is_some_and(|(depth, _)| *depth >= cursor.depth())
+            .is_some_and(|(scope_depth, _)| *scope_depth as usize >= ancestors.len())
         {
             scopes.pop();
         }
@@ -1226,7 +1231,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         // inside an anonymous callback is not mistaken for module-level code.
         if is_function_node(kind) {
             scopes.push((
-                cursor.depth(),
+                ancestors.len() as u32,
                 parser::function_binding_name(&node, source, lang),
             ));
         }
@@ -1244,10 +1249,12 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         };
 
         // Collect usages from identifiers (excluding definitions)
-        if (kind == "identifier" || kind == "type_identifier") && !is_definition_context(&node) {
+        if (kind == "identifier" || kind == "type_identifier")
+            && !is_definition_context(&node, &ancestors)
+        {
             if let Ok(name) = node.utf8_text(source) {
                 fdc.usages.insert(name.to_string());
-                if kind == "identifier" && !is_call_target(&node) {
+                if kind == "identifier" && !is_call_target(&node, &ancestors) {
                     let (caller, module_scope) = match &current_function {
                         Some(caller) => (caller.clone(), from_module_scope),
                         None => (MODULE_SCOPE.to_string(), true),
@@ -1261,7 +1268,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         // `#[serde(default = "path")]` names a function in a string. The derive calls it.
         if lang == Language::Rust && kind == "attribute_item" {
             if let Ok(text) = node.utf8_text(source) {
-                let chain = rust_module_chain(&node, source);
+                let chain = rust_module_chain(&ancestors, source);
                 for path in serde_function_names(text) {
                     let segments: Vec<String> = path.split("::").map(str::to_string).collect();
                     if let Some(name) = segments.last() {
@@ -1291,7 +1298,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         }
 
         // `Util.replacer` reads the function `replacer` as a property.
-        if kind == "property_identifier" && is_read_as_property(&node) {
+        if kind == "property_identifier" && is_read_as_property(&node, &ancestors) {
             if let Ok(name) = node.utf8_text(source) {
                 fdc.usages.insert(name.to_string());
                 let (caller, module_scope) = match &current_function {
@@ -1304,6 +1311,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
 
         // Move to next node in pre-order traversal
         if cursor.goto_first_child() {
+            ancestors.push(node);
             continue;
         }
 
@@ -1328,6 +1336,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                 fdc.path_uses = path_uses;
                 return; // Done traversing
             }
+            ancestors.pop();
         }
     }
 }
@@ -1497,7 +1506,9 @@ impl<'a> RustPaths<'a> {
                 tree.tree
                     .root_node()
                     .descendant_for_byte_range(at, at)
-                    .is_some_and(|node| rust_module_chain(&node, &tree.source) == chain)
+                    .is_some_and(|node| {
+                        rust_module_chain(&ancestors_of(node), &tree.source) == chain
+                    })
             })
             .collect()
     }
@@ -1564,29 +1575,48 @@ fn key_path(key: &str) -> &str {
     path.split('~').next().unwrap_or(path)
 }
 
-/// The names of the `mod` items around a node, from the outermost to the innermost.
-fn rust_module_chain(node: &tree_sitter::Node<'_>, source: &[u8]) -> Vec<String> {
-    let mut chain = Vec::new();
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if parent.kind() == "mod_item" {
-            if let Some(name) = parent
+/// The names of the `mod` items of the ancestors of a node, from the outermost
+/// to the innermost.
+fn rust_module_chain(ancestors: &[tree_sitter::Node<'_>], source: &[u8]) -> Vec<String> {
+    ancestors
+        .iter()
+        .filter(|ancestor| ancestor.kind() == "mod_item")
+        .filter_map(|module| {
+            module
                 .child_by_field_name("name")
                 .and_then(|name| name.utf8_text(source).ok())
-            {
-                chain.push(name.to_string());
-            }
-        }
-        current = parent.parent();
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// The nodes from the root to the parent of the node.
+fn ancestors_of(node: tree_sitter::Node<'_>) -> Vec<tree_sitter::Node<'_>> {
+    let mut ancestors: Vec<_> =
+        std::iter::successors(node.parent(), |parent| parent.parent()).collect();
+    ancestors.reverse();
+    ancestors
+}
+
+/// The parent and the parent of the parent, from the ancestors of a node.
+fn parent_and_grandparent<'tree>(
+    ancestors: &[tree_sitter::Node<'tree>],
+) -> (
+    Option<tree_sitter::Node<'tree>>,
+    Option<tree_sitter::Node<'tree>>,
+) {
+    match ancestors {
+        [.., grandparent, parent] => (Some(*parent), Some(*grandparent)),
+        [parent] => (Some(*parent), None),
+        [] => (None, None),
     }
-    chain.reverse();
-    chain
 }
 
 /// Whether a property name is read as a value: it is the member of a member
 /// expression, and the expression is not the callee of a call.
-fn is_read_as_property(node: &tree_sitter::Node<'_>) -> bool {
-    let Some(access) = node.parent().filter(|p| p.kind() == "member_expression") else {
+fn is_read_as_property(node: &tree_sitter::Node<'_>, ancestors: &[tree_sitter::Node<'_>]) -> bool {
+    let (parent, grandparent) = parent_and_grandparent(ancestors);
+    let Some(access) = parent.filter(|p| p.kind() == "member_expression") else {
         return false;
     };
     if access
@@ -1595,7 +1625,7 @@ fn is_read_as_property(node: &tree_sitter::Node<'_>) -> bool {
     {
         return false;
     }
-    !access.parent().is_some_and(|call| {
+    !grandparent.is_some_and(|call| {
         call.kind() == "call_expression"
             && call
                 .child_by_field_name("function")
@@ -1606,8 +1636,9 @@ fn is_read_as_property(node: &tree_sitter::Node<'_>) -> bool {
 /// Whether the identifier names the callee of a call, or a member of an object,
 /// and not a value. The call or the member access has its own reference in
 /// the index.
-fn is_call_target(node: &tree_sitter::Node<'_>) -> bool {
-    let Some(parent) = node.parent() else {
+fn is_call_target(node: &tree_sitter::Node<'_>, ancestors: &[tree_sitter::Node<'_>]) -> bool {
+    let (parent, grandparent) = parent_and_grandparent(ancestors);
+    let Some(parent) = parent else {
         return false;
     };
     let kind = parent.kind();
@@ -1619,7 +1650,7 @@ fn is_call_target(node: &tree_sitter::Node<'_>) -> bool {
             .named_child(0)
             .is_some_and(|object| object.id() != node.id())
     {
-        let calls_the_access = parent.parent().is_some_and(|call| {
+        let calls_the_access = grandparent.is_some_and(|call| {
             let call_kind = call.kind();
             (call_kind.contains("call") || call_kind.contains("invocation"))
                 && call
@@ -1656,8 +1687,11 @@ fn is_function_node(kind: &str) -> bool {
     )
 }
 
-fn is_definition_context(node: &tree_sitter::Node<'_>) -> bool {
-    if let Some(parent) = node.parent() {
+fn is_definition_context(
+    node: &tree_sitter::Node<'_>,
+    ancestors: &[tree_sitter::Node<'_>],
+) -> bool {
+    if let Some(parent) = ancestors.last() {
         let parent_kind = parent.kind();
         // C and C++ put the name of a function in a declarator.
         if parent_kind == "function_declarator"
@@ -2282,6 +2316,76 @@ pub struct AnalysisSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `x + x + ... + x` is a left-deep tree, as deep as the number of terms.
+    /// The walk of the uses must not search up the tree from each node.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_the_uses_of_a_deep_expression_are_read_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("terms", 5_000, |size| {
+            let content = format!("function f(x) {{ return x{}; }}\n", " + x".repeat(size));
+            let result = crate::parser::Parser::new()
+                .parse(
+                    content.as_bytes(),
+                    Language::JavaScript,
+                    std::path::Path::new("a.js"),
+                )
+                .unwrap();
+            let mut fdc = FileDeadCode {
+                path: "a.js".to_string(),
+                definitions: Vec::new(),
+                usages: HashSet::new(),
+                calls: Vec::new(),
+                path_uses: Vec::new(),
+            };
+            let started = crate::index::timing::Stopwatch::start();
+            collect_usages_and_calls(&result, &mut fdc);
+            let elapsed = started.elapsed();
+            assert!(fdc.usages.contains("x"));
+            elapsed
+        });
+    }
+
+    #[test]
+    fn test_python_context_of_deeply_nested_source() {
+        use crate::parser::deep;
+        let calls = deep::on_small_stack(|| {
+            for (_, parsed) in deep::parsed_deep_sources_of(Language::Python) {
+                extract_python_context(parsed);
+            }
+            let code = format!(
+                "if __name__ == \"__main__\":\n    main({})\n",
+                deep::nest("(", "1", ")")
+            );
+            let parsed = crate::parser::Parser::new()
+                .parse(code.as_bytes(), Language::Python, Path::new("a.py"))
+                .unwrap();
+            extract_python_context(&parsed).name_main_calls
+        });
+        assert_eq!(calls, HashSet::from(["main".to_string()]));
+    }
+
+    #[test]
+    fn test_ruby_visibility_of_deeply_nested_source() {
+        use crate::parser::deep;
+        let visibility = deep::on_small_stack(|| {
+            for (_, parsed) in deep::parsed_deep_sources_of(Language::Ruby) {
+                extract_ruby_visibility(parsed);
+            }
+            let code = format!(
+                "x = {}\nclass A\n  private\n  def f\n  end\nend\n",
+                deep::nest("[", "1", "]")
+            );
+            let parsed = crate::parser::Parser::new()
+                .parse(code.as_bytes(), Language::Ruby, Path::new("a.rb"))
+                .unwrap();
+            extract_ruby_visibility(&parsed).method_visibility
+        });
+        assert_eq!(
+            visibility,
+            HashMap::from([("f".to_string(), "private".to_string())])
+        );
+    }
 
     #[test]
     fn test_analyzer_uses_content_source_for_historical_commits() {
@@ -5074,7 +5178,7 @@ mod go_tests {
             ("shop/shop.go", source.as_str()),
         ];
         let (facts, _) = crate::index::imports::testing::index_with_manifests(&files);
-        let started = std::time::Instant::now();
+        let started = crate::index::timing::Stopwatch::start();
         let found = go_interface_methods(&facts);
         let elapsed = started.elapsed();
         assert_eq!(found.len(), size * 2);

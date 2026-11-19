@@ -5,6 +5,8 @@
 //! not say that the code has a vulnerability, and it does not follow data.
 
 pub mod analysis;
+#[cfg(test)]
+mod deep_tests;
 pub mod entry;
 mod matcher;
 pub mod reach;
@@ -312,7 +314,7 @@ mod tests {
                     .expect("each file of the index has a tree")
             })
             .collect();
-        let start = std::time::Instant::now();
+        let start = crate::index::timing::Stopwatch::start();
         let found = find_sinks(&trees, &index);
         (found, start.elapsed())
     }

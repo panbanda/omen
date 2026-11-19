@@ -17,10 +17,10 @@ use std::path::Path;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::analyzers::{hotspot, temporal};
+use crate::analyzers::{complexity, hotspot, temporal};
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
 use crate::index::test_code::test_ranges_of_tree;
-use crate::parser::Parser;
+use crate::parser::{ParseResult, Parser};
 
 /// TDG weight configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,17 +165,22 @@ impl Analyzer {
         score.language = language;
         score.confidence = language.confidence();
         score.file = file_path.to_string();
+        let parsed = parse_source(source, language, file_path);
 
         // Analyze each component
         score.structural_complexity = self.analyze_structural_complexity(source, &mut penalties);
-        score.semantic_complexity = self.analyze_semantic_complexity(source, &mut penalties);
+        score.semantic_complexity =
+            self.analyze_semantic_complexity(parsed.as_ref(), &mut penalties);
         score.duplication_ratio = self.analyze_duplication(source, &mut penalties);
         score.coupling_score = self.analyze_coupling(source);
         score.doc_coverage = self.analyze_documentation(source, language);
         score.consistency_score = self.analyze_consistency(source);
 
         // Check for critical defects
-        let (defect_count, has_critical) = self.detect_critical_defects(source, language);
+        let (defect_count, has_critical) = match &parsed {
+            Some(parsed) => self.count_critical_defects(source, language, parsed),
+            None => (0, false),
+        };
         score.critical_defects_count = defect_count;
         score.has_critical_defects = has_critical;
 
@@ -213,11 +218,11 @@ impl Analyzer {
 
     fn analyze_semantic_complexity(
         &self,
-        source: &str,
+        parsed: Option<&ParseResult>,
         penalties: &mut Vec<PenaltyAttribution>,
     ) -> f32 {
         let mut points = self.weights.semantic_complexity;
-        let nesting_depth = self.estimate_nesting_depth(source);
+        let nesting_depth = nesting_depth(parsed);
 
         if nesting_depth > self.thresholds.max_nesting_depth as i32 {
             let excess = (nesting_depth - self.thresholds.max_nesting_depth as i32) as f32;
@@ -368,25 +373,6 @@ impl Analyzer {
         complexity
     }
 
-    fn estimate_nesting_depth(&self, source: &str) -> i32 {
-        let mut max_depth = 0;
-        let mut current_depth = 0;
-
-        for line in source.lines() {
-            let trimmed = line.trim();
-            current_depth += trimmed.matches('{').count() as i32;
-            if current_depth > max_depth {
-                max_depth = current_depth;
-            }
-            current_depth -= trimmed.matches('}').count() as i32;
-            if current_depth < 0 {
-                current_depth = 0;
-            }
-        }
-
-        max_depth
-    }
-
     fn estimate_duplication_ratio(&self, source: &str) -> f32 {
         let lines: Vec<&str> = source
             .lines()
@@ -414,27 +400,23 @@ impl Analyzer {
         duplicates as f32 / lines.len() as f32
     }
 
+    #[cfg(test)]
     fn detect_critical_defects(&self, source: &str, language: Language) -> (i32, bool) {
-        let parser_language = match language {
-            Language::Rust => crate::core::Language::Rust,
-            Language::Go => crate::core::Language::Go,
-            Language::Python => crate::core::Language::Python,
-            Language::JavaScript => crate::core::Language::JavaScript,
-            Language::TypeScript => crate::core::Language::TypeScript,
-            Language::Java => crate::core::Language::Java,
-            Language::C => crate::core::Language::C,
-            Language::Cpp => crate::core::Language::Cpp,
-            Language::CSharp => crate::core::Language::CSharp,
-            Language::Ruby => crate::core::Language::Ruby,
-            Language::PHP => crate::core::Language::Php,
-            Language::Unknown | Language::Swift | Language::Kotlin => return (0, false),
-        };
+        match parse_source(source, language, "<tdg>") {
+            Some(parsed) => self.count_critical_defects(source, language, &parsed),
+            None => (0, false),
+        }
+    }
 
-        let parser = Parser::new();
-        let parsed = match parser.parse(source.as_bytes(), parser_language, Path::new("<tdg>")) {
-            Ok(parsed) => parsed,
-            Err(_) => return (0, false),
-        };
+    fn count_critical_defects(
+        &self,
+        source: &str,
+        language: Language,
+        parsed: &ParseResult,
+    ) -> (i32, bool) {
+        if parser_language(language).is_none() {
+            return (0, false);
+        }
 
         let test_ranges = if language == Language::Rust {
             test_ranges_of_tree(
@@ -458,7 +440,7 @@ impl Analyzer {
             &mut count,
         );
 
-        let count = count + critical_sinks(&parsed, language);
+        let count = count + critical_sinks(parsed, language);
         (count, count > 0)
     }
 
@@ -603,38 +585,23 @@ fn count_defect_nodes(
     is_go_test_file: bool,
     count: &mut i32,
 ) {
-    // Skip nodes inside #[cfg(test)] modules
-    let start = node.start_byte();
-    if test_ranges
-        .iter()
-        .any(|r| start >= r.start && start < r.end)
-    {
-        return;
-    }
-
-    if match_defect_node(node, source, language, is_go_test_file) {
-        *count += 1;
-        // Don't recurse into children of a matched node to avoid double-counting
-        return;
-    }
-
-    // Recurse into children
-    let mut cursor = node.walk();
-    if cursor.goto_first_child() {
-        loop {
-            count_defect_nodes(
-                &cursor.node(),
-                source,
-                language,
-                test_ranges,
-                is_go_test_file,
-                count,
-            );
-            if !cursor.goto_next_sibling() {
-                break;
-            }
+    crate::parser::walk_preorder(*node, |node| {
+        // Skip nodes inside #[cfg(test)] modules
+        let start = node.start_byte();
+        if test_ranges
+            .iter()
+            .any(|r| start >= r.start && start < r.end)
+        {
+            return crate::parser::Walk::SkipChildren;
         }
-    }
+
+        if match_defect_node(&node, source, language, is_go_test_file) {
+            *count += 1;
+            // Don't go into children of a matched node to avoid double-counting
+            return crate::parser::Walk::SkipChildren;
+        }
+        crate::parser::Walk::Children
+    });
 }
 
 /// Check if a single AST node matches a critical defect pattern for the given language.
@@ -787,6 +754,38 @@ impl Language {
             0.95
         }
     }
+}
+
+/// The grammar of a TDG language.
+fn parser_language(language: Language) -> Option<crate::core::Language> {
+    match language {
+        Language::Rust => Some(crate::core::Language::Rust),
+        Language::Go => Some(crate::core::Language::Go),
+        Language::Python => Some(crate::core::Language::Python),
+        Language::JavaScript => Some(crate::core::Language::JavaScript),
+        Language::TypeScript => Some(crate::core::Language::TypeScript),
+        Language::Java => Some(crate::core::Language::Java),
+        Language::C => Some(crate::core::Language::C),
+        Language::Cpp => Some(crate::core::Language::Cpp),
+        Language::CSharp => Some(crate::core::Language::CSharp),
+        Language::Ruby => Some(crate::core::Language::Ruby),
+        Language::PHP => Some(crate::core::Language::Php),
+        Language::Unknown | Language::Swift | Language::Kotlin => None,
+    }
+}
+
+/// Parse the source with the grammar of its path. The TDG language has no
+/// TSX, JSX, or Bash, so the path decides first, then the TDG language.
+fn parse_source(source: &str, language: Language, file_path: &str) -> Option<ParseResult> {
+    let path = Path::new(file_path);
+    let grammar = crate::core::Language::detect(path).or_else(|| parser_language(language))?;
+    Parser::new().parse(source.as_bytes(), grammar, path).ok()
+}
+
+/// The maximum nesting depth of the file, with the nesting kinds of the
+/// cognitive complexity. A file that has no grammar has no nesting.
+fn nesting_depth(parsed: Option<&ParseResult>) -> i32 {
+    parsed.map_or(0, |parsed| complexity::max_nesting_of_file(parsed) as i32)
 }
 
 /// Letter grade from A+ to F.
@@ -1021,6 +1020,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_count_defect_nodes_in_deeply_nested_source() {
+        use crate::parser::deep;
+        let counts = deep::on_small_stack(|| {
+            for (source, parsed) in deep::parsed_deep_sources() {
+                let language = Language::from_extension(Path::new(&source.file));
+                let mut count = 0;
+                count_defect_nodes(
+                    &parsed.root_node(),
+                    &parsed.source,
+                    language,
+                    &[],
+                    false,
+                    &mut count,
+                );
+            }
+            let code = format!(
+                "fn f() {{ {}x.unwrap(){}; }}\n",
+                "(".repeat(deep::DEPTH),
+                ")".repeat(deep::DEPTH)
+            );
+            let parsed = crate::parser::Parser::new()
+                .parse(
+                    code.as_bytes(),
+                    crate::core::Language::Rust,
+                    Path::new("a.rs"),
+                )
+                .unwrap();
+            let mut count = 0;
+            count_defect_nodes(
+                &parsed.root_node(),
+                &parsed.source,
+                Language::Rust,
+                &[],
+                false,
+                &mut count,
+            );
+            count
+        });
+        assert_eq!(counts, 1);
+    }
+
+    #[test]
     fn test_default_weights() {
         let weights = Weights::default();
         let total = weights.structural_complexity
@@ -1168,10 +1209,101 @@ fn complex() {
 
     #[test]
     fn test_nesting_depth() {
-        let analyzer = Analyzer::new();
-        let source = "{ { { } } }";
-        let depth = analyzer.estimate_nesting_depth(source);
-        assert_eq!(depth, 3);
+        // Each source has a loop that holds an `if`, inside the classes,
+        // modules, and functions of the language. Only the loop and the
+        // `if` are nesting.
+        let cases: &[(Language, &str, &str)] = &[
+            (
+                Language::Rust,
+                "a.rs",
+                "mod m { impl S { fn f(&self) { for x in y { if x { g(); } } } } }",
+            ),
+            (
+                Language::Go,
+                "a.go",
+                "package p\nfunc f() { for { if x { g() } } }\n",
+            ),
+            (
+                Language::Python,
+                "a.py",
+                "class C:\n    def f(self):\n        for x in y:\n            if x:\n                g()\n",
+            ),
+            (
+                Language::Python,
+                "script.py",
+                "for x in y:\n    if x:\n        g()\n",
+            ),
+            (
+                Language::JavaScript,
+                "a.js",
+                "class C { f() { for (const x of y) { if (x) { g(); } } } }",
+            ),
+            (
+                Language::TypeScript,
+                "a.ts",
+                "class C { f(y: number[]): void { for (const x of y) { if (x) { g(); } } } }",
+            ),
+            (
+                Language::TypeScript,
+                "a.tsx",
+                "function F() { for (const x of y) { if (x) { g(); } } return <div>{x}</div>; }",
+            ),
+            (
+                Language::Java,
+                "A.java",
+                "class C { void f() { for (;;) { if (x) { g(); } } } }",
+            ),
+            (
+                Language::C,
+                "a.c",
+                "void f(void) { for (;;) { if (x) { g(); } } }",
+            ),
+            (
+                Language::Cpp,
+                "a.cpp",
+                "namespace n { class C { void f() { for (;;) { if (x) { g(); } } } }; }",
+            ),
+            (
+                Language::CSharp,
+                "A.cs",
+                "namespace N { class C { void F() { foreach (var x in y) { if (x) { G(); } } } } }",
+            ),
+            (
+                Language::Ruby,
+                "a.rb",
+                "module M\n  class C\n    def f\n      while x\n        if y\n          g\n        end\n      end\n    end\n  end\nend\n",
+            ),
+            (
+                Language::PHP,
+                "a.php",
+                "<?php class C { function f() { foreach ($y as $x) { if ($x) { g(); } } } }",
+            ),
+            (
+                Language::Unknown,
+                "a.sh",
+                "f() {\n  for x in a; do\n    if [ -n \"$x\" ]; then\n      g\n    fi\n  done\n}\n",
+            ),
+        ];
+        for (language, path, source) in cases {
+            let parsed = parse_source(source, *language, path);
+            assert_eq!(nesting_depth(parsed.as_ref()), 2, "{path}");
+        }
+    }
+
+    #[test]
+    fn test_nesting_in_a_method_ignores_the_class_braces() {
+        let source = "class C {\n  void f() {\n    for (;;) {\n      if (a) {\n        if (b) {\n          if (c) {\n            g();\n          }\n        }\n      }\n    }\n  }\n}\n";
+        let score = Analyzer::new()
+            .analyze_source(source, Language::Java, "C.java")
+            .unwrap();
+        assert!(
+            score
+                .penalties_applied
+                .iter()
+                .all(|penalty| penalty.source_metric != "semantic_complexity"),
+            "{:?}",
+            score.penalties_applied
+        );
     }
 
     #[test]
