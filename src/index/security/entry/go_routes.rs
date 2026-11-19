@@ -1907,10 +1907,21 @@ impl CallSites {
         self.referenced.contains(key)
     }
 
-    /// The facts for all Go files. The walk of each file that imports a framework finds the
-    /// factories. Then one pass over the references and one pass over the syntax of each file
-    /// classify each use of a factory.
+    /// The facts for all Go files. One walk of the syntax of each file finds the factories
+    /// and the names that the file mentions. Then one pass over the references, and a second
+    /// walk of only the files that call a factory, classify each use of a factory. A tree is
+    /// in use only during the walk of its file.
     pub(super) fn build(files: &[FileSymbols], trees: &dyn TreeSource) -> Self {
+        // The names of the Go symbols. The names of the factories are some of them, so the
+        // first walk can keep the mentions of these names before it knows the factories.
+        let symbol_names: HashSet<&str> = files
+            .iter()
+            .filter(|file| file.language == Language::Go)
+            .flat_map(|file| &file.symbols)
+            .map(|symbol| symbol.name.as_str())
+            .collect();
+        // For each Go file with a tree, the symbol names that it mentions without a call.
+        let mut mentioned: Vec<Option<HashSet<&str>>> = vec![None; files.len()];
         let referenced: HashSet<String> = files
             .iter()
             .filter(|file| file.language == Language::Go)
@@ -1932,6 +1943,11 @@ impl CallSites {
             let Some(tree) = trees.tree(position) else {
                 continue;
             };
+            mentioned[position] = Some(Self::mentions(
+                tree.root_node(),
+                &tree.source,
+                &symbol_names,
+            ));
             let context = Context::new(&tree, file, files, trees, &[]);
             let directory = directory_of(&file.file);
             for (name, alias) in collect_aliases(tree.root_node(), &tree.source) {
@@ -2030,6 +2046,19 @@ impl CallSites {
                     (!keys.is_empty()).then_some((reference, keys))
                 })
                 .collect();
+            let Some(names) = &mentioned[position] else {
+                blocked.extend(
+                    sites
+                        .iter()
+                        .flat_map(|(_, keys)| keys)
+                        .map(|key| key.to_string()),
+                );
+                continue;
+            };
+            blocked_names.extend(names.iter().filter(|name| by_name.contains_key(*name)));
+            if sites.is_empty() {
+                continue;
+            }
             let Some(tree) = trees.tree(position) else {
                 blocked.extend(
                     sites
@@ -2039,10 +2068,6 @@ impl CallSites {
                 );
                 continue;
             };
-            blocked_names.extend(Self::mentions(tree.root_node(), &tree.source, &by_name));
-            if sites.is_empty() {
-                continue;
-            }
             let context = Context::new(&tree, file, files, trees, &[]);
             let own_index = FileUses::new(tree.root_node(), &tree.source, file, &context, false);
             let mut other_index: Option<FileUses<'_, '_>> = None;
@@ -2079,20 +2104,16 @@ impl CallSites {
         }
     }
 
-    /// The keys of the factories that a name in the file mentions without a call. A function
-    /// value, a method value, and an argument that is a function are such mentions. A
-    /// mention can name another function of the same name, and the result stays safe.
-    fn mentions<'m>(
-        root: Node<'_>,
-        source: &[u8],
-        by_name: &HashMap<&'m str, Vec<&'m str>>,
-    ) -> HashSet<&'m str> {
+    /// The names of `known` that the file mentions without a call. A function value, a
+    /// method value, and an argument that is a function are such mentions. A mention can
+    /// name another function of the same name, and the result stays safe.
+    fn mentions<'m>(root: Node<'_>, source: &[u8], known: &HashSet<&'m str>) -> HashSet<&'m str> {
         let mut found = HashSet::new();
         let mut pending = vec![root];
         while let Some(node) = pending.pop() {
             if matches!(node.kind(), "identifier" | "field_identifier") {
                 let name = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
-                if let Some((known, _)) = by_name.get_key_value(name) {
+                if let Some(known) = known.get(name) {
                     if !Self::is_declaration_or_callee(node) {
                         found.insert(*known);
                     }

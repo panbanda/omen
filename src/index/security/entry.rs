@@ -316,9 +316,9 @@ fn callables_by_name(
 #[derive(Default)]
 pub struct EntryShared {
     rails: std::sync::OnceLock<rails::RailsShared>,
-    go_call_sites: std::sync::OnceLock<go_routes::CallSites>,
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
     go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
+    go_call_sites: std::sync::OnceLock<go_routes::CallSites>,
     go_packages: std::sync::OnceLock<go_routes::PackageNames>,
 }
 
@@ -2354,6 +2354,75 @@ mod tests {
         assert!(trees.tree(0).is_none());
         assert!(trees.tree(0).is_none());
         assert_eq!(parses.load(Ordering::SeqCst), 1);
+    }
+
+    /// A source of the trees of a test that counts the requests.
+    struct CountedTrees<'a> {
+        parsed: &'a [ParseResult],
+        shared: EntryShared,
+        requests: std::sync::atomic::AtomicUsize,
+    }
+
+    impl TreeSource for CountedTrees<'_> {
+        fn tree(&self, position: usize) -> Option<TreeRef<'_>> {
+            self.requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.parsed.get(position).map(TreeRef::Borrowed)
+        }
+
+        fn shared(&self) -> &EntryShared {
+            &self.shared
+        }
+    }
+
+    #[test]
+    fn the_go_package_rules_read_each_go_file_twice_and_again_only_for_a_factory_call() {
+        let sources = [
+            ("app/main.go", "package app\n\nimport \"net/http\"\n\nfunc main() {\n\thttp.ListenAndServe(\":80\", newRouter())\n}\n"),
+            ("app/routes.go", "package app\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\nfunc newRouter() chi.Router {\n\tr := chi.NewRouter()\n\tr.Get(\"/a\", list)\n\treturn r\n}\n\nfunc list(w http.ResponseWriter, r *http.Request) {}\n"),
+            ("other/a.go", "package other\n\nfunc A() int { return 1 }\n"),
+            ("other/b.go", "package other\n\nfunc B() int { return A() }\n"),
+        ];
+        let parsed: Vec<ParseResult> = sources
+            .iter()
+            .map(|(name, text)| {
+                Parser::new()
+                    .parse(text.as_bytes(), Language::Go, Path::new(name))
+                    .unwrap()
+            })
+            .collect();
+        let mut index: Vec<FileSymbols> = sources
+            .iter()
+            .zip(&parsed)
+            .map(|((name, _), parsed)| extract_file(parsed, name))
+            .collect();
+        link_files(&mut index);
+        resolve_imports(&mut index, &test_manifests());
+        resolve_references(&mut index);
+        let trees = CountedTrees {
+            parsed: &parsed,
+            shared: EntryShared::default(),
+            requests: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let found: Vec<EntryPoint> = (0..index.len())
+            .flat_map(|position| {
+                entry_points_of_file(position, &parsed[position], &index, &trees, &[])
+            })
+            .collect();
+        assert_eq!(
+            found
+                .iter()
+                .filter_map(|entry| entry.route.as_ref().map(|route| route.path.as_str()))
+                .collect::<Vec<_>>(),
+            ["/a"]
+        );
+        // The names of the packages and the factories are two walks of each Go file: the
+        // search for the factories reads the names of the packages. `app/main.go` calls the
+        // factory `newRouter`, so a third walk reads it.
+        assert_eq!(
+            trees.requests.load(std::sync::atomic::Ordering::SeqCst),
+            2 * sources.len() + 1
+        );
     }
 
     pub(super) fn entries(language: Language, files: &[(&str, &str)]) -> Vec<EntryPoint> {
