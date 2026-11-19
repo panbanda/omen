@@ -337,6 +337,12 @@ impl AnalyzerTrait for Analyzer {
                 .collect(),
             by_name: &keys_by_name,
         };
+        let barrels_not_resolved: Vec<String> = index
+            .files
+            .iter()
+            .filter(|facts| facts.barrel_not_resolved)
+            .map(|facts| facts.file.clone())
+            .collect();
         let mut unresolved_paths = 0usize;
         for path_use in &path_uses {
             let found = rust_paths.resolve(path_use);
@@ -533,6 +539,7 @@ impl AnalyzerTrait for Analyzer {
                 total_definitions: all_definitions.len(),
                 reachable_count: reachable.len(),
                 unresolved_paths,
+                barrels_not_resolved,
             },
         };
 
@@ -2338,6 +2345,11 @@ pub struct AnalysisSummary {
     /// each function with the last name of such a path alive.
     #[serde(default)]
     pub unresolved_paths: usize,
+    /// The files whose wildcard re-exports the index did not resolve,
+    /// because they need more work than its cap gives. A name that such a
+    /// file gives with a wildcard re-export has no definition.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub barrels_not_resolved: Vec<String>,
 }
 
 #[cfg(test)]
@@ -4666,6 +4678,58 @@ mod index_tests {
             .collect();
         dead.sort();
         (dead, result.summary.unresolved_paths)
+    }
+
+    /// Many barrels re-export the same two large files. The export tables
+    /// read more entries than their cap, thus the last barrels keep only
+    /// their own names, and the summary lists them.
+    #[test]
+    fn test_summary_lists_the_barrels_that_are_not_resolved() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let mut files: Vec<(String, String)> = Vec::new();
+        for module in ["x", "y"] {
+            let text: String = (0..500)
+                .map(|position| format!("export function {module}{position}() {{}}\n"))
+                .collect();
+            files.push((format!("{module}.ts"), text));
+        }
+        for position in 0..150 {
+            files.push((
+                format!("b{position:03}.ts"),
+                "export * from './x';\nexport * from './y';\n".to_string(),
+            ));
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let mut names: Vec<PathBuf> = Vec::new();
+        for (name, text) in &files {
+            std::fs::write(directory.path().join(name), text).unwrap();
+            names.push(PathBuf::from(name));
+        }
+        names.sort();
+        let set = FileSet::from_files(directory.path().to_path_buf(), names);
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&set, &config, Some(directory.path()));
+        let result = Analyzer::new().analyze(&ctx).unwrap();
+        let listed = &result.summary.barrels_not_resolved;
+        assert!(!listed.is_empty());
+        assert!(listed.len() < 150, "{listed:?}");
+        assert!(
+            listed.iter().all(|file| file.starts_with('b')),
+            "{listed:?}"
+        );
+        assert!(listed.windows(2).all(|pair| pair[0] < pair[1]));
+        let json = serde_json::to_value(&result.summary).unwrap();
+        assert!(json.get("barrels_not_resolved").is_some(), "{json}");
+    }
+
+    #[test]
+    fn test_summary_has_no_barrels_field_when_each_barrel_is_resolved() {
+        let summary = AnalysisSummary::default();
+        let json = serde_json::to_value(&summary).unwrap();
+        assert!(json.get("barrels_not_resolved").is_none(), "{json}");
     }
 
     #[test]

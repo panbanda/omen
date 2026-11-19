@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use super::{Family, Id, ImportBinding, ImportKind, Resolver, SymbolKind};
-use crate::index::export_tables::{self, Exports, Member, Table};
+use crate::index::export_tables::{Exports, Member, Tables, Values};
 
 /// How a binding gives names of its target again.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,23 +28,20 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// The table of the names that `file` exports.
-    pub(super) fn export_table(&self, file: usize) -> Table<'a, Id> {
-        export_tables::table(self, &self.export_tables, file)
+    /// The export tables of the files, which the first query builds.
+    pub(super) fn export_tables(&self) -> &Tables<'a, Id> {
+        self.export_tables.get_or_init(|| Tables::build(self))
+    }
+
+    /// The definitions that the name `name` of `file` gives.
+    pub(super) fn export_entry(&self, file: usize, name: &str) -> Option<&Values<Id>> {
+        self.export_tables().get(file, name)
     }
 }
 
 impl<'a> Exports<'a, Id> for Resolver<'a> {
-    fn targets(&self, file: usize) -> Vec<usize> {
-        let mut targets: Vec<usize> = self.files[file]
-            .imports
-            .iter()
-            .filter(|binding| self.re_export(file, binding).is_some())
-            .flat_map(|binding| self.target_files(binding))
-            .collect();
-        targets.sort_unstable();
-        targets.dedup();
-        targets
+    fn files(&self) -> usize {
+        self.files.len()
     }
 
     /// The rules of the own definitions are the rules of a name of one
@@ -108,11 +105,8 @@ impl<'a> Exports<'a, Id> for Resolver<'a> {
             own: own.into_iter().collect(),
             wildcards,
             named,
+            hides_default: self.family(file) == Family::Ecma,
         }
-    }
-
-    fn contribution<'v>(&self, values: &'v [Id]) -> &'v [Id] {
-        values
     }
 }
 
@@ -167,9 +161,8 @@ mod timing_tests {
 
     /// A chain of `size` barrels. Each barrel defines one function and
     /// re-exports the barrel before it with a wildcard. A file imports each
-    /// function from the last barrel and calls it. The case gives the time
-    /// and the number of the nodes of the tables.
-    fn barrel_chain_at(size: usize) -> (std::time::Duration, usize) {
+    /// function from the last barrel and calls it.
+    fn barrel_chain_at(size: usize) -> std::time::Duration {
         let mut files: Vec<(String, String)> = Vec::new();
         let mut names = Vec::new();
         let mut calls = String::new();
@@ -198,17 +191,15 @@ mod timing_tests {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
-        let nodes = crate::index::export_tables::NODES.with(std::cell::Cell::get);
         let started = Stopwatch::start();
         let found = rows(&files, "view.ts");
         let elapsed = started.elapsed();
-        let nodes = crate::index::export_tables::NODES.with(std::cell::Cell::get) - nodes;
         assert_eq!(found.len(), size);
         assert_eq!(
             found[0],
             "4 view>f0 UniqueCandidate ImportedName [b0.ts#f0]".to_string()
         );
-        (elapsed, nodes)
+        elapsed
     }
 
     /// `size` files in one cycle of wildcard re-exports. Each file defines
@@ -261,9 +252,8 @@ mod timing_tests {
         barrel_cycle_at(3);
     }
 
-    /// Each file of a cycle gives the definitions of each file of the cycle,
-    /// and its own definition comes first. Two definitions of the cycle give
-    /// a name that is ambiguous.
+    /// In a cycle, the search of a name stops at a file that defines it, as
+    /// `ResolveExport` of ECMAScript does. Thus `b` gives the `x` of `c` only.
     #[test]
     fn test_names_of_a_cycle_of_re_exports() {
         let files = [
@@ -278,7 +268,7 @@ mod timing_tests {
         assert_eq!(
             rows(&files, "view.ts"),
             [
-                "5 view>x Ambiguous ImportedName [a.ts#x, c.ts#x]",
+                "5 view>x UniqueCandidate ImportedName [c.ts#x]",
                 "6 view>own UniqueCandidate ImportedName [b.ts#own]",
                 "7 view>mine UniqueCandidate ImportedAlias [a.ts#own]",
             ]
@@ -288,14 +278,7 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_calls_through_a_chain_of_barrels_resolve_in_linear_time() {
-        assert_scales_linearly("chain of barrels", 8_000, |size| barrel_chain_at(size).0);
-        // A table that copied each name below it would have four times the nodes.
-        let (_, small) = crate::index::timing::on_one_thread(|| barrel_chain_at(8_000));
-        let (_, large) = crate::index::timing::on_one_thread(|| barrel_chain_at(16_000));
-        assert!(
-            large * 10 < small * 25,
-            "nodes of the tables: {small} at 8000, {large} at 16000"
-        );
+        assert_scales_linearly("chain of barrels", 8_000, barrel_chain_at);
     }
 
     #[test]

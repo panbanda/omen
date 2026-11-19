@@ -59,7 +59,7 @@ struct Repository<'a> {
     project_options: RwLock<HashMap<String, std::sync::Arc<typescript::ProjectOptions>>>,
     inherited_options: typescript::InheritedMemo,
     /// The symbol table of each file that an import asked for.
-    symbol_tables: RwLock<crate::index::export_tables::Tables<'a, &'a str>>,
+    symbol_tables: std::sync::OnceLock<crate::index::export_tables::Tables<'a, &'a str>>,
 }
 
 /// The module tree of the Rust files of an index: which file is the root of a crate, the
@@ -160,7 +160,7 @@ impl<'a> Repository<'a> {
             rust_parents: RwLock::new(HashMap::new()),
             project_options: RwLock::new(HashMap::new()),
             inherited_options: RwLock::new(HashMap::new()),
-            symbol_tables: RwLock::new(HashMap::new()),
+            symbol_tables: std::sync::OnceLock::new(),
         };
         repository.read_rust_packages();
         repository
@@ -1401,11 +1401,12 @@ fn go_package_names(files: &mut [FileSymbols]) {
 ///
 /// The result does not depend on the order of `files`.
 pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
-    let resolve = |files: &[FileSymbols],
-                   symbols: bool|
-     -> Vec<Vec<(ImportTarget, Option<String>)>> {
+    // The results of each binding, and the files whose symbol tables keep
+    // only their own names.
+    type Results = (Vec<Vec<(ImportTarget, Option<String>)>>, Vec<usize>);
+    let resolve = |files: &[FileSymbols], symbols: bool| -> Results {
         let repository = Repository::new(files, manifests);
-        files
+        let results = files
             .par_iter()
             .map(|file| {
                 file.imports
@@ -1426,7 +1427,13 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
                     })
                     .collect()
             })
-            .collect()
+            .collect();
+        let not_resolved = if symbols {
+            repository.symbol_tables().not_resolved().to_vec()
+        } else {
+            Vec::new()
+        };
+        (results, not_resolved)
     };
     let path_targets: Vec<BTreeMap<String, String>> = {
         let repository = Repository::new(files, manifests);
@@ -1491,7 +1498,10 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
     }
     // The symbol search reads the targets of all files. Thus the targets come first.
     for symbols in [false, true] {
-        let results = resolve(files, symbols);
+        let (results, not_resolved) = resolve(files, symbols);
+        for position in not_resolved {
+            files[position].barrel_not_resolved = true;
+        }
         for (file, results) in files.iter_mut().zip(results) {
             for (binding, (target, symbol)) in file.imports.iter_mut().zip(results) {
                 binding.target_file = target;
@@ -1982,10 +1992,10 @@ mod typescript_tests {
         assert_eq!(target(&files, main, "@/b"), "app/src/other/b.ts");
     }
 
-    /// A name that two wildcard re-exports of one module give is not a name
-    /// of that module. A module that re-exports both that module and the one
-    /// definition still gives that definition, whatever the order of the
-    /// re-exports. A cycle of re-exports still gives the name.
+    /// A name that two wildcard re-exports of one module give is ambiguous.
+    /// A module that re-exports that module is ambiguous too, as
+    /// `ResolveExport` of ECMAScript tells, also when it re-exports one of
+    /// the definitions again. A cycle of re-exports still gives the name.
     #[test]
     fn test_symbol_of_wildcard_re_exports_through_a_diamond_and_a_cycle() {
         let files = [
@@ -2008,7 +2018,7 @@ mod typescript_tests {
             .iter()
             .map(|binding| binding.target_symbol.as_deref())
             .collect();
-        assert_eq!(symbols, [Some("d.ts#x"), None, Some("left.ts#y")]);
+        assert_eq!(symbols, [None, None, Some("left.ts#y")]);
     }
 
     #[test]

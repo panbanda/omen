@@ -283,7 +283,7 @@ struct Resolver<'a> {
     /// resolution of one call asks for the same facts many times.
     types_cache: RwLock<HashMap<TypeQuery, Vec<Id>>>,
     /// The export table of each file that a query asked for.
-    export_tables: RwLock<crate::index::export_tables::Tables<'a, Id>>,
+    export_tables: std::sync::OnceLock<crate::index::export_tables::Tables<'a, Id>>,
     /// For each file, the files of its package. Files of one package share
     /// one list.
     packages: OnceLock<Packages<'a>>,
@@ -530,7 +530,7 @@ impl<'a> Resolver<'a> {
             module_scopes_cache: RwLock::new(HashMap::new()),
             constructor_position_cache: RwLock::new(HashMap::new()),
             alias_constructs_cache: RwLock::new(HashMap::new()),
-            export_tables: RwLock::new(HashMap::new()),
+            export_tables: std::sync::OnceLock::new(),
             packages: OnceLock::new(),
             visible_cache: RwLock::new(HashMap::new()),
         }
@@ -847,8 +847,7 @@ impl<'a> Resolver<'a> {
     /// definition, or the definitions that its re-exports give.
     fn exported(&self, file: usize, name: &str) -> Arc<Vec<Id>> {
         Arc::new(
-            self.export_table(file)
-                .get(name)
+            self.export_entry(file, name)
                 .map(|found| found.to_vec())
                 .unwrap_or_default(),
         )
@@ -3573,7 +3572,7 @@ pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests)
     // The function references of a file. `None` means that this is a second
     // resolution: the uses are not there, and the list of the file stays.
     type Resolutions = (Vec<Resolution>, Option<Vec<Reference>>);
-    let resolutions: Vec<Resolutions> = {
+    let (resolutions, not_resolved): (Vec<Resolutions>, Vec<usize>) = {
         let resolver = Resolver::new(files, manifests);
         let resolution = |outcome: Outcome| {
             let keys = |ids: &[Id]| {
@@ -3591,7 +3590,7 @@ pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests)
                 candidates: keys(&outcome.candidates),
             }
         };
-        (0..files.len())
+        let resolutions = (0..files.len())
             .into_par_iter()
             .map(|file| {
                 let calls = (0..files[file].references.len())
@@ -3620,8 +3619,15 @@ pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests)
                 });
                 (calls, values)
             })
-            .collect()
+            .collect();
+        (
+            resolutions,
+            resolver.export_tables().not_resolved().to_vec(),
+        )
     };
+    for position in not_resolved {
+        files[position].barrel_not_resolved = true;
+    }
     for (file, (calls, values)) in files.iter_mut().zip(resolutions) {
         for (reference, resolution) in file.references.iter_mut().zip(calls) {
             reference.resolution = resolution;

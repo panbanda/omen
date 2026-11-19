@@ -1,25 +1,28 @@
 //! The symbol tables of the import resolution. See `crate::index::export_tables`.
 //!
 //! The table of a file gives each name the keys of its symbols. A name has
-//! a symbol only when it has one key. A file that re-exports a name with
-//! more than one key gets nothing from that file.
+//! a symbol only when it has one key.
 
 use std::collections::HashMap;
 
 use super::{ImportKind, ImportTarget, Repository};
 use crate::core::Language;
-use crate::index::export_tables::{self, Exports, Member};
+use crate::index::export_tables::{Exports, Member, Tables};
 use crate::index::model::SymbolKind;
 
 impl<'a> Repository<'a> {
     /// The key of the symbol that the name `name` of `file` gives to an import.
     pub(super) fn symbol_of(&self, file: &str, name: &str) -> Option<String> {
         let position = *self.by_path.get(file)?;
-        let table = export_tables::table(self, &self.symbol_tables, position);
-        match table.get(name)?.as_slice() {
+        match self.symbol_tables().get(position, name)?.as_slice() {
             [only] => Some(only.to_string()),
             _ => None,
         }
+    }
+
+    /// The symbol tables of the files, which the first query builds.
+    pub(super) fn symbol_tables(&self) -> &Tables<'a, &'a str> {
+        self.symbol_tables.get_or_init(|| Tables::build(self))
     }
 
     /// The re-exports of the file at `position`: a wildcard re-export gives
@@ -54,11 +57,8 @@ impl<'a> Repository<'a> {
 }
 
 impl<'a> Exports<'a, &'a str> for Repository<'a> {
-    fn targets(&self, file: usize) -> Vec<usize> {
-        let mut targets: Vec<usize> = self.re_exports(file).map(|(_, target)| target).collect();
-        targets.sort_unstable();
-        targets.dedup();
-        targets
+    fn files(&self) -> usize {
+        self.files.len()
     }
 
     /// A definition at the top level or an alias of an export decides the
@@ -105,14 +105,10 @@ impl<'a> Exports<'a, &'a str> for Repository<'a> {
             own: own.into_iter().collect(),
             wildcards,
             named,
-        }
-    }
-
-    fn contribution<'v>(&self, values: &'v [&'a str]) -> &'v [&'a str] {
-        if values.len() == 1 {
-            values
-        } else {
-            &[]
+            hides_default: matches!(
+                facts.language,
+                Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx
+            ),
         }
     }
 }
