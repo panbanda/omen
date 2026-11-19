@@ -250,14 +250,14 @@ impl LanguageSpec for Go {
                 .child_by_field_name("name")
                 .or_else(|| embedded_type_name(node));
         }
-        let values = node
-            .parent()
+        let values = context
+            .parent(node)
             .filter(|list| list.kind() == EXPRESSION_LIST)?;
         let mut cursor = values.walk();
         let position = values
             .named_children(&mut cursor)
             .position(|value| value == node)?;
-        let declaration = values.parent()?;
+        let declaration = context.parent(values)?;
         let name = match declaration.kind() {
             SHORT_VAR_DECLARATION => declaration
                 .child_by_field_name("left")?

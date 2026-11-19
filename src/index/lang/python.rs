@@ -416,7 +416,9 @@ impl LanguageSpec for Python {
         match node.kind() {
             // A lambda has a name only when an assignment binds it to one variable.
             LAMBDA => {
-                let assignment = node.parent().filter(|parent| parent.kind() == ASSIGNMENT)?;
+                let assignment = context
+                    .parent(node)
+                    .filter(|parent| parent.kind() == ASSIGNMENT)?;
                 if assignment.child_by_field_name("right") != Some(node) {
                     return None;
                 }

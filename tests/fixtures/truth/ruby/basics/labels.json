@@ -8,7 +8,6 @@
     {"dimension": "symbols", "category": "overload", "reason": "Ruby keeps only the last definition of a method name in a class."},
     {"dimension": "calls", "category": "declared_type_receiver", "reason": "Ruby has no syntax to declare the type of a variable or a parameter."},
     {"dimension": "imports", "category": "alias", "reason": "`require` loads a file. It binds no name, thus it cannot give a local name."},
-    {"dimension": "imports", "category": "named", "reason": "`require` loads a file. It cannot import one name from the file."},
     {"dimension": "imports", "category": "wildcard", "reason": "`require` has no wildcard syntax. Each `require` makes all top-level definitions of the file available."},
     {"dimension": "imports", "category": "grouped", "reason": "`require` accepts one path. Ruby has no syntax to group imports."},
     {"dimension": "imports", "category": "re_export", "reason": "Ruby has no syntax to export an imported name again."}

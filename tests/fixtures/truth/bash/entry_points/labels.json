@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "language": "bash",
+  "split": "development",
+  "oracle": "Author-reviewed. `bash -n` (GNU bash 5.3.15\n25.4.0) accepts each script. Only `script.sh` starts with `#!`, so only it runs as a program. `late_shebang.sh` has `#!` on line 2, which is a comment. The harness does not run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {
+      "label": "shebang_script",
+      "file": "script.sh",
+      "line": 1,
+      "kind": "cli_main",
+      "framework": "bash",
+      "symbol": null,
+      "guards_complete": true,
+      "guards_unknown_reason": null
+    }
+  ]
+}
