@@ -3855,6 +3855,14 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     fn is_subrouter_operand(&self, call: Node<'t>) -> bool {
         let mut current = call;
         loop {
+            // `Node::parent` searches down from the root. Thus the check of the source text
+            // comes first: only a `.` or a comment can follow the operand of a selector.
+            let next = self.context.source[current.end_byte()..]
+                .iter()
+                .find(|byte| !byte.is_ascii_whitespace());
+            if !matches!(next, Some(b'.' | b'/')) {
+                return false;
+            }
             let Some(selector) = current.parent().filter(|parent| {
                 parent.kind() == "selector_expression"
                     && parent.child_by_field_name("operand") == Some(current)

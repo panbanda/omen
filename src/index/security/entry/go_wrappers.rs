@@ -3966,6 +3966,43 @@ func main() {
         assert_scales_linearly("nested groups", 2_000, |depth| nested_groups(depth).1);
     }
 
+    /// `depth` nested `chi` groups, each with a route. The time of the search, on a large stack,
+    /// because this branch of the code does not limit the depth of the router expressions.
+    fn nested_chi_groups(depth: usize) -> std::time::Duration {
+        let mut main = String::from(
+            "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\nfunc list(w http.ResponseWriter, r *http.Request) {}\n\nfunc main() {\nr := chi.NewRouter()\n",
+        );
+        for level in 0..depth {
+            main.push_str(&format!(
+                "r.Group(func(r chi.Router) {{\nr.Get(\"/x{level}\", list)\n"
+            ));
+        }
+        main.push_str(&"})\n".repeat(depth));
+        main.push_str("}\n");
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .stack_size(1 << 30)
+            .build()
+            .expect("a thread for the timing run")
+            .install(|| {
+                let (found, took) = entries_timed(Language::Go, &[("main.go", &main)], true);
+                assert_eq!(
+                    found
+                        .iter()
+                        .filter(|entry| entry.kind == EntryKind::HttpHandler)
+                        .count(),
+                    depth
+                );
+                took
+            })
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_nested_chi_groups_cost_linear_time() {
+        assert_scales_linearly("nested chi groups", 1_000, nested_chi_groups);
+    }
+
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_chain_of_mounting_factories_costs_linear_time() {
