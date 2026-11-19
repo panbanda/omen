@@ -359,6 +359,257 @@ pub(super) fn is_ecma_global(name: &str) -> bool {
     ECMA_GLOBAL_NAMES.binary_search(&name).is_ok()
 }
 
+/// The standard static members of the ECMAScript, Node.js, and browser
+/// globals, by the global. A declaration in the repository can add a member
+/// to a global, as `reflect-metadata` adds `Reflect.getMetadata`, but it
+/// cannot change a standard member. The globals and each list are sorted.
+const ECMA_GLOBAL_MEMBERS: &[(&str, &[&str])] = &[
+    ("Array", &["from", "fromAsync", "isArray", "of"]),
+    ("ArrayBuffer", &["isView"]),
+    ("BigInt", &["asIntN", "asUintN"]),
+    (
+        "Buffer",
+        &[
+            "alloc",
+            "allocUnsafe",
+            "allocUnsafeSlow",
+            "byteLength",
+            "compare",
+            "concat",
+            "from",
+            "isBuffer",
+            "isEncoding",
+        ],
+    ),
+    ("Date", &["UTC", "now", "parse"]),
+    ("Error", &["captureStackTrace"]),
+    (
+        "Intl",
+        &[
+            "Collator",
+            "DateTimeFormat",
+            "DisplayNames",
+            "ListFormat",
+            "Locale",
+            "NumberFormat",
+            "PluralRules",
+            "RelativeTimeFormat",
+            "Segmenter",
+            "getCanonicalLocales",
+            "supportedValuesOf",
+        ],
+    ),
+    ("JSON", &["parse", "stringify"]),
+    ("Map", &["groupBy"]),
+    (
+        "Math",
+        &[
+            "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil",
+            "clz32", "cos", "cosh", "exp", "expm1", "floor", "fround", "hypot", "imul", "log",
+            "log10", "log1p", "log2", "max", "min", "pow", "random", "round", "sign", "sin",
+            "sinh", "sqrt", "tan", "tanh", "trunc",
+        ],
+    ),
+    (
+        "Number",
+        &[
+            "isFinite",
+            "isInteger",
+            "isNaN",
+            "isSafeInteger",
+            "parseFloat",
+            "parseInt",
+        ],
+    ),
+    (
+        "Object",
+        &[
+            "assign",
+            "create",
+            "defineProperties",
+            "defineProperty",
+            "entries",
+            "freeze",
+            "fromEntries",
+            "getOwnPropertyDescriptor",
+            "getOwnPropertyDescriptors",
+            "getOwnPropertyNames",
+            "getOwnPropertySymbols",
+            "getPrototypeOf",
+            "groupBy",
+            "hasOwn",
+            "is",
+            "isExtensible",
+            "isFrozen",
+            "isSealed",
+            "keys",
+            "preventExtensions",
+            "seal",
+            "setPrototypeOf",
+            "values",
+        ],
+    ),
+    (
+        "Promise",
+        &[
+            "all",
+            "allSettled",
+            "any",
+            "race",
+            "reject",
+            "resolve",
+            "try",
+            "withResolvers",
+        ],
+    ),
+    ("Proxy", &["revocable"]),
+    (
+        "Reflect",
+        &[
+            "apply",
+            "construct",
+            "defineProperty",
+            "deleteProperty",
+            "get",
+            "getOwnPropertyDescriptor",
+            "getPrototypeOf",
+            "has",
+            "isExtensible",
+            "ownKeys",
+            "preventExtensions",
+            "set",
+            "setPrototypeOf",
+        ],
+    ),
+    ("String", &["fromCharCode", "fromCodePoint", "raw"]),
+    ("Symbol", &["for", "keyFor"]),
+    (
+        "URL",
+        &["canParse", "createObjectURL", "parse", "revokeObjectURL"],
+    ),
+    (
+        "console",
+        &[
+            "assert",
+            "clear",
+            "count",
+            "countReset",
+            "debug",
+            "dir",
+            "dirxml",
+            "error",
+            "group",
+            "groupCollapsed",
+            "groupEnd",
+            "info",
+            "log",
+            "table",
+            "time",
+            "timeEnd",
+            "timeLog",
+            "trace",
+            "warn",
+        ],
+    ),
+    (
+        "document",
+        &[
+            "addEventListener",
+            "createElement",
+            "createElementNS",
+            "createEvent",
+            "createRange",
+            "createTextNode",
+            "dispatchEvent",
+            "elementFromPoint",
+            "execCommand",
+            "getElementById",
+            "getElementsByClassName",
+            "getElementsByName",
+            "getElementsByTagName",
+            "getSelection",
+            "hasFocus",
+            "querySelector",
+            "querySelectorAll",
+            "removeEventListener",
+        ],
+    ),
+    (
+        "process",
+        &[
+            "abort",
+            "chdir",
+            "cpuUsage",
+            "cwd",
+            "emit",
+            "emitWarning",
+            "exit",
+            "getActiveResourcesInfo",
+            "getegid",
+            "geteuid",
+            "getgid",
+            "getgroups",
+            "getuid",
+            "hrtime",
+            "kill",
+            "listenerCount",
+            "memoryUsage",
+            "nextTick",
+            "off",
+            "on",
+            "once",
+            "removeAllListeners",
+            "removeListener",
+            "resourceUsage",
+            "setUncaughtExceptionCaptureCallback",
+            "umask",
+            "uptime",
+        ],
+    ),
+    (
+        "window",
+        &[
+            "addEventListener",
+            "alert",
+            "blur",
+            "cancelAnimationFrame",
+            "clearInterval",
+            "clearTimeout",
+            "close",
+            "confirm",
+            "dispatchEvent",
+            "fetch",
+            "focus",
+            "getComputedStyle",
+            "getSelection",
+            "matchMedia",
+            "open",
+            "postMessage",
+            "print",
+            "prompt",
+            "removeEventListener",
+            "requestAnimationFrame",
+            "scroll",
+            "scrollBy",
+            "scrollTo",
+            "setInterval",
+            "setTimeout",
+        ],
+    ),
+];
+
+/// Tells if `member` is a standard static member of the global `global`.
+fn is_standard_member(global: &str, member: &str) -> bool {
+    ECMA_GLOBAL_MEMBERS
+        .binary_search_by(|(name, _)| (*name).cmp(global))
+        .is_ok_and(|position| {
+            ECMA_GLOBAL_MEMBERS[position]
+                .1
+                .binary_search(&member)
+                .is_ok()
+        })
+}
+
 const JAVA_RECEIVERS: &[&str] = &[
     "Boolean",
     "Character",
@@ -731,9 +982,12 @@ impl<'a> Resolver<'a> {
                     self.external_receiver(scope, receiver, name, rules)
                 }
                 (None, Some(qualifier)) => {
+                    let standard = self.is_ecma_global_in(file, qualifier)
+                        && is_standard_member(qualifier, name);
                     self.external_qualifier(scope, qualifier, rules)
-                        && !self.can_extend_external_type(name, file)
-                        && !self.unbound_qualifier_can_name(scope, qualifier, name)
+                        && (standard
+                            || (!self.can_extend_external_type(name, file)
+                                && !self.unbound_qualifier_can_name(scope, qualifier, name)))
                 }
                 (None, None) => !name.starts_with('$') && self.external_bare(scope, name, rules),
                 _ => false,
@@ -834,7 +1088,14 @@ impl<'a> Resolver<'a> {
             return self.is_external_binding(binding);
         }
         self.is_free_name(scope, name)
-            && (rules.receivers.contains(name) || self.is_provided(scope.file, name))
+            && (rules.receivers.contains(name)
+                || self.is_ecma_global_in(scope.file, name)
+                || self.is_provided(scope.file, name))
+    }
+
+    /// An ECMAScript, Node.js, or browser global, in a file of ECMAScript.
+    fn is_ecma_global_in(&self, file: usize, name: &str) -> bool {
+        self.family(file) == super::Family::Ecma && is_ecma_global(name)
     }
 
     fn external_bare(&self, scope: Scope<'_>, name: &str, rules: Rules) -> bool {
@@ -880,7 +1141,9 @@ impl<'a> Resolver<'a> {
                     || self.is_declared_dependency(scope.file, head));
         }
         !self.has_repository_wildcard(scope.file)
-            && (rules.receivers.contains(head) || self.is_provided(scope.file, head))
+            && (rules.receivers.contains(head)
+                || self.is_ecma_global_in(scope.file, head)
+                || self.is_provided(scope.file, head))
     }
 
     /// The head of the qualifier has no import, and a function or a method of
@@ -933,7 +1196,9 @@ impl<'a> Resolver<'a> {
         self.binding_of(scope.file, receiver)
             .is_some_and(|binding| self.is_external_binding(binding))
             || (self.is_external_name(scope, receiver, rules)
-                && !self.has_callable_named(name, scope.file))
+                && (!self.has_callable_named(name, scope.file)
+                    || (self.is_ecma_global_in(scope.file, receiver)
+                        && is_standard_member(receiver, name))))
     }
 
     /// The text of the type of a Go local name and the file of the text: the
@@ -1124,6 +1389,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_ecma_global_members_are_sorted_and_unique() {
+        let globals: Vec<&str> = ECMA_GLOBAL_MEMBERS.iter().map(|(name, _)| *name).collect();
+        assert!(globals.windows(2).all(|pair| pair[0] < pair[1]));
+        for (global, members) in ECMA_GLOBAL_MEMBERS {
+            assert!(is_ecma_global(global), "{global}");
+            assert!(members.windows(2).all(|pair| pair[0] < pair[1]), "{global}");
+        }
+        assert!(is_standard_member("Object", "keys"));
+        assert!(!is_standard_member("Reflect", "getMetadata"));
     }
 
     #[test]
@@ -1328,6 +1605,40 @@ mod tests {
         }
     }
 
+    /// A standard member of an ECMAScript or Node.js global is outside the
+    /// repository, also when a method of the repository has its name, and a
+    /// global class is outside the repository in `new`. A member that the
+    /// standard does not define can come from the repository.
+    #[test]
+    fn test_ecma_standard_members_of_globals() {
+        let other =
+            "export class Store {\n  keys() {}\n  log() {}\n  now() {}\n  getMetadata() {}\n}\nexport class Math {\n  static max() {}\n}\n";
+        for (file, other_file) in [
+            ("app.ts", "store.ts"),
+            ("app.js", "store.js"),
+            ("app.tsx", "store.tsx"),
+            ("app.jsx", "store.jsx"),
+        ] {
+            let app = "export function run(value) {\n  Object.keys(value);\n  console.log(1);\n  Date.now();\n  Math.max(1);\n  Reflect.getMetadata('a', value);\n  throw new Error('x');\n}\nexport function link() {\n  return new URL('a');\n}\n";
+            let files = [(file, app), (other_file, other)];
+            assert!(external(&files, file, "keys"), "{file}");
+            assert!(external(&files, file, "log"), "{file}");
+            assert!(external(&files, file, "now"), "{file}");
+            // A class of a different module with the name of a global is not global.
+            assert!(external(&files, file, "max"), "{file}");
+            assert!(external(&files, file, "Error"), "{file}");
+            assert!(external(&files, file, "URL"), "{file}");
+            // `reflect-metadata` adds `getMetadata` to `Reflect`.
+            assert!(!external(&files, file, "getMetadata"), "{file}");
+            // A local name, an import, or a declaration of the file hides the global.
+            let hidden = "import { Error } from './errors';\nexport function run(console) {\n  console.log(1);\n  throw new Error('x');\n}\n";
+            let errors = "export class Error {}\n";
+            let files = [(file, hidden), (other_file, other), ("errors.ts", errors)];
+            assert!(!external(&files, file, "log"), "{file}");
+            assert!(!external(&files, file, "Error"), "{file}");
+        }
+    }
+
     #[test]
     fn test_ecma_declared_global_type_typescript() {
         for file in ["app.ts", "app.tsx"] {
@@ -1509,8 +1820,10 @@ mod tests {
 
     #[test]
     fn test_a_receiver_without_a_binding_abstains_when_a_repository_method_has_the_call_name() {
-        let app = "function run() { return Math.max(1); }\nclass Repo { max() { return 1; } }\n";
-        assert!(!external(&[("a.ts", app)], "a.ts", "max"));
+        // `clamp` is not a standard member of `Math`, thus a declaration of
+        // the repository can add it.
+        let app = "function run() { return Math.clamp(1); }\nclass Repo { clamp() { return 1; } }\n";
+        assert!(!external(&[("a.ts", app)], "a.ts", "clamp"));
     }
 
     #[test]
