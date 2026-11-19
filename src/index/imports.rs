@@ -59,7 +59,7 @@ struct Repository<'a> {
     project_options: RwLock<HashMap<String, std::sync::Arc<typescript::ProjectOptions>>>,
     inherited_options: typescript::InheritedMemo,
     /// The symbol table of each file that an import asked for.
-    symbol_tables: RwLock<symbols::SymbolTables<'a>>,
+    symbol_tables: RwLock<crate::index::export_tables::Tables<'a, &'a str>>,
 }
 
 /// The module tree of the Rust files of an index: which file is the root of a crate, the
@@ -1349,77 +1349,6 @@ impl Repository<'_> {
             Language::Bash => self.bash(binding),
         }
     }
-
-    /// Finds the key of the top-level symbol `name` of `file`. If the file
-    /// does not define the name, the search follows the re-exports of the file.
-    fn symbol(
-        &self,
-        file: &str,
-        name: &str,
-        visited: &mut BTreeSet<(String, String)>,
-    ) -> Option<String> {
-        if !visited.insert((file.to_string(), name.to_string())) {
-            return None;
-        }
-        let facts = &self.files[*self.by_path.get(file)?];
-        let mut defined = facts
-            .symbols
-            .iter()
-            .filter(|symbol| symbol.container.is_none() && symbol.name == name);
-        if let Some(first) = defined.next() {
-            return defined.next().is_none().then(|| first.key.to_string());
-        }
-        // `export { original as name }` gives the name to a symbol of the file.
-        let mut aliased = facts
-            .symbols
-            .iter()
-            .zip(&facts.link_facts)
-            .filter(|(_, link)| link.export_aliases.iter().any(|alias| alias == name));
-        if let Some((first, _)) = aliased.next() {
-            return aliased.next().is_none().then(|| first.key.to_string());
-        }
-        if let Some(key) = inline_module_symbol(facts, name) {
-            return Some(key);
-        }
-        // Each import of a Python module is a name of that module.
-        let python = facts.language == Language::Python;
-        let mut found = BTreeSet::new();
-        for binding in &facts.imports {
-            let ImportTarget::Resolved(target) = &binding.target_file else {
-                continue;
-            };
-            let named = binding.kind == ImportKind::ReExportNamed
-                || (python && binding.kind == ImportKind::Named);
-            let wildcard = binding.kind == ImportKind::ReExportWildcard
-                || (python && binding.kind == ImportKind::Wildcard);
-            if named && binding.local_name.as_deref() == Some(name) {
-                let source = binding.imported_name.as_deref().unwrap_or(name);
-                found.extend(self.symbol(target, source, visited));
-            } else if wildcard && binding.local_name.is_none() {
-                found.extend(self.symbol(target, name, visited));
-            }
-        }
-        (found.len() == 1)
-            .then(|| found.into_iter().next())
-            .flatten()
-    }
-}
-
-/// The one symbol `name` of a file that is in a module in the file, as a
-/// Rust `mod tests { ... }` has it.
-fn inline_module_symbol(facts: &FileSymbols, name: &str) -> Option<String> {
-    let in_module = |symbol: &&crate::index::model::Symbol| {
-        symbol.name == name
-            && symbol.container.as_ref().is_some_and(|container| {
-                facts.symbols.iter().any(|module| {
-                    module.kind == crate::index::model::SymbolKind::Module
-                        && module.name == *container
-                })
-            })
-    };
-    let mut found = facts.symbols.iter().filter(in_module);
-    let first = found.next()?;
-    found.next().is_none().then(|| first.key.to_string())
 }
 
 /// Gives a Go import without an alias the name that the package clause of

@@ -1,22 +1,9 @@
-//! The names that each file exports, computed once for each file.
-//!
-//! A query of one name of a barrel module read each re-export of the module,
-//! thus a barrel with many wildcard re-exports cost its size for each name.
-//! The table of a file has each name that it exports, with the definitions
-//! of `Resolver::exported_name`. It is built from the tables of the files
-//! that the file re-exports. A file whose re-exports reach a cycle has no
-//! table, and its queries use `exported_name`.
+//! The export tables of the call resolution. See `crate::index::export_tables`.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::HashMap;
 
 use super::{Family, Id, ImportBinding, ImportKind, Resolver, SymbolKind};
-
-/// The definitions of each name that a file exports.
-pub(super) type ExportTable<'a> = HashMap<&'a str, Vec<Id>>;
-
-/// The table of a file, or `None` when its re-exports reach a cycle.
-pub(super) type ExportTables<'a> = HashMap<usize, Option<Arc<ExportTable<'a>>>>;
+use crate::index::export_tables::{self, Exports, Member, Table};
 
 /// How a binding gives names of its target again.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,8 +28,14 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// The files whose tables the table of `file` reads.
-    fn re_export_targets(&self, file: usize) -> Vec<usize> {
+    /// The table of the names that `file` exports.
+    pub(super) fn export_table(&self, file: usize) -> Table<'a, Id> {
+        export_tables::table(self, &self.export_tables, file)
+    }
+}
+
+impl<'a> Exports<'a, Id> for Resolver<'a> {
+    fn targets(&self, file: usize) -> Vec<usize> {
         let mut targets: Vec<usize> = self.files[file]
             .imports
             .iter()
@@ -54,81 +47,10 @@ impl<'a> Resolver<'a> {
         targets
     }
 
-    /// The table of `file`. The search visits each file one time and does
-    /// not use recursion, because a chain of barrels can be long.
-    pub(super) fn export_table(&self, file: usize) -> Option<Arc<ExportTable<'a>>> {
-        if let Some(found) = self.export_tables.read().get(&file) {
-            return found.clone();
-        }
-        struct Frame {
-            file: usize,
-            targets: Vec<usize>,
-            next: usize,
-            reaches_cycle: bool,
-        }
-        let mut built: ExportTables<'a> = HashMap::new();
-        let known =
-            |file: usize, built: &ExportTables<'a>| -> Option<Option<Arc<ExportTable<'a>>>> {
-                built
-                    .get(&file)
-                    .cloned()
-                    .or_else(|| self.export_tables.read().get(&file).cloned())
-            };
-        let mut searching: HashSet<usize> = HashSet::from([file]);
-        let mut stack = vec![Frame {
-            file,
-            targets: self.re_export_targets(file),
-            next: 0,
-            reaches_cycle: false,
-        }];
-        while let Some(frame) = stack.last_mut() {
-            if frame.next < frame.targets.len() {
-                let target = frame.targets[frame.next];
-                frame.next += 1;
-                if known(target, &built).is_some() {
-                    continue;
-                }
-                if searching.contains(&target) {
-                    // Each file on the stack reaches the cycle.
-                    for frame in &mut stack {
-                        frame.reaches_cycle = true;
-                    }
-                    continue;
-                }
-                searching.insert(target);
-                stack.push(Frame {
-                    file: target,
-                    targets: self.re_export_targets(target),
-                    next: 0,
-                    reaches_cycle: false,
-                });
-                continue;
-            }
-            let frame = stack.pop().expect("a frame");
-            searching.remove(&frame.file);
-            let tables: Option<HashMap<usize, Arc<ExportTable<'a>>>> = if frame.reaches_cycle {
-                None
-            } else {
-                frame
-                    .targets
-                    .iter()
-                    .map(|target| Some((*target, known(*target, &built).flatten()?)))
-                    .collect()
-            };
-            let table = tables.map(|tables| Arc::new(self.build_export_table(frame.file, &tables)));
-            built.insert(frame.file, table);
-        }
-        let found = built.get(&file).cloned().flatten();
-        self.export_tables.write().extend(built);
-        found
-    }
-
-    /// The table of `file` from the tables of the files that it re-exports.
-    fn build_export_table(
-        &self,
-        file: usize,
-        tables: &HashMap<usize, Arc<ExportTable<'a>>>,
-    ) -> ExportTable<'a> {
+    /// The rules of the own definitions are the rules of a name of one
+    /// file: a default export, a top-level definition, an alias of an
+    /// export, and the one definition of the name in a module of the file.
+    fn member(&self, file: usize) -> Member<'a, Id> {
         let facts = &self.files[file];
         let mut defaults: Vec<Id> = Vec::new();
         let mut top_level: HashMap<&'a str, Vec<Id>> = HashMap::new();
@@ -153,70 +75,44 @@ impl<'a> Resolver<'a> {
                 in_module.entry(symbol.name.as_str()).or_default().push(id);
             }
         }
-        let mut re_exported: HashMap<&'a str, Vec<Id>> = HashMap::new();
+        let mut own: HashMap<&'a str, Vec<Id>> = HashMap::new();
+        for (name, found) in in_module {
+            if let [only] = found.as_slice() {
+                own.insert(name, vec![*only]);
+            }
+        }
+        own.extend(aliased);
+        own.extend(top_level);
+        if !defaults.is_empty() {
+            own.insert("default", defaults);
+        }
+        let mut wildcards = Vec::new();
+        let mut named = Vec::new();
         for binding in &facts.imports {
             let Some(kind) = self.re_export(file, binding) else {
                 continue;
             };
             for target in self.target_files(binding) {
-                let table = &tables[&target];
                 match kind {
+                    ReExport::Wildcard => wildcards.push(target),
                     ReExport::Named => {
-                        let Some(local) = binding.local_name.as_deref() else {
-                            continue;
-                        };
-                        let source = binding.imported_name.as_deref().unwrap_or(local);
-                        if let Some(found) = table.get(source) {
-                            re_exported.entry(local).or_default().extend(found);
-                        }
-                    }
-                    ReExport::Wildcard => {
-                        for (name, found) in table.iter() {
-                            re_exported.entry(name).or_default().extend(found);
+                        if let Some(local) = binding.local_name.as_deref() {
+                            let source = binding.imported_name.as_deref().unwrap_or(local);
+                            named.push((local, target, source));
                         }
                     }
                 }
             }
         }
-        // The order of the rules is the order of `exported_name`: the first
-        // rule that finds a definition gives the name.
-        let own = |name: &str| -> Option<Vec<Id>> {
-            if name == "default" && !defaults.is_empty() {
-                return Some(defaults.clone());
-            }
-            if let Some(found) = top_level.get(name) {
-                return Some(found.clone());
-            }
-            if let Some(found) = aliased.get(name) {
-                return Some(found.clone());
-            }
-            match in_module.get(name).map(Vec::as_slice) {
-                Some([only]) => Some(vec![*only]),
-                _ => None,
-            }
-        };
-        let mut names: HashSet<&'a str> = HashSet::new();
-        names.extend(top_level.keys());
-        names.extend(aliased.keys());
-        names.extend(in_module.keys());
-        names.extend(re_exported.keys());
-        if !defaults.is_empty() {
-            names.insert("default");
+        Member {
+            own: own.into_iter().collect(),
+            wildcards,
+            named,
         }
-        let mut table = HashMap::with_capacity(names.len());
-        for name in names {
-            let mut found = match own(name) {
-                Some(found) => found,
-                None => match re_exported.remove(name) {
-                    Some(found) => found,
-                    None => continue,
-                },
-            };
-            found.sort_unstable();
-            found.dedup();
-            table.insert(name, found);
-        }
-        table
+    }
+
+    fn contribution<'v>(&self, values: &'v [Id]) -> &'v [Id] {
+        values
     }
 }
 
@@ -269,9 +165,143 @@ mod timing_tests {
         elapsed
     }
 
+    /// A chain of `size` barrels. Each barrel defines one function and
+    /// re-exports the barrel before it with a wildcard. A file imports each
+    /// function from the last barrel and calls it. The case gives the time
+    /// and the number of the nodes of the tables.
+    fn barrel_chain_at(size: usize) -> (std::time::Duration, usize) {
+        let mut files: Vec<(String, String)> = Vec::new();
+        let mut names = Vec::new();
+        let mut calls = String::new();
+        for position in 0..size {
+            let previous = if position == 0 {
+                String::new()
+            } else {
+                format!("export * from './b{}';\n", position - 1)
+            };
+            files.push((
+                format!("b{position}.ts"),
+                format!("{previous}export function f{position}() {{}}\n"),
+            ));
+            names.push(format!("f{position}"));
+            calls.push_str(&format!("\tf{position}();\n"));
+        }
+        files.push((
+            "view.ts".to_string(),
+            format!(
+                "import {{ {} }} from './b{}';\n\nexport function view() {{\n{calls}}}\n",
+                names.join(", "),
+                size - 1
+            ),
+        ));
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let nodes = crate::index::export_tables::NODES.with(std::cell::Cell::get);
+        let started = Stopwatch::start();
+        let found = rows(&files, "view.ts");
+        let elapsed = started.elapsed();
+        let nodes = crate::index::export_tables::NODES.with(std::cell::Cell::get) - nodes;
+        assert_eq!(found.len(), size);
+        assert_eq!(
+            found[0],
+            "4 view>f0 UniqueCandidate ImportedName [b0.ts#f0]".to_string()
+        );
+        (elapsed, nodes)
+    }
+
+    /// `size` files in one cycle of wildcard re-exports. Each file defines
+    /// one function, and a file imports each function from the first file.
+    fn barrel_cycle_at(size: usize) -> std::time::Duration {
+        let mut files: Vec<(String, String)> = Vec::new();
+        let mut names = Vec::new();
+        let mut calls = String::new();
+        for position in 0..size {
+            files.push((
+                format!("c{position}.ts"),
+                format!(
+                    "export * from './c{}';\nexport function f{position}() {{}}\n",
+                    (position + 1) % size
+                ),
+            ));
+            names.push(format!("f{position}"));
+            calls.push_str(&format!("\tf{position}();\n"));
+        }
+        files.push((
+            "view.ts".to_string(),
+            format!(
+                "import {{ {} }} from './c0';\n\nexport function view() {{\n{calls}}}\n",
+                names.join(", ")
+            ),
+        ));
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let started = Stopwatch::start();
+        let found = rows(&files, "view.ts");
+        let elapsed = started.elapsed();
+        assert_eq!(found.len(), size);
+        let last = size - 1;
+        assert_eq!(
+            found[last],
+            format!(
+                "{} view>f{last} UniqueCandidate ImportedName [c{last}.ts#f{last}]",
+                4 + last
+            )
+        );
+        elapsed
+    }
+
     #[test]
-    fn test_timing_case_resolves_each_call() {
+    fn test_timing_cases_resolve_each_call() {
         wildcard_barrel_at(3);
+        barrel_chain_at(3);
+        barrel_cycle_at(3);
+    }
+
+    /// Each file of a cycle gives the definitions of each file of the cycle,
+    /// and its own definition comes first. Two definitions of the cycle give
+    /// a name that is ambiguous.
+    #[test]
+    fn test_names_of_a_cycle_of_re_exports() {
+        let files = [
+            ("a.ts", "export * from './b';\nexport function x() {}\nexport function own() {}\n"),
+            ("b.ts", "export * from './c';\nexport function own() {}\n"),
+            ("c.ts", "export * from './a';\nexport function x() {}\n"),
+            (
+                "view.ts",
+                "import { x, own } from './b';\nimport { own as mine } from './a';\n\nexport function view() {\n\tx();\n\town();\n\tmine();\n}\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "view.ts"),
+            [
+                "5 view>x Ambiguous ImportedName [a.ts#x, c.ts#x]",
+                "6 view>own UniqueCandidate ImportedName [b.ts#own]",
+                "7 view>mine UniqueCandidate ImportedAlias [a.ts#own]",
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_calls_through_a_chain_of_barrels_resolve_in_linear_time() {
+        assert_scales_linearly("chain of barrels", 8_000, |size| barrel_chain_at(size).0);
+        // A table that copied each name below it would have four times the nodes.
+        let (_, small) = crate::index::timing::on_one_thread(|| barrel_chain_at(8_000));
+        let (_, large) = crate::index::timing::on_one_thread(|| barrel_chain_at(16_000));
+        assert!(
+            large * 10 < small * 25,
+            "nodes of the tables: {small} at 8000, {large} at 16000"
+        );
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_calls_through_a_cycle_of_barrels_resolve_in_linear_time() {
+        assert_scales_linearly("cycle of barrels", 8_000, barrel_cycle_at);
     }
 
     #[test]
