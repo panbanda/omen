@@ -266,12 +266,12 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     let index = index.as_ref();
     match report_from_index(&scope.path, index, name, &options, start_line) {
         Ok(mut report) => {
-            let analysis =
-                crate::analyzers::security::analyze_paths(&scope.path, &files, &server.config)?;
-            report.security = Some(crate::index::security::symbol_security(
-                &analysis,
+            report.security = Some(crate::analyzers::security::symbol_security_of_paths(
+                &scope.path,
+                &files,
+                &server.config,
                 &report.qualified_name,
-            ));
+            )?);
             let mut truncated = Vec::new();
             if report.source_truncated {
                 truncated.push(Truncation {
@@ -546,11 +546,12 @@ fn impact(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         }
         other => other?,
     };
-    let analysis = crate::analyzers::security::analyze_paths(&scope.path, &files, &server.config)?;
-    report.security = Some(crate::index::security::symbol_security(
-        &analysis,
+    report.security = Some(crate::analyzers::security::symbol_security_of_paths(
+        &scope.path,
+        &files,
+        &server.config,
         &report.resolved[0],
-    ));
+    )?);
     // The traversal stops at `depth`. The totals without a limit tell if
     // the limit cut callers or callees.
     let all = analyze_view(

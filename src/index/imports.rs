@@ -11,6 +11,7 @@ pub mod typescript;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use parking_lot::RwLock;
+use rayon::prelude::*;
 
 use super::extract::FileSymbols;
 use super::model::{ImportBinding, ImportKind, ImportTarget, SymbolKind};
@@ -260,6 +261,66 @@ pub struct Manifests {
     pub node_packages: Vec<NodePackage>,
     /// The project files of TypeScript and JavaScript.
     pub projects: typescript::ProjectConfigs,
+    /// The test runners that each `package.json` file depends on, by the
+    /// directory of the file.
+    pub test_runners: BTreeMap<String, TestRunners>,
+}
+
+/// A set of the test runners of ECMAScript that the index knows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TestRunners(u8);
+
+impl TestRunners {
+    pub const JEST: Self = Self(1);
+    pub const VITEST: Self = Self(2);
+    pub const MOCHA: Self = Self(4);
+
+    /// The runners that the dependencies of a `package.json` text name.
+    pub fn of_package(package_json: &str) -> Self {
+        let Ok(package) = serde_json::from_str::<serde_json::Value>(package_json) else {
+            return Self::default();
+        };
+        let mut runners = Self::default();
+        for field in ["dependencies", "devDependencies"] {
+            let Some(dependencies) = package.get(field).and_then(|value| value.as_object()) else {
+                continue;
+            };
+            for (name, runner) in [
+                ("jest", Self::JEST),
+                ("vitest", Self::VITEST),
+                ("mocha", Self::MOCHA),
+            ] {
+                if dependencies.contains_key(name) {
+                    runners = runners.union(runner);
+                }
+            }
+        }
+        runners
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub fn contains(self, runner: Self) -> bool {
+        self.0 & runner.0 == runner.0
+    }
+
+    /// The runners for `file`: the runners of each `package.json` in the
+    /// directory of the file and in each directory above it.
+    pub fn of_file(manifests: &Manifests, file: &str) -> Self {
+        let mut runners = Self::default();
+        let mut here = directory(file);
+        loop {
+            if let Some(found) = manifests.test_runners.get(here) {
+                runners = runners.union(*found);
+            }
+            if here.is_empty() {
+                return runners;
+            }
+            here = directory(here);
+        }
+    }
 }
 
 /// The facts of one `package.json` file.
@@ -370,6 +431,7 @@ impl Default for Manifests {
             rust_library_directories: BTreeMap::new(),
             node_packages: Vec::new(),
             projects: typescript::ProjectConfigs::default(),
+            test_runners: BTreeMap::new(),
         }
     }
 }
@@ -409,6 +471,10 @@ impl Manifests {
                 self.projects.insert(path.to_string(), config);
             }
         } else if file_name(path) == "package.json" {
+            let runners = TestRunners::of_package(text);
+            if runners != TestRunners::default() {
+                self.test_runners.insert(here.to_string(), runners);
+            }
             self.node_packages.extend(node_package(here, text));
         } else if file_name(path) == "go.mod" {
             self.go_modules
@@ -1420,7 +1486,7 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
      -> Vec<Vec<(ImportTarget, Option<String>)>> {
         let repository = Repository::new(files, manifests);
         files
-            .iter()
+            .par_iter()
             .map(|file| {
                 file.imports
                     .iter()
@@ -1445,7 +1511,7 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
     let path_targets: Vec<BTreeMap<String, String>> = {
         let repository = Repository::new(files, manifests);
         files
-            .iter()
+            .par_iter()
             .map(|file| {
                 let mut qualifiers: BTreeSet<&str> = file
                     .references
@@ -1588,6 +1654,133 @@ pub(crate) mod testing {
                 row
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod thread_tests {
+    use super::*;
+
+    /// Files of each language that resolves imports through the memos of the
+    /// repository: TypeScript configs with chains and a cycle of `extends`,
+    /// Rust modules with `super` and `crate`, Go packages, Python packages,
+    /// and Java packages.
+    fn sources(count: usize) -> Vec<(String, String)> {
+        let mut sources = vec![
+            ("go.mod".to_string(), "module example.com/shop\n".to_string()),
+            (
+                "Cargo.toml".to_string(),
+                "[package]\nname = \"shop\"\n".to_string(),
+            ),
+            (
+                "web/tsconfig.base.json".to_string(),
+                "{ \"compilerOptions\": { \"baseUrl\": \"${configDir}\", \"paths\": { \"@lib/*\": [\"lib/*\"] } } }\n"
+                    .to_string(),
+            ),
+            (
+                "web/cycle/a.json".to_string(),
+                "{ \"extends\": \"./b.json\" }\n".to_string(),
+            ),
+            (
+                "web/cycle/b.json".to_string(),
+                "{ \"extends\": \"./a.json\" }\n".to_string(),
+            ),
+            (
+                "web/cycle/tsconfig.json".to_string(),
+                "{ \"extends\": \"./a.json\" }\n".to_string(),
+            ),
+        ];
+        let mut modules = String::new();
+        for position in 0..count {
+            let next = (position + 1) % count;
+            sources.push((
+                format!("web/p{position}/tsconfig.json"),
+                "{ \"extends\": \"../tsconfig.base.json\" }\n".to_string(),
+            ));
+            sources.push((
+                format!("web/p{position}/lib/f{position}.ts"),
+                format!("export function f{position}() {{}}\n"),
+            ));
+            sources.push((
+                format!("web/p{position}/main.ts"),
+                format!(
+                    "import {{ f{position} }} from \"@lib/f{position}\";\nimport {{ g{position} }} from \"../cycle/g{position}\";\nexport {{ f{position}, g{position} }};\n"
+                ),
+            ));
+            sources.push((
+                format!("web/cycle/g{position}.ts"),
+                format!("import {{ f{position} }} from \"../p{position}/main\";\nexport const g{position} = f{position};\n"),
+            ));
+            modules.push_str(&format!("mod m{position};\n"));
+            sources.push((
+                format!("src/m{position}.rs"),
+                format!(
+                    "use super::m{next}::run{next};\nuse crate::m{next};\npub fn run{position}() {{ run{next}(); m{next}::run{next}(); }}\n"
+                ),
+            ));
+            sources.push((
+                format!("shop/p{position}/a.go"),
+                format!(
+                    "package p{position}\n\nimport \"example.com/shop/shop/p{next}\"\n\nfunc A() {{ p{next}.A() }}\n"
+                ),
+            ));
+            sources.push((
+                format!("py/p{position}/__init__.py"),
+                format!("from ..p{next} import run\nfrom .helper import help\n"),
+            ));
+            sources.push((
+                format!("py/p{position}/helper.py"),
+                "def help():\n    pass\n".to_string(),
+            ));
+            sources.push((
+                format!("java/p{position}/A.java"),
+                format!("package p{position};\n\nimport p{next}.A;\n\npublic class A {{}}\n"),
+            ));
+        }
+        sources.push(("src/lib.rs".to_string(), modules));
+        sources
+    }
+
+    /// The result of the resolution of the imports, as text.
+    fn resolved(files: &[(&str, &str)], threads: usize) -> Vec<String> {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        let facts = pool.install(|| testing::index(files));
+        facts
+            .iter()
+            .flat_map(|file| {
+                let imports = file.imports.iter().map(move |binding| {
+                    format!(
+                        "{} {:?} {:?} {:?}",
+                        file.file, binding.module_path, binding.target_file, binding.target_symbol
+                    )
+                });
+                std::iter::once(format!("{} {:?}", file.file, file.path_targets)).chain(imports)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_imports_resolve_the_same_for_each_number_of_threads() {
+        let sources = sources(150);
+        let files: Vec<(&str, &str)> = sources
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let expected = resolved(&files, 1);
+        assert!(expected
+            .iter()
+            .any(|row| row.contains("Resolved(\"web/p0/lib/f0.ts\")")));
+        assert!(expected
+            .iter()
+            .any(|row| row.contains("Resolved(\"src/m1.rs\")")));
+        for threads in [2, 3, 4, 8] {
+            for _ in 0..3 {
+                assert_eq!(resolved(&files, threads), expected, "{threads} threads");
+            }
+        }
     }
 }
 
