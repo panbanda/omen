@@ -1,0 +1,4 @@
+{
+  "name": "@acme/util",
+  "exports": { "./*": { "types": "./dist/*.d.mts", "import": "./dist/*.mjs" } }
+}

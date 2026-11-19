@@ -453,6 +453,194 @@ fn object_exported<'tree>(object: Node<'tree>, context: &Context<'_, 'tree>) -> 
     }
 }
 
+/// The import bindings of one statement or one `require` call. See `Ecma::imports`.
+fn imports_of(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+    let text = |node: Node<'_>| context.text(node);
+    let literal = |string: Node<'_>| {
+        text(string)
+            .trim_matches(|quote| quote == '\'' || quote == '"' || quote == '`')
+            .to_string()
+    };
+    // The name and the alias of an import specifier or an export specifier.
+    let specifier = |specifier: Node<'_>| -> Option<(String, String)> {
+        let name = text(specifier.child_by_field_name("name")?);
+        let alias = specifier.child_by_field_name("alias").map(text);
+        Some((name.clone(), alias.unwrap_or(name)))
+    };
+    let module = |local: Node<'_>, path: &str, kind: ImportKind| {
+        context.import(node, path, kind, Some("*".to_string()), Some(text(local)))
+    };
+    match node.kind() {
+        IMPORT_STATEMENT => {
+            let Some(source) = node.child_by_field_name("source") else {
+                // `import name = require('path')`
+                if let Some(clause) = child_of_kind(node, IMPORT_REQUIRE_CLAUSE) {
+                    if let (Some(local), Some(source)) =
+                        (clause.named_child(0), clause.child_by_field_name("source"))
+                    {
+                        out.push(module(local, &literal(source), ImportKind::Module));
+                    }
+                }
+                return;
+            };
+            let path = literal(source);
+            let Some(clause) = child_of_kind(node, IMPORT_CLAUSE) else {
+                out.push(context.import(node, path, ImportKind::Load, None, None));
+                return;
+            };
+            let mut cursor = clause.walk();
+            for part in clause.named_children(&mut cursor) {
+                match part.kind() {
+                    IDENTIFIER => out.push(context.import(
+                        node,
+                        path.as_str(),
+                        ImportKind::Named,
+                        Some("default".to_string()),
+                        Some(text(part)),
+                    )),
+                    NAMESPACE_IMPORT => {
+                        if let Some(local) = part.named_child(0) {
+                            out.push(module(local, &path, ImportKind::Module));
+                        }
+                    }
+                    NAMED_IMPORTS => {
+                        let mut cursor = part.walk();
+                        for (name, local) in part.named_children(&mut cursor).filter_map(specifier)
+                        {
+                            out.push(context.import(
+                                node,
+                                path.as_str(),
+                                ImportKind::Named,
+                                Some(name),
+                                Some(local),
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        EXPORT_STATEMENT => {
+            let Some(source) = node.child_by_field_name("source") else {
+                return;
+            };
+            let path = literal(source);
+            if let Some(clause) = child_of_kind(node, EXPORT_CLAUSE) {
+                let mut cursor = clause.walk();
+                for (name, local) in clause.named_children(&mut cursor).filter_map(specifier) {
+                    out.push(context.import(
+                        node,
+                        path.as_str(),
+                        ImportKind::ReExportNamed,
+                        Some(name),
+                        Some(local),
+                    ));
+                }
+            } else if let Some(local) =
+                child_of_kind(node, NAMESPACE_EXPORT).and_then(|export| export.named_child(0))
+            {
+                out.push(module(local, &path, ImportKind::ReExportNamed));
+            } else {
+                out.push(context.import(node, path, ImportKind::ReExportWildcard, None, None));
+            }
+        }
+        CALL_EXPRESSION => {
+            let is_require = node
+                .child_by_field_name("function")
+                .is_some_and(|function| {
+                    function.kind() == IDENTIFIER && text(function) == "require"
+                });
+            let argument = node
+                .child_by_field_name("arguments")
+                .filter(|arguments| arguments.named_child_count() == 1)
+                .and_then(|arguments| arguments.named_child(0))
+                .filter(|argument| argument.kind() == STRING);
+            let (true, Some(argument)) = (is_require, argument) else {
+                return;
+            };
+            let path = literal(argument);
+            let pattern = context
+                .parent(node)
+                .filter(|parent| {
+                    parent.kind() == VARIABLE_DECLARATOR && has_field(*parent, "value", node)
+                })
+                .and_then(|declarator| declarator.child_by_field_name("name"));
+            match pattern {
+                Some(local) if local.kind() == IDENTIFIER => {
+                    out.push(module(local, &path, ImportKind::Module));
+                }
+                Some(pattern) if pattern.kind() == OBJECT_PATTERN => {
+                    let mut cursor = pattern.walk();
+                    for member in pattern.named_children(&mut cursor) {
+                        let names = match member.kind() {
+                            SHORTHAND_PATTERN => Some((text(member), text(member))),
+                            PAIR_PATTERN => member
+                                .child_by_field_name("key")
+                                .zip(member.child_by_field_name("value"))
+                                .filter(|(_, value)| value.kind() == IDENTIFIER)
+                                .map(|(key, value)| (text(key), text(value))),
+                            _ => None,
+                        };
+                        if let Some((name, local)) = names {
+                            out.push(context.import(
+                                node,
+                                path.as_str(),
+                                ImportKind::Named,
+                                Some(name),
+                                Some(local),
+                            ));
+                        }
+                    }
+                }
+                _ => out.push(context.import(node, path, ImportKind::Load, None, None)),
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Tells if the node has the keyword `type` as a direct child, as
+/// `import type { A } from "a"` and the specifier `type A` have.
+fn has_type_keyword(node: Node<'_>) -> bool {
+    let mut cursor = node.walk();
+    let found = node
+        .children(&mut cursor)
+        .any(|child| !child.is_named() && child.kind() == "type");
+    found
+}
+
+/// Marks the bindings of a statement that bind only a type: each binding of
+/// `import type` or `export type`, and each specifier with `type`.
+fn mark_type_only(node: Node<'_>, context: &Context<'_, '_>, bindings: &mut [ImportBinding]) {
+    if has_type_keyword(node) {
+        for binding in bindings.iter_mut() {
+            binding.type_only = true;
+        }
+        return;
+    }
+    let lists = [
+        child_of_kind(node, IMPORT_CLAUSE).and_then(|clause| child_of_kind(clause, NAMED_IMPORTS)),
+        child_of_kind(node, EXPORT_CLAUSE),
+    ];
+    for list in lists.into_iter().flatten() {
+        let mut cursor = list.walk();
+        for specifier in list.named_children(&mut cursor) {
+            if !has_type_keyword(specifier) {
+                continue;
+            }
+            let local = specifier
+                .child_by_field_name("alias")
+                .or_else(|| specifier.child_by_field_name("name"))
+                .map(|name| context.text(name));
+            for binding in bindings.iter_mut() {
+                if binding.local_name.is_some() && binding.local_name == local {
+                    binding.type_only = true;
+                }
+            }
+        }
+    }
+}
+
 impl Ecma {
     fn language(&self) -> Language {
         if self.typescript {
@@ -473,11 +661,17 @@ impl Ecma {
                 IDENTIFIER | TYPE_IDENTIFIER | NESTED_TYPE_IDENTIFIER | MEMBER_EXPRESSION => {
                     out.push(context.text(child))
                 }
-                _ => {
+                // `extends mixin(Base)` names the result of a call. The
+                // index does not know the class of that result.
+                "extends_clause"
+                | "implements_clause"
+                | "generic_type"
+                | "parenthesized_expression" => {
                     let mut cursor = child.walk();
                     let children: Vec<Node<'_>> = child.named_children(&mut cursor).collect();
                     pending.extend(children.into_iter().rev());
                 }
+                _ => {}
             }
         }
     }
@@ -654,149 +848,9 @@ impl LanguageSpec for Ecma {
     /// `require('path')` with a literal path is an import. An `export` statement
     /// with a source is a re-export.
     fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
-        let text = |node: Node<'_>| context.text(node);
-        let literal = |string: Node<'_>| {
-            text(string)
-                .trim_matches(|quote| quote == '\'' || quote == '"' || quote == '`')
-                .to_string()
-        };
-        // The name and the alias of an import specifier or an export specifier.
-        let specifier = |specifier: Node<'_>| -> Option<(String, String)> {
-            let name = text(specifier.child_by_field_name("name")?);
-            let alias = specifier.child_by_field_name("alias").map(text);
-            Some((name.clone(), alias.unwrap_or(name)))
-        };
-        let module = |local: Node<'_>, path: &str, kind: ImportKind| {
-            context.import(node, path, kind, Some("*".to_string()), Some(text(local)))
-        };
-        match node.kind() {
-            IMPORT_STATEMENT => {
-                let Some(source) = node.child_by_field_name("source") else {
-                    // `import name = require('path')`
-                    if let Some(clause) = child_of_kind(node, IMPORT_REQUIRE_CLAUSE) {
-                        if let (Some(local), Some(source)) =
-                            (clause.named_child(0), clause.child_by_field_name("source"))
-                        {
-                            out.push(module(local, &literal(source), ImportKind::Module));
-                        }
-                    }
-                    return;
-                };
-                let path = literal(source);
-                let Some(clause) = child_of_kind(node, IMPORT_CLAUSE) else {
-                    out.push(context.import(node, path, ImportKind::Load, None, None));
-                    return;
-                };
-                let mut cursor = clause.walk();
-                for part in clause.named_children(&mut cursor) {
-                    match part.kind() {
-                        IDENTIFIER => out.push(context.import(
-                            node,
-                            path.as_str(),
-                            ImportKind::Named,
-                            Some("default".to_string()),
-                            Some(text(part)),
-                        )),
-                        NAMESPACE_IMPORT => {
-                            if let Some(local) = part.named_child(0) {
-                                out.push(module(local, &path, ImportKind::Module));
-                            }
-                        }
-                        NAMED_IMPORTS => {
-                            let mut cursor = part.walk();
-                            for (name, local) in
-                                part.named_children(&mut cursor).filter_map(specifier)
-                            {
-                                out.push(context.import(
-                                    node,
-                                    path.as_str(),
-                                    ImportKind::Named,
-                                    Some(name),
-                                    Some(local),
-                                ));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            EXPORT_STATEMENT => {
-                let Some(source) = node.child_by_field_name("source") else {
-                    return;
-                };
-                let path = literal(source);
-                if let Some(clause) = child_of_kind(node, EXPORT_CLAUSE) {
-                    let mut cursor = clause.walk();
-                    for (name, local) in clause.named_children(&mut cursor).filter_map(specifier) {
-                        out.push(context.import(
-                            node,
-                            path.as_str(),
-                            ImportKind::ReExportNamed,
-                            Some(name),
-                            Some(local),
-                        ));
-                    }
-                } else if let Some(local) =
-                    child_of_kind(node, NAMESPACE_EXPORT).and_then(|export| export.named_child(0))
-                {
-                    out.push(module(local, &path, ImportKind::ReExportNamed));
-                } else {
-                    out.push(context.import(node, path, ImportKind::ReExportWildcard, None, None));
-                }
-            }
-            CALL_EXPRESSION => {
-                let is_require = node
-                    .child_by_field_name("function")
-                    .is_some_and(|function| {
-                        function.kind() == IDENTIFIER && text(function) == "require"
-                    });
-                let argument = node
-                    .child_by_field_name("arguments")
-                    .filter(|arguments| arguments.named_child_count() == 1)
-                    .and_then(|arguments| arguments.named_child(0))
-                    .filter(|argument| argument.kind() == STRING);
-                let (true, Some(argument)) = (is_require, argument) else {
-                    return;
-                };
-                let path = literal(argument);
-                let pattern = context
-                    .parent(node)
-                    .filter(|parent| {
-                        parent.kind() == VARIABLE_DECLARATOR && has_field(*parent, "value", node)
-                    })
-                    .and_then(|declarator| declarator.child_by_field_name("name"));
-                match pattern {
-                    Some(local) if local.kind() == IDENTIFIER => {
-                        out.push(module(local, &path, ImportKind::Module));
-                    }
-                    Some(pattern) if pattern.kind() == OBJECT_PATTERN => {
-                        let mut cursor = pattern.walk();
-                        for member in pattern.named_children(&mut cursor) {
-                            let names = match member.kind() {
-                                SHORTHAND_PATTERN => Some((text(member), text(member))),
-                                PAIR_PATTERN => member
-                                    .child_by_field_name("key")
-                                    .zip(member.child_by_field_name("value"))
-                                    .filter(|(_, value)| value.kind() == IDENTIFIER)
-                                    .map(|(key, value)| (text(key), text(value))),
-                                _ => None,
-                            };
-                            if let Some((name, local)) = names {
-                                out.push(context.import(
-                                    node,
-                                    path.as_str(),
-                                    ImportKind::Named,
-                                    Some(name),
-                                    Some(local),
-                                ));
-                            }
-                        }
-                    }
-                    _ => out.push(context.import(node, path, ImportKind::Load, None, None)),
-                }
-            }
-            _ => {}
-        }
+        let first = out.len();
+        imports_of(node, context, out);
+        mark_type_only(node, context, &mut out[first..]);
     }
 
     /// `export { original as publicName }` gives the name `publicName` to a
@@ -885,6 +939,20 @@ impl LanguageSpec for Ecma {
                     [ARROW_FUNCTION, FUNCTION_EXPRESSION].contains(&value.kind())
                 }),
             };
+        }
+        if let Some(parameters) = node.child_by_field_name("type_parameters") {
+            let mut cursor = parameters.walk();
+            draft.type_parameters = parameters
+                .named_children(&mut cursor)
+                .filter_map(|parameter| parameter.child_by_field_name("name"))
+                .map(|name| context.text(name))
+                .collect();
+        }
+        // The aliased type of `type Name = ...` is in the place of a result type.
+        if draft.kind == SymbolKind::TypeAlias {
+            draft.return_type = node
+                .child_by_field_name("value")
+                .map(|value| context.text(value));
         }
         draft.default_export = context.parent(node).is_some_and(|parent| {
             parent.kind() == EXPORT_STATEMENT && context.text(parent).starts_with("export default")
@@ -1074,6 +1142,29 @@ mod tests {
             ["Base"]
         );
         assert_eq!(keys(Language::JavaScript, source)[3], "file#Circle.#scaled");
+    }
+
+    #[test]
+    fn test_supertypes_of_an_expression_in_extends_are_unknown() {
+        let source = "class Node extends createNode({ run() { throw new Failure('x'); } }) {}\nclass Mixed extends mixin(Base) {}\nclass Member extends lib.Base {}\nclass Paren extends (Base) {}\n";
+        for language in [Language::JavaScript, Language::TypeScript] {
+            let found = symbols(language, source);
+            let supertypes = |name: &str| {
+                found
+                    .iter()
+                    .find(|symbol| symbol.name == name)
+                    .map(|symbol| symbol.supertypes.clone())
+                    .expect("the class")
+            };
+            assert!(supertypes("Node").is_empty(), "{language}");
+            assert!(supertypes("Mixed").is_empty(), "{language}");
+            assert_eq!(supertypes("Member"), ["lib.Base"], "{language}");
+            assert_eq!(supertypes("Paren"), ["Base"], "{language}");
+        }
+        let typed = "class Node extends Base<string> implements Shape<number>, Other {}\ninterface Shape<T> extends Named<T>, lib.Tagged {}\n";
+        let found = symbols(Language::TypeScript, typed);
+        assert_eq!(found[0].supertypes, ["Base", "Shape", "Other"]);
+        assert_eq!(found[1].supertypes, ["Named", "lib.Tagged"]);
     }
 
     #[test]

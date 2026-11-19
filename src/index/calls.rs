@@ -151,6 +151,27 @@ impl CallSyntax {
         callee: Node<'tree>,
         context: &Context<'_, 'tree>,
     ) -> Option<Callee<'tree>> {
+        // Go `f[T](x)` and `pkg.F[T](x)` name the callee as a generic type.
+        if callee.kind() == "generic_type" {
+            let named = callee.child_by_field_name("type")?;
+            return match named.kind() {
+                "type_identifier" => Some(Callee {
+                    target: None,
+                    name_node: named,
+                    receiver: None,
+                    qualifier: None,
+                }),
+                "qualified_type" => Some(Callee {
+                    target: None,
+                    name_node: named.child_by_field_name("name")?,
+                    receiver: Some(Receiver::Name(
+                        context.text(named.child_by_field_name("package")?),
+                    )),
+                    qualifier: None,
+                }),
+                _ => None,
+            };
+        }
         let callee = without_type_arguments(callee)?;
         let kind = callee.kind();
         if let Some((_, receiver, name)) = self.members.iter().find(|rule| rule.0 == kind) {

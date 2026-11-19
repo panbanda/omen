@@ -94,6 +94,7 @@
     {"label": "builtin_method", "category": "wrong_receiver", "caller": "external", "line": 74, "callee_text": "seen.set", "expected": []},
     {"label": "global_function", "category": "external", "caller": "external", "line": 75, "callee_text": "parseInt", "expected": []},
     {"label": "node_function", "category": "external", "caller": "file_name", "line": 79, "callee_text": "basename", "expected": []},
+    {"label": "overload_implementation", "category": "cross_file_import", "caller": "file_name", "line": 79, "callee_text": "format", "expected": ["format_implementation"]},
     {"label": "same_name_in_python", "category": "foreign_language", "caller": "main", "line": 84, "callee_text": "describe", "expected": ["describe"]}
   ],
   "imports": [

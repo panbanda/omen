@@ -68,7 +68,11 @@ pub fn class_model(language: Language) -> ClassModel {
         Language::TypeScript | Language::Tsx => ClassModel::Classes(ClassSyntax {
             classes: &[Class],
             references: &["type_identifier", "identifier"],
-            declarations: &["public_field_definition"],
+            declarations: &[
+                "public_field_definition",
+                "required_parameter",
+                "optional_parameter",
+            ],
             accesses: &["member_expression"],
             implicit: &[],
         }),
@@ -709,6 +713,23 @@ fn strip_sigil(language: Language, name: &str) -> &str {
     }
 }
 
+/// Tells if a TypeScript parameter is a parameter property: a parameter of
+/// a constructor with an accessibility modifier, `readonly`, or `override`.
+/// The class then has a field with the name of the parameter.
+fn is_parameter_property(node: Node<'_>, source: &[u8], ancestors: &[Node<'_>]) -> bool {
+    let mut cursor = node.walk();
+    let modified = node.children(&mut cursor).any(|child| {
+        ["accessibility_modifier", "override_modifier", "readonly"].contains(&child.kind())
+    });
+    let constructor = ancestors.iter().rev().nth(1).is_some_and(|method| {
+        method.kind() == "method_definition"
+            && method
+                .child_by_field_name("name")
+                .is_some_and(|name| text(name, source) == "constructor")
+    });
+    modified && constructor
+}
+
 /// The ranges of the names that a node declares as fields.
 fn declared_names(
     language: Language,
@@ -787,7 +808,15 @@ fn declared_names(
             }
         }
         Language::TypeScript | Language::Tsx => {
-            names.extend(node.child_by_field_name("name").map(range_of));
+            if node.kind() == "public_field_definition" {
+                names.extend(node.child_by_field_name("name").map(range_of));
+            } else if is_parameter_property(node, source, ancestors) {
+                names.extend(
+                    node.child_by_field_name("pattern")
+                        .filter(|pattern| pattern.kind() == "identifier")
+                        .map(range_of),
+                );
+            }
         }
         Language::JavaScript | Language::Jsx => {
             names.extend(node.child_by_field_name("property").map(range_of));
