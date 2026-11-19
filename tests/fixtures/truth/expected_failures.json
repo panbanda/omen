@@ -1,5 +1,15 @@
 [
   {
+    "id": "bash/idioms/calls/alias_call/no_missed_edge",
+    "reason": "no edge to main.sh:greet:6",
+    "tracking": "the Bash index does not read `alias` definitions, so a call through an alias has no edge"
+  },
+  {
+    "id": "bash/idioms/imports/source_through_path/target",
+    "reason": "expected {}, got {\"lib.sh\"}",
+    "tracking": "the Bash import resolver reads a `source` path without a slash as relative to the file; bash searches PATH and then the working directory"
+  },
+  {
     "id": "go/generic_methods/calls/generic_method/no_missed_edge",
     "reason": "no edge to flash.go:Error:5",
     "tracking": "tree-sitter-go 0.25.0 does not parse a method with type parameters"
