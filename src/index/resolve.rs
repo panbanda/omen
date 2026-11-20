@@ -234,6 +234,25 @@ fn is_callable(symbol: &Symbol) -> bool {
     )
 }
 
+/// The object that a Ruby instance variable belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum RubyObject {
+    /// An object of the class: the object of an instance method.
+    Instance,
+    /// The class object: the object of `def self.name`, of a method in
+    /// `class << self`, and of the class body.
+    Class,
+}
+
+/// The names of the scopes of a type and the name of the type.
+type TypePath = Vec<String>;
+
+/// A Ruby instance variable: the path of its type, its name, and its object.
+type InstanceVariable = (TypePath, String, RubyObject);
+
+/// The types of a value. `None` when the syntax gives no type.
+type Types = Option<Vec<Id>>;
+
 fn is_container(symbol: &Symbol) -> bool {
     symbol.kind.is_type() && symbol.kind != SymbolKind::TypeAlias
 }
@@ -263,21 +282,32 @@ struct Resolver<'a> {
     by_container: HashMap<(&'a str, &'a str), Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
-    locals_by_name: Vec<HashMap<&'a str, Vec<usize>>>,
+    locals_by_name: Vec<SortedPositions<&'a str>>,
     /// For each file, the positions of the local names by owner and name, in
     /// source order. Many functions of a file can bind one name, and a lookup
     /// reads only the names of one function.
-    locals_by_owner: Vec<HashMap<&'a str, PositionsByOwner>>,
+    locals_by_owner: Vec<SortedPositions<(&'a str, Option<usize>)>>,
     /// For each file, the index of the blocks of the local names of one owner and one name,
     /// when the owner binds the name many times.
     local_blocks: Vec<HashMap<(&'a str, Option<usize>), local_blocks::LocalBlocks>>,
     /// For each file, the positions of the references by start byte, in source order.
-    references_by_start: Vec<HashMap<usize, Vec<usize>>>,
-    /// For each file, the end byte and the position of the references by
-    /// start byte, sorted. A chain of calls has many calls with one start.
-    references_by_span: Vec<HashMap<usize, Vec<(usize, usize)>>>,
+    references_by_start: Vec<SortedPositions<usize>>,
+    /// For each file, the positions of the references by start byte and end
+    /// byte, in source order. A chain of calls has many calls with one start.
+    references_by_span: Vec<SortedPositions<(usize, usize)>>,
     /// For each Ruby type, the types that have it as a direct parent type.
     ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
+    /// The Ruby types by their path. Each file that opens a class gives a type.
+    ruby_types_by_path: OnceLock<HashMap<Vec<String>, Vec<Id>>>,
+    /// The writes of each Ruby instance variable, as `(file, local)`
+    /// positions, by the path of the type, the name, and the object.
+    ruby_instance_variables: OnceLock<HashMap<InstanceVariable, Vec<(usize, usize)>>>,
+    /// The results of `ruby_instance_variable_types`, by the variable and
+    /// the depth. The depth is in the key because a deeper search stops
+    /// sooner, and thus the order of the searches does not change a result.
+    ruby_instance_variable_cache: RwLock<HashMap<(InstanceVariable, usize), Types>>,
+    /// The results of `ruby_object_paths`, by the path of the type.
+    ruby_object_paths_cache: RwLock<HashMap<TypePath, Arc<Vec<TypePath>>>>,
     /// For each Go type, the Go structs that embed it.
     go_embedders: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// For each Go type, the methods that it has itself.
@@ -357,8 +387,55 @@ type ExportQuery = (usize, String);
 /// The file, the name, and the qualifier of one type lookup.
 type TypeQuery = (usize, String, Option<String>);
 
-/// The positions of the local names of one name, by the definition that binds them.
-type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
+/// Positions by a key, as the positions of the references of one file by start byte. The
+/// two lists are in the order of the key and then of the position, so the positions of one
+/// key are one slice in source order. A map from each key to a list costs several times as
+/// much memory for each position.
+struct SortedPositions<K> {
+    keys: Vec<K>,
+    positions: Vec<usize>,
+}
+
+impl<K: Ord> SortedPositions<K> {
+    /// `keys` gives the key of each position, in the order of the positions.
+    fn new(keys: impl Iterator<Item = K>) -> Self {
+        let mut pairs: Vec<(K, usize)> = keys
+            .enumerate()
+            .map(|(position, key)| (key, position))
+            .collect();
+        pairs.sort_unstable();
+        let (keys, positions) = pairs.into_iter().unzip();
+        Self { keys, positions }
+    }
+
+    /// The positions, in source order, of the keys for which `compare` gives `Equal`.
+    /// `compare` orders a key against the wanted key.
+    fn matching(&self, compare: impl Fn(&K) -> std::cmp::Ordering) -> &[usize] {
+        let first = self.keys.partition_point(|key| compare(key).is_lt());
+        let end = self.keys.partition_point(|key| compare(key).is_le());
+        &self.positions[first..end]
+    }
+
+    /// The positions of the keys from `low` to `high`, both included, in the
+    /// order of the key and then in source order.
+    fn between(&self, low: &K, high: &K) -> &[usize] {
+        let first = self.keys.partition_point(|key| key < low);
+        let end = self.keys.partition_point(|key| key <= high);
+        &self.positions[first..end.max(first)]
+    }
+
+    /// Each key once, in key order, with its positions in source order.
+    fn groups(&self) -> impl Iterator<Item = (&K, &[usize])> {
+        let mut first = 0;
+        std::iter::from_fn(move || {
+            let key = self.keys.get(first)?;
+            let length = self.keys[first..].partition_point(|other| other == key);
+            let group = (key, &self.positions[first..first + length]);
+            first += length;
+            Some(group)
+        })
+    }
+}
 
 /// The number of bindings of one name by one owner from which the resolver builds an index of
 /// their blocks. A look at fewer bindings costs less than the index.
@@ -414,39 +491,33 @@ impl<'a> Resolver<'a> {
         let locals_by_owner = files
             .iter()
             .map(|facts| {
-                let mut positions: HashMap<&str, PositionsByOwner> = HashMap::new();
-                for (position, local) in facts.locals.iter().enumerate() {
-                    positions
-                        .entry(local.name.name.as_str())
-                        .or_default()
-                        .entry(local.owner)
-                        .or_default()
-                        .push(position);
-                }
-                positions
+                SortedPositions::new(
+                    facts
+                        .locals
+                        .iter()
+                        .map(|local| (local.name.name.as_str(), local.owner)),
+                )
             })
             .collect();
         let local_blocks = files
             .iter()
             .zip(&locals_by_owner)
             .map(
-                |(facts, by_name): (&FileSymbols, &HashMap<&str, PositionsByOwner>)| {
+                |(facts, by_owner): (&FileSymbols, &SortedPositions<(&str, Option<usize>)>)| {
                     let mut index = HashMap::new();
-                    for (name, by_owner) in by_name {
-                        for (owner, positions) in by_owner {
-                            if positions.len() < LOCAL_BLOCKS_MINIMUM {
-                                continue;
-                            }
-                            let bindings: Vec<local_blocks::Binding<'_>> = positions
-                                .iter()
-                                .map(|position| {
-                                    let local = &facts.locals[*position];
-                                    (local.block.as_ref(), local.name.value_start)
-                                })
-                                .collect();
-                            if let Some(blocks) = local_blocks::LocalBlocks::new(&bindings) {
-                                index.insert((*name, *owner), blocks);
-                            }
+                    for (key, positions) in by_owner.groups() {
+                        if positions.len() < LOCAL_BLOCKS_MINIMUM {
+                            continue;
+                        }
+                        let bindings: Vec<local_blocks::Binding<'_>> = positions
+                            .iter()
+                            .map(|position| {
+                                let local = &facts.locals[*position];
+                                (local.block.as_ref(), local.name.value_start)
+                            })
+                            .collect();
+                        if let Some(blocks) = local_blocks::LocalBlocks::new(&bindings) {
+                            index.insert(*key, blocks);
                         }
                     }
                     index
@@ -456,43 +527,29 @@ impl<'a> Resolver<'a> {
         let locals_by_name = files
             .iter()
             .map(|facts| {
-                let mut positions: HashMap<&str, Vec<usize>> = HashMap::new();
-                for (position, local) in facts.locals.iter().enumerate() {
-                    positions
-                        .entry(local.name.name.as_str())
-                        .or_default()
-                        .push(position);
-                }
-                positions
+                SortedPositions::new(facts.locals.iter().map(|local| local.name.name.as_str()))
             })
             .collect();
         let references_by_start = files
             .iter()
             .map(|facts| {
-                let mut positions: HashMap<usize, Vec<usize>> = HashMap::new();
-                for (position, reference) in facts.reference_facts.iter().enumerate() {
-                    positions
-                        .entry(reference.start_byte)
-                        .or_default()
-                        .push(position);
-                }
-                positions
+                SortedPositions::new(
+                    facts
+                        .reference_facts
+                        .iter()
+                        .map(|reference| reference.start_byte),
+                )
             })
             .collect();
         let references_by_span = files
             .iter()
             .map(|facts| {
-                let mut spans: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
-                for (position, reference) in facts.reference_facts.iter().enumerate() {
-                    spans
-                        .entry(reference.start_byte)
-                        .or_default()
-                        .push((reference.end_byte, position));
-                }
-                for list in spans.values_mut() {
-                    list.sort_unstable();
-                }
-                spans
+                SortedPositions::new(
+                    facts
+                        .reference_facts
+                        .iter()
+                        .map(|reference| (reference.start_byte, reference.end_byte)),
+                )
             })
             .collect();
         let rebound = files
@@ -567,6 +624,10 @@ impl<'a> Resolver<'a> {
             references_by_start,
             references_by_span,
             ruby_children: OnceLock::new(),
+            ruby_types_by_path: OnceLock::new(),
+            ruby_instance_variables: OnceLock::new(),
+            ruby_instance_variable_cache: RwLock::new(HashMap::new()),
+            ruby_object_paths_cache: RwLock::new(HashMap::new()),
             go_embedders: OnceLock::new(),
             go_methods: OnceLock::new(),
             test_runners: OnceLock::new(),
@@ -1495,6 +1556,10 @@ impl<'a> Resolver<'a> {
         // A constant of a parent type, or a module that the repository
         // opens only in a form this search does not see.
         if qualifier.is_empty() {
+            // A core class that no enclosing module has is the core class.
+            if external::is_ruby_core_class(name) {
+                return Vec::new();
+            }
             return self.types(name, None, owner.0);
         }
         candidates
@@ -1507,6 +1572,83 @@ impl<'a> Resolver<'a> {
                         .eq(qualifier.iter())
             })
             .collect()
+    }
+
+    /// The types that a Ruby constant names at a call in `chain`, as
+    /// `ruby_constant` finds them from the innermost type or module that
+    /// encloses the call. `None` when the code is not Ruby or no type or
+    /// module encloses the call.
+    fn ruby_constant_at(&self, file: usize, chain: &[Id], text: &str) -> Option<Vec<Id>> {
+        if self.family(file) != Family::Ruby {
+            return None;
+        }
+        let scope = chain
+            .iter()
+            .copied()
+            .find(|id| is_container(self.symbol(*id)))?;
+        Some(self.ruby_constant(scope, text, false))
+    }
+
+    /// The repository types that open the Ruby core class that the constant
+    /// `text` names at a call in `chain` again, as a script opens `Thread`
+    /// to add a method. Empty when no file opens the class again. `None`
+    /// when the code is not Ruby, `text` is not a core class, a singleton
+    /// class rebinds it, or a type of the repository with the name hides the
+    /// core class at the call.
+    fn ruby_core_types(&self, file: usize, chain: &[Id], text: &str) -> Option<Vec<Id>> {
+        let class = text.strip_prefix("::").unwrap_or(text);
+        // `class << File` can give the core class a method that is not a
+        // symbol of `File`, and the old search reads that.
+        if self.family(file) != Family::Ruby
+            || !external::is_ruby_core_class(class)
+            || class.contains("::")
+            || self.is_rebound(file, class)
+        {
+            return None;
+        }
+        let top_level = |id: &Id| self.member_path(*id) == [class];
+        let types = match self.ruby_constant_at(file, chain, text) {
+            Some(types) => types,
+            None => self
+                .named(class, file)
+                .filter(|id| is_container(self.symbol(*id)) && top_level(id))
+                .collect(),
+        };
+        types.iter().all(top_level).then_some(types)
+    }
+
+    /// A call of a method of a Ruby core class. `new` calls the `initialize`
+    /// that the repository defines for the class, else the core one. Another
+    /// method is a method that the repository adds to the class, as a file
+    /// that opens the class or its singleton class again adds it, else a
+    /// core method. `None` when `ruby_core_types` gives none.
+    fn ruby_core_call(
+        &self,
+        file: usize,
+        chain: &[Id],
+        text: &str,
+        name: &str,
+        arity: usize,
+    ) -> Option<Outcome> {
+        self.ruby_core_types(file, chain, text)?;
+        let class = text.strip_prefix("::").unwrap_or(text);
+        let method = if name == "new" { "initialize" } else { name };
+        let found: Vec<Id> = self
+            .by_container
+            .get(&(class, method))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|id| {
+                self.family(id.0) == Family::Ruby
+                    && self.facts(*id).container_path == [class]
+                    && (name != "new" || self.symbol(*id).kind == SymbolKind::Constructor)
+            })
+            .collect();
+        Some(
+            Outcome::of(Basis::QualifiedPath, self.preferred(found, arity))
+                .unwrap_or_else(|| Outcome::none(Status::External)),
+        )
     }
 
     /// The constructors of a type or of its nearest parent type that has one.
@@ -1632,34 +1774,29 @@ impl<'a> Resolver<'a> {
     fn locals_named(&self, file: usize, name: &str) -> impl Iterator<Item = &'a Local> + '_ {
         let locals = &self.files[file].locals;
         self.locals_by_name[file]
-            .get(name)
-            .into_iter()
-            .flatten()
+            .matching(|key| (*key).cmp(name))
+            .iter()
             .map(move |position| &locals[*position])
     }
 
     /// The references of `file` that start at the byte `start`, in source order.
     fn references_at(&self, file: usize, start: usize) -> &[usize] {
-        self.references_by_start[file]
-            .get(&start)
-            .map_or(&[], Vec::as_slice)
+        self.references_by_start[file].matching(|key| key.cmp(&start))
     }
 
     /// The references of `file` that start at `start` and end at or before
-    /// `end`, sorted by the end byte and then by source order.
-    fn references_within(&self, file: usize, start: usize, end: usize) -> &[(usize, usize)] {
-        let spans = self.references_by_span[file]
-            .get(&start)
-            .map_or(&[][..], Vec::as_slice);
-        &spans[..spans.partition_point(|(other, _)| *other <= end)]
+    /// `end`, in the order of the end byte and then in source order.
+    fn references_within(&self, file: usize, start: usize, end: usize) -> &[usize] {
+        self.references_by_span[file].between(&(start, 0), &(start, end))
     }
 
     /// The first reference in source order that has exactly the bytes
     /// `start` to `end`.
     fn reference_spanning(&self, file: usize, start: usize, end: usize) -> Option<usize> {
-        let within = self.references_within(file, start, end);
-        let first = within.partition_point(|(other, _)| *other < end);
-        within.get(first).map(|(_, position)| *position)
+        self.references_by_span[file]
+            .matching(|key| key.cmp(&(start, end)))
+            .first()
+            .copied()
     }
 
     /// The local name `name` that a reference at the byte `at` sees. When two
@@ -1671,7 +1808,7 @@ impl<'a> Resolver<'a> {
             if let Some(blocks) = self.local_blocks[file].get(&(name, owner)) {
                 match blocks.nearest(at) {
                     Some(rank) => {
-                        let position = self.locals_by_owner[file][name][&owner][rank];
+                        let position = self.local_positions(file, owner, name)[rank];
                         return Some(&self.files[file].locals[position]);
                     }
                     None => continue,
@@ -1698,12 +1835,15 @@ impl<'a> Resolver<'a> {
         name: &str,
     ) -> impl Iterator<Item = &'a Local> + '_ {
         let locals = &self.files[file].locals;
-        self.locals_by_owner[file]
-            .get(name)
-            .and_then(|owners| owners.get(&owner))
-            .into_iter()
-            .flatten()
+        self.local_positions(file, owner, name)
+            .iter()
             .map(move |position| &locals[*position])
+    }
+
+    /// The positions of the local names `name` that the definition `owner` of `file` binds,
+    /// in source order.
+    fn local_positions(&self, file: usize, owner: Option<usize>, name: &str) -> &[usize] {
+        self.locals_by_owner[file].matching(|key| (key.0, key.1).cmp(&(name, owner)))
     }
 
     /// Tells if a definition of `chain` binds the local name `name` so that a
@@ -1881,6 +2021,11 @@ impl<'a> Resolver<'a> {
         let (root, fields) = path.split_first()?;
         let mut owners: Vec<Id> = if SELF_WORDS.contains(&root.as_str()) {
             self.enclosing_type(chain).into_iter().collect()
+        } else if self.is_ruby_instance_variable(file, root) {
+            if element && fields.is_empty() {
+                return None;
+            }
+            self.ruby_instance_variable_types(chain, root, depth)?
         } else if let Some(local) = self.local(chain, file, root, at) {
             if fields.is_empty() && element {
                 let declared = local.name.type_name.as_deref()?;
@@ -1932,7 +2077,12 @@ impl<'a> Resolver<'a> {
     }
 
     /// The types that the receiver of a Ruby `Type.new` call names.
-    fn ruby_new_receiver_types(&self, file: usize, reference: &Reference) -> Option<Vec<Id>> {
+    fn ruby_new_receiver_types(
+        &self,
+        file: usize,
+        reference: &Reference,
+        owner: Option<usize>,
+    ) -> Option<Vec<Id>> {
         if self.family(file) != Family::Ruby || reference.name != "new" {
             return None;
         }
@@ -1941,6 +2091,13 @@ impl<'a> Resolver<'a> {
             (None, Some(Receiver::Name(name))) => name.as_str(),
             _ => return None,
         };
+        let chain = self.chain(file, owner);
+        let types = self
+            .ruby_core_types(file, &chain, text)
+            .or_else(|| self.ruby_constant_at(file, &chain, text));
+        if let Some(types) = types {
+            return (!types.is_empty()).then_some(types);
+        }
         let path = segments(text);
         let (last, before) = path.split_last()?;
         let before = (!before.is_empty()).then(|| before.join("."));
@@ -1980,6 +2137,12 @@ impl<'a> Resolver<'a> {
             return Some(self.enclosing_type(&chain).into_iter().collect());
         }
         let outcome = self.resolve(file, position, depth + 1);
+        // `Thread.new` calls the core `initialize`, and the object has the
+        // methods that the repository adds to `Thread`.
+        if whole && outcome.status == Status::External {
+            let owner = facts.reference_facts[position].owner;
+            return self.ruby_new_receiver_types(file, reference, owner);
+        }
         let [callee] = outcome.candidates.as_slice() else {
             return None;
         };
@@ -1997,7 +2160,8 @@ impl<'a> Resolver<'a> {
             }
             // Ruby `Type.new` gives an object of `Type`, also when
             // `initialize` comes from a parent type or from a module.
-            if let Some(types) = self.ruby_new_receiver_types(file, reference) {
+            let owner = facts.reference_facts[position].owner;
+            if let Some(types) = self.ruby_new_receiver_types(file, reference, owner) {
                 return Some(types);
             }
             return if is_container(symbol) {
@@ -2237,6 +2401,19 @@ impl<'a> Resolver<'a> {
         }
         if types.is_empty() {
             return Outcome::none(Status::Unresolved);
+        }
+        // A Ruby core class that files of the repository open again has the
+        // methods of the core and the methods that these files add.
+        let core = |id: &Id| {
+            let path = self.member_path(*id);
+            path.len() == 1 && external::is_ruby_core_class(&path[0])
+        };
+        if self.family(file) == Family::Ruby && name != "new" && types.iter().all(core) {
+            let found: Vec<Id> = types
+                .iter()
+                .flat_map(|owner| self.members(*owner, name, arity, &mut BTreeSet::new()))
+                .collect();
+            return Outcome::of(basis, found).unwrap_or_else(|| Outcome::none(Status::External));
         }
         // Each file that opens a Ruby class or module gives a symbol, and
         // all these symbols are one type.
@@ -2762,7 +2939,12 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
-        let types = self.types(x, None, file);
+        if let Some(outcome) = self.ruby_core_call(file, chain, x, name, arity) {
+            return outcome;
+        }
+        let types = self
+            .ruby_constant_at(file, chain, x)
+            .unwrap_or_else(|| self.types(x, None, file));
         if types.is_empty() {
             return match self.own_field(file, chain, x) {
                 Some((text, text_file)) => {
@@ -2858,7 +3040,14 @@ impl<'a> Resolver<'a> {
         }
         if let Some(last) = path.last() {
             let before = (path.len() > 1).then(|| path[..path.len() - 1].join("."));
-            let types = self.types(last, before.as_deref(), file);
+            if let Some(outcome) =
+                self.ruby_core_call(file, chain, qualifier, name, reference.arity)
+            {
+                return outcome;
+            }
+            let types = self
+                .ruby_constant_at(file, chain, qualifier)
+                .unwrap_or_else(|| self.types(last, before.as_deref(), file));
             if !types.is_empty() {
                 return self.on_types(&types, name, reference.arity, Basis::QualifiedPath, file);
             }
@@ -3365,7 +3554,21 @@ impl<'a> Resolver<'a> {
         if self.symbol(module).kind != SymbolKind::Module {
             return found;
         }
-        let children = self.ruby_children.get_or_init(|| {
+        let children = self.ruby_children();
+        let mut pending = vec![module];
+        while let Some(parent) = pending.pop() {
+            for child in children.get(&parent).into_iter().flatten() {
+                if found.insert(*child) {
+                    pending.push(*child);
+                }
+            }
+        }
+        found
+    }
+
+    /// For each Ruby type, the types that have it as a direct parent type.
+    fn ruby_children(&self) -> &BTreeMap<Id, Vec<Id>> {
+        self.ruby_children.get_or_init(|| {
             let mut children: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
             for (file, facts) in self.files.iter().enumerate() {
                 if self.family(file) != Family::Ruby {
@@ -3381,15 +3584,173 @@ impl<'a> Resolver<'a> {
                 }
             }
             children
-        });
-        let mut pending = vec![module];
-        while let Some(parent) = pending.pop() {
-            for child in children.get(&parent).into_iter().flatten() {
-                if found.insert(*child) {
-                    pending.push(*child);
+        })
+    }
+
+    fn is_ruby_instance_variable(&self, file: usize, name: &str) -> bool {
+        self.family(file) == Family::Ruby && name.starts_with('@') && !name.starts_with("@@")
+    }
+
+    /// The Ruby type around a definition of `chain`, and the method of the
+    /// type that contains the definition. No method means the class body.
+    fn ruby_self(&self, chain: &[Id]) -> Option<(Id, Option<Id>)> {
+        let index = chain.iter().position(|id| is_container(self.symbol(*id)))?;
+        let method = index.checked_sub(1).map(|inner| chain[inner]);
+        Some((chain[index], method))
+    }
+
+    /// The object of the instance variables in the method `method`, or in
+    /// the class body without a method.
+    fn ruby_object(&self, method: Option<Id>) -> RubyObject {
+        match method {
+            Some(method) if !self.facts(method).singleton => RubyObject::Instance,
+            _ => RubyObject::Class,
+        }
+    }
+
+    /// The types of the Ruby instance variable `name` at a call in `chain`.
+    /// The variable has a type when each write of it, in each method that
+    /// can run on the object, gives a value of one type. The methods are
+    /// those of the type, of its subtypes, and of the parent types of these.
+    /// `None` when a write gives a value without a known type, as a
+    /// parameter, or a value of a second type.
+    fn ruby_instance_variable_types(
+        &self,
+        chain: &[Id],
+        name: &str,
+        depth: usize,
+    ) -> Option<Vec<Id>> {
+        if depth > 4 {
+            return None;
+        }
+        let (owner, method) = self.ruby_self(chain)?;
+        let key = (
+            (
+                self.member_path(owner),
+                name.to_string(),
+                self.ruby_object(method),
+            ),
+            depth,
+        );
+        if let Some(found) = self.ruby_instance_variable_cache.read().get(&key) {
+            return found.clone();
+        }
+        let found = self.ruby_variable_writes_types(&key.0, depth);
+        self.ruby_instance_variable_cache
+            .write()
+            .insert(key, found.clone());
+        found
+    }
+
+    /// The one type of the values that the writes of `variable` give, in the
+    /// methods that can run on its object.
+    fn ruby_variable_writes_types(
+        &self,
+        variable: &InstanceVariable,
+        depth: usize,
+    ) -> Option<Vec<Id>> {
+        let (owner_path, name, object) = variable;
+        let variables = self.ruby_instance_variables();
+        let mut found = BTreeSet::new();
+        for path in self.ruby_object_paths(owner_path.clone()).iter() {
+            let key = (path.clone(), name.clone(), *object);
+            for (local_file, position) in variables.get(&key).into_iter().flatten() {
+                let local = &self.files[*local_file].locals[*position];
+                found.extend(self.local_types(local, *local_file, depth + 1)?);
+            }
+        }
+        let paths: BTreeSet<TypePath> = found.into_iter().map(|id| self.member_path(id)).collect();
+        let [path] = Vec::from_iter(paths).try_into().ok()?;
+        // A file that opens the class again gives the class more methods.
+        self.ruby_types_by_path().get(&path).cloned()
+    }
+
+    fn ruby_instance_variables(&self) -> &HashMap<InstanceVariable, Vec<(usize, usize)>> {
+        self.ruby_instance_variables.get_or_init(|| {
+            let mut variables: HashMap<InstanceVariable, Vec<(usize, usize)>> = HashMap::new();
+            for (file, facts) in self.files.iter().enumerate() {
+                if self.family(file) != Family::Ruby {
+                    continue;
+                }
+                for (position, local) in facts.locals.iter().enumerate() {
+                    if !self.is_ruby_instance_variable(file, &local.name.name) {
+                        continue;
+                    }
+                    let chain = self.chain(file, local.owner);
+                    let Some((owner, method)) = self.ruby_self(&chain) else {
+                        continue;
+                    };
+                    // A name without a value in the class body is a writer
+                    // that `attr_writer` defines, or one of a list of
+                    // targets. The method that writes it can be an instance
+                    // method.
+                    let object = if method.is_none() && local.name.value_start.is_none() {
+                        RubyObject::Instance
+                    } else {
+                        self.ruby_object(method)
+                    };
+                    let key = (self.member_path(owner), local.name.name.clone(), object);
+                    variables.entry(key).or_default().push((file, position));
+                }
+            }
+            variables
+        })
+    }
+
+    /// The Ruby types by their path. Each file that opens a class gives a type.
+    fn ruby_types_by_path(&self) -> &HashMap<TypePath, Vec<Id>> {
+        self.ruby_types_by_path.get_or_init(|| {
+            let mut by_path: HashMap<Vec<String>, Vec<Id>> = HashMap::new();
+            for (file, facts) in self.files.iter().enumerate() {
+                if self.family(file) != Family::Ruby {
+                    continue;
+                }
+                for (position, symbol) in facts.symbols.iter().enumerate() {
+                    if is_container(symbol) {
+                        by_path
+                            .entry(self.member_path((file, position)))
+                            .or_default()
+                            .push((file, position));
+                    }
+                }
+            }
+            by_path
+        })
+    }
+
+    /// The paths of the Ruby types whose methods can run on an object of the
+    /// type at `path`: the type, its subtypes, and the parent types of these.
+    fn ruby_object_paths(&self, path: Vec<String>) -> Arc<Vec<Vec<String>>> {
+        if let Some(found) = self.ruby_object_paths_cache.read().get(&path) {
+            return Arc::clone(found);
+        }
+        let by_path = self.ruby_types_by_path();
+        let children = self.ruby_children();
+        let types = |path: &TypePath| by_path.get(path).into_iter().flatten().copied();
+        let mut subtypes = BTreeSet::from([path.clone()]);
+        let mut pending = vec![path.clone()];
+        while let Some(current) = pending.pop() {
+            for child in types(&current).flat_map(|id| children.get(&id).into_iter().flatten()) {
+                let child = self.member_path(*child);
+                if subtypes.insert(child.clone()) {
+                    pending.push(child);
                 }
             }
         }
+        let mut found = subtypes.clone();
+        let mut pending: Vec<Vec<String>> = subtypes.into_iter().collect();
+        while let Some(current) = pending.pop() {
+            for parent in types(&current).flat_map(|id| self.parents(id)) {
+                let parent = self.member_path(parent);
+                if found.insert(parent.clone()) {
+                    pending.push(parent);
+                }
+            }
+        }
+        let found = Arc::new(found.into_iter().collect::<Vec<_>>());
+        self.ruby_object_paths_cache
+            .write()
+            .insert(path, Arc::clone(&found));
         found
     }
 
@@ -3742,7 +4103,7 @@ impl<'a> Resolver<'a> {
                         // extraction gives no name for the receiver. A member
                         // with a declared type that is not a pointer is an
                         // object, thus the call is a call of that type.
-                        Some([name]) => self
+                        Some([name]) if !self.is_ruby_instance_variable(file, name) => self
                             .own_field(file, &chain, name)
                             .filter(|(declared, _)| !declared.contains('*'))
                             .map(|(declared, text_file)| {
@@ -3980,6 +4341,66 @@ pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests)
 #[cfg(test)]
 mod tests {
     use super::testing::rows;
+
+    #[test]
+    fn sorted_positions_between_two_keys_are_in_key_order_then_source_order() {
+        // The spans of a chain of calls: each call starts at byte 0.
+        let spans = [(0, 9), (0, 4), (5, 9), (0, 4), (0, 12)];
+        let table = super::SortedPositions::new(spans.iter().copied());
+        assert_eq!(table.between(&(0, 0), &(0, 9)), [1, 3, 0]);
+        assert_eq!(table.between(&(0, 0), &(0, 12)), [1, 3, 0, 4]);
+        assert_eq!(table.between(&(0, 5), &(0, 8)), [] as [usize; 0]);
+        assert_eq!(table.between(&(5, 0), &(5, 9)), [2]);
+        assert_eq!(table.between(&(0, 9), &(0, 4)), [] as [usize; 0]);
+    }
+
+    #[test]
+    fn sorted_positions_give_each_key_once_with_its_positions_in_source_order() {
+        let starts = [40, 10, 40, 25, 10, 40];
+        let table = super::SortedPositions::new(starts.iter().copied());
+        let groups: Vec<(usize, Vec<usize>)> = table
+            .groups()
+            .map(|(key, positions)| (*key, positions.to_vec()))
+            .collect();
+        assert_eq!(
+            groups,
+            [(10, vec![1, 4]), (25, vec![3]), (40, vec![0, 2, 5])]
+        );
+        let empty = super::SortedPositions::<usize>::new(std::iter::empty());
+        assert_eq!(empty.groups().count(), 0);
+    }
+
+    #[test]
+    fn sorted_positions_give_the_positions_of_a_key_in_source_order() {
+        use std::cmp::Ordering;
+        let starts = [40, 10, 40, 25, 10, 40];
+        let table = super::SortedPositions::new(starts.iter().copied());
+        let at = |start: usize| table.matching(|key| key.cmp(&start)).to_vec();
+        assert_eq!(at(10), [1, 4]);
+        assert_eq!(at(25), [3]);
+        assert_eq!(at(40), [0, 2, 5]);
+        assert!(at(0).is_empty());
+        assert!(at(30).is_empty());
+        assert!(at(99).is_empty());
+        let empty = super::SortedPositions::<usize>::new(std::iter::empty());
+        assert!(empty.matching(|_| Ordering::Equal).is_empty());
+        let owned = [
+            ("b", Some(1)),
+            ("a", None),
+            ("b", Some(1)),
+            ("b", None),
+            ("a", None),
+        ];
+        let table = super::SortedPositions::new(owned.iter().copied());
+        let named = |name: &str, owner: Option<usize>| {
+            table.matching(|key| key.cmp(&(name, owner))).to_vec()
+        };
+        assert_eq!(named("a", None), [1, 4]);
+        assert_eq!(named("b", Some(1)), [0, 2]);
+        assert_eq!(named("b", None), [3]);
+        assert!(named("b", Some(2)).is_empty());
+        assert!(named("c", None).is_empty());
+    }
 
     /// The rows of the calls of `name`.
     fn rows_of(files: &[(&str, &str)], file: &str, name: &str) -> Vec<String> {
@@ -4760,6 +5181,96 @@ mod false_edge_tests {
     }
 
     #[test]
+    fn test_ruby_instance_variable_has_the_type_of_its_assignments() {
+        let store = "class Store\n  def add(item)\n    item\n  end\nend\n\nclass Cache\n  def add(item)\n    item\n  end\nend\n";
+        // `@store` has one type in each method that can run on the object:
+        // `Report`, its parent, and its subclass assign only `Store`.
+        let report = "class Base\n  def setup\n    @store ||= Store.new\n  end\nend\n\nclass Report < Base\n  def initialize\n    @store = Store.new\n    @store.add(0)\n  end\n\n  def fill\n    @store.add(1)\n  end\nend\n\nclass Daily < Report\n  def reset\n    @store = Store.new\n  end\nend\n";
+        let files = [("store.rb", store), ("report.rb", report)];
+        assert_eq!(
+            rows(&files, "report.rb"),
+            [
+                "3 Base.setup>Store.new UniqueCandidate QualifiedPath [store.rb#Store]",
+                "9 Report.initialize>Store.new UniqueCandidate QualifiedPath [store.rb#Store]",
+                "10 Report.initialize>(..).add UniqueCandidate ReceiverDeclaredType [store.rb#Store.add]",
+                "14 Report.fill>(..).add UniqueCandidate ReceiverDeclaredType [store.rb#Store.add]",
+                "20 Daily.reset>Store.new UniqueCandidate QualifiedPath [store.rb#Store]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ruby_instance_variable_without_one_type_gives_no_edge() {
+        let store = "class Store\n  def add(item)\n    item\n  end\nend\n\nclass Cache\n  def add(item)\n    item\n  end\nend\n";
+        // A subclass assigns a second type, and an assignment of a value
+        // without a known type can give any type.
+        let report = "class Report\n  def initialize\n    @store = Store.new\n    @log = build\n    @log = Store.new\n  end\n\n  def fill\n    @store.add(1)\n    @log.add(2)\n  end\nend\n\nclass Other < Report\n  def reset\n    @store = Cache.new\n  end\nend\n";
+        let files = [("store.rb", store), ("report.rb", report)];
+        let rows = rows(&files, "report.rb");
+        assert!(rows.contains(&"9 Report.fill>(..).add Ambiguous NameOnly [store.rb#Cache.add, store.rb#Store.add]".to_string()), "{rows:?}");
+        assert!(rows.contains(&"10 Report.fill>(..).add Ambiguous NameOnly [store.rb#Cache.add, store.rb#Store.add]".to_string()), "{rows:?}");
+    }
+
+    #[test]
+    fn test_ruby_instance_variable_that_a_writer_sets_has_no_type() {
+        let store = "class Store\n  def add(item)\n    item\n  end\nend\n\nclass Cache\n  def add(item)\n    item\n  end\nend\n";
+        let report = "class Report\n  attr_writer :store\n  attr_accessor :log\n\n  def initialize\n    @store = Store.new\n    @log = Store.new\n    @first, @second = Store.new, Cache.new\n    @first = Store.new\n    @cache = Store.new\n  end\n\n  def cache=(value)\n    @cache = value\n  end\n\n  def fill\n    @store.add(1)\n    @log.add(2)\n    @first.add(3)\n    @cache.add(4)\n  end\nend\n";
+        let files = [("store.rb", store), ("report.rb", report)];
+        let rows: Vec<String> = rows(&files, "report.rb")
+            .into_iter()
+            .filter(|row| row.contains("(..).add"))
+            .collect();
+        let ambiguous = "Ambiguous NameOnly [store.rb#Cache.add, store.rb#Store.add]";
+        assert_eq!(
+            rows,
+            [18, 19, 20, 21].map(|line| format!("{line} Report.fill>(..).add {ambiguous}"))
+        );
+    }
+
+    #[test]
+    fn test_ruby_instance_variable_that_a_writer_named_by_a_string_sets_has_no_type() {
+        let store = "class Store\n  def add(item)\n    item\n  end\nend\n\nclass Cache\n  def add(item)\n    item\n  end\nend\n";
+        let report = "class Report\n  attr_writer 'store'\n\n  def initialize\n    @store = Store.new\n  end\n\n  def fill\n    @store.add(1)\n  end\nend\n";
+        let files = [("store.rb", store), ("report.rb", report)];
+        assert!(rows(&files, "report.rb").contains(
+            &"9 Report.fill>(..).add Ambiguous NameOnly [store.rb#Cache.add, store.rb#Store.add]"
+                .to_string()
+        ));
+    }
+
+    #[test]
+    fn test_ruby_instance_variable_type_is_each_file_that_opens_the_class() {
+        let wizard = "class Wizard\n  def append_step\n  end\nend\n";
+        // In `Wizard::Builder`, `Wizard` is the class that `wizard.rb` opens
+        // too, and the method is in that file.
+        let builder = "class Wizard\n  class Builder\n    def initialize\n      @wizard = Wizard.new\n    end\n\n    def build\n      @wizard.append_step\n    end\n  end\nend\n";
+        let files = [("wizard.rb", wizard), ("builder.rb", builder)];
+        let rows = rows(&files, "builder.rb");
+        assert!(
+            rows.contains(&"8 Wizard.Builder.build>(..).append_step UniqueCandidate ReceiverDeclaredType [wizard.rb#Wizard.append_step]".to_string()),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn test_ruby_instance_variable_of_the_class_object_is_a_different_variable() {
+        let store = "class Store\n  def add(item)\n    item\n  end\nend\n\nclass Cache\n  def add(item)\n    item\n  end\nend\n";
+        // In `def self.x` and in `class << self`, `@store` is a variable of
+        // the class object, not of an object of the class.
+        let report = "class Report\n  def self.cache\n    @store = Cache.new\n  end\n\n  class << self\n    def read\n      @store.add(0)\n    end\n  end\n\n  def initialize\n    @store = Store.new\n  end\n\n  def fill\n    @store.add(1)\n  end\nend\n";
+        let files = [("store.rb", store), ("report.rb", report)];
+        let rows = rows(&files, "report.rb");
+        assert!(
+            rows.contains(
+                &"8 Report.read>(..).add UniqueCandidate ReceiverDeclaredType [store.rb#Cache.add]"
+                    .to_string()
+            ),
+            "{rows:?}"
+        );
+        assert!(rows.contains(&"17 Report.fill>(..).add UniqueCandidate ReceiverDeclaredType [store.rb#Store.add]".to_string()), "{rows:?}");
+    }
+
+    #[test]
     fn test_python_qualified_base_outside_the_repository_is_not_a_repository_type() {
         let tools = "class Base:\n    def current_user(self):\n        return 1\n";
         let row = |admin: &str| rows(&[("tools.py", tools), ("admin.py", admin)], "admin.py");
@@ -4859,6 +5370,74 @@ mod false_edge_tests {
         assert_eq!(
             rows(&[("database.rb", database), ("upload.rb", upload), ("other.rb", other)], "upload.rb")[0],
             "4 Migrations.Database.FilesDB.insert>Migrations::Database::format_boolean UniqueCandidate QualifiedPath [database.rb#Migrations.Database.format_boolean]"
+        );
+    }
+
+    #[test]
+    fn test_ruby_core_class_reopened_by_the_repository() {
+        // `class Thread` in a script opens the core class again to add
+        // `origin`. `Thread.new` calls the core `initialize`, and a call of
+        // a method that the repository adds binds to that method.
+        let patch = "class Thread\n  attr_accessor :origin\n\n  def describe\n    origin\n  end\nend\n\nclass Array\n  def initialize(size)\n    super(size)\n  end\nend\n";
+        let chat = "module Chat\n  class Thread\n    def title\n      1\n    end\n  end\nend\n";
+        let caller = "class Job\n  def run\n    worker = Thread.new { 1 }\n    worker.describe\n    worker.join\n    Thread.current\n    Array.new(3)\n    Hash.new\n  end\nend\n\nmodule Chat\n  class Poster\n    def post\n      Thread.new\n    end\n  end\nend\n\nThread.new { 2 }\n";
+        let files = [
+            ("script/patch.rb", patch),
+            ("chat.rb", chat),
+            ("job.rb", caller),
+        ];
+        assert_eq!(
+            rows(&files, "job.rb"),
+            [
+                "3 Job.run>Thread.new External - []",
+                "4 Job.run>worker.describe UniqueCandidate ReceiverDeclaredType [script/patch.rb#Thread.describe]",
+                "4 Job.run>worker Unresolved - []",
+                "5 Job.run>worker.join External - []",
+                "5 Job.run>worker Unresolved - []",
+                "6 Job.run>Thread.current External - []",
+                "7 Job.run>Array.new UniqueCandidate QualifiedPath [script/patch.rb#Array.initialize]",
+                "8 Job.run>Hash.new External - []",
+                "15 Chat.Poster.post>Thread.new UniqueCandidate QualifiedPath [chat.rb#Chat.Thread]",
+                "20 ->Thread.new External - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ruby_constant_receiver_resolves_in_the_enclosing_modules_first() {
+        // Ruby finds `Problem` in `Check` before the top level, thus
+        // `Blog::Problem` is not a candidate.
+        let check = "class Check\n  class Problem\n    def initialize(text)\n      @text = text\n    end\n\n    def text\n      @text\n    end\n  end\nend\n";
+        let blog = "module Blog\n  class Problem\n    def initialize(text)\n      @text = text\n    end\n\n    def text\n      @text\n    end\n  end\nend\n";
+        let caller = "class Check\n  def problem\n    found = Problem.new('a')\n    found.text\n  end\nend\n";
+        let files = [
+            ("check/problem.rb", check),
+            ("blog/problem.rb", blog),
+            ("check.rb", caller),
+        ];
+        assert_eq!(
+            rows(&files, "check.rb"),
+            [
+                "3 Check.problem>Problem.new UniqueCandidate QualifiedPath [check/problem.rb#Check.Problem.initialize]",
+                "4 Check.problem>found.text UniqueCandidate ReceiverDeclaredType [check/problem.rb#Check.Problem.text]",
+                "4 Check.problem>found Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ruby_qualified_constant_receiver_resolves_in_the_enclosing_modules_first() {
+        let api = "module Api\n  module Body\n    class Location\n      def self.for(name)\n        name\n      end\n    end\n  end\nend\n";
+        let other = "module Other\n  module Body\n    class Location\n      def self.for(name)\n        name\n      end\n    end\n  end\nend\n";
+        let caller = "module Api\n  class Contract\n    def build\n      Body::Location.for('a')\n    end\n  end\nend\n";
+        let files = [
+            ("api.rb", api),
+            ("other.rb", other),
+            ("contract.rb", caller),
+        ];
+        assert_eq!(
+            rows(&files, "contract.rb"),
+            ["4 Api.Contract.build>Body::Location::for UniqueCandidate QualifiedPath [api.rb#Api.Body.Location.for]"]
         );
     }
 
@@ -5226,6 +5805,48 @@ mod false_edge_tests {
             .count();
         assert_eq!(twins, size);
         elapsed
+    }
+
+    /// `size` subclasses write `@store` of a base class, and `size` methods of
+    /// the base class read it.
+    fn instance_variable_reads_resolve_at(size: usize) -> std::time::Duration {
+        let mut source = String::from("class Store\n  def add\n  end\nend\n\nclass Base\n");
+        for index in 0..size {
+            source.push_str(&format!("  def read{index}\n    @store.add\n  end\n"));
+        }
+        source.push_str("end\n");
+        for index in 0..size {
+            source.push_str(&format!(
+                "class Child{index} < Base\n  def initialize\n    @store = Store.new\n  end\nend\n"
+            ));
+        }
+        let files = [("a.rb", source.as_str())];
+        let started = crate::index::timing::Stopwatch::start();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let bound = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| {
+                reference.name == "add"
+                    && reference.resolution.status == super::Status::UniqueCandidate
+            })
+            .count();
+        assert_eq!(bound, size);
+        elapsed
+    }
+
+    #[test]
+    fn test_instance_variable_reads_resolve_to_the_type_of_the_writes() {
+        instance_variable_reads_resolve_at(20);
+    }
+
+    /// A read must not examine each write of the variable again.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_instance_variable_reads_resolve_in_linear_time() {
+        assert_scales_linearly("reads", 2_000, instance_variable_reads_resolve_at);
     }
 
     #[test]

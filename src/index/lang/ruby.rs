@@ -62,6 +62,7 @@ const IDENTIFIER: &str = "identifier";
 const SCOPE_RESOLUTION: &str = "scope_resolution";
 const ARGUMENT_LIST: &str = "argument_list";
 const SIMPLE_SYMBOL: &str = "simple_symbol";
+const INSTANCE_VARIABLE: &str = "instance_variable";
 
 const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::function(METHOD, NameRule::Field("name")),
@@ -71,6 +72,103 @@ const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new(LAMBDA, SymbolKind::Function, NameRule::Hook),
     DefinitionRule::new(CALL, SymbolKind::Function, NameRule::Hook),
 ];
+
+/// The tag of the memo entries of `in_singleton_class`.
+const SINGLETON_MEMO: u8 = 2;
+
+/// Tells if the nearest class, module, or `class << self` around `node` is
+/// `class << self`. Each ancestor keeps the answer, thus many definitions in
+/// deeply nested blocks walk each block once.
+fn in_singleton_class(node: Node<'_>, context: &Context<'_, '_>) -> bool {
+    let mut unknown = Vec::new();
+    let mut ancestor = context.parent(node);
+    let found = loop {
+        let Some(current) = ancestor else {
+            break false;
+        };
+        match current.kind() {
+            SINGLETON_CLASS => break true,
+            CLASS | MODULE => break false,
+            _ => {}
+        }
+        let known = context
+            .memo
+            .borrow()
+            .get(&(current.id(), SINGLETON_MEMO))
+            .and_then(|found| found.downcast_ref::<bool>().copied());
+        if let Some(known) = known {
+            break known;
+        }
+        unknown.push(current.id());
+        ancestor = context.parent(current);
+    };
+    let mut memo = context.memo.borrow_mut();
+    for id in unknown {
+        memo.insert((id, SINGLETON_MEMO), Rc::new(found));
+    }
+    found
+}
+
+/// An instance variable without a known value: its name, and no type.
+fn unknown_instance_variable(name: String) -> LocalName {
+    LocalName {
+        name,
+        type_name: None,
+        value_start: None,
+        is_parameter: false,
+        element: false,
+        result_index: None,
+        visible: None,
+        constant: false,
+    }
+}
+
+/// The instance variables that the assignment `node` writes. `@name = value`
+/// gives the start of the value; a variable of a list of targets, as
+/// `@a, @b = values`, has no known value.
+fn instance_variable_writes(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+    let Some(left) = node.child_by_field_name("left") else {
+        return;
+    };
+    if left.kind() == INSTANCE_VARIABLE {
+        let mut local = unknown_instance_variable(context.text(left));
+        local.value_start = node
+            .child_by_field_name("right")
+            .map(|value| value.start_byte());
+        out.push(local);
+        return;
+    }
+    let mut pending = vec![left];
+    while let Some(target) = pending.pop() {
+        if target.kind() == INSTANCE_VARIABLE {
+            out.push(unknown_instance_variable(context.text(target)));
+            continue;
+        }
+        let mut cursor = target.walk();
+        pending.extend(target.named_children(&mut cursor));
+    }
+}
+
+/// `attr_writer :name` and `attr_accessor :name` define a method that writes
+/// `@name` with a value of any type.
+fn instance_variable_writers(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+    let is_writer = node.child_by_field_name("receiver").is_none()
+        && node.child_by_field_name("method").is_some_and(|method| {
+            let method = context.text(method);
+            ACCESSORS
+                .iter()
+                .any(|(name, _, writer)| *writer && *name == method)
+        });
+    let Some(arguments) = node.child_by_field_name("arguments").filter(|_| is_writer) else {
+        return;
+    };
+    let mut cursor = arguments.walk();
+    for argument in arguments.named_children(&mut cursor) {
+        if let Some(name) = literal_name(argument, context) {
+            out.push(unknown_instance_variable(format!("@{name}")));
+        }
+    }
+}
 
 /// The methods that change the visibility of instance methods.
 const INSTANCE_MODIFIERS: &[(&str, bool)] = &[
@@ -276,6 +374,7 @@ impl LanguageSpec for Ruby {
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
         kinds.extend(PARAMETER_LISTS);
+        kinds.push(CALL);
         kinds
     }
 
@@ -342,9 +441,17 @@ impl LanguageSpec for Ruby {
         }
     }
 
-    /// The parameters of a method, a block, or a lambda are local names.
+    /// The parameters of a method, a block, or a lambda are local names. An
+    /// instance variable that a statement writes is a local name of the
+    /// method too, and the resolver collects these names of all the methods
+    /// that can run on one object.
     fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if node.kind() == CALL {
+            instance_variable_writers(node, context, out);
+            return;
+        }
         if !PARAMETER_LISTS.contains(&node.kind()) {
+            instance_variable_writes(node, context, out);
             let before = out.len();
             self.call_syntax().locals(node, context, out);
             // `Alias = Name` gives a second name to a class or a module.
@@ -448,17 +555,11 @@ impl LanguageSpec for Ruby {
             return Vec::new();
         };
         // `class << self` is not a scope. Its body gives methods of the type.
-        let mut owner = GeneratedFor::Instances;
-        let mut ancestor = context.parent(node);
-        while let Some(current) =
-            ancestor.filter(|current| ![CLASS, MODULE].contains(&current.kind()))
-        {
-            if current.kind() == SINGLETON_CLASS {
-                owner = GeneratedFor::Type;
-                break;
-            }
-            ancestor = context.parent(current);
-        }
+        let owner = if in_singleton_class(node, context) {
+            GeneratedFor::Type
+        } else {
+            GeneratedFor::Instances
+        };
         let mut methods = Vec::new();
         let mut cursor = arguments.walk();
         for argument in arguments.named_children(&mut cursor) {
@@ -522,7 +623,9 @@ impl LanguageSpec for Ruby {
                 if draft.kind == SymbolKind::Method && draft.name == "initialize" {
                     draft.kind = SymbolKind::Constructor;
                 }
+                draft.singleton = in_singleton_class(node, context);
             }
+            SINGLETON_METHOD => draft.singleton = true,
             CLASS | MODULE => {
                 // The methods of a module are methods, as the methods of a class are.
                 draft.role = ScopeRole::Type;
