@@ -533,6 +533,8 @@ pub struct ObservedSymbol {
 pub struct ObservedCall {
     pub caller: Location,
     pub call: String,
+    /// The line and the column at which the callee name starts.
+    pub position: (u32, u32),
     pub edges: Vec<Location>,
     pub candidates: Vec<Location>,
     /// True for each report of the call that has the status `External`.
@@ -848,6 +850,23 @@ fn compare_calls(
             .iter()
             .filter(|o| o.caller == caller && bare_name(&o.call) == bare_name(&call.callee_text))
             .collect();
+        // The same rule holds for a call without a label: the label would get the
+        // results of each call of the name in the caller.
+        let positions: BTreeSet<(u32, u32)> = matching.iter().map(|o| o.position).collect();
+        if positions.len() > 1 {
+            let places: Vec<String> = positions
+                .iter()
+                .map(|(line, column)| format!("{line}:{column}"))
+                .collect();
+            return Err(invalid(format!(
+                "{case}: call '{}' has the callee name '{}' at {} in its caller. Omen reports \
+                 one result for each callee name in a caller, thus the label gets the results \
+                 of each of these calls. Move the labelled call to a caller of its own",
+                call.label,
+                bare_name(&call.callee_text),
+                places.join(", ")
+            )));
+        }
         let edges: BTreeSet<Location> = matching
             .iter()
             .flat_map(|o| o.edges.iter().cloned())
@@ -1678,6 +1697,7 @@ mod tests {
                 ObservedCall {
                     caller: location("main.rs", "caller", 3),
                     call: "helper".to_string(),
+                    position: (4, 4),
                     edges: vec![location("a.rs", "helper", 1)],
                     candidates: vec![location("a.rs", "helper", 1)],
                     external: vec![false],
@@ -1685,6 +1705,7 @@ mod tests {
                 ObservedCall {
                     caller: location("main.rs", "caller", 3),
                     call: "area".to_string(),
+                    position: (5, 6),
                     edges: vec![],
                     candidates: vec![location("a.rs", "area", 5)],
                     external: vec![false],
@@ -1906,6 +1927,28 @@ mod tests {
         assert_eq!(
             failures(&observed),
             ["rust/basics/calls/bare/no_missed_edge"]
+        );
+    }
+
+    #[test]
+    fn a_call_label_is_rejected_when_its_caller_has_another_call_of_the_name() {
+        let mut observed = correct();
+        observed.calls.push(ObservedCall {
+            caller: location("main.rs", "caller", 3),
+            call: "helper".to_string(),
+            position: (6, 4),
+            edges: vec![location("a.rs", "helper", 1)],
+            candidates: vec![location("a.rs", "helper", 1)],
+            external: vec![false],
+        });
+        let error = compare("rust/basics", &labels(), &observed)
+            .expect_err("two calls of one callee name in a caller")
+            .to_string();
+        assert!(
+            error.contains("call 'bare'")
+                && error.contains("'helper'")
+                && error.contains("4:4, 6:4"),
+            "{error}"
         );
     }
 
