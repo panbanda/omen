@@ -1198,6 +1198,12 @@ impl<'a> Resolver<'a> {
     fn is_declared_for(&self, file: usize, name: &str) -> bool {
         if self.is_ecma_global_in(file, name) || self.is_test_global(file, name) {
             self.named_in(name, file).next().is_some()
+        } else if self.family(file) == super::Family::Python {
+            // Only a top-level definition of a module can hide a builtin. A
+            // member is in the scope of its class, and a nested function is
+            // in the scope of its function, where the lexical rules find it.
+            self.named(name, file)
+                .any(|id| self.symbol(id).container.is_none())
         } else {
             self.by_name.contains_key(name)
         }
@@ -1636,6 +1642,22 @@ mod tests {
             ("util.py", "def print(a):\n    return a\n"),
         ];
         assert!(!external(&files, "app.py", "print"));
+    }
+
+    #[test]
+    fn test_python_builtin_is_not_hidden_by_a_member_or_a_nested_function() {
+        let app = "def other():\n    def filter(a, b):\n        return a\n    return filter\n\n\ndef run(items):\n    filter(None, items)\n    next(iter(items))\n    return type(items)\n";
+        let models = "class QuerySet:\n    def filter(self, **query):\n        return self\n\n    def next(self):\n        return self\n\n    class type:\n        pass\n";
+        let script = "export function filter(a) {\n  return a;\n}\n";
+        let files = [
+            ("app.py", app),
+            ("models.py", models),
+            ("filter.js", script),
+        ];
+        assert!(external(&files, "app.py", "next"));
+        assert!(external(&files, "app.py", "type"));
+        let found = statuses(&files, "app.py", "filter");
+        assert_eq!(found, ["External"], "{found:?}");
     }
 
     #[test]
