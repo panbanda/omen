@@ -237,6 +237,9 @@ pub struct ReferenceFacts {
     /// A function reference whose name is a variable. Only a function value
     /// that the variable holds is its candidate.
     pub variable: bool,
+    /// What the call runs when its name is a Bash alias. The resolver
+    /// resolves the name of the alias value in place of the name of the reference.
+    pub alias: Option<crate::index::lang::bash::Alias>,
 }
 
 /// The names of the value that an index expression reads: `c.items[i]`
@@ -922,6 +925,7 @@ impl ValueSites {
             arrow: site.arrow,
             nullable_target: false,
             variable: site.variable,
+            alias: None,
         };
         (reference, facts)
     }
@@ -2183,6 +2187,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     calls.sort_by_key(|(_, range, _, _, _)| range.start);
     let mut references = Vec::with_capacity(calls.len());
     let mut reference_facts = Vec::with_capacity(calls.len());
+    let aliases = (parsed.language == Language::Bash)
+        .then(|| crate::index::lang::bash::Aliases::of(parsed.root_node(), &parsed.source));
     for (call, range, owner, via_closure, receiver) in calls {
         let (start_byte, end_byte) = (range.start, range.end);
         let owner = position_of(owner);
@@ -2200,6 +2206,10 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 .map_or_else(|| split_type(&text).1, |target| target.name.clone()),
             ReferenceKind::Call | ReferenceKind::FunctionReference => text.to_string(),
         };
+        let alias = aliases
+            .as_ref()
+            .filter(|_| call.kind == ReferenceKind::Call)
+            .and_then(|aliases| aliases.target(&name, start_byte));
         references.push(Reference {
             file: shared_file.clone(),
             name_range: Span::of(&call.callee.name_node),
@@ -2239,6 +2249,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             }),
             nullable_target,
             variable: false,
+            alias,
         });
     }
     // Most values are local names and fields, and a repository has many of

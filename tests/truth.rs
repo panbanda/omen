@@ -208,8 +208,11 @@ fn observed_imports(bindings: &[ImportBinding]) -> Vec<ObservedImport> {
         // Each binding can target a different file.
         let targets = match &binding.target_file {
             ImportTarget::Resolved(file) => vec![file.clone()],
-            ImportTarget::Package(files) | ImportTarget::Ambiguous(files) => files.clone(),
-            ImportTarget::External | ImportTarget::Unresolved => Vec::new(),
+            ImportTarget::Package(files) => files.clone(),
+            // An ambiguous import has candidates, but it names no file.
+            ImportTarget::Ambiguous(_) | ImportTarget::External | ImportTarget::Unresolved => {
+                Vec::new()
+            }
         };
         for target in targets {
             if !imports[position].resolved_files.contains(&target) {

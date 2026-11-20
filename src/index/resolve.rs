@@ -29,6 +29,7 @@ use super::model::{
     ResolutionBasis as Basis, ResolutionStatus as Status, SharedStr, Symbol, SymbolKind,
 };
 use crate::core::Language;
+use crate::index::lang::bash::Alias;
 
 /// Languages that can call the definitions of each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -280,19 +281,19 @@ struct Resolver<'a> {
     by_container: HashMap<(&'a str, &'a str), Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
-    locals_by_name: Vec<HashMap<&'a str, Vec<usize>>>,
+    locals_by_name: Vec<SortedPositions<&'a str>>,
     /// For each file, the positions of the local names by owner and name, in
     /// source order. Many functions of a file can bind one name, and a lookup
     /// reads only the names of one function.
-    locals_by_owner: Vec<HashMap<&'a str, PositionsByOwner>>,
+    locals_by_owner: Vec<SortedPositions<(&'a str, Option<usize>)>>,
     /// For each file, the index of the blocks of the local names of one owner and one name,
     /// when the owner binds the name many times.
     local_blocks: Vec<HashMap<(&'a str, Option<usize>), local_blocks::LocalBlocks>>,
     /// For each file, the positions of the references by start byte, in source order.
-    references_by_start: Vec<HashMap<usize, Vec<usize>>>,
-    /// For each file, the end byte and the position of the references by
-    /// start byte, sorted. A chain of calls has many calls with one start.
-    references_by_span: Vec<HashMap<usize, Vec<(usize, usize)>>>,
+    references_by_start: Vec<SortedPositions<usize>>,
+    /// For each file, the positions of the references by start byte and end
+    /// byte, in source order. A chain of calls has many calls with one start.
+    references_by_span: Vec<SortedPositions<(usize, usize)>>,
     /// For each Ruby type, the types that have it as a direct parent type.
     ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// The Ruby types by their path. Each file that opens a class gives a type.
@@ -381,8 +382,55 @@ type ExportQuery = (usize, String);
 /// The file, the name, and the qualifier of one type lookup.
 type TypeQuery = (usize, String, Option<String>);
 
-/// The positions of the local names of one name, by the definition that binds them.
-type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
+/// Positions by a key, as the positions of the references of one file by start byte. The
+/// two lists are in the order of the key and then of the position, so the positions of one
+/// key are one slice in source order. A map from each key to a list costs several times as
+/// much memory for each position.
+struct SortedPositions<K> {
+    keys: Vec<K>,
+    positions: Vec<usize>,
+}
+
+impl<K: Ord> SortedPositions<K> {
+    /// `keys` gives the key of each position, in the order of the positions.
+    fn new(keys: impl Iterator<Item = K>) -> Self {
+        let mut pairs: Vec<(K, usize)> = keys
+            .enumerate()
+            .map(|(position, key)| (key, position))
+            .collect();
+        pairs.sort_unstable();
+        let (keys, positions) = pairs.into_iter().unzip();
+        Self { keys, positions }
+    }
+
+    /// The positions, in source order, of the keys for which `compare` gives `Equal`.
+    /// `compare` orders a key against the wanted key.
+    fn matching(&self, compare: impl Fn(&K) -> std::cmp::Ordering) -> &[usize] {
+        let first = self.keys.partition_point(|key| compare(key).is_lt());
+        let end = self.keys.partition_point(|key| compare(key).is_le());
+        &self.positions[first..end]
+    }
+
+    /// The positions of the keys from `low` to `high`, both included, in the
+    /// order of the key and then in source order.
+    fn between(&self, low: &K, high: &K) -> &[usize] {
+        let first = self.keys.partition_point(|key| key < low);
+        let end = self.keys.partition_point(|key| key <= high);
+        &self.positions[first..end.max(first)]
+    }
+
+    /// Each key once, in key order, with its positions in source order.
+    fn groups(&self) -> impl Iterator<Item = (&K, &[usize])> {
+        let mut first = 0;
+        std::iter::from_fn(move || {
+            let key = self.keys.get(first)?;
+            let length = self.keys[first..].partition_point(|other| other == key);
+            let group = (key, &self.positions[first..first + length]);
+            first += length;
+            Some(group)
+        })
+    }
+}
 
 /// The number of bindings of one name by one owner from which the resolver builds an index of
 /// their blocks. A look at fewer bindings costs less than the index.
@@ -438,39 +486,33 @@ impl<'a> Resolver<'a> {
         let locals_by_owner = files
             .iter()
             .map(|facts| {
-                let mut positions: HashMap<&str, PositionsByOwner> = HashMap::new();
-                for (position, local) in facts.locals.iter().enumerate() {
-                    positions
-                        .entry(local.name.name.as_str())
-                        .or_default()
-                        .entry(local.owner)
-                        .or_default()
-                        .push(position);
-                }
-                positions
+                SortedPositions::new(
+                    facts
+                        .locals
+                        .iter()
+                        .map(|local| (local.name.name.as_str(), local.owner)),
+                )
             })
             .collect();
         let local_blocks = files
             .iter()
             .zip(&locals_by_owner)
             .map(
-                |(facts, by_name): (&FileSymbols, &HashMap<&str, PositionsByOwner>)| {
+                |(facts, by_owner): (&FileSymbols, &SortedPositions<(&str, Option<usize>)>)| {
                     let mut index = HashMap::new();
-                    for (name, by_owner) in by_name {
-                        for (owner, positions) in by_owner {
-                            if positions.len() < LOCAL_BLOCKS_MINIMUM {
-                                continue;
-                            }
-                            let bindings: Vec<local_blocks::Binding<'_>> = positions
-                                .iter()
-                                .map(|position| {
-                                    let local = &facts.locals[*position];
-                                    (local.block.as_ref(), local.name.value_start)
-                                })
-                                .collect();
-                            if let Some(blocks) = local_blocks::LocalBlocks::new(&bindings) {
-                                index.insert((*name, *owner), blocks);
-                            }
+                    for (key, positions) in by_owner.groups() {
+                        if positions.len() < LOCAL_BLOCKS_MINIMUM {
+                            continue;
+                        }
+                        let bindings: Vec<local_blocks::Binding<'_>> = positions
+                            .iter()
+                            .map(|position| {
+                                let local = &facts.locals[*position];
+                                (local.block.as_ref(), local.name.value_start)
+                            })
+                            .collect();
+                        if let Some(blocks) = local_blocks::LocalBlocks::new(&bindings) {
+                            index.insert(*key, blocks);
                         }
                     }
                     index
@@ -480,43 +522,29 @@ impl<'a> Resolver<'a> {
         let locals_by_name = files
             .iter()
             .map(|facts| {
-                let mut positions: HashMap<&str, Vec<usize>> = HashMap::new();
-                for (position, local) in facts.locals.iter().enumerate() {
-                    positions
-                        .entry(local.name.name.as_str())
-                        .or_default()
-                        .push(position);
-                }
-                positions
+                SortedPositions::new(facts.locals.iter().map(|local| local.name.name.as_str()))
             })
             .collect();
         let references_by_start = files
             .iter()
             .map(|facts| {
-                let mut positions: HashMap<usize, Vec<usize>> = HashMap::new();
-                for (position, reference) in facts.reference_facts.iter().enumerate() {
-                    positions
-                        .entry(reference.start_byte)
-                        .or_default()
-                        .push(position);
-                }
-                positions
+                SortedPositions::new(
+                    facts
+                        .reference_facts
+                        .iter()
+                        .map(|reference| reference.start_byte),
+                )
             })
             .collect();
         let references_by_span = files
             .iter()
             .map(|facts| {
-                let mut spans: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
-                for (position, reference) in facts.reference_facts.iter().enumerate() {
-                    spans
-                        .entry(reference.start_byte)
-                        .or_default()
-                        .push((reference.end_byte, position));
-                }
-                for list in spans.values_mut() {
-                    list.sort_unstable();
-                }
-                spans
+                SortedPositions::new(
+                    facts
+                        .reference_facts
+                        .iter()
+                        .map(|reference| (reference.start_byte, reference.end_byte)),
+                )
             })
             .collect();
         let rebound = files
@@ -1658,34 +1686,29 @@ impl<'a> Resolver<'a> {
     fn locals_named(&self, file: usize, name: &str) -> impl Iterator<Item = &'a Local> + '_ {
         let locals = &self.files[file].locals;
         self.locals_by_name[file]
-            .get(name)
-            .into_iter()
-            .flatten()
+            .matching(|key| (*key).cmp(name))
+            .iter()
             .map(move |position| &locals[*position])
     }
 
     /// The references of `file` that start at the byte `start`, in source order.
     fn references_at(&self, file: usize, start: usize) -> &[usize] {
-        self.references_by_start[file]
-            .get(&start)
-            .map_or(&[], Vec::as_slice)
+        self.references_by_start[file].matching(|key| key.cmp(&start))
     }
 
     /// The references of `file` that start at `start` and end at or before
-    /// `end`, sorted by the end byte and then by source order.
-    fn references_within(&self, file: usize, start: usize, end: usize) -> &[(usize, usize)] {
-        let spans = self.references_by_span[file]
-            .get(&start)
-            .map_or(&[][..], Vec::as_slice);
-        &spans[..spans.partition_point(|(other, _)| *other <= end)]
+    /// `end`, in the order of the end byte and then in source order.
+    fn references_within(&self, file: usize, start: usize, end: usize) -> &[usize] {
+        self.references_by_span[file].between(&(start, 0), &(start, end))
     }
 
     /// The first reference in source order that has exactly the bytes
     /// `start` to `end`.
     fn reference_spanning(&self, file: usize, start: usize, end: usize) -> Option<usize> {
-        let within = self.references_within(file, start, end);
-        let first = within.partition_point(|(other, _)| *other < end);
-        within.get(first).map(|(_, position)| *position)
+        self.references_by_span[file]
+            .matching(|key| key.cmp(&(start, end)))
+            .first()
+            .copied()
     }
 
     /// The local name `name` that a reference at the byte `at` sees. When two
@@ -1697,7 +1720,7 @@ impl<'a> Resolver<'a> {
             if let Some(blocks) = self.local_blocks[file].get(&(name, owner)) {
                 match blocks.nearest(at) {
                     Some(rank) => {
-                        let position = self.locals_by_owner[file][name][&owner][rank];
+                        let position = self.local_positions(file, owner, name)[rank];
                         return Some(&self.files[file].locals[position]);
                     }
                     None => continue,
@@ -1724,12 +1747,15 @@ impl<'a> Resolver<'a> {
         name: &str,
     ) -> impl Iterator<Item = &'a Local> + '_ {
         let locals = &self.files[file].locals;
-        self.locals_by_owner[file]
-            .get(name)
-            .and_then(|owners| owners.get(&owner))
-            .into_iter()
-            .flatten()
+        self.local_positions(file, owner, name)
+            .iter()
             .map(move |position| &locals[*position])
+    }
+
+    /// The positions of the local names `name` that the definition `owner` of `file` binds,
+    /// in source order.
+    fn local_positions(&self, file: usize, owner: Option<usize>, name: &str) -> &[usize] {
+        self.locals_by_owner[file].matching(|key| (key.0, key.1).cmp(&(name, owner)))
     }
 
     /// Tells if a definition of `chain` binds the local name `name` so that a
@@ -3713,11 +3739,25 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve(&self, file: usize, position: usize, depth: usize) -> Outcome {
-        let mut outcome = self.resolve_by_rules(file, position, depth);
+        let facts = &self.files[file];
+        let site = &facts.reference_facts[position];
+        let aliased;
+        let reference = match &site.alias {
+            Some(Alias::Unknown) => return Outcome::none(Status::Unresolved),
+            Some(Alias::Name(name)) => {
+                aliased = Reference {
+                    name: name.clone(),
+                    ..facts.references[position].clone()
+                };
+                &aliased
+            }
+            None => &facts.references[position],
+        };
+        let mut outcome = self.resolve_site(file, reference, site, depth);
         // The other rules found no candidate. The source can still show a
         // definition outside the repository.
         if outcome.status == Status::Unresolved && outcome.candidates.is_empty() {
-            if let Some(external) = self.external(file, position, depth) {
+            if let Some(external) = self.external(file, position, reference, depth) {
                 return external;
             }
         }
@@ -3797,16 +3837,6 @@ impl<'a> Resolver<'a> {
             return Outcome::none(Status::Unresolved);
         }
         outcome
-    }
-
-    fn resolve_by_rules(&self, file: usize, position: usize, depth: usize) -> Outcome {
-        let facts = &self.files[file];
-        self.resolve_site(
-            file,
-            &facts.references[position],
-            &facts.reference_facts[position],
-            depth,
-        )
     }
 
     /// Resolves one reference by the rules. `site` has the facts of the reference.
@@ -4170,6 +4200,66 @@ pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests)
 #[cfg(test)]
 mod tests {
     use super::testing::rows;
+
+    #[test]
+    fn sorted_positions_between_two_keys_are_in_key_order_then_source_order() {
+        // The spans of a chain of calls: each call starts at byte 0.
+        let spans = [(0, 9), (0, 4), (5, 9), (0, 4), (0, 12)];
+        let table = super::SortedPositions::new(spans.iter().copied());
+        assert_eq!(table.between(&(0, 0), &(0, 9)), [1, 3, 0]);
+        assert_eq!(table.between(&(0, 0), &(0, 12)), [1, 3, 0, 4]);
+        assert_eq!(table.between(&(0, 5), &(0, 8)), [] as [usize; 0]);
+        assert_eq!(table.between(&(5, 0), &(5, 9)), [2]);
+        assert_eq!(table.between(&(0, 9), &(0, 4)), [] as [usize; 0]);
+    }
+
+    #[test]
+    fn sorted_positions_give_each_key_once_with_its_positions_in_source_order() {
+        let starts = [40, 10, 40, 25, 10, 40];
+        let table = super::SortedPositions::new(starts.iter().copied());
+        let groups: Vec<(usize, Vec<usize>)> = table
+            .groups()
+            .map(|(key, positions)| (*key, positions.to_vec()))
+            .collect();
+        assert_eq!(
+            groups,
+            [(10, vec![1, 4]), (25, vec![3]), (40, vec![0, 2, 5])]
+        );
+        let empty = super::SortedPositions::<usize>::new(std::iter::empty());
+        assert_eq!(empty.groups().count(), 0);
+    }
+
+    #[test]
+    fn sorted_positions_give_the_positions_of_a_key_in_source_order() {
+        use std::cmp::Ordering;
+        let starts = [40, 10, 40, 25, 10, 40];
+        let table = super::SortedPositions::new(starts.iter().copied());
+        let at = |start: usize| table.matching(|key| key.cmp(&start)).to_vec();
+        assert_eq!(at(10), [1, 4]);
+        assert_eq!(at(25), [3]);
+        assert_eq!(at(40), [0, 2, 5]);
+        assert!(at(0).is_empty());
+        assert!(at(30).is_empty());
+        assert!(at(99).is_empty());
+        let empty = super::SortedPositions::<usize>::new(std::iter::empty());
+        assert!(empty.matching(|_| Ordering::Equal).is_empty());
+        let owned = [
+            ("b", Some(1)),
+            ("a", None),
+            ("b", Some(1)),
+            ("b", None),
+            ("a", None),
+        ];
+        let table = super::SortedPositions::new(owned.iter().copied());
+        let named = |name: &str, owner: Option<usize>| {
+            table.matching(|key| key.cmp(&(name, owner))).to_vec()
+        };
+        assert_eq!(named("a", None), [1, 4]);
+        assert_eq!(named("b", Some(1)), [0, 2]);
+        assert_eq!(named("b", None), [3]);
+        assert!(named("b", Some(2)).is_empty());
+        assert!(named("c", None).is_empty());
+    }
 
     /// The rows of the calls of `name`.
     fn rows_of(files: &[(&str, &str)], file: &str, name: &str) -> Vec<String> {
