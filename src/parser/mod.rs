@@ -82,6 +82,30 @@ impl Parser {
                 abstention = Some("the code of the template does not parse".to_string());
                 source = translation.script_text();
                 tree = Self::parse_text(&source, language, path)?;
+            } else if !translation.uses.is_empty() {
+                let bindings = vue::top_level_bindings(tree.root_node(), &source);
+                let unbound = |used: &&vue::ScriptUse| match used.kind {
+                    vue::UseKind::Directive => !bindings.values.contains(&used.name),
+                    vue::UseKind::Component => !bindings.imports.contains(&used.name),
+                };
+                if translation
+                    .uses
+                    .iter()
+                    .any(|used| used.kind == vue::UseKind::Component && unbound(&used))
+                {
+                    abstention = Some("the template has a dynamic component".to_string());
+                    source = translation.script_text();
+                    tree = Self::parse_text(&source, language, path)?;
+                } else {
+                    let mut blanked = false;
+                    for used in translation.uses.iter().filter(unbound) {
+                        source[used.range.clone()].fill(b' ');
+                        blanked = true;
+                    }
+                    if blanked {
+                        tree = Self::parse_text(&source, language, path)?;
+                    }
+                }
             }
         }
         Ok(ParseResult {
@@ -718,6 +742,92 @@ mod tests {
                 .abstention
         });
         assert!(abstention.unwrap().contains("does not parse"));
+    }
+
+    fn component(template: &str, script: &str) -> ParseResult {
+        let content = format!(
+            "<template>{template}</template>\n<script setup lang=\"ts\">\n{script}\n</script>\n"
+        );
+        Parser::new()
+            .parse(
+                content.as_bytes(),
+                Language::TypeScript,
+                Path::new("App.vue"),
+            )
+            .unwrap()
+    }
+
+    /// The translation of the template, which is at the start of the file.
+    fn template_text(result: &ParseResult, template: &str) -> String {
+        let end = "<template>".len() + template.len();
+        String::from_utf8(result.source[..end].to_vec()).unwrap()
+    }
+
+    #[test]
+    fn test_a_dynamic_component_of_an_imported_name_is_a_use() {
+        let template = "<component :is=\"Card\"/>";
+        let result = component(template, "import Card from './Card.vue';");
+        assert_eq!(result.component.as_ref().unwrap().abstention, None);
+        assert!(template_text(&result, template).contains("Card"));
+        assert!(!result.root_node().has_error());
+    }
+
+    #[test]
+    fn test_a_dynamic_component_of_a_name_that_is_not_imported_abstains() {
+        for script in [
+            "import Card from './Card.vue';\nconst current = Card;",
+            "import type { current } from './types';",
+            "",
+        ] {
+            let template = "<component :is=\"current\"/>";
+            let result = component(template, script);
+            let abstention = result.component.as_ref().unwrap().abstention.clone();
+            assert!(
+                abstention
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("dynamic component"),
+                "{script}: {abstention:?}"
+            );
+            assert!(
+                !template_text(&result, template).contains("current"),
+                "{script}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_custom_directive_uses_a_binding_of_the_script() {
+        for script in [
+            "import { vFocus } from './focus';",
+            "import { focus as vFocus } from './focus';",
+            "import vFocus from './focus';",
+            "const vFocus = { mounted() {} };",
+            "function vFocus() {}",
+        ] {
+            let result = component("<input v-focus=\"value\">", script);
+            assert_eq!(result.component.as_ref().unwrap().abstention, None);
+            let template = template_text(&result, "<input v-focus=\"value\">");
+            assert!(template.contains("vFocus"), "{script}: {template}");
+            assert!(template.contains("value"), "{script}");
+            assert!(!result.root_node().has_error(), "{script}");
+        }
+    }
+
+    #[test]
+    fn test_a_custom_directive_without_a_binding_is_global() {
+        for script in [
+            "",
+            "import { vOther } from './focus';",
+            "function run() {\n  const vFocus = {};\n}",
+        ] {
+            let result = component("<input v-focus=\"value\">", script);
+            assert_eq!(result.component.as_ref().unwrap().abstention, None);
+            let template = template_text(&result, "<input v-focus=\"value\">");
+            assert!(!template.contains("vFocus"), "{script}: {template}");
+            assert!(template.contains("value"), "{script}");
+            assert!(!result.root_node().has_error(), "{script}");
+        }
     }
 
     #[test]

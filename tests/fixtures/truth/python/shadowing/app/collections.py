@@ -1,0 +1,2 @@
+def defaultdict(factory):
+    return {}
