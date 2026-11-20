@@ -2614,7 +2614,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_deeply_nested_go_closures_are_extracted_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("go closures", 5_000, |size| {
+        crate::index::timing::assert_scales_linearly("go closures", 40_000, |size| {
             let source = format!(
                 "package p\nfunc f() {{\n{}{}\n}}\n",
                 "func() {".repeat(size),
