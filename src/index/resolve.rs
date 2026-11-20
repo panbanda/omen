@@ -233,6 +233,25 @@ fn is_callable(symbol: &Symbol) -> bool {
     )
 }
 
+/// The object that a Ruby instance variable belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum RubyObject {
+    /// An object of the class: the object of an instance method.
+    Instance,
+    /// The class object: the object of `def self.name`, of a method in
+    /// `class << self`, and of the class body.
+    Class,
+}
+
+/// The names of the scopes of a type and the name of the type.
+type TypePath = Vec<String>;
+
+/// A Ruby instance variable: the path of its type, its name, and its object.
+type InstanceVariable = (TypePath, String, RubyObject);
+
+/// The types of a value. `None` when the syntax gives no type.
+type Types = Option<Vec<Id>>;
+
 fn is_container(symbol: &Symbol) -> bool {
     symbol.kind.is_type() && symbol.kind != SymbolKind::TypeAlias
 }
@@ -277,6 +296,17 @@ struct Resolver<'a> {
     references_by_span: Vec<SortedPositions<(usize, usize)>>,
     /// For each Ruby type, the types that have it as a direct parent type.
     ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
+    /// The Ruby types by their path. Each file that opens a class gives a type.
+    ruby_types_by_path: OnceLock<HashMap<Vec<String>, Vec<Id>>>,
+    /// The writes of each Ruby instance variable, as `(file, local)`
+    /// positions, by the path of the type, the name, and the object.
+    ruby_instance_variables: OnceLock<HashMap<InstanceVariable, Vec<(usize, usize)>>>,
+    /// The results of `ruby_instance_variable_types`, by the variable and
+    /// the depth. The depth is in the key because a deeper search stops
+    /// sooner, and thus the order of the searches does not change a result.
+    ruby_instance_variable_cache: RwLock<HashMap<(InstanceVariable, usize), Types>>,
+    /// The results of `ruby_object_paths`, by the path of the type.
+    ruby_object_paths_cache: RwLock<HashMap<TypePath, Arc<Vec<TypePath>>>>,
     /// For each Go type, the Go structs that embed it.
     go_embedders: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// For each Go type, the methods that it has itself.
@@ -589,6 +619,10 @@ impl<'a> Resolver<'a> {
             references_by_start,
             references_by_span,
             ruby_children: OnceLock::new(),
+            ruby_types_by_path: OnceLock::new(),
+            ruby_instance_variables: OnceLock::new(),
+            ruby_instance_variable_cache: RwLock::new(HashMap::new()),
+            ruby_object_paths_cache: RwLock::new(HashMap::new()),
             go_embedders: OnceLock::new(),
             go_methods: OnceLock::new(),
             test_runners: OnceLock::new(),
@@ -1899,6 +1933,11 @@ impl<'a> Resolver<'a> {
         let (root, fields) = path.split_first()?;
         let mut owners: Vec<Id> = if SELF_WORDS.contains(&root.as_str()) {
             self.enclosing_type(chain).into_iter().collect()
+        } else if self.is_ruby_instance_variable(file, root) {
+            if element && fields.is_empty() {
+                return None;
+            }
+            self.ruby_instance_variable_types(chain, root, depth)?
         } else if let Some(local) = self.local(chain, file, root, at) {
             if fields.is_empty() && element {
                 let declared = local.name.type_name.as_deref()?;
@@ -3380,7 +3419,21 @@ impl<'a> Resolver<'a> {
         if self.symbol(module).kind != SymbolKind::Module {
             return found;
         }
-        let children = self.ruby_children.get_or_init(|| {
+        let children = self.ruby_children();
+        let mut pending = vec![module];
+        while let Some(parent) = pending.pop() {
+            for child in children.get(&parent).into_iter().flatten() {
+                if found.insert(*child) {
+                    pending.push(*child);
+                }
+            }
+        }
+        found
+    }
+
+    /// For each Ruby type, the types that have it as a direct parent type.
+    fn ruby_children(&self) -> &BTreeMap<Id, Vec<Id>> {
+        self.ruby_children.get_or_init(|| {
             let mut children: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
             for (file, facts) in self.files.iter().enumerate() {
                 if self.family(file) != Family::Ruby {
@@ -3396,15 +3449,173 @@ impl<'a> Resolver<'a> {
                 }
             }
             children
-        });
-        let mut pending = vec![module];
-        while let Some(parent) = pending.pop() {
-            for child in children.get(&parent).into_iter().flatten() {
-                if found.insert(*child) {
-                    pending.push(*child);
+        })
+    }
+
+    fn is_ruby_instance_variable(&self, file: usize, name: &str) -> bool {
+        self.family(file) == Family::Ruby && name.starts_with('@') && !name.starts_with("@@")
+    }
+
+    /// The Ruby type around a definition of `chain`, and the method of the
+    /// type that contains the definition. No method means the class body.
+    fn ruby_self(&self, chain: &[Id]) -> Option<(Id, Option<Id>)> {
+        let index = chain.iter().position(|id| is_container(self.symbol(*id)))?;
+        let method = index.checked_sub(1).map(|inner| chain[inner]);
+        Some((chain[index], method))
+    }
+
+    /// The object of the instance variables in the method `method`, or in
+    /// the class body without a method.
+    fn ruby_object(&self, method: Option<Id>) -> RubyObject {
+        match method {
+            Some(method) if !self.facts(method).singleton => RubyObject::Instance,
+            _ => RubyObject::Class,
+        }
+    }
+
+    /// The types of the Ruby instance variable `name` at a call in `chain`.
+    /// The variable has a type when each write of it, in each method that
+    /// can run on the object, gives a value of one type. The methods are
+    /// those of the type, of its subtypes, and of the parent types of these.
+    /// `None` when a write gives a value without a known type, as a
+    /// parameter, or a value of a second type.
+    fn ruby_instance_variable_types(
+        &self,
+        chain: &[Id],
+        name: &str,
+        depth: usize,
+    ) -> Option<Vec<Id>> {
+        if depth > 4 {
+            return None;
+        }
+        let (owner, method) = self.ruby_self(chain)?;
+        let key = (
+            (
+                self.member_path(owner),
+                name.to_string(),
+                self.ruby_object(method),
+            ),
+            depth,
+        );
+        if let Some(found) = self.ruby_instance_variable_cache.read().get(&key) {
+            return found.clone();
+        }
+        let found = self.ruby_variable_writes_types(&key.0, depth);
+        self.ruby_instance_variable_cache
+            .write()
+            .insert(key, found.clone());
+        found
+    }
+
+    /// The one type of the values that the writes of `variable` give, in the
+    /// methods that can run on its object.
+    fn ruby_variable_writes_types(
+        &self,
+        variable: &InstanceVariable,
+        depth: usize,
+    ) -> Option<Vec<Id>> {
+        let (owner_path, name, object) = variable;
+        let variables = self.ruby_instance_variables();
+        let mut found = BTreeSet::new();
+        for path in self.ruby_object_paths(owner_path.clone()).iter() {
+            let key = (path.clone(), name.clone(), *object);
+            for (local_file, position) in variables.get(&key).into_iter().flatten() {
+                let local = &self.files[*local_file].locals[*position];
+                found.extend(self.local_types(local, *local_file, depth + 1)?);
+            }
+        }
+        let paths: BTreeSet<TypePath> = found.into_iter().map(|id| self.member_path(id)).collect();
+        let [path] = Vec::from_iter(paths).try_into().ok()?;
+        // A file that opens the class again gives the class more methods.
+        self.ruby_types_by_path().get(&path).cloned()
+    }
+
+    fn ruby_instance_variables(&self) -> &HashMap<InstanceVariable, Vec<(usize, usize)>> {
+        self.ruby_instance_variables.get_or_init(|| {
+            let mut variables: HashMap<InstanceVariable, Vec<(usize, usize)>> = HashMap::new();
+            for (file, facts) in self.files.iter().enumerate() {
+                if self.family(file) != Family::Ruby {
+                    continue;
+                }
+                for (position, local) in facts.locals.iter().enumerate() {
+                    if !self.is_ruby_instance_variable(file, &local.name.name) {
+                        continue;
+                    }
+                    let chain = self.chain(file, local.owner);
+                    let Some((owner, method)) = self.ruby_self(&chain) else {
+                        continue;
+                    };
+                    // A name without a value in the class body is a writer
+                    // that `attr_writer` defines, or one of a list of
+                    // targets. The method that writes it can be an instance
+                    // method.
+                    let object = if method.is_none() && local.name.value_start.is_none() {
+                        RubyObject::Instance
+                    } else {
+                        self.ruby_object(method)
+                    };
+                    let key = (self.member_path(owner), local.name.name.clone(), object);
+                    variables.entry(key).or_default().push((file, position));
+                }
+            }
+            variables
+        })
+    }
+
+    /// The Ruby types by their path. Each file that opens a class gives a type.
+    fn ruby_types_by_path(&self) -> &HashMap<TypePath, Vec<Id>> {
+        self.ruby_types_by_path.get_or_init(|| {
+            let mut by_path: HashMap<Vec<String>, Vec<Id>> = HashMap::new();
+            for (file, facts) in self.files.iter().enumerate() {
+                if self.family(file) != Family::Ruby {
+                    continue;
+                }
+                for (position, symbol) in facts.symbols.iter().enumerate() {
+                    if is_container(symbol) {
+                        by_path
+                            .entry(self.member_path((file, position)))
+                            .or_default()
+                            .push((file, position));
+                    }
+                }
+            }
+            by_path
+        })
+    }
+
+    /// The paths of the Ruby types whose methods can run on an object of the
+    /// type at `path`: the type, its subtypes, and the parent types of these.
+    fn ruby_object_paths(&self, path: Vec<String>) -> Arc<Vec<Vec<String>>> {
+        if let Some(found) = self.ruby_object_paths_cache.read().get(&path) {
+            return Arc::clone(found);
+        }
+        let by_path = self.ruby_types_by_path();
+        let children = self.ruby_children();
+        let types = |path: &TypePath| by_path.get(path).into_iter().flatten().copied();
+        let mut subtypes = BTreeSet::from([path.clone()]);
+        let mut pending = vec![path.clone()];
+        while let Some(current) = pending.pop() {
+            for child in types(&current).flat_map(|id| children.get(&id).into_iter().flatten()) {
+                let child = self.member_path(*child);
+                if subtypes.insert(child.clone()) {
+                    pending.push(child);
                 }
             }
         }
+        let mut found = subtypes.clone();
+        let mut pending: Vec<Vec<String>> = subtypes.into_iter().collect();
+        while let Some(current) = pending.pop() {
+            for parent in types(&current).flat_map(|id| self.parents(id)) {
+                let parent = self.member_path(parent);
+                if found.insert(parent.clone()) {
+                    pending.push(parent);
+                }
+            }
+        }
+        let found = Arc::new(found.into_iter().collect::<Vec<_>>());
+        self.ruby_object_paths_cache
+            .write()
+            .insert(path, Arc::clone(&found));
         found
     }
 
@@ -3751,7 +3962,7 @@ impl<'a> Resolver<'a> {
                         // extraction gives no name for the receiver. A member
                         // with a declared type that is not a pointer is an
                         // object, thus the call is a call of that type.
-                        Some([name]) => self
+                        Some([name]) if !self.is_ruby_instance_variable(file, name) => self
                             .own_field(file, &chain, name)
                             .filter(|(declared, _)| !declared.contains('*'))
                             .map(|(declared, text_file)| {
@@ -4829,6 +5040,96 @@ mod false_edge_tests {
     }
 
     #[test]
+    fn test_ruby_instance_variable_has_the_type_of_its_assignments() {
+        let store = "class Store\n  def add(item)\n    item\n  end\nend\n\nclass Cache\n  def add(item)\n    item\n  end\nend\n";
+        // `@store` has one type in each method that can run on the object:
+        // `Report`, its parent, and its subclass assign only `Store`.
+        let report = "class Base\n  def setup\n    @store ||= Store.new\n  end\nend\n\nclass Report < Base\n  def initialize\n    @store = Store.new\n    @store.add(0)\n  end\n\n  def fill\n    @store.add(1)\n  end\nend\n\nclass Daily < Report\n  def reset\n    @store = Store.new\n  end\nend\n";
+        let files = [("store.rb", store), ("report.rb", report)];
+        assert_eq!(
+            rows(&files, "report.rb"),
+            [
+                "3 Base.setup>Store.new UniqueCandidate QualifiedPath [store.rb#Store]",
+                "9 Report.initialize>Store.new UniqueCandidate QualifiedPath [store.rb#Store]",
+                "10 Report.initialize>(..).add UniqueCandidate ReceiverDeclaredType [store.rb#Store.add]",
+                "14 Report.fill>(..).add UniqueCandidate ReceiverDeclaredType [store.rb#Store.add]",
+                "20 Daily.reset>Store.new UniqueCandidate QualifiedPath [store.rb#Store]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ruby_instance_variable_without_one_type_gives_no_edge() {
+        let store = "class Store\n  def add(item)\n    item\n  end\nend\n\nclass Cache\n  def add(item)\n    item\n  end\nend\n";
+        // A subclass assigns a second type, and an assignment of a value
+        // without a known type can give any type.
+        let report = "class Report\n  def initialize\n    @store = Store.new\n    @log = build\n    @log = Store.new\n  end\n\n  def fill\n    @store.add(1)\n    @log.add(2)\n  end\nend\n\nclass Other < Report\n  def reset\n    @store = Cache.new\n  end\nend\n";
+        let files = [("store.rb", store), ("report.rb", report)];
+        let rows = rows(&files, "report.rb");
+        assert!(rows.contains(&"9 Report.fill>(..).add Ambiguous NameOnly [store.rb#Cache.add, store.rb#Store.add]".to_string()), "{rows:?}");
+        assert!(rows.contains(&"10 Report.fill>(..).add Ambiguous NameOnly [store.rb#Cache.add, store.rb#Store.add]".to_string()), "{rows:?}");
+    }
+
+    #[test]
+    fn test_ruby_instance_variable_that_a_writer_sets_has_no_type() {
+        let store = "class Store\n  def add(item)\n    item\n  end\nend\n\nclass Cache\n  def add(item)\n    item\n  end\nend\n";
+        let report = "class Report\n  attr_writer :store\n  attr_accessor :log\n\n  def initialize\n    @store = Store.new\n    @log = Store.new\n    @first, @second = Store.new, Cache.new\n    @first = Store.new\n    @cache = Store.new\n  end\n\n  def cache=(value)\n    @cache = value\n  end\n\n  def fill\n    @store.add(1)\n    @log.add(2)\n    @first.add(3)\n    @cache.add(4)\n  end\nend\n";
+        let files = [("store.rb", store), ("report.rb", report)];
+        let rows: Vec<String> = rows(&files, "report.rb")
+            .into_iter()
+            .filter(|row| row.contains("(..).add"))
+            .collect();
+        let ambiguous = "Ambiguous NameOnly [store.rb#Cache.add, store.rb#Store.add]";
+        assert_eq!(
+            rows,
+            [18, 19, 20, 21].map(|line| format!("{line} Report.fill>(..).add {ambiguous}"))
+        );
+    }
+
+    #[test]
+    fn test_ruby_instance_variable_that_a_writer_named_by_a_string_sets_has_no_type() {
+        let store = "class Store\n  def add(item)\n    item\n  end\nend\n\nclass Cache\n  def add(item)\n    item\n  end\nend\n";
+        let report = "class Report\n  attr_writer 'store'\n\n  def initialize\n    @store = Store.new\n  end\n\n  def fill\n    @store.add(1)\n  end\nend\n";
+        let files = [("store.rb", store), ("report.rb", report)];
+        assert!(rows(&files, "report.rb").contains(
+            &"9 Report.fill>(..).add Ambiguous NameOnly [store.rb#Cache.add, store.rb#Store.add]"
+                .to_string()
+        ));
+    }
+
+    #[test]
+    fn test_ruby_instance_variable_type_is_each_file_that_opens_the_class() {
+        let wizard = "class Wizard\n  def append_step\n  end\nend\n";
+        // In `Wizard::Builder`, `Wizard` is the class that `wizard.rb` opens
+        // too, and the method is in that file.
+        let builder = "class Wizard\n  class Builder\n    def initialize\n      @wizard = Wizard.new\n    end\n\n    def build\n      @wizard.append_step\n    end\n  end\nend\n";
+        let files = [("wizard.rb", wizard), ("builder.rb", builder)];
+        let rows = rows(&files, "builder.rb");
+        assert!(
+            rows.contains(&"8 Wizard.Builder.build>(..).append_step UniqueCandidate ReceiverDeclaredType [wizard.rb#Wizard.append_step]".to_string()),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn test_ruby_instance_variable_of_the_class_object_is_a_different_variable() {
+        let store = "class Store\n  def add(item)\n    item\n  end\nend\n\nclass Cache\n  def add(item)\n    item\n  end\nend\n";
+        // In `def self.x` and in `class << self`, `@store` is a variable of
+        // the class object, not of an object of the class.
+        let report = "class Report\n  def self.cache\n    @store = Cache.new\n  end\n\n  class << self\n    def read\n      @store.add(0)\n    end\n  end\n\n  def initialize\n    @store = Store.new\n  end\n\n  def fill\n    @store.add(1)\n  end\nend\n";
+        let files = [("store.rb", store), ("report.rb", report)];
+        let rows = rows(&files, "report.rb");
+        assert!(
+            rows.contains(
+                &"8 Report.read>(..).add UniqueCandidate ReceiverDeclaredType [store.rb#Cache.add]"
+                    .to_string()
+            ),
+            "{rows:?}"
+        );
+        assert!(rows.contains(&"17 Report.fill>(..).add UniqueCandidate ReceiverDeclaredType [store.rb#Store.add]".to_string()), "{rows:?}");
+    }
+
+    #[test]
     fn test_python_qualified_base_outside_the_repository_is_not_a_repository_type() {
         let tools = "class Base:\n    def current_user(self):\n        return 1\n";
         let row = |admin: &str| rows(&[("tools.py", tools), ("admin.py", admin)], "admin.py");
@@ -5295,6 +5596,48 @@ mod false_edge_tests {
             .count();
         assert_eq!(twins, size);
         elapsed
+    }
+
+    /// `size` subclasses write `@store` of a base class, and `size` methods of
+    /// the base class read it.
+    fn instance_variable_reads_resolve_at(size: usize) -> std::time::Duration {
+        let mut source = String::from("class Store\n  def add\n  end\nend\n\nclass Base\n");
+        for index in 0..size {
+            source.push_str(&format!("  def read{index}\n    @store.add\n  end\n"));
+        }
+        source.push_str("end\n");
+        for index in 0..size {
+            source.push_str(&format!(
+                "class Child{index} < Base\n  def initialize\n    @store = Store.new\n  end\nend\n"
+            ));
+        }
+        let files = [("a.rb", source.as_str())];
+        let started = crate::index::timing::Stopwatch::start();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let bound = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| {
+                reference.name == "add"
+                    && reference.resolution.status == super::Status::UniqueCandidate
+            })
+            .count();
+        assert_eq!(bound, size);
+        elapsed
+    }
+
+    #[test]
+    fn test_instance_variable_reads_resolve_to_the_type_of_the_writes() {
+        instance_variable_reads_resolve_at(20);
+    }
+
+    /// A read must not examine each write of the variable again.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_instance_variable_reads_resolve_in_linear_time() {
+        assert_scales_linearly("reads", 2_000, instance_variable_reads_resolve_at);
     }
 
     #[test]

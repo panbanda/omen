@@ -670,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn test_namespace_package_is_a_package_and_two_of_them_are_ambiguous() {
+    fn test_an_absolute_import_of_a_namespace_package_is_ambiguous() {
         use crate::index::imports::testing::rows;
         let files = [
             ("ns/a.py", ""),
@@ -685,9 +685,55 @@ mod tests {
         assert_eq!(
             rows(&files, "main.py"),
             [
-                "1 Module ns ns->ns package(ns/a.py,ns/b.py)",
+                "1 Module ns ns->ns ambiguous(ns/a.py,ns/b.py)",
                 "2 Module twice twice->twice ambiguous(one/twice/a.py,two/twice/b.py)",
                 "3 Named . ns->local unresolved",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_a_module_in_a_package_is_not_a_top_level_module() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            ("app/__init__.py", ""),
+            ("app/collections.py", "def defaultdict():\n    pass\n"),
+            ("app/logging/__init__.py", ""),
+            ("app/types/__init__.py", ""),
+            ("src/project/__init__.py", ""),
+            ("src/project/util.py", ""),
+            ("scripts/helpers.py", ""),
+            (
+                "main.py",
+                "from collections import defaultdict\nimport logging\nimport app.collections\nimport project.util\nimport helpers\nfrom types import SimpleNamespace\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "main.py"),
+            [
+                "1 Named collections defaultdict->defaultdict external",
+                "2 Module logging logging->logging external",
+                "3 Module app.collections app->app app/collections.py",
+                "4 Module project.util project->project src/project/util.py",
+                "5 Module helpers helpers->helpers scripts/helpers.py",
+                "6 Named types SimpleNamespace->SimpleNamespace external",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_a_namespace_directory_does_not_hide_a_module_outside_the_repository() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (".semgrep/rules/logging/rule.py", "import logging\n"),
+            (".semgrep/rules/requests/rule.py", ""),
+            ("main.py", "import logging\nfrom requests import get\n"),
+        ];
+        assert_eq!(
+            rows(&files, "main.py"),
+            [
+                "1 Module logging logging->logging ambiguous(.semgrep/rules/logging/rule.py)",
+                "2 Named requests get->get ambiguous(.semgrep/rules/requests/rule.py)",
             ]
         );
     }
