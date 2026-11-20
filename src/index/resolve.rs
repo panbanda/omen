@@ -274,6 +274,9 @@ struct Resolver<'a> {
     references_by_span: Vec<HashMap<usize, Vec<(usize, usize)>>>,
     /// For each Ruby type, the types that have it as a direct parent type.
     ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
+    /// The Ruby types and constants by their full path, in the order of the
+    /// files and the positions.
+    ruby_constants: OnceLock<HashMap<Vec<String>, Vec<Id>>>,
     /// For each Go type, the Go structs that embed it.
     go_embedders: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// For each Go type, the methods that it has itself.
@@ -559,6 +562,7 @@ impl<'a> Resolver<'a> {
             references_by_start,
             references_by_span,
             ruby_children: OnceLock::new(),
+            ruby_constants: OnceLock::new(),
             go_embedders: OnceLock::new(),
             go_methods: OnceLock::new(),
             test_runners: OnceLock::new(),
@@ -1448,11 +1452,12 @@ impl<'a> Resolver<'a> {
         let Some((name, qualifier)) = path.split_last() else {
             return Vec::new();
         };
-        let candidates: Vec<Id> = self
-            .named(name, owner.0)
-            .filter(|id| is_container(self.symbol(*id)) || self.facts(*id).defined_type)
-            .collect();
-        let mut nesting = Vec::new();
+        let by_path = self.ruby_constants();
+        let at = |scope: Vec<String>| {
+            let mut full = scope;
+            full.extend(path.iter().map(|segment| segment.to_string()));
+            by_path.get(&full).cloned().unwrap_or_default()
+        };
         if !text.starts_with("::") {
             let mut current = if outside {
                 self.facts(owner).parent.map(|position| (owner.0, position))
@@ -1461,34 +1466,25 @@ impl<'a> Resolver<'a> {
             };
             while let Some(id) = current {
                 if is_container(self.symbol(id)) {
-                    nesting.push(self.member_path(id));
+                    let found = at(self.member_path(id));
+                    if !found.is_empty() {
+                        return found;
+                    }
                 }
                 current = self.facts(id).parent.map(|position| (id.0, position));
             }
         }
-        nesting.push(Vec::new());
-        for scope in nesting {
-            let found: Vec<Id> = candidates
-                .iter()
-                .copied()
-                .filter(|id| {
-                    let full = self.member_path(*id);
-                    full.len() == scope.len() + path.len()
-                        && full.starts_with(&scope)
-                        && full[scope.len()..].iter().eq(path.iter())
-                })
-                .collect();
-            if !found.is_empty() {
-                return found;
-            }
+        let found = at(Vec::new());
+        if !found.is_empty() {
+            return found;
         }
         // A constant of a parent type, or a module that the repository
         // opens only in a form this search does not see.
         if qualifier.is_empty() {
             return self.types(name, None, owner.0);
         }
-        candidates
-            .into_iter()
+        self.named(name, owner.0)
+            .filter(|id| is_container(self.symbol(*id)) || self.facts(*id).defined_type)
             .filter(|id| {
                 let containers = &self.facts(*id).container_path;
                 containers.len() >= qualifier.len()
@@ -1497,6 +1493,24 @@ impl<'a> Resolver<'a> {
                         .eq(qualifier.iter())
             })
             .collect()
+    }
+
+    fn ruby_constants(&self) -> &HashMap<Vec<String>, Vec<Id>> {
+        self.ruby_constants.get_or_init(|| {
+            let mut by_path: HashMap<Vec<String>, Vec<Id>> = HashMap::new();
+            for (file, facts) in self.files.iter().enumerate() {
+                if self.family(file) != Family::Ruby {
+                    continue;
+                }
+                for (position, symbol) in facts.symbols.iter().enumerate() {
+                    let id = (file, position);
+                    if is_container(symbol) || self.facts(id).defined_type {
+                        by_path.entry(self.member_path(id)).or_default().push(id);
+                    }
+                }
+            }
+            by_path
+        })
     }
 
     /// The constructors of a type or of its nearest parent type that has one.
@@ -5091,6 +5105,44 @@ mod false_edge_tests {
             .count();
         assert_eq!(twins, calls);
         elapsed
+    }
+
+    /// `depth` nested modules. Each has a class `Base` and a class `Item <
+    /// Base` whose method calls the method `foo` of its `Base`: the search of
+    /// the parent sees each class with the name `Base`.
+    fn ruby_constants_in_deep_modules_resolve_at(depth: usize) -> std::time::Duration {
+        let mut source = String::new();
+        for level in 0..depth {
+            source.push_str(&format!(
+                "module M{level}\nclass Base\ndef foo\nend\nend\nclass Item < Base\ndef go\nfoo\nend\nend\n"
+            ));
+        }
+        source.push_str(&"end\n".repeat(depth));
+        let files = [("a.rb", source.as_str())];
+        let started = crate::index::timing::Stopwatch::start();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let bound = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| reference.resolution.status == super::Status::UniqueCandidate)
+            .count();
+        assert_eq!(bound, depth);
+        elapsed
+    }
+
+    #[test]
+    fn test_ruby_constants_in_deep_modules_resolve_to_the_nearest_type() {
+        ruby_constants_in_deep_modules_resolve_at(20);
+    }
+
+    /// The search of a constant must not read the path of each type with the
+    /// name again in each enclosing module.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_ruby_constants_in_deep_modules_resolve_in_linear_time() {
+        assert_scales_linearly("modules", 400, ruby_constants_in_deep_modules_resolve_at);
     }
 
     #[test]
