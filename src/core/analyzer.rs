@@ -75,7 +75,7 @@ impl<'a> AnalysisContext<'a> {
     /// content source, thus an index of a commit reads only that commit.
     pub fn code_index(&self) -> Result<Arc<CodeIndex>> {
         let index = self.code_index.get_or_init(|| {
-            let files: Vec<PathBuf> = self.files.iter().cloned().collect();
+            let files: Vec<PathBuf> = self.files.index_files();
             let read = |path: &Path| self.read_file(path);
             let list = |directory: &Path| self.list_directory(directory);
             Arc::new(CodeIndex::build(self.root, &files, &read, &list))

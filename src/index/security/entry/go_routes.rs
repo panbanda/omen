@@ -44,7 +44,9 @@ use super::{
 };
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
-use crate::index::model::{ImportKind, ImportTarget, Reference, Span, Symbol, SymbolKind};
+use crate::index::model::{
+    ImportBinding, ImportKind, ImportTarget, Reference, Span, Symbol, SymbolKind,
+};
 
 /// The methods that `Any` registers. gin v1.11.0 `anyMethods`.
 /// The guard text of a middleware argument that is not a name. An entry point with this guard
@@ -214,6 +216,23 @@ impl Framework {
             }
         }
         Some(PrefixState { top, slash })
+    }
+
+    /// Tells if `materialize` gives a path, without the text of the path.
+    fn accepts(self, state: &PrefixState) -> bool {
+        match self {
+            Self::Chi | Self::Mux => {
+                let mut current = state.top.as_ref();
+                while let Some(piece) = current {
+                    if !piece.text.is_empty() {
+                        return true;
+                    }
+                    current = piece.parent.as_ref();
+                }
+                false
+            }
+            Self::Echo | Self::Gin => true,
+        }
     }
 
     /// The path that a joined list gives.
@@ -1682,12 +1701,7 @@ impl<'a> Context<'a> {
                     return None;
                 }
                 let import = (operand.kind() == "identifier")
-                    .then(|| {
-                        self.file.imports.iter().find(|binding| {
-                            binding.kind == ImportKind::Module
-                                && binding.local_name.as_deref() == Some(self.text(operand))
-                        })
-                    })
+                    .then(|| self.go_module_import(self.text(operand)))
                     .flatten();
                 // Another qualifier is a variable or a field. The index has no symbol for it.
                 let binding = import?;
@@ -1722,6 +1736,26 @@ impl<'a> Context<'a> {
             directory,
             name,
         )
+    }
+
+    /// The first import of a module that binds the local name. A file can have many imports,
+    /// and a file with a handler of each package looks up each of them.
+    fn go_module_import(&self, local_name: &str) -> Option<&'a ImportBinding> {
+        self.go_module_imports
+            .get_or_init(|| {
+                let mut by_name = HashMap::new();
+                for binding in &self.file.imports {
+                    if binding.kind != ImportKind::Module {
+                        continue;
+                    }
+                    if let Some(name) = binding.local_name.as_deref() {
+                        by_name.entry(name).or_insert(binding);
+                    }
+                }
+                by_name
+            })
+            .get(local_name)
+            .copied()
     }
 
     fn package_lookup(
@@ -4950,12 +4984,24 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             if unreadable && framework == Framework::Mux {
                 continue;
             }
+            // A hidden record of chi or gin only replaces other records, by its own pattern. It
+            // needs to know only that the library accepts the path. The text of the path is as
+            // long as the chain of mounts above the record, so a chain of mounts would take
+            // quadratic time in all.
+            let text_unused =
+                record.omitted && matches!(framework, Framework::Chi | Framework::Gin);
             let composed = up
                 .state
                 .as_ref()
                 .filter(|_| !up.dead)
                 .and_then(|state| framework.extend(state, &record.path))
-                .and_then(|state| framework.materialize(&state));
+                .and_then(|state| {
+                    if text_unused {
+                        framework.accepts(&state).then(String::new)
+                    } else {
+                        framework.materialize(&state)
+                    }
+                });
             let path = match composed {
                 Some(path) => path,
                 None if unreadable => {

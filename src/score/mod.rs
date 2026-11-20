@@ -1076,6 +1076,7 @@ mod tests {
                 total_definitions: 0,
                 reachable_count: 0,
                 unresolved_paths: 0,
+                components_not_analyzed: Vec::new(),
             },
         };
         assert_eq!(calculate_deadcode_score(&result), 100.0);
@@ -1104,6 +1105,7 @@ mod tests {
                 total_definitions: 10,
                 reachable_count: 7,
                 unresolved_paths: 0,
+                components_not_analyzed: Vec::new(),
             },
         };
         let score = calculate_deadcode_score(&result);
@@ -1133,6 +1135,7 @@ mod tests {
                 total_definitions: 100,
                 reachable_count: 50,
                 unresolved_paths: 0,
+                components_not_analyzed: Vec::new(),
             },
         };
         let score = calculate_deadcode_score(&result);
