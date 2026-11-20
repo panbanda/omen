@@ -6,6 +6,7 @@
 //! name. A qualifier or a receiver that fails does not continue to the rules
 //! for a bare name.
 
+mod condensed;
 pub mod external;
 #[cfg(test)]
 mod function_references;
@@ -16,7 +17,7 @@ mod local_blocks;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rayon::prelude::*;
 
 use super::calls::{element_type, one_result, required_type, split_list, split_type, Argument};
@@ -234,7 +235,7 @@ fn is_callable(symbol: &Symbol) -> bool {
 }
 
 /// The object that a Ruby instance variable belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum RubyObject {
     /// An object of the class: the object of an instance method.
     Instance,
@@ -248,6 +249,69 @@ type TypePath = Vec<String>;
 
 /// A Ruby instance variable: the path of its type, its name, and its object.
 type InstanceVariable = (TypePath, String, RubyObject);
+
+/// A search for the types of the Ruby instance variables of one name and one
+/// object, at one depth, in each type.
+type VariableSearch = (String, RubyObject, usize);
+
+/// The type of the values that the writes of a Ruby instance variable give.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WrittenType {
+    /// No write.
+    Nothing,
+    /// Each write gives a value of the type at this path.
+    One(TypePath),
+    /// A write gives a value without a known type, or two writes give
+    /// values of two types.
+    Any,
+}
+
+impl WrittenType {
+    fn join(self, other: &WrittenType) -> WrittenType {
+        match (self, other) {
+            (WrittenType::Nothing, other) => other.clone(),
+            (value, WrittenType::Nothing) => value,
+            (WrittenType::One(left), WrittenType::One(right)) if left == *right => {
+                WrittenType::One(left)
+            }
+            _ => WrittenType::Any,
+        }
+    }
+}
+
+/// The Ruby types by path, with the edges to the paths of the parent types
+/// and to the paths of the types that have a type as a direct parent.
+struct RubyHierarchy {
+    nodes: HashMap<TypePath, usize>,
+    paths: Vec<TypePath>,
+    ancestors: condensed::Condensed,
+    descendants: condensed::Condensed,
+}
+
+/// The name and the object of a Ruby instance variable, without its type.
+type VariableName = (String, RubyObject);
+
+/// The work of the regions of all the Ruby instance variables is at most this
+/// factor, times the size of the hierarchy, times the logarithm of that size.
+const RUBY_VARIABLE_BUDGET_FACTOR: usize = 4;
+
+/// The components of `RubyHierarchy` that can see a write of one Ruby
+/// instance variable: in `ancestors`, each component with a write in its
+/// ancestors; in `descendants`, each component with such a component in its
+/// descendants.
+struct VariableRegion {
+    ancestors: HashSet<usize>,
+    descendants: HashSet<usize>,
+}
+
+/// For one `VariableSearch`, the join of the written types over the
+/// ancestors of each component of `RubyHierarchy::ancestors`, and over the
+/// descendants of each component of `RubyHierarchy::descendants`.
+#[derive(Default)]
+struct WrittenJoins {
+    ancestors: HashMap<usize, WrittenType>,
+    descendants: HashMap<usize, WrittenType>,
+}
 
 /// The types of a value. `None` when the syntax gives no type.
 type Types = Option<Vec<Id>>;
@@ -305,8 +369,16 @@ struct Resolver<'a> {
     /// the depth. The depth is in the key because a deeper search stops
     /// sooner, and thus the order of the searches does not change a result.
     ruby_instance_variable_cache: RwLock<HashMap<(InstanceVariable, usize), Types>>,
-    /// The results of `ruby_object_paths`, by the path of the type.
-    ruby_object_paths_cache: RwLock<HashMap<TypePath, Arc<Vec<TypePath>>>>,
+    ruby_hierarchy: OnceLock<RubyHierarchy>,
+    /// The region of each Ruby instance variable with a write. `None` when
+    /// the regions of the variables before it, in the order of their first
+    /// writes, used the budget: the variable then has no type.
+    ruby_variable_regions: OnceLock<HashMap<VariableName, Option<VariableRegion>>>,
+    /// The joins of each search for the types of Ruby instance variables.
+    /// A search of one key holds its lock while it reads the writes, and a
+    /// write searches only at a greater depth, thus two searches never wait
+    /// for each other.
+    ruby_written_joins: RwLock<HashMap<VariableSearch, Arc<Mutex<WrittenJoins>>>>,
     /// For each Go type, the Go structs that embed it.
     go_embedders: OnceLock<BTreeMap<Id, Vec<Id>>>,
     /// For each Go type, the methods that it has itself.
@@ -622,7 +694,9 @@ impl<'a> Resolver<'a> {
             ruby_types_by_path: OnceLock::new(),
             ruby_instance_variables: OnceLock::new(),
             ruby_instance_variable_cache: RwLock::new(HashMap::new()),
-            ruby_object_paths_cache: RwLock::new(HashMap::new()),
+            ruby_hierarchy: OnceLock::new(),
+            ruby_variable_regions: OnceLock::new(),
+            ruby_written_joins: RwLock::new(HashMap::new()),
             go_embedders: OnceLock::new(),
             go_methods: OnceLock::new(),
             test_runners: OnceLock::new(),
@@ -3633,26 +3707,96 @@ impl<'a> Resolver<'a> {
     }
 
     /// The one type of the values that the writes of `variable` give, in the
-    /// methods that can run on its object.
+    /// methods that can run on its object: those of the type, of its
+    /// subtypes, and of the parent types of these.
     fn ruby_variable_writes_types(
         &self,
         variable: &InstanceVariable,
         depth: usize,
     ) -> Option<Vec<Id>> {
         let (owner_path, name, object) = variable;
-        let variables = self.ruby_instance_variables();
-        let mut found = BTreeSet::new();
-        for path in self.ruby_object_paths(owner_path.clone()).iter() {
-            let key = (path.clone(), name.clone(), *object);
-            for (local_file, position) in variables.get(&key).into_iter().flatten() {
-                let local = &self.files[*local_file].locals[*position];
-                found.extend(self.local_types(local, *local_file, depth + 1)?);
-            }
+        let hierarchy = self.ruby_hierarchy();
+        let node = *hierarchy.nodes.get(owner_path)?;
+        let region = self
+            .ruby_variable_regions()
+            .get(&(name.clone(), *object))?
+            .as_ref()?;
+        let start = hierarchy.descendants.component(node);
+        if !region.descendants.contains(&start) {
+            return None;
         }
-        let paths: BTreeSet<TypePath> = found.into_iter().map(|id| self.member_path(id)).collect();
-        let [path] = Vec::from_iter(paths).try_into().ok()?;
+        let joins = Arc::clone(
+            self.ruby_written_joins
+                .write()
+                .entry((name.clone(), *object, depth))
+                .or_default(),
+        );
+        let mut joins = joins.lock();
+        let WrittenJoins {
+            ancestors,
+            descendants,
+        } = &mut *joins;
+        let written = hierarchy.descendants.join(
+            start,
+            &region.descendants,
+            descendants,
+            |component| {
+                hierarchy.descendants.members(component).iter().fold(
+                    WrittenType::Nothing,
+                    |value, node| {
+                        let above = hierarchy.ancestors.component(*node);
+                        if !region.ancestors.contains(&above) {
+                            return value;
+                        }
+                        let above = hierarchy.ancestors.join(
+                            above,
+                            &region.ancestors,
+                            ancestors,
+                            |component| {
+                                self.ruby_component_writes(
+                                    hierarchy, component, name, *object, depth,
+                                )
+                            },
+                            WrittenType::join,
+                        );
+                        value.join(&above)
+                    },
+                )
+            },
+            WrittenType::join,
+        );
+        let WrittenType::One(path) = written else {
+            return None;
+        };
         // A file that opens the class again gives the class more methods.
         self.ruby_types_by_path().get(&path).cloned()
+    }
+
+    /// The written type of the writes of the variable `name` of `object` in
+    /// the types of one component of `RubyHierarchy::ancestors`.
+    fn ruby_component_writes(
+        &self,
+        hierarchy: &RubyHierarchy,
+        component: usize,
+        name: &str,
+        object: RubyObject,
+        depth: usize,
+    ) -> WrittenType {
+        let variables = self.ruby_instance_variables();
+        let mut written = WrittenType::Nothing;
+        for node in hierarchy.ancestors.members(component) {
+            let key = (hierarchy.paths[*node].clone(), name.to_string(), object);
+            for (file, position) in variables.get(&key).into_iter().flatten() {
+                let local = &self.files[*file].locals[*position];
+                let Some(types) = self.local_types(local, *file, depth + 1) else {
+                    return WrittenType::Any;
+                };
+                for id in types {
+                    written = written.join(&WrittenType::One(self.member_path(id)));
+                }
+            }
+        }
+        written
     }
 
     fn ruby_instance_variables(&self) -> &HashMap<InstanceVariable, Vec<(usize, usize)>> {
@@ -3708,40 +3852,123 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    /// The paths of the Ruby types whose methods can run on an object of the
-    /// type at `path`: the type, its subtypes, and the parent types of these.
-    fn ruby_object_paths(&self, path: Vec<String>) -> Arc<Vec<Vec<String>>> {
-        if let Some(found) = self.ruby_object_paths_cache.read().get(&path) {
-            return Arc::clone(found);
-        }
-        let by_path = self.ruby_types_by_path();
-        let children = self.ruby_children();
-        let types = |path: &TypePath| by_path.get(path).into_iter().flatten().copied();
-        let mut subtypes = BTreeSet::from([path.clone()]);
-        let mut pending = vec![path.clone()];
-        while let Some(current) = pending.pop() {
-            for child in types(&current).flat_map(|id| children.get(&id).into_iter().flatten()) {
-                let child = self.member_path(*child);
-                if subtypes.insert(child.clone()) {
-                    pending.push(child);
-                }
+    fn ruby_variable_regions(&self) -> &HashMap<VariableName, Option<VariableRegion>> {
+        self.ruby_variable_regions.get_or_init(|| {
+            let hierarchy = self.ruby_hierarchy();
+            // The first write and the nodes of the writes of each variable.
+            let mut writes: HashMap<VariableName, ((usize, usize), Vec<usize>)> = HashMap::new();
+            for ((path, name, object), positions) in self.ruby_instance_variables() {
+                let (Some(node), Some(first)) = (hierarchy.nodes.get(path), positions.iter().min())
+                else {
+                    continue;
+                };
+                let entry = writes
+                    .entry((name.clone(), *object))
+                    .or_insert((*first, Vec::new()));
+                entry.0 = entry.0.min(*first);
+                entry.1.push(*node);
             }
-        }
-        let mut found = subtypes.clone();
-        let mut pending: Vec<Vec<String>> = subtypes.into_iter().collect();
-        while let Some(current) = pending.pop() {
-            for parent in types(&current).flat_map(|id| self.parents(id)) {
-                let parent = self.member_path(parent);
-                if found.insert(parent.clone()) {
-                    pending.push(parent);
-                }
+            let mut order: Vec<_> = writes.into_iter().collect();
+            order.sort_by(|(left, (left_first, _)), (right, (right_first, _))| {
+                (left_first, left).cmp(&(right_first, right))
+            });
+            let size = hierarchy.ancestors.size() + hierarchy.descendants.size();
+            let logarithm = (usize::BITS - size.leading_zeros()) as usize;
+            let mut budget = RUBY_VARIABLE_BUDGET_FACTOR * size * logarithm.max(1);
+            let mut used = false;
+            let mut regions = HashMap::new();
+            for (variable, (_, nodes)) in order {
+                let region = if used {
+                    None
+                } else {
+                    self.ruby_variable_region(hierarchy, &nodes, &mut budget)
+                };
+                used = region.is_none();
+                regions.insert(variable, region);
             }
+            regions
+        })
+    }
+
+    /// The region of a variable with writes in the types of `nodes`. `None`
+    /// when the walks need more than `budget`.
+    fn ruby_variable_region(
+        &self,
+        hierarchy: &RubyHierarchy,
+        nodes: &[usize],
+        budget: &mut usize,
+    ) -> Option<VariableRegion> {
+        let starts = nodes
+            .iter()
+            .map(|node| hierarchy.ancestors.component(*node));
+        let ancestors = hierarchy.ancestors.reaching(starts, budget)?;
+        let mut starts = Vec::new();
+        for component in &ancestors {
+            let members = hierarchy.ancestors.members(*component);
+            *budget = budget.checked_sub(members.len())?;
+            starts.extend(
+                members
+                    .iter()
+                    .map(|node| hierarchy.descendants.component(*node)),
+            );
         }
-        let found = Arc::new(found.into_iter().collect::<Vec<_>>());
-        self.ruby_object_paths_cache
-            .write()
-            .insert(path, Arc::clone(&found));
-        found
+        let descendants = hierarchy.descendants.reaching(starts, budget)?;
+        Some(VariableRegion {
+            ancestors,
+            descendants,
+        })
+    }
+
+    fn ruby_hierarchy(&self) -> &RubyHierarchy {
+        self.ruby_hierarchy.get_or_init(|| {
+            let by_path = self.ruby_types_by_path();
+            let children = self.ruby_children();
+            let mut paths: Vec<TypePath> = by_path.keys().cloned().collect();
+            paths.sort_unstable();
+            let mut nodes: HashMap<TypePath, usize> = paths
+                .iter()
+                .enumerate()
+                .map(|(node, path)| (path.clone(), node))
+                .collect();
+            let mut ancestors: Vec<Vec<usize>> = Vec::new();
+            let mut descendants: Vec<Vec<usize>> = Vec::new();
+            // A parent that is not a class or a module is a path without
+            // types. The loop adds it, and it has no edges.
+            let mut node = 0;
+            while node < paths.len() {
+                let types: Vec<Id> = by_path
+                    .get(&paths[node])
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect();
+                let parents: Vec<TypePath> = types
+                    .iter()
+                    .flat_map(|id| self.parents(*id))
+                    .map(|parent| self.member_path(parent))
+                    .collect();
+                let subtypes: Vec<TypePath> = types
+                    .iter()
+                    .flat_map(|id| children.get(id).into_iter().flatten())
+                    .map(|child| self.member_path(*child))
+                    .collect();
+                let mut index = |path: TypePath| {
+                    *nodes.entry(path).or_insert_with_key(|path| {
+                        paths.push(path.clone());
+                        paths.len() - 1
+                    })
+                };
+                ancestors.push(parents.into_iter().map(&mut index).collect());
+                descendants.push(subtypes.into_iter().map(&mut index).collect());
+                node += 1;
+            }
+            RubyHierarchy {
+                nodes,
+                paths,
+                ancestors: condensed::Condensed::new(&ancestors),
+                descendants: condensed::Condensed::new(&descendants),
+            }
+        })
     }
 
     /// Replaces declarations by the definitions that they declare. A call
@@ -5831,6 +6058,95 @@ mod false_edge_tests {
     #[ignore = "timing: run in release"]
     fn timing_instance_variable_reads_resolve_in_linear_time() {
         assert_scales_linearly("reads", 2_000, instance_variable_reads_resolve_at);
+    }
+
+    /// A chain of `size` classes, each a subclass of the one before it. Each
+    /// class writes and reads `@store`, or its own variable when `distinct`.
+    fn instance_variables_in_a_chain_resolve_at(
+        size: usize,
+        distinct: bool,
+    ) -> std::time::Duration {
+        let (elapsed, typed) = instance_variables_in_a_chain_typed_at(size, distinct);
+        assert_eq!(typed, (1..=size).collect::<Vec<_>>());
+        elapsed
+    }
+
+    /// The time of the resolution of a chain, and the classes whose read
+    /// gets the type of the writes, in ascending order.
+    fn instance_variables_in_a_chain_typed_at(
+        size: usize,
+        distinct: bool,
+    ) -> (std::time::Duration, Vec<usize>) {
+        let mut source = String::from("class Store\n  def add\n  end\nend\n\nclass Link0\nend\n");
+        for index in 1..=size {
+            let variable = if distinct {
+                format!("@store{index}")
+            } else {
+                "@store".to_string()
+            };
+            source.push_str(&format!(
+                "class Link{index} < Link{}\n  def fill\n    {variable} = Store.new\n  end\n\n  def read\n    {variable}.add\n  end\nend\n",
+                index - 1
+            ));
+        }
+        let files = [("a.rb", source.as_str())];
+        let started = crate::index::timing::Stopwatch::start();
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        super::resolve_references_with(&mut facts, &manifests);
+        let elapsed = started.elapsed();
+        let mut typed: Vec<usize> = facts
+            .iter()
+            .flat_map(|file| &file.references)
+            .filter(|reference| {
+                reference.name == "add"
+                    && reference.resolution.status == super::Status::UniqueCandidate
+            })
+            .filter_map(|reference| {
+                let enclosing = reference.enclosing.as_deref()?;
+                enclosing
+                    .strip_prefix("a.rb#Link")?
+                    .strip_suffix(".read")?
+                    .parse()
+                    .ok()
+            })
+            .collect();
+        typed.sort_unstable();
+        (elapsed, typed)
+    }
+
+    /// Each variable of a chain has the region of the whole chain. The
+    /// budget gives a type to the variables of the first classes, in source
+    /// order, and no type to the others.
+    #[test]
+    fn test_distinct_instance_variables_in_a_long_chain_stop_at_the_budget() {
+        let size = 2_000;
+        let (_, typed) = instance_variables_in_a_chain_typed_at(size, true);
+        assert!(!typed.is_empty() && typed.len() < size, "{}", typed.len());
+        assert_eq!(typed, (1..=typed.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_instance_variables_in_a_chain_resolve_to_the_type_of_the_writes() {
+        instance_variables_in_a_chain_resolve_at(20, false);
+        instance_variables_in_a_chain_resolve_at(20, true);
+    }
+
+    /// A read in each class of a chain must not examine the whole chain again.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_instance_variables_in_a_chain_resolve_in_linear_time() {
+        assert_scales_linearly("chain", 2_000, |size| {
+            instance_variables_in_a_chain_resolve_at(size, false)
+        });
+    }
+
+    /// The budget bounds the work of a variable of each class of a chain.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_distinct_instance_variables_in_a_chain_resolve_in_linear_time() {
+        assert_scales_linearly("distinct chain", 2_000, |size| {
+            instance_variables_in_a_chain_typed_at(size, true).0
+        });
     }
 
     #[test]
