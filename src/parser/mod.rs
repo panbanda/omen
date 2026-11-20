@@ -1,6 +1,7 @@
 //! Tree-sitter based multi-language parser.
 
 pub mod queries;
+pub mod vue;
 
 #[cfg(test)]
 pub(crate) mod deep;
@@ -52,9 +53,52 @@ impl Parser {
 
     /// Parse content with explicit language.
     pub fn parse(&self, content: &[u8], lang: Language, path: &Path) -> Result<ParseResult> {
-        let ts_lang = get_tree_sitter_language(lang)?;
+        if vue::is_component(path) {
+            return self.parse_component(content, path);
+        }
+        let tree = Self::parse_text(content, lang, path)?;
+        Ok(ParseResult {
+            tree: Arc::new(tree),
+            source: content.to_vec(),
+            language: lang,
+            path: path.to_path_buf(),
+            component: None,
+        })
+    }
 
-        let tree = THREAD_PARSERS.with(|parsers| {
+    /// Parses the translation of a component. See `vue`. When the code of the
+    /// template does not parse, the tree has only the script.
+    fn parse_component(&self, content: &[u8], path: &Path) -> Result<ParseResult> {
+        let translation = vue::translate(content).ok_or_else(|| Error::Parse {
+            path: path.to_path_buf(),
+            message: "The script of the component has a language that is not supported".to_string(),
+        })?;
+        let language = translation.language;
+        let mut abstention = translation.abstention.clone();
+        let mut source = translation.text.clone();
+        let mut tree = Self::parse_text(&source, language, path)?;
+        if let Some(template) = &translation.template {
+            if has_error_in(tree.root_node(), template) {
+                abstention = Some("the code of the template does not parse".to_string());
+                source = translation.script_text();
+                tree = Self::parse_text(&source, language, path)?;
+            }
+        }
+        Ok(ParseResult {
+            tree: Arc::new(tree),
+            source,
+            language,
+            path: path.to_path_buf(),
+            component: Some(vue::Facts {
+                content_hash: *blake3::hash(content).as_bytes(),
+                abstention,
+            }),
+        })
+    }
+
+    fn parse_text(content: &[u8], lang: Language, path: &Path) -> Result<Tree> {
+        let ts_lang = get_tree_sitter_language(lang)?;
+        THREAD_PARSERS.with(|parsers| {
             let mut parsers = parsers.borrow_mut();
             let parser = parsers.entry(lang).or_insert_with(|| {
                 let mut p = TsParser::new();
@@ -66,15 +110,25 @@ impl Parser {
                 path: path.to_path_buf(),
                 message: "Failed to parse file".to_string(),
             })
-        })?;
-
-        Ok(ParseResult {
-            tree: Arc::new(tree),
-            source: content.to_vec(),
-            language: lang,
-            path: path.to_path_buf(),
         })
     }
+}
+
+/// A node of the tree in `range` is an error, or a node that the parser added.
+fn has_error_in(node: tree_sitter::Node<'_>, range: &std::ops::Range<usize>) -> bool {
+    let can_hold = |node: &tree_sitter::Node<'_>| {
+        node.has_error() && node.end_byte() > range.start && node.start_byte() < range.end
+    };
+    // A stack in place of recursion, because a template expression can nest to any depth.
+    let mut pending: Vec<tree_sitter::Node<'_>> = Some(node).filter(can_hold).into_iter().collect();
+    while let Some(node) = pending.pop() {
+        if node.is_error() || node.is_missing() {
+            return true;
+        }
+        let mut cursor = node.walk();
+        pending.extend(node.children(&mut cursor).filter(can_hold));
+    }
+    false
 }
 
 /// Result of parsing a source file.
@@ -82,12 +136,16 @@ impl Parser {
 pub struct ParseResult {
     /// The parsed syntax tree.
     pub tree: Arc<Tree>,
-    /// Original source content.
+    /// The text that the tree is of. For a Vue component it is the translation
+    /// of the file, see `vue`: it has the length of the file, and each byte of
+    /// the script is at its position.
     pub source: Vec<u8>,
     /// Detected language.
     pub language: Language,
     /// File path.
     pub path: std::path::PathBuf,
+    /// The facts of a Vue component, or `None` for a file of a language.
+    pub component: Option<vue::Facts>,
 }
 
 impl ParseResult {
@@ -592,6 +650,83 @@ mod tests {
         let content = b"fn main() {}";
         let result = parser.parse(content, Language::Rust, Path::new("main.rs"));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_a_component_parses_with_the_grammar_of_its_script() {
+        let content = "<template>\n  <MyButton :label=\"title\" @click=\"save\"/>\n</template>\n\n<script setup lang=\"ts\">\nimport MyButton from './MyButton.vue';\nconst title: string = 'a';\nfunction save() {}\n</script>\n";
+        let result = Parser::new()
+            .parse(
+                content.as_bytes(),
+                Language::TypeScript,
+                Path::new("App.vue"),
+            )
+            .unwrap();
+        assert_eq!(result.language, Language::TypeScript);
+        assert_eq!(result.source.len(), content.len());
+        assert!(!result.root_node().has_error());
+        let component = result.component.as_ref().unwrap();
+        assert_eq!(component.abstention, None);
+        assert_eq!(
+            component.content_hash,
+            *blake3::hash(content.as_bytes()).as_bytes()
+        );
+        let save = content.find("function save").unwrap();
+        let node = result
+            .root_node()
+            .descendant_for_byte_range(save, save + 8)
+            .unwrap();
+        assert_eq!(node.start_position().row, 7);
+    }
+
+    #[test]
+    fn test_a_template_that_does_not_parse_abstains_and_keeps_the_script() {
+        let content = "<template><p>{{ a + }}</p></template>\n<script setup lang=\"ts\">\nconst a = 1\n</script>\n";
+        let result = Parser::new()
+            .parse(
+                content.as_bytes(),
+                Language::TypeScript,
+                Path::new("App.vue"),
+            )
+            .unwrap();
+        let component = result.component.as_ref().unwrap();
+        assert!(component
+            .abstention
+            .as_deref()
+            .unwrap()
+            .contains("does not parse"));
+        assert!(!result.root_node().has_error());
+    }
+
+    #[test]
+    fn test_a_deeply_nested_template_error_abstains_without_recursion() {
+        use super::deep::{nest, on_small_stack};
+        let content = format!(
+            "<template><p>{{{{ {} }}}}</p></template>\n<script setup lang=\"ts\">\nconst a = 1\n</script>\n",
+            nest("(", "a +", ")")
+        );
+        let abstention = on_small_stack(move || {
+            Parser::new()
+                .parse(
+                    content.as_bytes(),
+                    Language::TypeScript,
+                    Path::new("App.vue"),
+                )
+                .unwrap()
+                .component
+                .unwrap()
+                .abstention
+        });
+        assert!(abstention.unwrap().contains("does not parse"));
+    }
+
+    #[test]
+    fn test_a_file_that_is_not_a_component_has_no_component_facts() {
+        let result = Parser::new()
+            .parse(b"const a = 1;\n", Language::TypeScript, Path::new("a.ts"))
+            .unwrap();
+        assert!(result.component.is_none());
+        assert_eq!(result.source, b"const a = 1;\n");
     }
 
     #[test]

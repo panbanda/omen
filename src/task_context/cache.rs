@@ -35,7 +35,7 @@ impl IndexCache {
             if !path.starts_with(&root) {
                 return Err(Error::analysis("Index file escapes repository"));
             }
-            if Language::detect(&path).is_none() {
+            if !Language::is_source_path(&path) {
                 continue;
             }
             let source = std::fs::read(&path)?;
@@ -55,36 +55,36 @@ impl IndexCache {
         let mut hasher = blake3::Hasher::new();
         let mut sources = BTreeMap::new();
         let mut parsed_files = 0;
-        for (path, source) in contents {
+        for (path, source) in &contents {
             let relative = path
                 .strip_prefix(&root)
                 .map_err(|e| Error::analysis(e.to_string()))?;
             let name = relative.to_string_lossy();
             hasher.update(&(name.len() as u64).to_le_bytes());
             hasher.update(name.as_bytes());
-            hasher.update(hashes[&path].as_bytes());
-            let previous = (self.root == root && self.hashes.get(&path) == hashes.get(&path))
-                .then(|| self.last.as_ref().and_then(|s| s.sources.get(&path)))
+            hasher.update(hashes[path].as_bytes());
+            let previous = (self.root == root && self.hashes.get(path) == hashes.get(path))
+                .then(|| self.last.as_ref().and_then(|s| s.sources.get(path)))
                 .flatten();
             let parsed = match previous {
                 Some(p) => p.clone(),
                 None => {
                     parsed_files += 1;
-                    let language = Language::detect(&path)
+                    let language = Language::detect_with_content(path, source)
                         .ok_or_else(|| Error::analysis("Unsupported source"))?;
-                    Arc::new(Parser::new().parse(&source, language, &path)?)
+                    Arc::new(Parser::new().parse(source, language, path)?)
                 }
             };
-            sources.insert(path, parsed);
+            sources.insert(path.clone(), parsed);
         }
         let paths: Vec<_> = sources.keys().cloned().collect();
         let index = CodeIndex::build(
             &root,
             &paths,
             &|path| {
-                sources
+                contents
                     .get(path)
-                    .map(|parsed| parsed.source.clone())
+                    .cloned()
                     .ok_or_else(|| Error::analysis("Missing snapshot source"))
             },
             &list_directory,
@@ -108,5 +108,31 @@ impl IndexCache {
             *self = Self::default();
         }
         Ok(snapshot)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_the_index_of_a_snapshot_has_the_symbols_of_a_component() {
+        let directory = tempfile::tempdir().unwrap();
+        let component = directory.path().join("App.vue");
+        std::fs::write(
+            &component,
+            "<template><p>{{ title() }}</p></template>\n<script setup lang=\"ts\">\nfunction title() { return 'a'; }\n</script>\n",
+        )
+        .unwrap();
+        let snapshot = IndexCache::default()
+            .load(directory.path(), &[component])
+            .unwrap();
+        let symbols: Vec<(&str, u32)> = snapshot
+            .index
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.line))
+            .collect();
+        assert_eq!(symbols, [("title", 3)]);
     }
 }
