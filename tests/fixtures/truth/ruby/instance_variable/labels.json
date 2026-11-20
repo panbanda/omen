@@ -1,0 +1,193 @@
+{
+  "version": 1,
+  "language": "ruby",
+  "split": "development",
+  "oracle": "Author-reviewed. `ruby -wc` (Ruby 3.4.7) accepts each file. `ruby -w -I. main.rb` in the case directory prints `store 1`, `cache 2`, and `store 3` with no warning: `@store` of an object of `Report` or `Board` is the `Store` that `initialize` assigns, and `@store` in `def self.fill` is the variable of the class object `Board`, which `def self.cache` assigns a `Cache`. The harness does not run the code.",
+  "closed_world": true,
+  "symbols": [
+    {
+      "label": "store",
+      "category": "type",
+      "file": "store.rb",
+      "name": "Store",
+      "kind": "class",
+      "container": null,
+      "start_line": 3,
+      "end_line": 7,
+      "exported": true
+    },
+    {
+      "label": "store_add",
+      "category": "method",
+      "file": "store.rb",
+      "name": "add",
+      "kind": "method",
+      "container": "Store",
+      "start_line": 4,
+      "end_line": 6,
+      "exported": true
+    },
+    {
+      "label": "cache",
+      "category": "type",
+      "file": "store.rb",
+      "name": "Cache",
+      "kind": "class",
+      "container": null,
+      "start_line": 9,
+      "end_line": 13,
+      "exported": true
+    },
+    {
+      "label": "cache_add",
+      "category": "method",
+      "file": "store.rb",
+      "name": "add",
+      "kind": "method",
+      "container": "Cache",
+      "start_line": 10,
+      "end_line": 12,
+      "exported": true
+    },
+    {
+      "label": "report",
+      "category": "type",
+      "file": "report.rb",
+      "name": "Report",
+      "kind": "class",
+      "container": null,
+      "start_line": 3,
+      "end_line": 11,
+      "exported": true
+    },
+    {
+      "label": "report_init",
+      "category": "constructor",
+      "file": "report.rb",
+      "name": "initialize",
+      "kind": "constructor",
+      "container": "Report",
+      "start_line": 4,
+      "end_line": 6,
+      "exported": true
+    },
+    {
+      "label": "report_fill",
+      "category": "method",
+      "file": "report.rb",
+      "name": "fill",
+      "kind": "method",
+      "container": "Report",
+      "start_line": 8,
+      "end_line": 10,
+      "exported": true
+    },
+    {
+      "label": "board",
+      "category": "type",
+      "file": "report.rb",
+      "name": "Board",
+      "kind": "class",
+      "container": null,
+      "start_line": 13,
+      "end_line": 29,
+      "exported": true
+    },
+    {
+      "label": "board_cache",
+      "category": "singleton_method",
+      "file": "report.rb",
+      "name": "cache",
+      "kind": "method",
+      "container": "Board",
+      "start_line": 14,
+      "end_line": 16,
+      "exported": true
+    },
+    {
+      "label": "board_class_fill",
+      "category": "singleton_method",
+      "file": "report.rb",
+      "name": "fill",
+      "kind": "method",
+      "container": "Board",
+      "start_line": 18,
+      "end_line": 20,
+      "exported": true
+    },
+    {
+      "label": "board_init",
+      "category": "constructor",
+      "file": "report.rb",
+      "name": "initialize",
+      "kind": "constructor",
+      "container": "Board",
+      "start_line": 22,
+      "end_line": 24,
+      "exported": true
+    },
+    {
+      "label": "board_fill",
+      "category": "method",
+      "file": "report.rb",
+      "name": "fill",
+      "kind": "method",
+      "container": "Board",
+      "start_line": 26,
+      "end_line": 28,
+      "exported": true
+    }
+  ],
+  "calls": [
+    {
+      "label": "instance_variable_of_the_object",
+      "category": "field_receiver",
+      "caller": "report_fill",
+      "line": 9,
+      "callee_text": "@store.add",
+      "expected": [
+        "store_add"
+      ]
+    },
+    {
+      "label": "instance_variable_of_the_class_object",
+      "category": "field_receiver",
+      "caller": "board_class_fill",
+      "line": 19,
+      "callee_text": "@store.add",
+      "expected": [
+        "cache_add"
+      ]
+    },
+    {
+      "label": "instance_variable_beside_a_class_object_variable",
+      "category": "field_receiver",
+      "caller": "board_fill",
+      "line": 27,
+      "callee_text": "@store.add",
+      "expected": [
+        "store_add"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "label": "require_relative_store",
+      "category": "relative",
+      "file": "main.rb",
+      "line": 3,
+      "path": "store",
+      "names": [],
+      "required_file": "store.rb"
+    },
+    {
+      "label": "require_relative_report",
+      "category": "relative",
+      "file": "main.rb",
+      "line": 4,
+      "path": "report",
+      "names": [],
+      "required_file": "report.rb"
+    }
+  ]
+}

@@ -1092,6 +1092,52 @@ mod tests {
         });
     }
 
+    /// One route makes `size` classes, and the `initialize` of each runs a command.
+    fn sinks_of_one_entry_resolve_at(size: usize) -> std::time::Duration {
+        let mut controller =
+            String::from("class CommandsController < ApplicationController\n  def run\n");
+        let mut models = String::new();
+        for index in 0..size {
+            controller.push_str(&format!("    Hook{index}.new\n"));
+            models.push_str(&format!(
+                "class Hook{index}\n  def initialize\n    system(ENV[\"HOOK\"])\n  end\nend\n"
+            ));
+        }
+        controller.push_str("  end\nend\n");
+        let routes =
+            "Rails.application.routes.draw do\n  post \"/run\", to: \"commands#run\"\nend\n";
+        let files = [
+            ("config/routes.rb", routes),
+            (
+                "app/controllers/commands_controller.rb",
+                controller.as_str(),
+            ),
+            ("app/models/hooks.rb", models.as_str()),
+        ];
+        let start = crate::index::timing::Stopwatch::start();
+        let analysis = run(&files, DEFAULT_MIN_BASIS);
+        let took = start.elapsed();
+        assert_eq!(analysis.reachability.paths.len(), size);
+        took
+    }
+
+    #[test]
+    fn one_entry_reaches_each_sink() {
+        sinks_of_one_entry_resolve_at(20);
+    }
+
+    /// The paths of one entry point must not read all the symbols that it reaches again for
+    /// each sink.
+    #[test]
+    #[ignore = "timing test: run in release with --ignored"]
+    fn timing_sinks_of_one_entry_resolve_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "sinks of one entry",
+            2_000,
+            sinks_of_one_entry_resolve_at,
+        );
+    }
+
     #[test]
     #[ignore = "timing test: run in release with --ignored"]
     fn timing_inline_handlers_resolve_in_linear_time() {

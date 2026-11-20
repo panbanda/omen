@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "language": "python",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. CPython 3 accepts the file. `install` can write any attribute on any object, also `__init__` on `BaseCommand` with a function of the repository, thus `super().__init__` in `Command` has no status.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "command_init", "category": "constructor", "file": "command.py", "name": "__init__", "kind": "constructor", "container": "Command", "start_line": 5, "end_line": 6, "exported": true}
+  ],
+  "calls": [
+    {"label": "super_with_a_dynamic_setattr", "category": "super_call", "caller": "command_init", "line": 6, "callee_text": "super().__init__", "expected": [], "status": "not_external"}
+  ]
+}

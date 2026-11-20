@@ -143,6 +143,10 @@ pub struct Draft<'tree> {
     /// The wrapper type of the `self` parameter of a Rust method, as `Arc`
     /// for `self: &Arc<Self>`.
     pub self_wrapper: Option<&'static str>,
+    /// A Ruby method of the class object, as `def self.name` and a method in
+    /// `class << self` are. Its instance variables are those of the class
+    /// object.
+    pub singleton: bool,
 }
 
 /// The objects that have a method that a call generates.
@@ -199,6 +203,8 @@ pub struct LinkFacts {
     /// The names, different from its own, under which the module exports
     /// this top-level symbol, as `export { a as b }` gives `b` to `a`.
     pub export_aliases: Vec<String>,
+    /// See `Draft::singleton`.
+    pub singleton: bool,
 }
 
 /// Facts of a reference that only the resolver uses.
@@ -432,6 +438,11 @@ impl<'tree> Context<'_, 'tree> {
 
     pub fn text(&self, node: Node<'_>) -> String {
         node.utf8_text(self.source).unwrap_or("").to_string()
+    }
+
+    /// Tells if the text of `node` is `text`, without a copy of the text of the node.
+    pub fn text_is(&self, node: Node<'_>, text: &str) -> bool {
+        self.source.get(node.byte_range()) == Some(text.as_bytes())
     }
 
     /// The nearest scope that is a type or a function.
@@ -949,6 +960,8 @@ struct PendingDecorators {
 
 struct Extractor<'a, 'tree> {
     spec: &'a dyn LanguageSpec,
+    /// The facts of Python classes. `None` for a different language.
+    python: Option<crate::index::lang::python_classes::Collector>,
     /// The comment before each node that follows a comment, by the id of the node.
     /// `Node::prev_sibling` searches from the root, so the walk records the sibling.
     comment_before: HashMap<usize, Node<'tree>>,
@@ -1205,6 +1218,7 @@ impl<'tree> Extractor<'_, 'tree> {
             named_by_binding: false,
             condition: None,
             self_wrapper: None,
+            singleton: false,
             generated: None,
         }
     }
@@ -1252,6 +1266,9 @@ impl<'tree> Extractor<'_, 'tree> {
         // A keyword token can have the same kind string as a named node, for example `class`.
         if !node.is_named() {
             return;
+        }
+        if let Some(python) = &mut self.python {
+            python.enter(node, depth, self.source);
         }
         self.track_decorators(node, depth);
         let KindFacts {
@@ -1433,6 +1450,9 @@ impl<'tree> Extractor<'_, 'tree> {
     }
 
     fn leave(&mut self, depth: usize) {
+        if let Some(python) = &mut self.python {
+            python.leave(depth);
+        }
         if self.scope_depths.last() == Some(&depth) {
             self.scope_depths.pop();
             self.scopes.pop();
@@ -1557,6 +1577,10 @@ pub struct FileSymbols {
     pub rebound: BTreeSet<String>,
     /// The facts that the class metrics use.
     pub members: MemberFacts,
+    /// The body of each Python class, in the order of the symbols.
+    pub python_classes: Vec<crate::index::lang::python_classes::ClassBody>,
+    /// The attributes that a Python file writes on an object other than `self`.
+    pub attribute_writes: BTreeSet<String>,
     /// The BLAKE3 hash of the bytes that gave these facts.
     pub content_hash: [u8; 32],
     /// The byte ranges that the syntax makes test code, in order. No range is
@@ -1567,6 +1591,10 @@ pub struct FileSymbols {
     /// The whole file is test code: its path follows a test convention, or a
     /// `#[cfg(test)]` declaration of a different file names it.
     pub test_file: bool,
+    /// The export table of the file has only its own names and its named
+    /// re-exports, because its wildcard re-exports need more work than the
+    /// cap of `crate::index::export_tables` gives.
+    pub barrel_not_resolved: bool,
     /// The facts of a Vue component, or `None` for a file of a language.
     pub component: Option<crate::parser::vue::Facts>,
 }
@@ -1983,6 +2011,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let spec = language_spec(parsed.language);
     let mut extractor = Extractor {
         spec,
+        python: (parsed.language == Language::Python)
+            .then(crate::index::lang::python_classes::Collector::default),
         comment_before: HashMap::new(),
         rules: spec
             .definitions()
@@ -2030,6 +2060,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let test_file = extractor.in_test_file;
     let mark_table = MarkTable::new(std::mem::take(&mut extractor.test_marks));
 
+    let python = extractor.python.take();
     let imports = extractor.imports;
     let modules = extractor.modules;
     let export_aliases = extractor.export_aliases;
@@ -2172,6 +2203,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             self_wrapper: draft.self_wrapper,
             generated: draft.generated,
             export_aliases,
+            singleton: draft.singleton,
         });
     }
     let mut calls = extractor.calls;
@@ -2371,6 +2403,9 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     }
     value_sites.sites.shrink_to_fit();
     value_sites.text.shrink_to_fit();
+    let (python_classes, attribute_writes) = python
+        .map(|python| python.finish(&symbols))
+        .unwrap_or_default();
     FileSymbols {
         file: file.to_string(),
         language: parsed.language,
@@ -2385,6 +2420,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         locals,
         path_targets: BTreeMap::new(),
         rebound: rebound_names(parsed),
+        python_classes,
+        attribute_writes,
         members: member_facts,
         content_hash: parsed.component.as_ref().map_or_else(
             || *blake3::hash(&parsed.source).as_bytes(),
@@ -2393,6 +2430,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         test_ranges: mark_table.ranges,
         test_lines: mark_table.lines,
         test_file,
+        barrel_not_resolved: false,
         component: parsed.component.clone(),
     }
 }
@@ -2562,10 +2600,51 @@ mod tests {
         });
     }
 
+    /// A Ruby class whose `class << self` has `size` nested blocks, each with a
+    /// method.
+    fn ruby_methods_in_nested_blocks(size: usize) -> String {
+        format!(
+            "class A\nclass << self\n{}{}end\nend\n",
+            (0..size)
+                .map(|level| format!("run do\ndef m{level}\nend\n"))
+                .collect::<String>(),
+            "end\n".repeat(size)
+        )
+    }
+
+    #[test]
+    fn test_ruby_methods_in_nested_blocks_of_the_singleton_class_are_singleton() {
+        let source = ruby_methods_in_nested_blocks(3);
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Ruby,
+                std::path::Path::new("a.rb"),
+            )
+            .unwrap();
+        let symbols = super::extract_file(&parsed, "a.rb");
+        let methods: Vec<(&str, bool)> = symbols
+            .symbols
+            .iter()
+            .zip(&symbols.link_facts)
+            .filter(|(symbol, _)| symbol.name.starts_with('m'))
+            .map(|(symbol, facts)| (symbol.name.as_str(), facts.singleton))
+            .collect();
+        assert_eq!(methods, [("m0", true), ("m1", true), ("m2", true)]);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_ruby_methods_in_nested_blocks_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("ruby methods", 5_000, |size| {
+            extract_time(Language::Ruby, "a.rb", ruby_methods_in_nested_blocks(size))
+        });
+    }
+
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_deeply_nested_go_closures_are_extracted_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("go closures", 5_000, |size| {
+        crate::index::timing::assert_scales_linearly("go closures", 40_000, |size| {
             let source = format!(
                 "package p\nfunc f() {{\n{}{}\n}}\n",
                 "func() {".repeat(size),
