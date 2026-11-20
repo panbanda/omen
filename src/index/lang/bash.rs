@@ -3,6 +3,8 @@
 use crate::index::extract::{Context, DefinitionRule, Draft, LanguageSpec, NameRule};
 use crate::index::model::{Exported, SymbolKind};
 
+use std::collections::HashMap;
+
 use tree_sitter::Node;
 
 use crate::index::model::{ImportBinding, ImportKind};
@@ -86,11 +88,7 @@ impl LanguageSpec for Bash {
             return;
         };
         let text = context.text(argument);
-        let path = ['"', '\'']
-            .iter()
-            .find_map(|quote| text.strip_prefix(*quote)?.strip_suffix(*quote))
-            .unwrap_or(&text);
-        out.push(context.import(node, path, ImportKind::Load, None, None));
+        out.push(context.import(node, unquote(&text), ImportKind::Load, None, None));
     }
 
     fn definitions(&self) -> Vec<DefinitionRule> {
@@ -106,6 +104,157 @@ impl LanguageSpec for Bash {
     fn exported(&self, _draft: &Draft<'_>, _context: &Context<'_, '_>) -> Exported {
         Exported::Exported
     }
+}
+
+/// What a call of an alias name runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Alias {
+    /// The first word of the alias value.
+    Name(String),
+    /// The source does not show if bash expands the alias at the call, or
+    /// what the first word of the value is.
+    Unknown,
+}
+
+/// The aliases of a script. Bash expands an alias only while the option
+/// `expand_aliases` is on, and only in a line that it reads after it runs
+/// the `alias` command. Bash reads a full line, and a full compound command,
+/// before it runs it. Thus only an `alias` or `shopt` command at the top
+/// level of the script has a known effect. Such a command in a function body
+/// or in a compound command can run at a different time or not run.
+#[derive(Debug, Default)]
+pub struct Aliases {
+    /// The byte from which each `shopt` command that sets `expand_aliases`
+    /// has an effect, with the new value, in source order. `None` is a value
+    /// that the source does not show.
+    switches: Vec<(usize, Option<bool>)>,
+    /// For each name, the byte from which each `alias` or `unalias` command
+    /// that names it has an effect, and the position of the command in
+    /// source order. `None` is a removal.
+    definitions: HashMap<String, Vec<(usize, usize, Option<Alias>)>>,
+    /// The same facts for each `unalias -a`, which removes each alias. One
+    /// list in place of an entry for each name keeps the table linear.
+    removals: Vec<(usize, usize, Option<Alias>)>,
+}
+
+impl Aliases {
+    pub fn of(root: Node<'_>, source: &[u8]) -> Self {
+        let mut commands = Vec::new();
+        let mut pending = vec![(root, false)];
+        while let Some((node, nested)) = pending.pop() {
+            if node.kind() == COMMAND {
+                commands.push((node, nested));
+            }
+            let nested = nested || node.kind() != "program";
+            let mut cursor = node.walk();
+            pending.extend(
+                node.named_children(&mut cursor)
+                    .map(|child| (child, nested)),
+            );
+        }
+        commands.sort_by_key(|(command, _)| command.start_byte());
+        let text =
+            |node: Node<'_>| String::from_utf8_lossy(&source[node.byte_range()]).into_owned();
+        let mut aliases = Self::default();
+        for (order, (command, nested)) in commands.into_iter().enumerate() {
+            let Some(name) = command.child_by_field_name("name") else {
+                continue;
+            };
+            let mut cursor = command.walk();
+            let arguments: Vec<String> = command
+                .children_by_field_name("argument", &mut cursor)
+                .map(text)
+                .collect();
+            let effect = source[command.end_byte()..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(source.len(), |offset| command.end_byte() + offset + 1);
+            let has = |flag: &str| arguments.iter().any(|argument| argument == flag);
+            match text(name).as_str() {
+                "shopt" if has("expand_aliases") => {
+                    let value = if has("-u") {
+                        Some(false)
+                    } else if has("-s") {
+                        Some(true)
+                    } else {
+                        continue;
+                    };
+                    aliases
+                        .switches
+                        .push((effect, if nested { None } else { value }));
+                }
+                "alias" => {
+                    for argument in &arguments {
+                        let Some((name, value)) = unquote(argument).split_once('=') else {
+                            continue;
+                        };
+                        let word = unquote(value)
+                            .split_whitespace()
+                            .next()
+                            .filter(|word| !word.contains(['$', '`', '\\', '\'', '"']));
+                        let alias = match word {
+                            Some(word) if !nested => Alias::Name(word.to_string()),
+                            _ => Alias::Unknown,
+                        };
+                        aliases
+                            .definitions
+                            .entry(unquote(name).to_string())
+                            .or_default()
+                            .push((effect, order, Some(alias)));
+                    }
+                }
+                "unalias" => {
+                    let removal = nested.then_some(Alias::Unknown);
+                    if has("-a") {
+                        aliases.removals.push((effect, order, removal));
+                    } else {
+                        for argument in &arguments {
+                            aliases
+                                .definitions
+                                .entry(unquote(argument).to_string())
+                                .or_default()
+                                .push((effect, order, removal.clone()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        aliases
+    }
+
+    /// What a command at `byte` runs when its first word is `name` and bash
+    /// can expand that word as an alias. `None` means that the word is not an alias.
+    pub fn target(&self, name: &str, byte: usize) -> Option<Alias> {
+        fn last(
+            entries: &[(usize, usize, Option<Alias>)],
+            byte: usize,
+        ) -> Option<&(usize, usize, Option<Alias>)> {
+            let index = entries
+                .partition_point(|(at, _, _)| *at <= byte)
+                .checked_sub(1)?;
+            Some(&entries[index])
+        }
+        let (_, defined, alias) = last(self.definitions.get(name)?, byte)?;
+        let alias = match last(&self.removals, byte) {
+            Some((_, removed, removal)) if removed > defined => removal.clone()?,
+            _ => alias.clone()?,
+        };
+        let switch = self.switches.partition_point(|(at, _)| *at <= byte);
+        match switch.checked_sub(1).map(|index| self.switches[index].1) {
+            None | Some(Some(false)) => None,
+            Some(None) => Some(Alias::Unknown),
+            Some(Some(true)) => Some(alias),
+        }
+    }
+}
+
+/// The text without one pair of quotation marks around it.
+fn unquote(text: &str) -> &str {
+    ['"', '\'']
+        .iter()
+        .find_map(|quote| text.strip_prefix(*quote)?.strip_suffix(*quote))
+        .unwrap_or(text)
 }
 
 #[cfg(test)]
@@ -183,6 +332,148 @@ mod tests {
     }
 
     #[test]
+    fn test_source_without_a_slash_has_no_certain_target() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "bin/main.sh",
+                "source lib.sh\n. lib.sh\nsource \"lib.sh\"\nsource ./lib.sh\nsource \"$(dirname \"$0\")/lib.sh\"\n",
+            ),
+            ("bin/lib.sh", ""),
+        ];
+        assert_eq!(
+            rows(&files, "bin/main.sh"),
+            [
+                "1 Load lib.sh -->- unresolved",
+                "2 Load lib.sh -->- unresolved",
+                "3 Load lib.sh -->- unresolved",
+                "4 Load ./lib.sh -->- bin/lib.sh",
+                "5 Load $(dirname \"$0\")/lib.sh -->- bin/lib.sh",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_alias_calls_the_first_word_of_its_value() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "main.sh",
+            "shopt -s expand_aliases\nalias plain=greet quoted='greet loud' double=\"greet twice\"\nalias 'whole=greet'\nalias listing='ls -l'\n\ngreet() {\n    echo hi\n}\n\nrun() {\n    plain\n    quoted\n    double\n    whole\n    listing\n}\n",
+        )];
+        assert_eq!(
+            rows(&files, "main.sh"),
+            [
+                "1 ->shopt Unresolved - []",
+                "2 ->alias External - []",
+                "3 ->alias External - []",
+                "4 ->alias External - []",
+                "7 greet>echo External - []",
+                "11 run>plain UniqueCandidate SameFile [main.sh#greet]",
+                "12 run>quoted UniqueCandidate SameFile [main.sh#greet]",
+                "13 run>double UniqueCandidate SameFile [main.sh#greet]",
+                "14 run>whole UniqueCandidate SameFile [main.sh#greet]",
+                "15 run>listing Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_alias_that_bash_can_defer_gives_no_edge() {
+        use crate::index::resolve::testing::rows;
+        let greet = "greet() {\n    echo hi\n}\n";
+        for (source, expected) in [
+            // An alias in a function body is defined only when the function runs.
+            (
+                format!("shopt -s expand_aliases\n{greet}setup() {{\n    alias plain=greet\n}}\nsetup\nplain\n"),
+                "9 ->plain Unresolved - []",
+            ),
+            // Bash reads a full compound command before it runs it.
+            (
+                format!("shopt -s expand_aliases\n{greet}if true; then\n    alias plain=greet\n    plain\nfi\n"),
+                "7 ->plain Unresolved - []",
+            ),
+            // The alias in the block may not run, so a later call is also not certain.
+            (
+                format!("shopt -s expand_aliases\n{greet}if [[ -n \"$X\" ]]; then\n    alias plain=greet\nfi\nplain\n"),
+                "8 ->plain Unresolved - []",
+            ),
+            // A later alias in a function hides an earlier alias of the same name.
+            (
+                format!("shopt -s expand_aliases\nalias plain=greet\n{greet}setup() {{\n    alias plain=other\n}}\nsetup\nplain\n"),
+                "10 ->plain Unresolved - []",
+            ),
+            // Bash reads a full line before it runs it.
+            (
+                format!("shopt -s expand_aliases\n{greet}alias plain=greet; plain\n"),
+                "5 ->plain Unresolved - []",
+            ),
+            // A `shopt` in a function can run or not.
+            (
+                format!("{greet}setup() {{\n    shopt -s expand_aliases\n}}\nsetup\nalias plain=greet\nplain\n"),
+                "9 ->plain Unresolved - []",
+            ),
+        ] {
+            let rows = rows(&[("main.sh", source.as_str())], "main.sh");
+            assert!(rows.contains(&expected.to_string()), "{source}: {rows:?}");
+        }
+        let source = format!("shopt -s expand_aliases\n{greet}alias plain=greet\nplain\n");
+        let rows = rows(&[("main.sh", source.as_str())], "main.sh");
+        assert!(
+            rows.contains(&"6 ->plain UniqueCandidate SameFile [main.sh#greet]".to_string()),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn test_unalias_all_and_alias_on_one_line_keep_their_order() {
+        use crate::index::resolve::testing::rows;
+        let greet = "greet() {\n    echo hi\n}\n";
+        let source = format!("shopt -s expand_aliases\n{greet}alias plain=other\nunalias -a; alias plain=greet\nplain\n");
+        let found = rows(&[("main.sh", source.as_str())], "main.sh");
+        assert!(
+            found.contains(&"7 ->plain UniqueCandidate SameFile [main.sh#greet]".to_string()),
+            "{found:?}"
+        );
+        let source =
+            format!("shopt -s expand_aliases\n{greet}alias plain=greet; unalias -a\nplain\n");
+        let found = rows(&[("main.sh", source.as_str())], "main.sh");
+        assert!(
+            found.contains(&"6 ->plain Unresolved - []".to_string()),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn test_alias_without_expand_aliases_is_not_expanded() {
+        use crate::index::resolve::testing::rows;
+        for (source, expected) in [
+            (
+                "alias plain=greet\ngreet() {\n    echo hi\n}\nrun() {\n    plain\n}\n",
+                "6 run>plain Unresolved - []",
+            ),
+            (
+                "alias plain=greet\ngreet() {\n    echo hi\n}\nrun() {\n    plain\n}\nshopt -s expand_aliases\n",
+                "6 run>plain Unresolved - []",
+            ),
+            (
+                "shopt -s expand_aliases\nshopt -u expand_aliases\nalias plain=greet\ngreet() {\n    echo hi\n}\nrun() {\n    plain\n}\n",
+                "8 run>plain Unresolved - []",
+            ),
+            (
+                "shopt -s expand_aliases\nalias plain=greet\nunalias plain\ngreet() {\n    echo hi\n}\nrun() {\n    plain\n}\n",
+                "8 run>plain Unresolved - []",
+            ),
+            (
+                "shopt -s expand_aliases\ngreet() {\n    echo hi\n}\nrun() {\n    plain\n}\nalias plain=greet\n",
+                "6 run>plain Unresolved - []",
+            ),
+        ] {
+            let rows = rows(&[("main.sh", source)], "main.sh");
+            assert!(rows.contains(&expected.to_string()), "{source}: {rows:?}");
+        }
+    }
+
+    #[test]
     fn test_calls() {
         use crate::index::resolve::testing::rows;
         let files = [
@@ -233,5 +524,99 @@ mod tests {
             .unwrap();
         assert_eq!(call.resolution.candidates, ["main.sh#greet~2"]);
         assert_eq!(call.resolution.superseded, ["main.sh#greet"]);
+    }
+}
+
+#[cfg(test)]
+mod alias_timing_tests {
+    use std::path::Path;
+
+    use crate::core::Language;
+    use crate::index::extract::extract_file;
+    use crate::index::timing::{assert_scales_linearly, assert_scales_linearly_above, Stopwatch};
+    use crate::parser::Parser;
+
+    /// `size` aliases and `size` functions, then one call of each alias.
+    fn aliases_at(size: usize) -> std::time::Duration {
+        let mut source = String::from("shopt -s expand_aliases\n");
+        for position in 0..size {
+            source.push_str(&format!(
+                "alias a{position}='f{position} x'\nf{position}() {{ :; }}\n"
+            ));
+        }
+        for position in 0..size {
+            source.push_str(&format!("a{position}\n"));
+        }
+        let started = Stopwatch::start();
+        let parsed = Parser::new()
+            .parse(source.as_bytes(), Language::Bash, Path::new("main.sh"))
+            .unwrap();
+        let facts = extract_file(&parsed, "main.sh");
+        let elapsed = started.elapsed();
+        let aliased = facts
+            .reference_facts
+            .iter()
+            .filter(|site| matches!(site.alias, Some(super::Alias::Name(_))))
+            .count();
+        assert_eq!(aliased, size);
+        elapsed
+    }
+
+    #[test]
+    fn test_each_alias_call_has_its_target() {
+        aliases_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_aliases_are_read_in_linear_time() {
+        assert_scales_linearly("aliases", 5_000, aliases_at);
+    }
+
+    /// `size` aliases, each followed by `unalias -a`, then a call of each
+    /// alias and a last alias with its call.
+    fn removals_at(size: usize) -> std::time::Duration {
+        let mut source = String::from("shopt -s expand_aliases\n");
+        for position in 0..size {
+            source.push_str(&format!("alias a{position}=f{position}\nunalias -a\n"));
+        }
+        let calls = source.len();
+        for position in 0..size {
+            source.push_str(&format!("a{position}\n"));
+        }
+        let last = source.len();
+        source.push_str("alias a0=g\na0\n");
+        let parsed = Parser::new()
+            .parse(source.as_bytes(), Language::Bash, Path::new("main.sh"))
+            .unwrap();
+        let started = Stopwatch::start();
+        let aliases = super::Aliases::of(parsed.root_node(), source.as_bytes());
+        let elapsed = started.elapsed();
+        for position in 0..size {
+            assert_eq!(aliases.target(&format!("a{position}"), calls), None);
+        }
+        assert_eq!(
+            aliases.target("a0", last + "alias a0=g\n".len()),
+            Some(super::Alias::Name("g".to_string()))
+        );
+        elapsed
+    }
+
+    #[test]
+    fn test_unalias_all_removes_each_earlier_alias() {
+        removals_at(20);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_unalias_all_is_read_in_linear_time() {
+        // The linear work is small, thus a lower floor shows a quadratic
+        // growth before the growth uses much memory.
+        assert_scales_linearly_above(
+            "unalias -a",
+            3_000,
+            std::time::Duration::from_millis(5),
+            removals_at,
+        );
     }
 }

@@ -291,8 +291,9 @@ pub enum ImportTarget {
     /// The files of the one package or namespace that the import names, in
     /// path order. This target is as certain as `Resolved`.
     Package(Vec<String>),
-    /// Two or more modules or packages match the import path, and the index
-    /// cannot tell which one the import names. The list is in path order.
+    /// Two or more modules or packages match the import path, or a match is
+    /// not certain, as a Python namespace package is, and the index cannot
+    /// tell which one the import names. The list is in path order.
     Ambiguous(Vec<String>),
     /// The module is not a part of the repository.
     External,

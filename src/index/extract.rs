@@ -143,6 +143,10 @@ pub struct Draft<'tree> {
     /// The wrapper type of the `self` parameter of a Rust method, as `Arc`
     /// for `self: &Arc<Self>`.
     pub self_wrapper: Option<&'static str>,
+    /// A Ruby method of the class object, as `def self.name` and a method in
+    /// `class << self` are. Its instance variables are those of the class
+    /// object.
+    pub singleton: bool,
 }
 
 /// The objects that have a method that a call generates.
@@ -199,6 +203,8 @@ pub struct LinkFacts {
     /// The names, different from its own, under which the module exports
     /// this top-level symbol, as `export { a as b }` gives `b` to `a`.
     pub export_aliases: Vec<String>,
+    /// See `Draft::singleton`.
+    pub singleton: bool,
 }
 
 /// Facts of a reference that only the resolver uses.
@@ -231,6 +237,9 @@ pub struct ReferenceFacts {
     /// A function reference whose name is a variable. Only a function value
     /// that the variable holds is its candidate.
     pub variable: bool,
+    /// What the call runs when its name is a Bash alias. The resolver
+    /// resolves the name of the alias value in place of the name of the reference.
+    pub alias: Option<crate::index::lang::bash::Alias>,
 }
 
 /// The names of the value that an index expression reads: `c.items[i]`
@@ -916,6 +925,7 @@ impl ValueSites {
             arrow: site.arrow,
             nullable_target: false,
             variable: site.variable,
+            alias: None,
         };
         (reference, facts)
     }
@@ -1201,6 +1211,7 @@ impl<'tree> Extractor<'_, 'tree> {
             named_by_binding: false,
             condition: None,
             self_wrapper: None,
+            singleton: false,
             generated: None,
         }
     }
@@ -2168,6 +2179,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             self_wrapper: draft.self_wrapper,
             generated: draft.generated,
             export_aliases,
+            singleton: draft.singleton,
         });
     }
     let mut calls = extractor.calls;
@@ -2175,6 +2187,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     calls.sort_by_key(|(_, range, _, _, _)| range.start);
     let mut references = Vec::with_capacity(calls.len());
     let mut reference_facts = Vec::with_capacity(calls.len());
+    let aliases = (parsed.language == Language::Bash)
+        .then(|| crate::index::lang::bash::Aliases::of(parsed.root_node(), &parsed.source));
     for (call, range, owner, via_closure, receiver) in calls {
         let (start_byte, end_byte) = (range.start, range.end);
         let owner = position_of(owner);
@@ -2192,6 +2206,10 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 .map_or_else(|| split_type(&text).1, |target| target.name.clone()),
             ReferenceKind::Call | ReferenceKind::FunctionReference => text.to_string(),
         };
+        let alias = aliases
+            .as_ref()
+            .filter(|_| call.kind == ReferenceKind::Call)
+            .and_then(|aliases| aliases.target(&name, start_byte));
         references.push(Reference {
             file: shared_file.clone(),
             name_range: Span::of(&call.callee.name_node),
@@ -2231,6 +2249,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             }),
             nullable_target,
             variable: false,
+            alias,
         });
     }
     // Most values are local names and fields, and a repository has many of
@@ -2548,6 +2567,47 @@ mod tests {
         crate::index::timing::assert_scales_linearly("arrow functions", 5_000, |size| {
             let source = format!("const f = {}1;\n", "() => ".repeat(size));
             extract_time(Language::TypeScript, "a.ts", source)
+        });
+    }
+
+    /// A Ruby class whose `class << self` has `size` nested blocks, each with a
+    /// method.
+    fn ruby_methods_in_nested_blocks(size: usize) -> String {
+        format!(
+            "class A\nclass << self\n{}{}end\nend\n",
+            (0..size)
+                .map(|level| format!("run do\ndef m{level}\nend\n"))
+                .collect::<String>(),
+            "end\n".repeat(size)
+        )
+    }
+
+    #[test]
+    fn test_ruby_methods_in_nested_blocks_of_the_singleton_class_are_singleton() {
+        let source = ruby_methods_in_nested_blocks(3);
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Ruby,
+                std::path::Path::new("a.rb"),
+            )
+            .unwrap();
+        let symbols = super::extract_file(&parsed, "a.rb");
+        let methods: Vec<(&str, bool)> = symbols
+            .symbols
+            .iter()
+            .zip(&symbols.link_facts)
+            .filter(|(symbol, _)| symbol.name.starts_with('m'))
+            .map(|(symbol, facts)| (symbol.name.as_str(), facts.singleton))
+            .collect();
+        assert_eq!(methods, [("m0", true), ("m1", true), ("m2", true)]);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_ruby_methods_in_nested_blocks_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("ruby methods", 5_000, |size| {
+            extract_time(Language::Ruby, "a.rb", ruby_methods_in_nested_blocks(size))
         });
     }
 
