@@ -143,6 +143,18 @@ fn run_engine(corpus: &Corpus, labels: &BTreeMap<String, Labels>) -> Vec<Outcome
     outcomes
 }
 
+/// The cases of the directory have a `host`, as Vue components do. The
+/// semantic search does not read the files of a host yet.
+fn is_host_directory(directory: &std::path::Path) -> bool {
+    std::fs::read_dir(directory).unwrap().any(|case| {
+        let labels = case.unwrap().path().join("labels.json");
+        std::fs::read_to_string(labels)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .is_some_and(|labels| labels.get("host").is_some())
+    })
+}
+
 #[test]
 fn the_corpus_is_complete_for_each_language() {
     let corpus = load_corpus(&retrieval_root());
@@ -154,7 +166,7 @@ fn the_corpus_is_complete_for_each_language() {
     let mut without_queries = Vec::new();
     for language in std::fs::read_dir(truth_root()).unwrap() {
         let language = language.unwrap().path();
-        if !language.is_dir() {
+        if !language.is_dir() || is_host_directory(&language) {
             continue;
         }
         let case = format!("{}/basics", language.file_name().unwrap().to_string_lossy());

@@ -48,6 +48,20 @@ are not evidence of accuracy on code that the author did not see.
 - With `closed_world`, a symbol or import that omen reports without a label is
   a failure.
 
+## Vue component labels
+
+The cases in the directory `vue` are Vue single-file components. `language` is
+the language of the script blocks, and `host` is `vue`.
+
+- A `template_uses` label is one use of a name in a template, on a line. The
+  index reads the template as top-level code of the component. `expected`
+  lists the keys of the definitions to which the use has an edge. A non-empty
+  list also requires that omen reports the use. An empty list means that omen
+  must not report an edge, as for a name that a `v-for` alias or the props of
+  a slot bind.
+- A `dead_code` label is one definition. `dead` tells if the dead code
+  analysis must report it.
+
 ## Sink labels
 
 A `sinks` label states that omen reports a sink on a line, or that omen does
