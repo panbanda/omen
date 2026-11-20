@@ -73,18 +73,40 @@ const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new(CALL, SymbolKind::Function, NameRule::Hook),
 ];
 
+/// The tag of the memo entries of `in_singleton_class`.
+const SINGLETON_MEMO: u8 = 2;
+
 /// Tells if the nearest class, module, or `class << self` around `node` is
-/// `class << self`.
-fn in_singleton_class(node: Node<'_>) -> bool {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        match parent.kind() {
-            SINGLETON_CLASS => return true,
-            CLASS | MODULE => return false,
-            _ => current = parent.parent(),
+/// `class << self`. Each ancestor keeps the answer, thus many definitions in
+/// deeply nested blocks walk each block once.
+fn in_singleton_class(node: Node<'_>, context: &Context<'_, '_>) -> bool {
+    let mut unknown = Vec::new();
+    let mut ancestor = context.parent(node);
+    let found = loop {
+        let Some(current) = ancestor else {
+            break false;
+        };
+        match current.kind() {
+            SINGLETON_CLASS => break true,
+            CLASS | MODULE => break false,
+            _ => {}
         }
+        let known = context
+            .memo
+            .borrow()
+            .get(&(current.id(), SINGLETON_MEMO))
+            .and_then(|found| found.downcast_ref::<bool>().copied());
+        if let Some(known) = known {
+            break known;
+        }
+        unknown.push(current.id());
+        ancestor = context.parent(current);
+    };
+    let mut memo = context.memo.borrow_mut();
+    for id in unknown {
+        memo.insert((id, SINGLETON_MEMO), Rc::new(found));
     }
-    false
+    found
 }
 
 /// An instance variable without a known value: its name, and no type.
@@ -531,17 +553,11 @@ impl LanguageSpec for Ruby {
             return Vec::new();
         };
         // `class << self` is not a scope. Its body gives methods of the type.
-        let mut owner = GeneratedFor::Instances;
-        let mut ancestor = context.parent(node);
-        while let Some(current) =
-            ancestor.filter(|current| ![CLASS, MODULE].contains(&current.kind()))
-        {
-            if current.kind() == SINGLETON_CLASS {
-                owner = GeneratedFor::Type;
-                break;
-            }
-            ancestor = context.parent(current);
-        }
+        let owner = if in_singleton_class(node, context) {
+            GeneratedFor::Type
+        } else {
+            GeneratedFor::Instances
+        };
         let mut methods = Vec::new();
         let mut cursor = arguments.walk();
         for argument in arguments.named_children(&mut cursor) {
@@ -605,7 +621,7 @@ impl LanguageSpec for Ruby {
                 if draft.kind == SymbolKind::Method && draft.name == "initialize" {
                     draft.kind = SymbolKind::Constructor;
                 }
-                draft.singleton = in_singleton_class(node);
+                draft.singleton = in_singleton_class(node, context);
             }
             SINGLETON_METHOD => draft.singleton = true,
             CLASS | MODULE => {

@@ -2559,6 +2559,47 @@ mod tests {
         });
     }
 
+    /// A Ruby class whose `class << self` has `size` nested blocks, each with a
+    /// method.
+    fn ruby_methods_in_nested_blocks(size: usize) -> String {
+        format!(
+            "class A\nclass << self\n{}{}end\nend\n",
+            (0..size)
+                .map(|level| format!("run do\ndef m{level}\nend\n"))
+                .collect::<String>(),
+            "end\n".repeat(size)
+        )
+    }
+
+    #[test]
+    fn test_ruby_methods_in_nested_blocks_of_the_singleton_class_are_singleton() {
+        let source = ruby_methods_in_nested_blocks(3);
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Ruby,
+                std::path::Path::new("a.rb"),
+            )
+            .unwrap();
+        let symbols = super::extract_file(&parsed, "a.rb");
+        let methods: Vec<(&str, bool)> = symbols
+            .symbols
+            .iter()
+            .zip(&symbols.link_facts)
+            .filter(|(symbol, _)| symbol.name.starts_with('m'))
+            .map(|(symbol, facts)| (symbol.name.as_str(), facts.singleton))
+            .collect();
+        assert_eq!(methods, [("m0", true), ("m1", true), ("m2", true)]);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_ruby_methods_in_nested_blocks_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("ruby methods", 5_000, |size| {
+            extract_time(Language::Ruby, "a.rb", ruby_methods_in_nested_blocks(size))
+        });
+    }
+
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_deeply_nested_go_closures_are_extracted_in_linear_time() {
