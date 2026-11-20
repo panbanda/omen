@@ -321,6 +321,22 @@ fn check_corpora(source: &str, observe: fn(&Path, &str) -> Option<Observation>, 
     );
 }
 
+/// A base directory without the corpus ledger of the base branch fails the
+/// comparison. A pass would hide that no comparison was made.
+#[test]
+fn ledger_comparison_fails_without_base_cases() {
+    let fixtures = quality_root().parent().unwrap().to_path_buf();
+    for base in [fixtures.clone(), fixtures.join("missing")] {
+        let failure = std::panic::catch_unwind(|| ledger_never_grows_from(&base))
+            .expect_err(&format!("{} passed", base.display()));
+        let message = failure
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(message.contains("OMEN_QUALITY_BASE_DIR"), "{message}");
+    }
+}
+
 /// CI runs this test with `OMEN_QUALITY_BASE_DIR` set to the fixture directory
 /// of the base branch.
 #[test]
@@ -329,12 +345,23 @@ fn ledger_never_grows() {
     let base = PathBuf::from(
         std::env::var_os("OMEN_QUALITY_BASE_DIR").expect("set OMEN_QUALITY_BASE_DIR"),
     );
-    if !base.join(LEDGER_FILE).is_file() {
-        // The base branch has no ledger, thus it did not make these checks and
-        // this test cannot know which of them the base branch passed. The pull
-        // request that adds the ledger must show the paired benchmark result.
-        return;
-    }
+    ledger_never_grows_from(&base);
+}
+
+fn ledger_never_grows_from(base: &Path) {
+    let wanted = "set OMEN_QUALITY_BASE_DIR to tests/fixtures/quality of the base branch";
+    assert!(
+        base.join(LEDGER_FILE).is_file(),
+        "{} has no {LEDGER_FILE}: {wanted}",
+        base.display()
+    );
+    assert!(
+        CORPORA
+            .iter()
+            .any(|corpus| base.join(format!("{corpus}.json")).is_file()),
+        "{} has no corpus: {wanted}",
+        base.display()
+    );
     let mut base_ids = BTreeSet::new();
     let mut base_case_ids = BTreeSet::new();
     for corpus in CORPORA {
@@ -342,18 +369,18 @@ fn ledger_never_grows() {
         if !base.join(format!("{corpus}.json")).is_file() {
             continue;
         }
-        let (ids, case_ids) = expectation_ids(corpus, &load_corpus(&base, corpus));
+        let (ids, case_ids) = expectation_ids(corpus, &load_corpus(base, corpus));
         base_ids.extend(ids);
         base_case_ids.extend(case_ids);
     }
     let grown = ledger_growth(
         &base_ids,
         &base_case_ids,
-        &load_ledger(&base),
+        &load_ledger(base),
         &load_ledger(&quality_root()),
     );
     let accepted: Vec<AcceptedFact> = load_accepted(&quality_root()).unwrap();
-    let base_accepted: Vec<AcceptedFact> = load_accepted(&base).unwrap();
+    let base_accepted: Vec<AcceptedFact> = load_accepted(base).unwrap();
     let report = check_accepted_facts(&grown, &accepted, &base_accepted);
     for note in &report.notes {
         println!("note: {note}");
