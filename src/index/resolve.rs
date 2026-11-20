@@ -20,13 +20,16 @@ use parking_lot::RwLock;
 use rayon::prelude::*;
 
 use super::calls::{element_type, one_result, required_type, split_list, split_type, Argument};
-use super::extract::{name_path, FileSymbols, LinkFacts, Local, ReferenceFacts, ValueSites};
+use super::extract::{
+    name_path, FileSymbols, GeneratedFor, LinkFacts, Local, ReferenceFacts, ValueSites,
+};
 use super::imports::Manifests;
 use super::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ReferenceKind, Resolution,
     ResolutionBasis as Basis, ResolutionStatus as Status, SharedStr, Symbol, SymbolKind,
 };
 use crate::core::Language;
+use crate::index::lang::bash::Alias;
 
 /// Languages that can call the definitions of each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2952,7 +2955,13 @@ impl<'a> Resolver<'a> {
             Family::Java | Family::CSharp | Family::C | Family::Ruby
         ) {
             if let Some(owner) = self.enclosing_type(chain) {
-                let members = self.members(owner, name, arity, &mut BTreeSet::new());
+                let mut members = self.members(owner, name, arity, &mut BTreeSet::new());
+                // In a class body `self` is the class, not an object of it.
+                if chain.first() == Some(&owner) {
+                    members.retain(|member| {
+                        self.facts(*member).generated != Some(GeneratedFor::Instances)
+                    });
+                }
                 if let Some(outcome) = Outcome::of(Basis::EnclosingType, members) {
                     return outcome;
                 }
@@ -3494,11 +3503,25 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve(&self, file: usize, position: usize, depth: usize) -> Outcome {
-        let mut outcome = self.resolve_by_rules(file, position, depth);
+        let facts = &self.files[file];
+        let site = &facts.reference_facts[position];
+        let aliased;
+        let reference = match &site.alias {
+            Some(Alias::Unknown) => return Outcome::none(Status::Unresolved),
+            Some(Alias::Name(name)) => {
+                aliased = Reference {
+                    name: name.clone(),
+                    ..facts.references[position].clone()
+                };
+                &aliased
+            }
+            None => &facts.references[position],
+        };
+        let mut outcome = self.resolve_site(file, reference, site, depth);
         // The other rules found no candidate. The source can still show a
         // definition outside the repository.
         if outcome.status == Status::Unresolved && outcome.candidates.is_empty() {
-            if let Some(external) = self.external(file, position, depth) {
+            if let Some(external) = self.external(file, position, reference, depth) {
                 return external;
             }
         }
@@ -3578,16 +3601,6 @@ impl<'a> Resolver<'a> {
             return Outcome::none(Status::Unresolved);
         }
         outcome
-    }
-
-    fn resolve_by_rules(&self, file: usize, position: usize, depth: usize) -> Outcome {
-        let facts = &self.files[file];
-        self.resolve_site(
-            file,
-            &facts.references[position],
-            &facts.reference_facts[position],
-            depth,
-        )
     }
 
     /// Resolves one reference by the rules. `site` has the facts of the reference.
