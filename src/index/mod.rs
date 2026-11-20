@@ -7,6 +7,7 @@ pub mod calls;
 #[cfg(test)]
 mod deep_tests;
 pub mod dependencies;
+mod export_tables;
 pub mod extract;
 pub mod graph;
 pub mod headers;
