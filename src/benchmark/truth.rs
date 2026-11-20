@@ -149,6 +149,9 @@ pub enum Kind {
 pub struct Labels {
     pub version: u32,
     pub language: Language,
+    /// `vue` for a case of Vue components, whose script blocks have the language.
+    #[serde(default)]
+    pub host: Option<String>,
     pub split: String,
     pub oracle: String,
     #[serde(default)]
@@ -179,6 +182,35 @@ pub struct Labels {
     pub tests: Vec<TestLabel>,
     #[serde(default)]
     pub references: Vec<ReferenceLabel>,
+    #[serde(default)]
+    pub template_uses: Vec<TemplateUseLabel>,
+    #[serde(default)]
+    pub dead_code: Vec<DeadCodeLabel>,
+}
+
+/// One use of a name in the template of a Vue component.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateUseLabel {
+    pub label: String,
+    pub file: String,
+    pub line: u32,
+    pub name: String,
+    /// The keys of the definitions to which the use has an edge. A non-empty
+    /// list also requires that omen reports the use. An empty list means that
+    /// omen must not report an edge, as for a name that a `v-for` binds.
+    pub expected: Vec<String>,
+}
+
+/// One definition, and whether the dead code analysis must report it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeadCodeLabel {
+    pub label: String,
+    pub file: String,
+    pub name: String,
+    pub line: u32,
+    pub dead: bool,
 }
 
 /// The relation of a definition or of a line to test code.
@@ -448,6 +480,19 @@ pub struct Observed {
     pub test_symbols: Vec<ObservedTestSymbol>,
     pub test_lines: Vec<ObservedTestLines>,
     pub references: Vec<ObservedReference>,
+    pub template_uses: Vec<ObservedTemplateUse>,
+    /// The definitions that the dead code analysis reports.
+    pub dead_code: Vec<Location>,
+}
+
+/// A use of a name in the template of a Vue component.
+#[derive(Debug, Clone)]
+pub struct ObservedTemplateUse {
+    pub file: String,
+    pub line: u32,
+    pub name: String,
+    /// The keys of the definitions to which the use has an edge.
+    pub edges: Vec<String>,
 }
 
 /// The relation to test code that omen reports for one definition.
@@ -1384,7 +1429,94 @@ pub fn compare(case: &str, labels: &Labels, observed: &Observed) -> Result<Vec<A
     compare_paths(case, labels, observed, &mut assertions);
     compare_tests(case, labels, observed, &mut assertions);
     compare_references(case, labels, observed, &mut assertions)?;
+    compare_template_uses(case, labels, observed, &mut assertions)?;
+    compare_dead_code(case, labels, observed, &mut assertions)?;
     Ok(assertions)
+}
+
+fn unique_named_labels<'a>(
+    case: &str,
+    kind: &str,
+    names: impl Iterator<Item = &'a str>,
+) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for name in names {
+        if name.is_empty() || name.contains('/') || !seen.insert(name) {
+            return Err(invalid(format!(
+                "{case}: {kind} label '{name}' must be unique and non-empty without '/'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn compare_template_uses(
+    case: &str,
+    labels: &Labels,
+    observed: &Observed,
+    out: &mut Vec<Assertion>,
+) -> Result<()> {
+    let names = labels
+        .template_uses
+        .iter()
+        .map(|label| label.label.as_str());
+    unique_named_labels(case, "template_uses", names)?;
+    for label in &labels.template_uses {
+        let found: Vec<&ObservedTemplateUse> = observed
+            .template_uses
+            .iter()
+            .filter(|found| {
+                found.file == label.file && found.line == label.line && found.name == label.name
+            })
+            .collect();
+        let expected: BTreeSet<&String> = label.expected.iter().collect();
+        let edges: BTreeSet<&String> = found.iter().flat_map(|found| &found.edges).collect();
+        let false_edges: Vec<_> = edges.difference(&expected).collect();
+        let missed_edges: Vec<_> = expected.difference(&edges).collect();
+        let prefix = format!("{case}/template_uses/{}", label.label);
+        if !label.expected.is_empty() {
+            out.push(assertion(
+                format!("{prefix}/reported"),
+                found.is_empty().then(|| "omen reports no use".to_string()),
+            ));
+        }
+        out.push(assertion(
+            format!("{prefix}/no_false_edge"),
+            (!false_edges.is_empty()).then(|| format!("false edge to {}", join(false_edges))),
+        ));
+        if !label.expected.is_empty() {
+            out.push(assertion(
+                format!("{prefix}/no_missed_edge"),
+                (!missed_edges.is_empty()).then(|| format!("no edge to {}", join(missed_edges))),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn compare_dead_code(
+    case: &str,
+    labels: &Labels,
+    observed: &Observed,
+    out: &mut Vec<Assertion>,
+) -> Result<()> {
+    let names = labels.dead_code.iter().map(|label| label.label.as_str());
+    unique_named_labels(case, "dead_code", names)?;
+    for label in &labels.dead_code {
+        let reported = observed.dead_code.iter().any(|found| {
+            found.file == label.file && found.name == label.name && found.start_line == label.line
+        });
+        let detail = match (label.dead, reported) {
+            (true, false) => Some("omen does not report the definition".to_string()),
+            (false, true) => Some("omen reports the definition as dead".to_string()),
+            _ => None,
+        };
+        out.push(assertion(
+            format!("{case}/dead_code/{}", label.label),
+            detail,
+        ));
+    }
+    Ok(())
 }
 
 /// Assertion ids that follow from the labels alone, whatever omen reports.
@@ -1656,6 +1788,95 @@ mod tests {
             ]
         }))
         .unwrap()
+    }
+
+    fn component_labels() -> Labels {
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "language": "typescript",
+            "host": "vue",
+            "split": "development",
+            "oracle": "author-reviewed, not executed",
+            "closed_world": false,
+            "template_uses": [
+                {"label": "handler", "file": "App.vue", "line": 3, "name": "save",
+                 "expected": ["App.vue#save"]},
+                {"label": "alias", "file": "App.vue", "line": 4, "name": "item", "expected": []}
+            ],
+            "dead_code": [
+                {"label": "template_only", "file": "App.vue", "name": "save", "line": 9, "dead": false},
+                {"label": "unused", "file": "App.vue", "name": "unused", "line": 10, "dead": true}
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn template_uses_and_dead_code_are_compared() {
+        let labels = component_labels();
+        assert_eq!(labels.host.as_deref(), Some("vue"));
+        let observed = Observed {
+            template_uses: vec![ObservedTemplateUse {
+                file: "App.vue".to_string(),
+                line: 3,
+                name: "save".to_string(),
+                edges: vec!["App.vue#save".to_string()],
+            }],
+            dead_code: vec![location("App.vue", "unused", 10)],
+            ..Observed::default()
+        };
+        let assertions = compare("vue/case", &labels, &observed).unwrap();
+        let failed: Vec<&str> = assertions
+            .iter()
+            .filter(|assertion| !assertion.passed)
+            .map(|assertion| assertion.id.as_str())
+            .collect();
+        assert!(failed.is_empty(), "{failed:?}");
+        let ids: Vec<&str> = assertions
+            .iter()
+            .map(|assertion| assertion.id.as_str())
+            .collect();
+        for id in [
+            "vue/case/template_uses/handler/reported",
+            "vue/case/template_uses/handler/no_false_edge",
+            "vue/case/template_uses/alias/no_false_edge",
+            "vue/case/dead_code/template_only",
+            "vue/case/dead_code/unused",
+        ] {
+            assert!(ids.contains(&id), "{id} in {ids:?}");
+        }
+        assert!(!ids.contains(&"vue/case/template_uses/alias/reported"));
+    }
+
+    #[test]
+    fn a_wrong_template_use_or_dead_code_fact_fails() {
+        let labels = component_labels();
+        let observed = Observed {
+            template_uses: vec![ObservedTemplateUse {
+                file: "App.vue".to_string(),
+                line: 4,
+                name: "item".to_string(),
+                edges: vec!["App.vue#item".to_string()],
+            }],
+            dead_code: vec![location("App.vue", "save", 9)],
+            ..Observed::default()
+        };
+        let failed: Vec<String> = compare("vue/case", &labels, &observed)
+            .unwrap()
+            .into_iter()
+            .filter(|assertion| !assertion.passed)
+            .map(|assertion| assertion.id)
+            .collect();
+        assert_eq!(
+            failed,
+            [
+                "vue/case/template_uses/handler/reported",
+                "vue/case/template_uses/handler/no_missed_edge",
+                "vue/case/template_uses/alias/no_false_edge",
+                "vue/case/dead_code/template_only",
+                "vue/case/dead_code/unused",
+            ]
+        );
     }
 
     fn symbol(
