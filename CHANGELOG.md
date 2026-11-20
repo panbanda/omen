@@ -1,5 +1,66 @@
 # Changelog
 
+## [5.2.0](https://github.com/panbanda/omen/compare/omen-v5.1.0...omen-v5.2.0) (2026-11-20)
+
+
+### Features
+
+* **diff:** give the change set in JSON and through MCP ([#576](https://github.com/panbanda/omen/issues/576)) ([39d125f](https://github.com/panbanda/omen/commit/39d125ffb6b113414c1dd9ce9b8b6ca6447dcab6))
+* **index:** extract the methods that Ruby attribute calls define ([#618](https://github.com/panbanda/omen/issues/618)) ([5ec00b8](https://github.com/panbanda/omen/commit/5ec00b8f30e0594df2483fdd250ed6b194817b5d))
+* **index:** read Vue single-file components ([#606](https://github.com/panbanda/omen/issues/606)) ([954f43c](https://github.com/panbanda/omen/commit/954f43cc94e109a0e42b5759f5c5bd1f438adef6))
+* **parser:** read v-bind objects, custom directives and imported dynamic components in Vue templates ([#622](https://github.com/panbanda/omen/issues/622)) ([7ce51a8](https://github.com/panbanda/omen/commit/7ce51a8f163ab26277faa0952a2b4d15d9f2a818))
+* **resolve:** mark Python calls into a base class outside the repository as External ([#631](https://github.com/panbanda/omen/issues/631)) ([fd3fc2e](https://github.com/panbanda/omen/commit/fd3fc2e11765e8441f64d67a3e82a9825c843de8))
+* **security:** add unsafe HTML output and correct TLS, command, code and SQL sinks ([#589](https://github.com/panbanda/omen/issues/589)) ([a675f10](https://github.com/panbanda/omen/commit/a675f1061729c52e4d614e79f50492205ebb9827))
+* **security:** follow function references in the search for paths ([#578](https://github.com/panbanda/omen/issues/578)) ([7abf138](https://github.com/panbanda/omen/commit/7abf138de665b66d6e5a075642ecbc9575c01d16))
+* **security:** read TypeScript decorator, member and inline routes ([#590](https://github.com/panbanda/omen/issues/590)) ([8647b36](https://github.com/panbanda/omen/commit/8647b36757f67b50a8bacb4f434d26d6c9388e2e))
+
+
+### Bug Fixes
+
+* **action:** pass a JSON output over 100,000 bytes as a file ([#587](https://github.com/panbanda/omen/issues/587)) ([6135f91](https://github.com/panbanda/omen/commit/6135f91dee30d8dbb9c559e3a25de0cbbb9d3510))
+* **analyzers:** correct complexity, SATD, clone, defect and change classification ([#588](https://github.com/panbanda/omen/issues/588)) ([271bb54](https://github.com/panbanda/omen/commit/271bb54be97ab7657599b87e827821ddc7cb947a))
+* **analyzers:** nesting from the syntax tree, and linear complexity and dead code walks ([#595](https://github.com/panbanda/omen/issues/595)) ([4989e69](https://github.com/panbanda/omen/commit/4989e69eef5eb2167785df6d49e3707cabb6c965))
+* **graph:** sum betweenness in a fixed order so output does not depend on threads ([#598](https://github.com/panbanda/omen/issues/598)) ([2544f39](https://github.com/panbanda/omen/commit/2544f39b02397271f49f0ef81fabb58349833ca7))
+* **imports:** give a composite project the directory of its config as the root ([#617](https://github.com/panbanda/omen/issues/617)) ([21d7597](https://github.com/panbanda/omen/commit/21d75972395feaccd3dd859024d10e93c9c339e8))
+* **imports:** give a Python absolute import only a top-level module ([#623](https://github.com/panbanda/omen/issues/623)) ([e8717eb](https://github.com/panbanda/omen/commit/e8717ebc0a1c55d033a1109d9ae7bf8a809aa68f))
+* **index:** give a Ruby instance variable the type of all its writes ([#621](https://github.com/panbanda/omen/issues/621)) ([be12ea0](https://github.com/panbanda/omen/commit/be12ea0b7fa2aa82203b458b232c55db847dbf73))
+* **index:** mark ECMAScript and test-runner globals External ([#605](https://github.com/panbanda/omen/issues/605)) ([a0a473d](https://github.com/panbanda/omen/commit/a0a473d5faca5bf9df9af2de2a98929ee510b82f))
+* **index:** mark inline `type` imports in one pass ([#604](https://github.com/panbanda/omen/issues/604)) ([891725c](https://github.com/panbanda/omen/commit/891725c160fc58c371ce774fba59244c2434c51d))
+* **index:** read Bash aliases and abstain on `source` through PATH ([#613](https://github.com/panbanda/omen/issues/613)) ([5a44845](https://github.com/panbanda/omen/commit/5a44845ea0d35c8dc6ced80e398ab8cb9ab19701))
+* **index:** resolve Go embedded methods and package qualifiers, keep test files out of imports ([#594](https://github.com/panbanda/omen/issues/594)) ([649f216](https://github.com/panbanda/omen/commit/649f216840fc688ef22682396611e8e1f0030df7))
+* **index:** resolve Ruby constant receivers lexically, and Ruby core classes as External ([#629](https://github.com/panbanda/omen/issues/629)) ([59a1c8f](https://github.com/panbanda/omen/commit/59a1c8f9f1f1e38b162cff26b5558a56d3f4e473))
+* **index:** resolve Ruby constants lexically and abstain on unknown qualifiers ([#615](https://github.com/panbanda/omen/issues/615)) ([e04963d](https://github.com/panbanda/omen/commit/e04963d0e622ad646359ba6db8cee25f9a919426))
+* **index:** resolve Rust calls between the crates of a workspace ([#579](https://github.com/panbanda/omen/issues/579)) ([7dbfef8](https://github.com/panbanda/omen/commit/7dbfef8ad26b6f55a5eac3176e4f8477386a788c))
+* **index:** resolve TypeScript paths, workspace packages, globals, overloads and generic returns ([#591](https://github.com/panbanda/omen/issues/591)) ([04489a0](https://github.com/panbanda/omen/commit/04489a0afad961cb431f3d11c8ddfaa0a81c04ce))
+* **index:** resolve wildcard re-exports with shared export tables ([#620](https://github.com/panbanda/omen/issues/620)) ([ee07ea6](https://github.com/panbanda/omen/commit/ee07ea6aac717567026d84529f792f7248c7e5fb))
+* recognise test code, rank paged lists, and report the history window ([#581](https://github.com/panbanda/omen/issues/581)) ([fe9c544](https://github.com/panbanda/omen/commit/fe9c544afe5fce79f4aec11338367cd43ee21e4c))
+* **resolve:** let only a top-level Python definition hide a builtin ([#625](https://github.com/panbanda/omen/issues/625)) ([e8c6c2b](https://github.com/panbanda/omen/commit/e8c6c2b5e145beceb8798ba0712c299ab29427de))
+* **security:** close the Go route findings from the review of 5.1.0 ([#573](https://github.com/panbanda/omen/issues/573)) ([3dc089b](https://github.com/panbanda/omen/commit/3dc089b88d624c07c14628a65c7555fbf8a357ae))
+* **security:** close the Rails route findings from the review of 5.1.0 ([#572](https://github.com/panbanda/omen/issues/572)) ([0d77c1d](https://github.com/panbanda/omen/commit/0d77c1dc73bfbd11d4cb19c453d0fd6327f92fc6))
+* **security:** find async Rust command sinks and full paths under a glob import ([#582](https://github.com/panbanda/omen/issues/582)) ([aaefd23](https://github.com/panbanda/omen/commit/aaefd23a6afcdc3d63c80cdbfbe9238ae879cd8d))
+* **security:** read FastAPI dependencies as guards and give the request parameters ([#577](https://github.com/panbanda/omen/issues/577)) ([bb870be](https://github.com/panbanda/omen/commit/bb870bedf47b54fc80c35e66f02ad950fd59bb0f))
+* **security:** resolve a route handler that has a module path ([#585](https://github.com/panbanda/omen/issues/585)) ([e3112d4](https://github.com/panbanda/omen/commit/e3112d46e15c6ce609f1ba53c07a271f3004f424))
+* **symbol:** refuse an ambiguous name in symbol and impact ([#584](https://github.com/panbanda/omen/issues/584)) ([104eaa9](https://github.com/panbanda/omen/commit/104eaa9356018e7989d7148a74fc1a5a64e7b328))
+* walk deeply nested syntax trees without stack overflow ([#596](https://github.com/panbanda/omen/issues/596)) ([f4c6273](https://github.com/panbanda/omen/commit/f4c62731a2ddf482c35843573f2d74f24ceb7004))
+
+
+### Performance Improvements
+
+* **imports:** resolve the imports of the files in parallel ([#601](https://github.com/panbanda/omen/issues/601)) ([45440b4](https://github.com/panbanda/omen/commit/45440b4768608839f2926c9d22a82e01958c0c84))
+* **imports:** sort the manifests once for each search step ([#612](https://github.com/panbanda/omen/issues/612)) ([5a3be3a](https://github.com/panbanda/omen/commit/5a3be3a3b5047271a78de851a8ef7372b8c89193))
+* **index:** build package file lists once and index names by package ([#599](https://github.com/panbanda/omen/issues/599)) ([f1f2f0d](https://github.com/panbanda/omen/commit/f1f2f0d02d7bc7c1d2ad4d3ad35ff2fb38a4e0ef))
+* **index:** compare the callee words of a call without copying the callee text ([#632](https://github.com/panbanda/omen/issues/632)) ([1c5cac5](https://github.com/panbanda/omen/commit/1c5cac569cab8779010fcf08d73f01b2d72012c0))
+* **index:** find the nearest local name with an index of its blocks ([#614](https://github.com/panbanda/omen/issues/614)) ([8982c57](https://github.com/panbanda/omen/commit/8982c573545df39d0de914d1142eeaba782b6631))
+* **index:** find the parent of each ancestor without a search from the root ([#592](https://github.com/panbanda/omen/issues/592)) ([e835f0d](https://github.com/panbanda/omen/commit/e835f0d7ec7e36db3ff0debbc22cc1c0c07c9ce0))
+* **index:** keep each Bash `unalias -a` in one list ([#626](https://github.com/panbanda/omen/issues/626)) ([4b18a89](https://github.com/panbanda/omen/commit/4b18a894449007156921d8bbdd6caf6b9413219b))
+* **index:** lower peak memory of Go package rules and resolver tables ([#597](https://github.com/panbanda/omen/issues/597)) ([19a0f1c](https://github.com/panbanda/omen/commit/19a0f1c22730895caa58a577ce0fa3be47e7db47))
+* **index:** read the module exports one time for each module ([#586](https://github.com/panbanda/omen/issues/586)) ([d948c51](https://github.com/panbanda/omen/commit/d948c510db10eb503fe43e8e13a26d3e5ed87620))
+* **security:** find the members of each shortest path in its own part of the search ([#624](https://github.com/panbanda/omen/issues/624)) ([2bac51f](https://github.com/panbanda/omen/commit/2bac51f05a4dbccfacb4f6ac5d78c5e73d661790))
+* **security:** find the sinks of the files that a symbol reaches only ([#602](https://github.com/panbanda/omen/issues/602)) ([e8c196a](https://github.com/panbanda/omen/commit/e8c196aa9ef3f55eeefd94740e9e05115583981e))
+* **security:** linear Go mount chains and handler package lookups ([#610](https://github.com/panbanda/omen/issues/610)) ([6b8d393](https://github.com/panbanda/omen/commit/6b8d39311e0e16ade7a3dbf5badaa49372433c79))
+* **security:** read only the sinks of the symbols that a search reaches ([#611](https://github.com/panbanda/omen/issues/611)) ([282fbe0](https://github.com/panbanda/omen/commit/282fbe0e6ea3488cb19857f1dd8106e843c55966))
+* walk deep syntax trees without a parent search from the root ([#603](https://github.com/panbanda/omen/issues/603)) ([7785e16](https://github.com/panbanda/omen/commit/7785e1689eba3bb36df2803527943c9dbe35a1c0))
+
 ## [5.1.0](https://github.com/panbanda/omen/compare/omen-v5.0.0...omen-v5.1.0) (2026-11-17)
 
 

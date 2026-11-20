@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.1.0](https://github.com/panbanda/omen/compare/omen-reporting-v3.0.0...omen-reporting-v3.1.0) (2026-11-20)
+
+
+### Features
+
+* **security:** follow function references in the search for paths ([#578](https://github.com/panbanda/omen/issues/578)) ([7abf138](https://github.com/panbanda/omen/commit/7abf138de665b66d6e5a075642ecbc9575c01d16))
+
+
+### Bug Fixes
+
+* **security:** read FastAPI dependencies as guards and give the request parameters ([#577](https://github.com/panbanda/omen/issues/577)) ([bb870be](https://github.com/panbanda/omen/commit/bb870bedf47b54fc80c35e66f02ad950fd59bb0f))
+
 ## [3.0.0](https://github.com/panbanda/omen/compare/omen-reporting-v2.0.3...omen-reporting-v3.0.0) (2026-11-16)
 
 
