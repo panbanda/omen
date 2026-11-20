@@ -26,6 +26,7 @@ const SHORTHAND_PATTERN: &str = "shorthand_property_identifier_pattern";
 const PAIR_PATTERN: &str = "pair_pattern";
 const STRING: &str = "string";
 const IMPORT_REQUIRE_CLAUSE: &str = "import_require_clause";
+const AWAIT_EXPRESSION: &str = "await_expression";
 
 use crate::index::calls::{CallSyntax, LocalName, ValueSyntax, ValueUse};
 
@@ -545,24 +546,34 @@ fn imports_of(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBin
             }
         }
         CALL_EXPRESSION => {
-            let is_require = node
-                .child_by_field_name("function")
-                .is_some_and(|function| {
-                    function.kind() == IDENTIFIER && text(function) == "require"
-                });
+            let function = node.child_by_field_name("function");
+            let is_require = function.is_some_and(|function| {
+                function.kind() == IDENTIFIER && text(function) == "require"
+            });
+            let is_import = function.is_some_and(|function| function.kind() == "import");
             let argument = node
                 .child_by_field_name("arguments")
                 .filter(|arguments| arguments.named_child_count() == 1)
                 .and_then(|arguments| arguments.named_child(0))
                 .filter(|argument| argument.kind() == STRING);
-            let (true, Some(argument)) = (is_require, argument) else {
+            let (true, Some(argument)) = (is_require || is_import, argument) else {
                 return;
             };
             let path = literal(argument);
-            let pattern = context
-                .parent(node)
-                .filter(|parent| {
-                    parent.kind() == VARIABLE_DECLARATOR && has_field(*parent, "value", node)
+            // `import('path')` gives a promise of the module. Only the value
+            // of `await import('path')` is the module.
+            let value = if is_import {
+                context
+                    .parent(node)
+                    .filter(|parent| parent.kind() == AWAIT_EXPRESSION)
+            } else {
+                Some(node)
+            };
+            let pattern = value
+                .and_then(|value| {
+                    context.parent(value).filter(|parent| {
+                        parent.kind() == VARIABLE_DECLARATOR && has_field(*parent, "value", value)
+                    })
                 })
                 .and_then(|declarator| declarator.child_by_field_name("name"));
             match pattern {
@@ -1426,6 +1437,34 @@ mod tests {
                 "29 Circle.describe>super.describe UniqueCandidate EnclosingType [shapes.ts#Base.describe]",
                 "33 Circle.unit>Circle UniqueCandidate QualifiedPath [shapes.ts#Circle.constructor]",
                 "39 Square.area>self.doubled UniqueCandidate EnclosingType [shapes.ts#Square.doubled]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_awaited_dynamic_import_binds_the_module() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "main.ts",
+                "export async function run(name: string) {\n  const runtime = await import('./runtime');\n  const { Bridge } = await import('./runtime');\n  await import('./side');\n  const other = await import(name);\n  return new runtime.Bridge(new Bridge(), other);\n}\n",
+            ),
+            ("runtime.ts", "export class Bridge {}\n"),
+            ("side.ts", ""),
+        ];
+        assert_eq!(
+            rows(&files, "main.ts"),
+            [
+                "2 Module ./runtime *->runtime runtime.ts",
+                "3 Named ./runtime Bridge->Bridge runtime.ts [runtime.ts#Bridge]",
+                "4 Load ./side -->- side.ts",
+            ]
+        );
+        assert_eq!(
+            crate::index::resolve::testing::rows(&files, "main.ts"),
+            [
+                "6 run>runtime::Bridge UniqueCandidate QualifiedPath [runtime.ts#Bridge]",
+                "6 run>Bridge UniqueCandidate QualifiedPath [runtime.ts#Bridge]",
             ]
         );
     }

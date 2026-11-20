@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "language": "php",
+  "split": "development",
+  "oracle": "Author-reviewed against the PHP name resolution rules; PHP is not installed here, so `php -l` did not run. In `namespace App`, the unqualified class name `Base` with no `use` statement is `App\\Base`, a class of a package outside the case. PHP does not fall back to `Tools\\Base` for a class name, so `Tools\\Base::currentUser` is not the callee of `$this->currentUser()`. The harness does not run the code.",
+  "closed_world": true,
+  "symbols": [
+    {
+      "label": "tools_base",
+      "category": "type",
+      "file": "Tools.php",
+      "name": "Base",
+      "kind": "class",
+      "container": null,
+      "start_line": 5,
+      "end_line": 11,
+      "exported": true
+    },
+    {
+      "label": "tools_base_current_user",
+      "category": "method",
+      "file": "Tools.php",
+      "name": "currentUser",
+      "kind": "method",
+      "container": "Base",
+      "start_line": 7,
+      "end_line": 10,
+      "exported": true
+    },
+    {
+      "label": "admin",
+      "category": "type",
+      "file": "Admin.php",
+      "name": "Admin",
+      "kind": "class",
+      "container": null,
+      "start_line": 5,
+      "end_line": 11,
+      "exported": true
+    },
+    {
+      "label": "admin_show",
+      "category": "method",
+      "file": "Admin.php",
+      "name": "show",
+      "kind": "method",
+      "container": "Admin",
+      "start_line": 7,
+      "end_line": 10,
+      "exported": true
+    }
+  ],
+  "calls": [
+    {
+      "label": "unqualified_parent_in_namespace",
+      "category": "external",
+      "caller": "admin_show",
+      "line": 9,
+      "callee_text": "$this->currentUser",
+      "expected": []
+    }
+  ],
+  "imports": []
+}
