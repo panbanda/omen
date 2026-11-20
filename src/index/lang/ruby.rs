@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use tree_sitter::Node;
 
-use crate::index::extract::{Context, DefinitionRule, Draft, LanguageSpec, NameRule, ScopeRole};
+use crate::index::extract::{
+    Context, DefinitionRule, Draft, GeneratedFor, LanguageSpec, NameRule, ScopeRole,
+};
 use crate::index::model::{Exported, Span, SymbolKind};
 
 use crate::index::model::{ImportBinding, ImportKind, ImportTarget};
@@ -52,6 +54,7 @@ const METHOD: &str = "method";
 const SINGLETON_METHOD: &str = "singleton_method";
 const CLASS: &str = "class";
 const MODULE: &str = "module";
+const SINGLETON_CLASS: &str = "singleton_class";
 const LAMBDA: &str = "lambda";
 const CALL: &str = "call";
 const ASSIGNMENT: &str = "assignment";
@@ -102,6 +105,30 @@ fn bare_call_name(call: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
     }
     call.child_by_field_name("method")
         .map(|method| context.text(method))
+}
+
+/// The methods that `attr_reader`, `attr_writer`, and `attr_accessor` define.
+/// Each gives a reader `name` and a writer `name=`.
+const ACCESSORS: &[(&str, bool, bool)] = &[
+    ("attr_reader", true, false),
+    ("attr_writer", false, true),
+    ("attr_accessor", true, true),
+];
+
+/// The name in a literal symbol or a literal string without interpolation.
+fn literal_name(argument: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+    match argument.kind() {
+        SIMPLE_SYMBOL => Some(context.text(argument).trim_start_matches(':').to_string()),
+        STRING => {
+            let mut cursor = argument.walk();
+            let parts: Vec<Node<'_>> = argument.named_children(&mut cursor).collect();
+            match parts.as_slice() {
+                [content] if content.kind() == STRING_CONTENT => Some(context.text(*content)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// The modules that the calls of `keywords` in the body of a class or a
@@ -390,6 +417,63 @@ impl LanguageSpec for Ruby {
         DEFINITIONS.to_vec()
     }
 
+    fn generated_kinds(&self) -> Vec<&'static str> {
+        vec![CALL]
+    }
+
+    /// The methods of `attr_reader :name` and its kin in the body of a class or
+    /// a module. An argument that is not a literal name, as `*NAMES`, gives none.
+    fn generated_methods<'tree>(
+        &self,
+        node: Node<'tree>,
+        context: &Context<'_, 'tree>,
+    ) -> Vec<(Node<'tree>, String, GeneratedFor)> {
+        let direct_member = context
+            .scopes
+            .last()
+            .is_some_and(|scope| scope.role == ScopeRole::Type);
+        let Some((reader, writer)) = bare_call_name(node, context).and_then(|name| {
+            ACCESSORS
+                .iter()
+                .find(|(accessor, _, _)| *accessor == name)
+                .map(|(_, reader, writer)| (*reader, *writer))
+        }) else {
+            return Vec::new();
+        };
+        let Some(arguments) = node
+            .child_by_field_name("arguments")
+            .filter(|_| direct_member)
+        else {
+            return Vec::new();
+        };
+        // `class << self` is not a scope. Its body gives methods of the type.
+        let mut owner = GeneratedFor::Instances;
+        let mut ancestor = context.parent(node);
+        while let Some(current) =
+            ancestor.filter(|current| ![CLASS, MODULE].contains(&current.kind()))
+        {
+            if current.kind() == SINGLETON_CLASS {
+                owner = GeneratedFor::Type;
+                break;
+            }
+            ancestor = context.parent(current);
+        }
+        let mut methods = Vec::new();
+        let mut cursor = arguments.walk();
+        for argument in arguments.named_children(&mut cursor) {
+            let Some(name) = literal_name(argument, context) else {
+                continue;
+            };
+            if reader {
+                methods.push((argument, name.clone(), owner));
+            }
+            if writer {
+                methods.push((argument, format!("{name}="), owner));
+            }
+        }
+        methods
+    }
+
     fn hook_kinds(&self) -> Vec<&'static str> {
         vec![
             ASSIGNMENT,
@@ -474,7 +558,7 @@ impl LanguageSpec for Ruby {
     /// definition has the visibility of a definition at that level.
     fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
         let node = draft.node;
-        if [LAMBDA, CALL].contains(&node.kind()) {
+        if draft.generated.is_none() && [LAMBDA, CALL].contains(&node.kind()) {
             return Exported::NotExported;
         }
         let Some(owner) = context
@@ -489,7 +573,9 @@ impl LanguageSpec for Ruby {
             .scopes
             .last()
             .is_some_and(|scope| scope.role == ScopeRole::Type);
-        let is_method = [METHOD, SINGLETON_METHOD].contains(&node.kind());
+        // The node of a generated method is the call that defines it.
+        let is_method =
+            draft.generated.is_some() || [METHOD, SINGLETON_METHOD].contains(&node.kind());
         if is_method && direct_member && !is_public_method(node, &draft.name, context) {
             return Exported::NotExported;
         }
@@ -573,6 +659,72 @@ mod tests {
                 "Method inline Circle 19-20 not_exported",
                 "Method open Circle 23-24 exported",
                 "Method closed Circle 28-29 not_exported",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_a_call_in_a_class_body_does_not_bind_to_an_instance_accessor() {
+        // In the class body `self` is the class. `attr_reader :size` gives
+        // objects of `Box` a method, not the class. `attr_reader` in
+        // `class << self` gives the class a method.
+        let source = "class Box\n  attr_reader :size\n\n  class << self\n    attr_reader :registry\n  end\n\n  size\n  registry\n\n  def area\n    size\n  end\nend\n";
+        let rows = crate::index::resolve::testing::rows(&[("box.rb", source)], "box.rb");
+        assert_eq!(
+            rows,
+            [
+                "2 Box>attr_reader Unresolved - []",
+                "5 Box>attr_reader Unresolved - []",
+                "8 Box>size Ambiguous NameOnly [box.rb#Box.size]",
+                "9 Box>registry UniqueCandidate EnclosingType [box.rb#Box.registry]",
+                "12 Box.area>size UniqueCandidate EnclosingType [box.rb#Box.size]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_accessor_macros_define_methods() {
+        let source = "class Store\n  attr_reader :items, 'count'\n  attr_writer :label\n  attr_accessor :limit\n  attr_reader(*NAMES)\n  other.attr_reader :ignored\n  private attr_accessor :hidden\n  attr_reader :shown\n\n  private\n\n  attr_reader :secret\nend\n\nattr_reader :top\n";
+        assert_eq!(
+            rows(Language::Ruby, source),
+            [
+                "Class Store - 1-13 exported",
+                "Method items Store 2-2 exported",
+                "Method count Store 2-2 exported",
+                "Method label= Store 3-3 exported",
+                "Method limit Store 4-4 exported",
+                "Method limit= Store 4-4 exported",
+                "Method hidden Store 7-7 not_exported",
+                "Method hidden= Store 7-7 not_exported",
+                "Method shown Store 8-8 exported",
+                "Method secret Store 12-12 not_exported",
+            ]
+        );
+        let keys = keys(Language::Ruby, source);
+        assert_eq!(keys[4], "file#Store.limit");
+        assert_eq!(keys[5], "file#Store.limit=");
+        // A generated method does not change the key of a method that `def` defines.
+        let source = "class Box\n  attr_reader :size\n\n  def size\n    2\n  end\nend\n";
+        assert_eq!(
+            super::super::super::extract::testing::keys(Language::Ruby, source),
+            ["file#Box", "file#Box.size~2", "file#Box.size"]
+        );
+    }
+
+    #[test]
+    fn test_a_call_of_an_accessor_binds_to_the_generated_method() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "box.rb",
+            "class Box\n  attr_reader :size, :name\n\n  def size\n    2\n  end\n\n  def area\n    size * name.length\n  end\nend\n",
+        )];
+        assert_eq!(
+            rows(&files, "box.rb"),
+            [
+                "2 Box>attr_reader Unresolved - []",
+                "9 Box.area>size UniqueCandidate EnclosingType [box.rb#Box.size]",
+                "9 Box.area>name.length Unresolved - []",
+                "9 Box.area>name UniqueCandidate EnclosingType [box.rb#Box.name]",
             ]
         );
     }
@@ -785,7 +937,7 @@ mod tests {
             [
                 "1 ->require_relative External - []",
                 "4 Handler>attr_reader Unresolved - []",
-                "7 Handler.challenge>realm Ambiguous NameOnly [test/spec_handler.rb#realm]",
+                "7 Handler.challenge>realm UniqueCandidate EnclosingType [lib/handler.rb#Handler.realm]",
                 "7 Handler.challenge>loaded UniqueCandidate ImportedModule [lib/tools.rb#loaded]",
             ]
         );

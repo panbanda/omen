@@ -331,6 +331,12 @@ impl std::ops::Deref for TreeRef<'_> {
 pub trait TreeSource: Sync {
     fn tree(&self, position: usize) -> Option<TreeRef<'_>>;
 
+    /// The tree of a file for a walk that reads it one time. The source does not keep
+    /// the tree for a later request.
+    fn transient_tree(&self, position: usize) -> Option<TreeRef<'_>> {
+        self.tree(position)
+    }
+
     /// The data that the entry point search shares between the files of one analysis.
     fn shared(&self) -> &EntryShared;
 }
@@ -367,26 +373,28 @@ fn callables_by_name(
 #[derive(Default)]
 pub struct EntryShared {
     rails: std::sync::OnceLock<rails::RailsShared>,
-    go_call_sites: std::sync::OnceLock<go_routes::CallSites>,
-    go_wrappers: std::sync::OnceLock<go_wrappers::WrapperRoutes>,
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
     go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
-    go_packages: std::sync::OnceLock<go_routes::PackageNames>,
+    go_packages: std::sync::OnceLock<go_routes::GoPackages>,
     ecma: ecma::Shared,
 }
 
 /// The syntax trees that the entry point rules ask for in other files. The source
-/// parses a file when a rule asks, and it keeps the tree for the next question.
+/// parses a file when a rule asks, and keeps the tree for the later requests. A walk
+/// that reads each file of a language one time asks for a transient tree. The source
+/// keeps that tree only while the walk uses it: it would otherwise keep a tree of each
+/// file until the end of the analysis.
 pub struct OnDemandTrees<'a> {
     parse_file: &'a (dyn Fn(usize) -> crate::core::Result<Option<ParseResult>> + Sync),
     error: parking_lot::Mutex<Option<crate::core::Error>>,
     parsed: parking_lot::Mutex<std::collections::HashMap<usize, Cell>>,
+    kept: parking_lot::Mutex<std::collections::HashMap<usize, std::sync::Arc<ParseResult>>>,
     shared: EntryShared,
 }
 
-/// The one parse of a file. The first thread that asks parses the file, and the other
+/// The parse of a file. The first thread that asks parses the file, and the other
 /// threads wait for the result. A file that cannot be parsed stays without a tree.
-type Cell = std::sync::Arc<std::sync::OnceLock<Option<std::sync::Arc<ParseResult>>>>;
+type Cell = std::sync::Arc<std::sync::OnceLock<Option<std::sync::Weak<ParseResult>>>>;
 
 impl<'a> OnDemandTrees<'a> {
     pub fn new(
@@ -396,6 +404,7 @@ impl<'a> OnDemandTrees<'a> {
             parse_file,
             error: parking_lot::Mutex::new(None),
             parsed: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            kept: parking_lot::Mutex::new(std::collections::HashMap::new()),
             shared: EntryShared::default(),
         }
     }
@@ -412,7 +421,17 @@ impl<'a> OnDemandTrees<'a> {
 
 impl TreeSource for OnDemandTrees<'_> {
     fn tree(&self, position: usize) -> Option<TreeRef<'_>> {
-        let cell = std::sync::Arc::clone(self.parsed.lock().entry(position).or_default());
+        let tree = self.transient_tree(position)?;
+        if let TreeRef::Shared(shared) = &tree {
+            self.kept
+                .lock()
+                .entry(position)
+                .or_insert_with(|| std::sync::Arc::clone(shared));
+        }
+        Some(tree)
+    }
+
+    fn transient_tree(&self, position: usize) -> Option<TreeRef<'_>> {
         let parse = || match (self.parse_file)(position) {
             Ok(tree) => tree.map(std::sync::Arc::new),
             Err(error) => {
@@ -420,9 +439,37 @@ impl TreeSource for OnDemandTrees<'_> {
                 None
             }
         };
-        cell.get_or_init(parse)
-            .as_ref()
-            .map(|tree| TreeRef::Shared(std::sync::Arc::clone(tree)))
+        // The thread that parsed the tree can release it before a waiting thread reads
+        // it. Then the waiting thread asks again, and its parse is in the cache for the
+        // later requests.
+        let tree = loop {
+            let cell = {
+                let mut parsed = self.parsed.lock();
+                let cell = parsed.entry(position).or_default();
+                let released = matches!(cell.get(), Some(Some(tree)) if tree.strong_count() == 0);
+                if released {
+                    *cell = Cell::default();
+                }
+                std::sync::Arc::clone(cell)
+            };
+            let mut parsed_here = None;
+            let stored = cell.get_or_init(|| {
+                let tree = parse()?;
+                let weak = std::sync::Arc::downgrade(&tree);
+                parsed_here = Some(tree);
+                Some(weak)
+            });
+            match (parsed_here, stored) {
+                (Some(tree), _) => break tree,
+                (None, None) => return None,
+                (None, Some(weak)) => {
+                    if let Some(tree) = weak.upgrade() {
+                        break tree;
+                    }
+                }
+            }
+        };
+        Some(TreeRef::Shared(tree))
     }
 
     fn shared(&self) -> &EntryShared {
@@ -2445,12 +2492,178 @@ pub(super) mod tests {
                 .ok())
         };
         let trees = OnDemandTrees::new(&parse_file);
+        // Each thread keeps its tree until all threads have one, so the tree is in use
+        // during each request.
+        let barrier = std::sync::Barrier::new(8);
         std::thread::scope(|scope| {
             for _ in 0..8 {
-                scope.spawn(|| assert!(trees.tree(0).is_some()));
+                scope.spawn(|| {
+                    let tree = trees.tree(0);
+                    assert!(tree.is_some());
+                    barrier.wait();
+                });
             }
         });
         assert_eq!(parses.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_tree_that_a_rule_asks_for_is_kept() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let parses = AtomicUsize::new(0);
+        let parse_file = |_: usize| {
+            parses.fetch_add(1, Ordering::SeqCst);
+            Ok(Parser::new()
+                .parse(b"x = 1\n", Language::Python, Path::new("a.py"))
+                .ok())
+        };
+        let trees = OnDemandTrees::new(&parse_file);
+        drop(trees.tree(0));
+        assert!(trees.tree(0).is_some());
+        assert!(trees.transient_tree(0).is_some());
+        assert_eq!(parses.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_tree_for_one_walk_is_not_kept() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let parses = AtomicUsize::new(0);
+        let parse_file = |_: usize| {
+            parses.fetch_add(1, Ordering::SeqCst);
+            Ok(Parser::new()
+                .parse(b"x = 1\n", Language::Python, Path::new("a.py"))
+                .ok())
+        };
+        let trees = OnDemandTrees::new(&parse_file);
+        let Some(TreeRef::Shared(tree)) = trees.transient_tree(0) else {
+            panic!("a shared tree");
+        };
+        let released = std::sync::Arc::downgrade(&tree);
+        drop(tree);
+        assert!(released.upgrade().is_none());
+        assert!(trees.transient_tree(0).is_some());
+        assert_eq!(parses.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_waiter_whose_tree_was_released_publishes_its_parse_for_later_requests() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let parses = AtomicUsize::new(0);
+        let waiting = AtomicBool::new(false);
+        let parse_file = |_: usize| {
+            if parses.fetch_add(1, Ordering::SeqCst) == 0 {
+                // The second thread must wait on the cell while the first parses.
+                while !waiting.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Ok(Parser::new()
+                .parse(b"x = 1\n", Language::Python, Path::new("a.py"))
+                .ok())
+        };
+        let trees = OnDemandTrees::new(&parse_file);
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| drop(trees.transient_tree(0)));
+            while parses.load(Ordering::SeqCst) == 0 {
+                std::thread::yield_now();
+            }
+            let second = scope.spawn(|| {
+                waiting.store(true, Ordering::SeqCst);
+                trees.transient_tree(0)
+            });
+            first.join().unwrap();
+            let held = second.join().unwrap();
+            assert!(held.is_some());
+            assert!(trees.transient_tree(0).is_some());
+        });
+        assert_eq!(parses.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_file_without_a_tree_is_not_parsed_again() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let parses = AtomicUsize::new(0);
+        let parse_file = |_: usize| {
+            parses.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        };
+        let trees = OnDemandTrees::new(&parse_file);
+        assert!(trees.tree(0).is_none());
+        assert!(trees.tree(0).is_none());
+        assert_eq!(parses.load(Ordering::SeqCst), 1);
+    }
+
+    /// A source of the trees of a test that counts the requests.
+    struct CountedTrees<'a> {
+        parsed: &'a [ParseResult],
+        shared: EntryShared,
+        requests: std::sync::atomic::AtomicUsize,
+    }
+
+    impl TreeSource for CountedTrees<'_> {
+        fn tree(&self, position: usize) -> Option<TreeRef<'_>> {
+            self.requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.parsed.get(position).map(TreeRef::Borrowed)
+        }
+
+        fn shared(&self) -> &EntryShared {
+            &self.shared
+        }
+    }
+
+    #[test]
+    fn the_go_package_rules_read_each_go_file_once_and_again_only_for_a_factory_call_or_a_router_type(
+    ) {
+        let sources = [
+            ("app/main.go", "package app\n\nimport \"net/http\"\n\nfunc main() {\n\thttp.ListenAndServe(\":80\", newRouter())\n}\n"),
+            ("app/routes.go", "package app\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\nfunc newRouter() chi.Router {\n\tr := chi.NewRouter()\n\tr.Get(\"/a\", list)\n\treturn r\n}\n\nfunc list(w http.ResponseWriter, r *http.Request) {}\n"),
+            ("main.go", "package main\n\nimport (\n\t\"net/http\"\n\n\t\"example.com/app/web\"\n)\n\nfunc Home(w http.ResponseWriter, r *http.Request) {}\n\nfunc main() {\n\tm := web.NewRouter()\n\tm.Get(\"/wrapped\", Home)\n}\n"),
+            ("other/a.go", "package other\n\nfunc A() int { return 1 }\n"),
+            ("other/b.go", "package other\n\nfunc B() int { return A() }\n"),
+            ("web/router.go", "package web\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\ntype Router struct{ chiRouter chi.Router }\n\nfunc NewRouter() *Router {\n\treturn &Router{chiRouter: chi.NewRouter()}\n}\n\nfunc (r *Router) Get(pattern string, h ...any) {\n\tr.chiRouter.Get(pattern, h[0].(http.HandlerFunc))\n}\n"),
+        ];
+        let parsed: Vec<ParseResult> = sources
+            .iter()
+            .map(|(name, text)| {
+                Parser::new()
+                    .parse(text.as_bytes(), Language::Go, Path::new(name))
+                    .unwrap()
+            })
+            .collect();
+        let mut index: Vec<FileSymbols> = sources
+            .iter()
+            .zip(&parsed)
+            .map(|((name, _), parsed)| extract_file(parsed, name))
+            .collect();
+        link_files(&mut index);
+        resolve_imports(&mut index, &test_manifests());
+        resolve_references(&mut index);
+        let trees = CountedTrees {
+            parsed: &parsed,
+            shared: EntryShared::default(),
+            requests: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let found: Vec<EntryPoint> = (0..index.len())
+            .flat_map(|position| {
+                entry_points_of_file(position, &parsed[position], &index, &trees, &[])
+            })
+            .collect();
+        let mut paths: Vec<&str> = found
+            .iter()
+            .filter_map(|entry| entry.route.as_ref().and_then(|route| route.path.as_deref()))
+            .collect();
+        paths.sort_unstable();
+        assert_eq!(paths, ["/a", "/wrapped"]);
+        // One walk reads each Go file. The factories and the router types are known only
+        // after the walk of all files, so one second walk reads each file that needs them:
+        // `app/main.go` calls the factory `newRouter`, `web/router.go` has the router type
+        // `Router`, and `main.go` imports its package.
+        assert_eq!(
+            trees.requests.load(std::sync::atomic::Ordering::SeqCst),
+            sources.len() + 3
+        );
     }
 
     pub(super) fn entries(language: Language, files: &[(&str, &str)]) -> Vec<EntryPoint> {
