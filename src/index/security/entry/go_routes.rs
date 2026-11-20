@@ -44,7 +44,9 @@ use super::{
 };
 use crate::core::Language;
 use crate::index::extract::FileSymbols;
-use crate::index::model::{ImportKind, ImportTarget, Reference, Span, Symbol, SymbolKind};
+use crate::index::model::{
+    ImportBinding, ImportKind, ImportTarget, Reference, Span, Symbol, SymbolKind,
+};
 
 /// The methods that `Any` registers. gin v1.11.0 `anyMethods`.
 /// The guard text of a middleware argument that is not a name. An entry point with this guard
@@ -214,6 +216,23 @@ impl Framework {
             }
         }
         Some(PrefixState { top, slash })
+    }
+
+    /// Tells if `materialize` gives a path, without the text of the path.
+    fn accepts(self, state: &PrefixState) -> bool {
+        match self {
+            Self::Chi | Self::Mux => {
+                let mut current = state.top.as_ref();
+                while let Some(piece) = current {
+                    if !piece.text.is_empty() {
+                        return true;
+                    }
+                    current = piece.parent.as_ref();
+                }
+                false
+            }
+            Self::Echo | Self::Gin => true,
+        }
     }
 
     /// The path that a joined list gives.
@@ -479,6 +498,115 @@ fn is_qualified(kind: &str, member: &str, qualifiers: &[String], pointer: bool) 
     kind.split_once('.').is_some_and(|(qualifier, name)| {
         name == member && qualifiers.iter().any(|known| known == qualifier)
     })
+}
+
+/// The names that the walk binds, in nested scopes. Scope 0 is the scope of the package.
+///
+/// A search of each scope for a name costs the depth of the scopes, and nested closures make
+/// that quadratic. Thus each name keeps its bindings, the innermost last.
+#[derive(Default)]
+struct Scopes {
+    bindings: HashMap<String, Vec<(usize, Option<usize>)>>,
+    /// The names that each open scope binds.
+    names: Vec<Vec<String>>,
+    /// The scopes from 1 up to this scope are of a caller and out of view, while the walk
+    /// reads a declared function. A value of 1 hides nothing.
+    hidden_end: usize,
+    /// The previous values of `hidden_end`.
+    hidden_ends: Vec<usize>,
+}
+
+impl Scopes {
+    fn new() -> Self {
+        Self {
+            names: vec![Vec::new()],
+            hidden_end: 1,
+            ..Self::default()
+        }
+    }
+
+    fn push(&mut self) {
+        self.names.push(Vec::new());
+    }
+
+    fn pop(&mut self) {
+        let Some(names) = self.names.pop() else {
+            return;
+        };
+        for name in names {
+            if let Some(bindings) = self.bindings.get_mut(&name) {
+                bindings.pop();
+                if bindings.is_empty() {
+                    self.bindings.remove(&name);
+                }
+            }
+        }
+    }
+
+    fn top(&self) -> usize {
+        self.names.len() - 1
+    }
+
+    /// Puts the scopes of the caller out of view, and opens a scope above them.
+    fn hide_callers(&mut self) {
+        self.hidden_ends.push(self.hidden_end);
+        self.hidden_end = self.names.len();
+        self.push();
+    }
+
+    /// Closes the scopes above the scopes of the caller, and puts them back in view.
+    fn show_callers(&mut self) {
+        while self.names.len() > self.hidden_end {
+            self.pop();
+        }
+        self.hidden_end = self.hidden_ends.pop().unwrap_or(1);
+    }
+
+    fn is_visible(&self, scope: usize) -> bool {
+        scope == 0 || scope >= self.hidden_end
+    }
+
+    /// The innermost binding of the name in view, as the scope and the value. The hidden
+    /// scopes are in one run of the bindings, between the binding of the package and the
+    /// bindings of the scopes above them.
+    fn find(&self, name: &str) -> Option<(usize, Option<usize>)> {
+        let bindings = self.bindings.get(name)?;
+        let last = *bindings.last()?;
+        if self.is_visible(last.0) {
+            return Some(last);
+        }
+        bindings.first().copied().filter(|first| first.0 == 0)
+    }
+
+    fn lookup(&self, name: &str) -> Option<Option<usize>> {
+        self.find(name).map(|(_, value)| value)
+    }
+
+    /// The innermost scope in view that binds the name.
+    fn scope_of(&self, name: &str) -> Option<usize> {
+        self.find(name).map(|(scope, _)| scope)
+    }
+
+    fn insert(&mut self, scope: usize, name: &str, value: Option<usize>) {
+        let top = self.top();
+        let bindings = self.bindings.entry(name.to_string()).or_default();
+        // The binding of the package is the first one, and a different binding in view is the
+        // last one.
+        let current = if scope == 0 {
+            bindings.first_mut()
+        } else {
+            bindings.last_mut()
+        };
+        if let Some(binding) = current.filter(|binding| binding.0 == scope) {
+            binding.1 = value;
+            return;
+        }
+        // A new binding is in the innermost scope, or in the scope of the package when the name
+        // has no other binding. Thus the bindings stay in the order of their scopes.
+        debug_assert!(scope == top || bindings.is_empty());
+        bindings.push((scope, value));
+        self.names[scope].push(name.to_string());
+    }
 }
 
 #[derive(Clone)]
@@ -1576,12 +1704,7 @@ impl<'a> Context<'a> {
                     return None;
                 }
                 let import = (operand.kind() == "identifier")
-                    .then(|| {
-                        self.file.imports.iter().find(|binding| {
-                            binding.kind == ImportKind::Module
-                                && binding.local_name.as_deref() == Some(self.text(operand))
-                        })
-                    })
+                    .then(|| self.go_module_import(self.text(operand)))
                     .flatten();
                 // Another qualifier is a variable or a field. The index has no symbol for it.
                 let binding = import?;
@@ -1616,6 +1739,26 @@ impl<'a> Context<'a> {
             directory,
             name,
         )
+    }
+
+    /// The first import of a module that binds the local name. A file can have many imports,
+    /// and a file with a handler of each package looks up each of them.
+    fn go_module_import(&self, local_name: &str) -> Option<&'a ImportBinding> {
+        self.go_module_imports
+            .get_or_init(|| {
+                let mut by_name = HashMap::new();
+                for binding in &self.file.imports {
+                    if binding.kind != ImportKind::Module {
+                        continue;
+                    }
+                    if let Some(name) = binding.local_name.as_deref() {
+                        by_name.entry(name).or_insert(binding);
+                    }
+                }
+                by_name
+            })
+            .get(local_name)
+            .copied()
     }
 
     fn package_lookup(
@@ -2502,7 +2645,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             packages,
             routers: Vec::new(),
             records: Vec::new(),
-            scopes: vec![HashMap::new()],
+            scopes: Scopes::new(),
             consumed: HashSet::new(),
             route_calls: HashMap::new(),
             functions: HashMap::new(),
@@ -2533,16 +2676,19 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             dry,
             function_key: None,
             factory_keys: Vec::new(),
+            subrouter_operands: HashSet::new(),
         })
     }
 }
 
 struct Routes<'c, 'a, 't> {
     context: &'c Context<'a>,
+    /// The ids of the calls that `is_subrouter_operand` accepts.
+    subrouter_operands: HashSet<usize>,
     packages: Vec<(String, Framework)>,
     routers: Vec<Router>,
     records: Vec<Record>,
-    scopes: Vec<HashMap<String, Option<usize>>>,
+    scopes: Scopes,
     consumed: HashSet<usize>,
     /// The router that a call of `Route` made, by the node of the call.
     route_calls: HashMap<usize, usize>,
@@ -2607,6 +2753,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn run(&mut self, root: Node<'t>) {
+        self.subrouter_operands = self.find_subrouter_operands(root);
         let children = Self::named_children(root);
         for child in &children {
             if child.kind() == "function_declaration" {
@@ -2622,8 +2769,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             self.visit(*child);
         }
         for name in self.assigned_globals(root) {
-            if self.scopes[0].contains_key(&name) {
-                self.scopes[0].insert(name, None);
+            if self.scopes.scope_of(&name) == Some(0) {
+                self.scopes.insert(0, &name, None);
             }
         }
         for child in children
@@ -2733,7 +2880,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 return;
             }
             "block" => {
-                self.scopes.push(HashMap::new());
+                self.scopes.push();
                 stack.push(Step::LeaveBlock);
                 Self::push_children(node, None, stack);
                 return;
@@ -2781,8 +2928,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 .and_then(|name| self.context.symbol_at(name)),
         );
         // The scope of the package stays in place, and the scopes of the caller wait aside.
-        let saved = self.scopes.split_off(1);
-        self.scopes.push(HashMap::new());
+        self.scopes.hide_callers();
         self.owners += 1;
         let owner = self.owners;
         self.frames.push(Frame {
@@ -2807,8 +2953,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         if let Some(name) = declared {
             self.in_progress.remove(name);
         }
-        self.scopes.truncate(1);
-        self.scopes.extend(saved);
+        self.scopes.show_callers();
         let Some(frame) = frame else {
             return;
         };
@@ -3120,7 +3265,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn read_closure(&mut self, literal: Node<'t>, bound: Option<usize>) {
-        self.scopes.push(HashMap::new());
+        self.scopes.push();
         let owner = self.current_owner();
         self.frames.push(Frame {
             function: false,
@@ -3221,10 +3366,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     fn lookup(&self, name: &str) -> Option<Option<usize>> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name).copied())
+        self.scopes.lookup(name)
     }
 
     fn bind(&mut self, name: &str, router: Option<usize>, define: bool) {
@@ -3232,12 +3374,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return;
         }
         let index = if define {
-            self.scopes.len() - 1
+            self.scopes.top()
         } else {
             self.scopes
-                .iter()
-                .rposition(|scope| scope.contains_key(name))
-                .unwrap_or(self.scopes.len() - 1)
+                .scope_of(name)
+                .unwrap_or_else(|| self.scopes.top())
         };
         if index == 0 && !self.frames.is_empty() {
             self.mark_impure();
@@ -3246,7 +3387,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             }
             return;
         }
-        self.scopes[index].insert(name.to_string(), router);
+        self.scopes.insert(index, name, router);
     }
 
     fn make_root(&mut self, framework: Framework) -> usize {
@@ -3976,30 +4117,44 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
 
     /// Tells if a call is a part of a chain that ends in `Subrouter`.
     fn is_subrouter_operand(&self, call: Node<'t>) -> bool {
-        let mut current = call;
+        self.subrouter_operands.contains(&call.id())
+    }
+
+    /// The calls that are the operand of a `Subrouter` selector, directly or through a chain of
+    /// matcher calls, as in `router.PathPrefix("/a").Subrouter()`. The search goes down from each
+    /// `Subrouter` call, because `Node::parent` searches down from the root for each call.
+    fn find_subrouter_operands(&self, root: Node<'t>) -> HashSet<usize> {
+        let mut operands = HashSet::new();
+        let mut cursor = root.walk();
         loop {
-            let Some(selector) = current.parent().filter(|parent| {
-                parent.kind() == "selector_expression"
-                    && parent.child_by_field_name("operand") == Some(current)
-            }) else {
-                return false;
-            };
-            let Some(outer) = selector
-                .parent()
-                .filter(|parent| parent.kind() == "call_expression")
-            else {
-                return false;
-            };
-            let name = selector
-                .child_by_field_name("field")
-                .map_or("", |field| self.text(field));
-            if name == "Subrouter" {
-                return true;
+            let node = cursor.node();
+            let selector = (node.kind() == "call_expression")
+                .then(|| node.child_by_field_name("function"))
+                .flatten()
+                .filter(|function| {
+                    function.kind() == "selector_expression"
+                        && function
+                            .child_by_field_name("field")
+                            .is_some_and(|field| self.text(field) == "Subrouter")
+                });
+            let mut operand = selector.and_then(|selector| selector.child_by_field_name("operand"));
+            while let Some(call) = operand.filter(|call| call.kind() == "call_expression") {
+                // The calls below a call in the set are in the set already.
+                if !operands.insert(call.id()) || !self.is_mux_matcher_call(call) {
+                    break;
+                }
+                operand = call
+                    .child_by_field_name("function")
+                    .and_then(|function| function.child_by_field_name("operand"));
             }
-            if !self.is_mux_matcher_call(outer) {
-                return false;
+            if cursor.goto_first_child() {
+                continue;
             }
-            current = outer;
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    return operands;
+                }
+            }
         }
     }
 
@@ -4732,12 +4887,24 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             if unreadable && framework == Framework::Mux {
                 continue;
             }
+            // A hidden record of chi or gin only replaces other records, by its own pattern. It
+            // needs to know only that the library accepts the path. The text of the path is as
+            // long as the chain of mounts above the record, so a chain of mounts would take
+            // quadratic time in all.
+            let text_unused =
+                record.omitted && matches!(framework, Framework::Chi | Framework::Gin);
             let composed = up
                 .state
                 .as_ref()
                 .filter(|_| !up.dead)
                 .and_then(|state| framework.extend(state, &record.path))
-                .and_then(|state| framework.materialize(&state));
+                .and_then(|state| {
+                    if text_unused {
+                        framework.accepts(&state).then(String::new)
+                    } else {
+                        framework.materialize(&state)
+                    }
+                });
             let path = match composed {
                 Some(path) => path,
                 None if unreadable => {
