@@ -2088,6 +2088,59 @@ mod typescript_tests {
         assert_eq!(target(&files, main, "root-lib/private"), "unresolved");
     }
 
+    /// A composite project without `rootDir` has the directory of its own
+    /// config as the root, also when a config that it extends sets
+    /// `composite`. A project that is not composite abstains, because the
+    /// default root of `tsc` depends on its version and on its inputs.
+    #[test]
+    fn test_root_directory_of_a_composite_project() {
+        let files = [
+            (
+                "packages/config/package.json",
+                "{\"name\": \"@acme/config\"}",
+            ),
+            (
+                "packages/config/composite.json",
+                "{\"compilerOptions\": {\"composite\": true}}",
+            ),
+            (
+                "packages/nodes/package.json",
+                "{\"name\": \"@acme/nodes\", \"exports\": {\".\": \"./dist/index.js\", \"./mcp/core\": {\"types\": \"./dist/nodes/mcp/index.d.ts\", \"require\": \"./dist/nodes/mcp/index.js\"}}}",
+            ),
+            (
+                "packages/nodes/tsconfig.build.json",
+                "{\"extends\": [\"./tsconfig.json\", \"@acme/config/composite.json\"], \"compilerOptions\": {\"outDir\": \"dist\"}}",
+            ),
+            ("packages/nodes/tsconfig.json", "{\"compilerOptions\": {}}"),
+            ("packages/nodes/index.ts", "export function all() {}\n"),
+            ("packages/nodes/nodes/mcp/index.ts", "export function core() {}\n"),
+            // `composite: false` in the leaf config replaces the inherited value.
+            (
+                "packages/plain/package.json",
+                "{\"name\": \"@acme/plain\", \"exports\": {\"./*\": \"./dist/*.js\"}}",
+            ),
+            (
+                "packages/plain/tsconfig.json",
+                "{\"extends\": \"@acme/config/composite.json\", \"compilerOptions\": {\"composite\": false, \"outDir\": \"dist\"}}",
+            ),
+            ("packages/plain/lib/a.ts", "export function a() {}\n"),
+            (
+                "app/main.ts",
+                "import { all } from '@acme/nodes';\nimport { core } from '@acme/nodes/mcp/core';\nimport { a } from '@acme/plain/lib/a';\n",
+            ),
+        ];
+        let main = "app/main.ts";
+        assert_eq!(
+            target(&files, main, "@acme/nodes"),
+            "packages/nodes/index.ts"
+        );
+        assert_eq!(
+            target(&files, main, "@acme/nodes/mcp/core"),
+            "packages/nodes/nodes/mcp/index.ts"
+        );
+        assert_eq!(target(&files, main, "@acme/plain/lib/a"), "unresolved");
+    }
+
     #[test]
     fn test_workspace_package_that_points_at_dist_maps_to_the_source() {
         let files = [
