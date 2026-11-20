@@ -449,6 +449,22 @@ impl Manifests {
     }
 
     pub fn add(&mut self, path: &str, text: &str) {
+        self.add_each([(path, text)]);
+    }
+
+    /// Reads each file as `add` does. The packages are sorted one time, after
+    /// the last file.
+    pub fn add_each<'t>(&mut self, files: impl IntoIterator<Item = (&'t str, &'t str)>) {
+        for (path, text) in files {
+            self.add_without_order(path, text);
+        }
+        self.node_packages.sort_by(|left, right| {
+            (&left.name, &left.directory).cmp(&(&right.name, &right.directory))
+        });
+    }
+
+    /// Reads one file as `add` does, but does not sort the packages.
+    fn add_without_order(&mut self, path: &str, text: &str) {
         let here = directory(path);
         if typescript::is_project_file(file_name(path)) {
             if let Some(config) = typescript::project_config(text) {
@@ -460,9 +476,6 @@ impl Manifests {
                 self.test_runners.insert(here.to_string(), runners);
             }
             self.node_packages.extend(node_package(here, text));
-            self.node_packages.sort_by(|left, right| {
-                (&left.name, &left.directory).cmp(&(&right.name, &right.directory))
-            });
         } else if file_name(path) == "go.mod" {
             self.go_modules
                 .extend(go_module_path(text).map(|module| (here.to_string(), module)));
@@ -1599,7 +1612,8 @@ pub(crate) mod testing {
                 manifests.add_project(file, source);
                 continue;
             }
-            let language = Language::detect(Path::new(file)).unwrap();
+            let language =
+                Language::detect_with_content(Path::new(file), source.as_bytes()).unwrap();
             let parsed = Parser::new()
                 .parse(source.as_bytes(), language, Path::new(file))
                 .unwrap();
@@ -2072,6 +2086,59 @@ mod typescript_tests {
         assert_eq!(target(&files, main, "root-lib"), "index.ts");
         assert_eq!(target(&files, main, "root-lib/open"), "open.ts");
         assert_eq!(target(&files, main, "root-lib/private"), "unresolved");
+    }
+
+    /// A composite project without `rootDir` has the directory of its own
+    /// config as the root, also when a config that it extends sets
+    /// `composite`. A project that is not composite abstains, because the
+    /// default root of `tsc` depends on its version and on its inputs.
+    #[test]
+    fn test_root_directory_of_a_composite_project() {
+        let files = [
+            (
+                "packages/config/package.json",
+                "{\"name\": \"@acme/config\"}",
+            ),
+            (
+                "packages/config/composite.json",
+                "{\"compilerOptions\": {\"composite\": true}}",
+            ),
+            (
+                "packages/nodes/package.json",
+                "{\"name\": \"@acme/nodes\", \"exports\": {\".\": \"./dist/index.js\", \"./mcp/core\": {\"types\": \"./dist/nodes/mcp/index.d.ts\", \"require\": \"./dist/nodes/mcp/index.js\"}}}",
+            ),
+            (
+                "packages/nodes/tsconfig.build.json",
+                "{\"extends\": [\"./tsconfig.json\", \"@acme/config/composite.json\"], \"compilerOptions\": {\"outDir\": \"dist\"}}",
+            ),
+            ("packages/nodes/tsconfig.json", "{\"compilerOptions\": {}}"),
+            ("packages/nodes/index.ts", "export function all() {}\n"),
+            ("packages/nodes/nodes/mcp/index.ts", "export function core() {}\n"),
+            // `composite: false` in the leaf config replaces the inherited value.
+            (
+                "packages/plain/package.json",
+                "{\"name\": \"@acme/plain\", \"exports\": {\"./*\": \"./dist/*.js\"}}",
+            ),
+            (
+                "packages/plain/tsconfig.json",
+                "{\"extends\": \"@acme/config/composite.json\", \"compilerOptions\": {\"composite\": false, \"outDir\": \"dist\"}}",
+            ),
+            ("packages/plain/lib/a.ts", "export function a() {}\n"),
+            (
+                "app/main.ts",
+                "import { all } from '@acme/nodes';\nimport { core } from '@acme/nodes/mcp/core';\nimport { a } from '@acme/plain/lib/a';\n",
+            ),
+        ];
+        let main = "app/main.ts";
+        assert_eq!(
+            target(&files, main, "@acme/nodes"),
+            "packages/nodes/index.ts"
+        );
+        assert_eq!(
+            target(&files, main, "@acme/nodes/mcp/core"),
+            "packages/nodes/nodes/mcp/index.ts"
+        );
+        assert_eq!(target(&files, main, "@acme/plain/lib/a"), "unresolved");
     }
 
     #[test]

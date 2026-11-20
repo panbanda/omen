@@ -18,7 +18,7 @@
 //! it. The inline handler or the function that contains a handler has a function reference to
 //! it, because it gives the handler as a value.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 
 use petgraph::algo::dominators::simple_fast;
@@ -530,6 +530,14 @@ pub fn reachability(
             (sink, symbol)
         })
         .collect();
+    // The sinks of each symbol, by their position in `sink_symbols`. A search
+    // reads only the sinks of the symbols that it reaches, not each sink.
+    let mut sinks_of_symbol: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (position, (_, symbol)) in sink_symbols.iter().enumerate() {
+        if let Some(symbol) = symbol {
+            sinks_of_symbol.entry(*symbol).or_default().push(position);
+        }
+    }
     let starts: Vec<(&EntryPoint, usize)> = entries
         .iter()
         .filter(|entry| !entry.in_test)
@@ -553,7 +561,17 @@ pub fn reachability(
         for symbol in result.reached.keys() {
             found.entries[*symbol] += 1;
         }
-        for (sink, symbol) in &sink_symbols {
+        let mut reached_sinks: Vec<usize> = result
+            .reached
+            .keys()
+            .filter_map(|symbol| sinks_of_symbol.get(symbol))
+            .flatten()
+            .copied()
+            .collect();
+        // The paths keep the order of the sinks.
+        reached_sinks.sort_unstable();
+        for position in reached_sinks {
+            let (sink, symbol) = &sink_symbols[position];
             let Some(symbol) = symbol else {
                 continue;
             };

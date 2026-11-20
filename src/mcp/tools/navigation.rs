@@ -246,7 +246,11 @@ fn min_basis(arguments: &Arguments<'_>) -> crate::index::model::ResolutionBasis 
 }
 
 fn absolute_files(scope_path: &Path, file_set: &FileSet) -> Vec<PathBuf> {
-    file_set.iter().map(|file| scope_path.join(file)).collect()
+    file_set
+        .index_files()
+        .iter()
+        .map(|file| scope_path.join(file))
+        .collect()
 }
 
 fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {

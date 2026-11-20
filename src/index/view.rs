@@ -701,7 +701,7 @@ impl ViewCache {
             if !path.starts_with(&root) {
                 return Err(Error::analysis("Index file escapes repository"));
             }
-            if Language::detect(&path).is_none() {
+            if !Language::is_source_path(&path) {
                 continue;
             }
             let content = read(&path)?;
