@@ -16,11 +16,16 @@
 //! the script. Its first character becomes `$` in the text, thus it names
 //! nothing of the script.
 //!
+//! A custom directive `v-focus` uses the binding `vFocus` of `<script setup>`,
+//! and `<component :is="Card">` uses `Card`. These names are uses only when
+//! the script binds them, thus the parser checks them against the tree of the
+//! script (see `ScriptUse`).
+//!
 //! When the template has a construct that this translation does not show
 //! completely, the translation abstains: it gives the reason, and a consumer
 //! must treat each definition of the script as used.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::Path;
 
@@ -51,6 +56,28 @@ pub struct Translation {
     /// The range of `text` that the template gives.
     pub template: Option<Range<usize>>,
     pub abstention: Option<String>,
+    /// The names in the template that are uses only when the script binds
+    /// them. The parser checks them against the tree of the script.
+    pub uses: Vec<ScriptUse>,
+}
+
+/// A name in the template that is a use only when the script binds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptUse {
+    pub name: Vec<u8>,
+    /// The range of the translation that the name and its `,` take.
+    pub range: Range<usize>,
+    pub kind: UseKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UseKind {
+    /// `v-focus` uses the binding `vFocus` of `<script setup>`. Without the
+    /// binding the directive is global: it is not a use and not an abstention.
+    Directive,
+    /// `<component :is="Card">` uses `Card` when the script imports it. A
+    /// different value can name each component, thus the template abstains.
+    Component,
 }
 
 impl Translation {
@@ -100,6 +127,7 @@ pub fn translate(content: &[u8]) -> Option<Translation> {
         text,
         template: None,
         abstention,
+        uses: Vec::new(),
     };
     if translation.abstention.is_some() {
         return Some(translation);
@@ -114,19 +142,31 @@ pub fn translate(content: &[u8]) -> Option<Translation> {
         translation.abstention = Some(reason);
         return Some(translation);
     }
+    let setup = blocks.iter().any(|block| {
+        block.name == "script"
+            && block
+                .attributes
+                .iter()
+                .any(|attribute| content[attribute.name.clone()].eq_ignore_ascii_case(b"setup"))
+    });
     let mut writer = Writer {
         content,
         text: &mut translation.text,
+        setup,
+        uses: Vec::new(),
     };
     writer.put(template.start, b";[");
     writer.put(template.close, b"];");
     let result = Template::new(content, &mut writer).run(template.content.clone());
+    let uses = std::mem::take(&mut writer.uses);
     translation.template = Some(template.start..template.close + 2);
     if let Err(reason) = result {
         let range = template.start..template.close + 2;
         blank(&mut translation.text[range]);
         translation.template = None;
         translation.abstention = Some(reason);
+    } else {
+        translation.uses = uses;
     }
     Some(translation)
 }
@@ -467,6 +507,9 @@ impl Scope {
 struct Writer<'a> {
     content: &'a [u8],
     text: &'a mut Vec<u8>,
+    /// The component has `<script setup>`, whose bindings the template can use.
+    setup: bool,
+    uses: Vec<ScriptUse>,
 }
 
 impl Writer<'_> {
@@ -975,7 +1018,7 @@ impl<'a, 'w> Template<'a, 'w> {
         let mut slot_names: Vec<Vec<u8>> = Vec::new();
         if !pre {
             if name == b"component" || name == b"Component" {
-                return Err("the template has a dynamic component".to_string());
+                self.dynamic_component(tag)?;
             }
             if is_component_tag(name)
                 && !BUILT_IN_COMPONENTS.contains(&&*String::from_utf8_lossy(name))
@@ -1033,6 +1076,44 @@ impl<'a, 'w> Template<'a, 'w> {
         Ok(tag.end)
     }
 
+    /// `<component :is="Card">` is a use of `Card` when `Card` can be an
+    /// import of `<script setup>`. Each other value abstains.
+    fn dynamic_component(&mut self, tag: &Tag) -> Result<(), String> {
+        let dynamic = || "the template has a dynamic component".to_string();
+        if !self.writer.setup {
+            return Err(dynamic());
+        }
+        let content = self.content;
+        let value = tag
+            .attributes
+            .iter()
+            .find(|attribute| {
+                let name = &content[attribute.name.clone()];
+                name == b":is" || name == b"v-bind:is"
+            })
+            .and_then(|attribute| attribute.value.as_ref())
+            .ok_or_else(dynamic)?;
+        let text = &content[value.range.clone()];
+        let start = text.iter().position(|byte| !is_space(*byte)).unwrap_or(0);
+        let end = text
+            .iter()
+            .rposition(|byte| !is_space(*byte))
+            .map_or(0, |end| end + 1);
+        let name = &text[start..end.max(start)];
+        let identifier = !name.is_empty()
+            && is_identifier_start(name[0])
+            && name.iter().all(|byte| is_identifier_part(*byte));
+        if !identifier || self.bound.contains(name) {
+            return Err(dynamic());
+        }
+        self.writer.uses.push(ScriptUse {
+            name: name.to_vec(),
+            range: value.range.start - 1..value.range.end,
+            kind: UseKind::Component,
+        });
+        Ok(())
+    }
+
     /// Reads an attribute in the scope of `self.bound`.
     fn attribute(
         &mut self,
@@ -1066,17 +1147,30 @@ impl<'a, 'w> Template<'a, 'w> {
                 }
             }
             Directive::Plain | Directive::Pre => {}
-            Directive::BindAll => {
-                return Err(
-                    "the template binds all the attributes of an object with `v-bind`".to_string(),
-                );
-            }
             Directive::Custom(directive) => {
-                return Err(format!(
-                    "the template has the custom directive `v-{directive}`"
-                ));
+                if self.writer.setup {
+                    let start = attribute.name.start;
+                    if start == 0 || !is_space(content[start - 1]) {
+                        return Err(format!(
+                            "the custom directive `v-{directive}` has no space before it"
+                        ));
+                    }
+                    let mut binding = b"v".to_vec();
+                    binding.extend(pascal_case(directive.as_bytes()));
+                    self.writer.text[start - 1] = b',';
+                    self.writer.put(start, &binding);
+                    self.writer.uses.push(ScriptUse {
+                        range: start - 1..start + binding.len(),
+                        name: binding,
+                        kind: UseKind::Directive,
+                    });
+                }
+                if let Some(value) = value {
+                    self.writer
+                        .expression(glue(value), value.range.clone(), &self.bound)?;
+                }
             }
-            Directive::Expression => {
+            Directive::Expression | Directive::BindAll => {
                 if let Some(value) = value {
                     self.writer
                         .expression(glue(value), value.range.clone(), scope)?;
@@ -1159,6 +1253,84 @@ fn split_for(text: &[u8]) -> Result<(&[u8], Range<usize>), String> {
         }
     }
     Err("a `v-for` of the template has no `in` or `of`".to_string())
+}
+
+/// The names that the top level of the script binds as values.
+#[derive(Debug, Default)]
+pub struct Bindings {
+    /// The names of value imports.
+    pub imports: HashSet<Vec<u8>>,
+    /// The names of value imports and of declarations.
+    pub values: HashSet<Vec<u8>>,
+}
+
+/// The value bindings of the top level of the tree of a translation:
+/// imports without `type`, and declarations of one name.
+pub fn top_level_bindings(root: tree_sitter::Node<'_>, source: &[u8]) -> Bindings {
+    let text = |node: tree_sitter::Node<'_>| source[node.byte_range()].to_vec();
+    let mut bindings = Bindings::default();
+    let mut cursor = root.walk();
+    for statement in root.named_children(&mut cursor) {
+        match statement.kind() {
+            "import_statement" => {
+                let mut cursor = statement.walk();
+                let type_only = statement
+                    .children(&mut cursor)
+                    .any(|child| child.kind() == "type");
+                let clause = statement
+                    .named_children(&mut statement.walk())
+                    .find(|child| child.kind() == "import_clause");
+                let Some(clause) = clause.filter(|_| !type_only) else {
+                    continue;
+                };
+                for part in clause.named_children(&mut clause.walk()) {
+                    match part.kind() {
+                        "identifier" => {
+                            bindings.imports.insert(text(part));
+                        }
+                        "namespace_import" => {
+                            let name = part
+                                .named_children(&mut part.walk())
+                                .find(|child| child.kind() == "identifier");
+                            bindings.imports.extend(name.map(text));
+                        }
+                        "named_imports" => {
+                            for specifier in part.named_children(&mut part.walk()) {
+                                let is_type = specifier
+                                    .children(&mut specifier.walk())
+                                    .any(|child| child.kind() == "type");
+                                let name = specifier
+                                    .child_by_field_name("alias")
+                                    .or_else(|| specifier.child_by_field_name("name"));
+                                if let Some(name) = name
+                                    .filter(|_| specifier.kind() == "import_specifier" && !is_type)
+                                {
+                                    bindings.imports.insert(text(name));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "lexical_declaration" | "variable_declaration" => {
+                for declarator in statement.named_children(&mut statement.walk()) {
+                    let name = declarator
+                        .child_by_field_name("name")
+                        .filter(|name| name.kind() == "identifier");
+                    bindings.values.extend(name.map(text));
+                }
+            }
+            "function_declaration" | "generator_function_declaration" | "class_declaration" => {
+                bindings
+                    .values
+                    .extend(statement.child_by_field_name("name").map(text));
+            }
+            _ => {}
+        }
+    }
+    bindings.values.extend(bindings.imports.iter().cloned());
+    bindings
 }
 
 #[cfg(test)]
@@ -1396,10 +1568,92 @@ mod tests {
     }
 
     #[test]
+    fn test_v_bind_of_an_object_is_an_expression() {
+        assert_eq!(
+            template_code("<div v-bind=\"attrs\"></div><p v-bind=\"{ ...rest, id }\"></p>"),
+            ";[,attrs,{...rest,id}];"
+        );
+    }
+
+    #[test]
+    fn test_a_custom_directive_uses_its_script_binding() {
+        let translation = translation(
+            "<template><input v-focus=\"value\"><p v-n8n-html.raw:[arg]=\"html\"></p><i v-tip></i></template>\n<script setup lang=\"ts\"></script>\n",
+        );
+        assert_eq!(translation.abstention, None);
+        let names: Vec<(&[u8], UseKind)> = translation
+            .uses
+            .iter()
+            .map(|used| (used.name.as_slice(), used.kind))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                (&b"vFocus"[..], UseKind::Directive),
+                (&b"vN8nHtml"[..], UseKind::Directive),
+                (&b"vTip"[..], UseKind::Directive),
+            ]
+        );
+        assert_eq!(
+            template_code(
+                "<input v-focus=\"value\"><p v-n8n-html.raw:[arg]=\"html\"></p><i v-tip></i>"
+            ),
+            ";[,vFocus,value,vN8nHtml,arg,html,vTip];"
+        );
+    }
+
+    #[test]
+    fn test_a_custom_directive_without_script_setup_is_global() {
+        let content = "<template><input v-focus=\"value\"></template>\n<script lang=\"ts\">export default {}</script>\n";
+        let translation = translation(content);
+        assert_eq!(translation.abstention, None);
+        assert!(translation.uses.is_empty());
+        assert_eq!(code(content), ";[,value];exportdefault{}");
+    }
+
+    #[test]
+    fn test_a_dynamic_component_of_one_name_is_a_use() {
+        let translation = translation(
+            "<template><component :is=\"Current\"/><component v-bind:is=\"Other\"></component></template>\n<script setup lang=\"ts\"></script>\n",
+        );
+        assert_eq!(translation.abstention, None);
+        let names: Vec<(&[u8], UseKind)> = translation
+            .uses
+            .iter()
+            .map(|used| (used.name.as_slice(), used.kind))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                (&b"Current"[..], UseKind::Component),
+                (&b"Other"[..], UseKind::Component),
+            ]
+        );
+        assert_eq!(
+            template_code("<component :is=\"Current\"/>"),
+            ";[,Current];"
+        );
+    }
+
+    #[test]
+    fn test_a_dynamic_component_without_script_setup_abstains() {
+        let content = "<template><component :is=\"Current\"/></template>\n<script lang=\"ts\">export default {}</script>\n";
+        assert!(translation(content)
+            .abstention
+            .unwrap()
+            .contains("dynamic component"));
+    }
+
+    #[test]
     fn test_the_template_abstains_on_a_construct_it_cannot_show() {
-        assert!(abstention("<component :is=\"current\"/>").contains("dynamic component"));
-        assert!(abstention("<div v-bind=\"attrs\"></div>").contains("v-bind"));
-        assert!(abstention("<input v-focus>").contains("`v-focus`"));
+        assert!(abstention("<component/>").contains("dynamic component"));
+        assert!(abstention("<component :is=\"'card'\"/>").contains("dynamic component"));
+        assert!(abstention("<component :is=\"a ? B : C\"/>").contains("dynamic component"));
+        assert!(abstention("<component is=\"card\"/>").contains("dynamic component"));
+        assert!(
+            abstention("<li v-for=\"c in list\"><component :is=\"c\"/></li>")
+                .contains("dynamic component")
+        );
         assert!(abstention("<div></span>").contains("`span`"));
         assert!(abstention("<div>").contains("`div`"));
         assert!(abstention("<p>{{ a </p>").contains("mustache"));

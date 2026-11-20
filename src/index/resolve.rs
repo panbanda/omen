@@ -29,6 +29,7 @@ use super::model::{
     ResolutionBasis as Basis, ResolutionStatus as Status, SharedStr, Symbol, SymbolKind,
 };
 use crate::core::Language;
+use crate::index::lang::bash::Alias;
 
 /// Languages that can call the definitions of each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -3527,11 +3528,25 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve(&self, file: usize, position: usize, depth: usize) -> Outcome {
-        let mut outcome = self.resolve_by_rules(file, position, depth);
+        let facts = &self.files[file];
+        let site = &facts.reference_facts[position];
+        let aliased;
+        let reference = match &site.alias {
+            Some(Alias::Unknown) => return Outcome::none(Status::Unresolved),
+            Some(Alias::Name(name)) => {
+                aliased = Reference {
+                    name: name.clone(),
+                    ..facts.references[position].clone()
+                };
+                &aliased
+            }
+            None => &facts.references[position],
+        };
+        let mut outcome = self.resolve_site(file, reference, site, depth);
         // The other rules found no candidate. The source can still show a
         // definition outside the repository.
         if outcome.status == Status::Unresolved && outcome.candidates.is_empty() {
-            if let Some(external) = self.external(file, position, depth) {
+            if let Some(external) = self.external(file, position, reference, depth) {
                 return external;
             }
         }
@@ -3611,16 +3626,6 @@ impl<'a> Resolver<'a> {
             return Outcome::none(Status::Unresolved);
         }
         outcome
-    }
-
-    fn resolve_by_rules(&self, file: usize, position: usize, depth: usize) -> Outcome {
-        let facts = &self.files[file];
-        self.resolve_site(
-            file,
-            &facts.references[position],
-            &facts.reference_facts[position],
-            depth,
-        )
     }
 
     /// Resolves one reference by the rules. `site` has the facts of the reference.
