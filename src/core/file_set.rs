@@ -15,8 +15,11 @@ use crate::config::Config;
 pub struct FileSet {
     /// Root directory.
     root: PathBuf,
-    /// All files in the set.
+    /// The files of a language, in path order.
     files: Vec<PathBuf>,
+    /// The Vue components, in path order. Only the index reads them, see
+    /// `index_files`. The other analyses read the files of a language.
+    components: Vec<PathBuf>,
     /// Excluded patterns.
     #[allow(dead_code)]
     exclude_patterns: Vec<String>,
@@ -40,13 +43,26 @@ impl FileSet {
     /// Create a file set from an existing list of files.
     /// Files are sorted for deterministic ordering.
     pub fn from_files(root: PathBuf, files: Vec<PathBuf>) -> Self {
-        let mut files = files;
+        Self::new(root, files, Vec::new())
+    }
+
+    fn new(root: PathBuf, all: Vec<PathBuf>, exclude_patterns: Vec<String>) -> Self {
+        let (mut components, mut files): (Vec<PathBuf>, Vec<PathBuf>) = all
+            .into_iter()
+            .partition(|path| crate::parser::vue::is_component(path));
         files.sort();
+        components.sort();
         Self {
             root,
             files,
-            exclude_patterns: Vec::new(),
+            components,
+            exclude_patterns,
         }
+    }
+
+    /// The files and the components.
+    fn all(&self) -> impl Iterator<Item = &PathBuf> {
+        self.files.iter().chain(&self.components)
     }
 
     /// Create a file set from a TreeSource (git tree at a specific commit).
@@ -62,7 +78,7 @@ impl FileSet {
             .into_iter()
             .filter(|path| {
                 // Only include files with recognized languages
-                if Language::detect(path).is_none() {
+                if !Language::is_source_path(path) {
                     return false;
                 }
                 // The walk skips hidden entries, so the tree must too.
@@ -129,7 +145,7 @@ impl FileSet {
 
                 let path = entry.path();
 
-                if Language::detect(path).is_none() {
+                if !Language::is_source_path(path) {
                     return WalkState::Continue;
                 }
 
@@ -167,20 +183,14 @@ impl FileSet {
                 WalkState::Continue
             })
         });
-        let mut files = files_mutex.into_inner().expect("file_set mutex poisoned");
-
-        // Sort for deterministic ordering
-        files.sort();
+        let files = files_mutex.into_inner().expect("file_set mutex poisoned");
+        let set = Self::new(root, files, exclude_patterns);
 
         if let Some(s) = spinner {
-            s.finish_with_message(format!("Found {} source files", files.len()));
+            s.finish_with_message(format!("Found {} source files", set.files.len()));
         }
 
-        Ok(Self {
-            root,
-            files,
-            exclude_patterns,
-        })
+        Ok(set)
     }
 
     /// Get the root directory.
@@ -191,6 +201,19 @@ impl FileSet {
     /// Get all files in the set.
     pub fn files(&self) -> &[PathBuf] {
         &self.files
+    }
+
+    /// The Vue components of the set.
+    pub fn components(&self) -> &[PathBuf] {
+        &self.components
+    }
+
+    /// The files that the index reads: the files of a language and the Vue
+    /// components, in path order.
+    pub fn index_files(&self) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = self.all().cloned().collect();
+        files.sort();
+        files
     }
 
     /// Get the number of files.
@@ -224,8 +247,7 @@ impl FileSet {
         };
 
         let files: Vec<PathBuf> = self
-            .files
-            .iter()
+            .all()
             .filter(|f| {
                 let path_str = f.to_string_lossy();
                 glob.is_match(&*path_str)
@@ -236,28 +258,19 @@ impl FileSet {
             .cloned()
             .collect();
 
-        Self {
-            root: self.root.clone(),
-            files,
-            exclude_patterns: self.exclude_patterns.clone(),
-        }
+        Self::new(self.root.clone(), files, self.exclude_patterns.clone())
     }
 
     /// Filter files by exact relative paths, returning a new FileSet.
     pub fn filter_by_paths(&self, paths: &[PathBuf]) -> Self {
         let wanted: std::collections::HashSet<&Path> = paths.iter().map(PathBuf::as_path).collect();
         let files: Vec<PathBuf> = self
-            .files
-            .iter()
+            .all()
             .filter(|f| wanted.contains(f.as_path()))
             .cloned()
             .collect();
 
-        Self {
-            root: self.root.clone(),
-            files,
-            exclude_patterns: self.exclude_patterns.clone(),
-        }
+        Self::new(self.root.clone(), files, self.exclude_patterns.clone())
     }
 
     /// Exclude files matching glob pattern, returning a new FileSet.
@@ -268,8 +281,7 @@ impl FileSet {
         };
 
         let files: Vec<PathBuf> = self
-            .files
-            .iter()
+            .all()
             .filter(|f| {
                 let path_str = f.to_string_lossy();
                 !glob.is_match(&*path_str)
@@ -281,11 +293,7 @@ impl FileSet {
             .cloned()
             .collect();
 
-        Self {
-            root: self.root.clone(),
-            files,
-            exclude_patterns: self.exclude_patterns.clone(),
-        }
+        Self::new(self.root.clone(), files, self.exclude_patterns.clone())
     }
 
     /// Get files grouped by language.
@@ -402,6 +410,38 @@ fn build_glob_set(patterns: &[String]) -> GlobSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_a_component_is_a_file_of_the_index_only() {
+        let set = FileSet::from_files(
+            PathBuf::from("."),
+            vec![PathBuf::from("b.ts"), PathBuf::from("App.vue")],
+        );
+        assert_eq!(set.files(), [PathBuf::from("b.ts")]);
+        assert_eq!(set.components(), [PathBuf::from("App.vue")]);
+        assert_eq!(
+            set.index_files(),
+            [PathBuf::from("App.vue"), PathBuf::from("b.ts")]
+        );
+        let filtered = set.filter_by_glob("*.vue");
+        assert!(filtered.files().is_empty());
+        assert_eq!(filtered.components(), [PathBuf::from("App.vue")]);
+    }
+
+    #[test]
+    fn test_the_walk_finds_components() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("App.vue"),
+            "<template><p/></template>\n",
+        )
+        .unwrap();
+        std::fs::write(directory.path().join("a.ts"), "export const a = 1;\n").unwrap();
+        std::fs::write(directory.path().join("notes.md"), "text\n").unwrap();
+        let set = FileSet::from_path_default(directory.path()).unwrap();
+        assert_eq!(set.files(), [PathBuf::from("a.ts")]);
+        assert_eq!(set.components(), [PathBuf::from("App.vue")]);
+    }
 
     #[test]
     fn test_file_set_empty() {

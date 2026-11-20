@@ -747,6 +747,10 @@ struct Context<'a> {
     go_dead: std::sync::OnceLock<(Vec<usize>, Vec<usize>)>,
     /// The names that the package of a Go file declares at the top level.
     go_declared: std::sync::OnceLock<std::sync::Arc<std::collections::HashSet<String>>>,
+    /// The first import of a module of a Go file for each local name.
+    go_module_imports: std::sync::OnceLock<
+        std::collections::HashMap<&'a str, &'a crate::index::model::ImportBinding>,
+    >,
     /// The bindings of a Python file, by scope. Only a file with a FastAPI route builds them.
     python_scopes: std::cell::OnceCell<fastapi::Scopes<'a>>,
     /// Why the guards of the FastAPI route that omen reads now are not complete.
@@ -802,6 +806,7 @@ impl<'a> Context<'a> {
             go_covered: std::sync::OnceLock::new(),
             go_dead: std::sync::OnceLock::new(),
             go_declared: std::sync::OnceLock::new(),
+            go_module_imports: std::sync::OnceLock::new(),
             python_scopes: std::cell::OnceCell::new(),
             guard_gap: std::cell::Cell::new(None),
             python_receivers: std::cell::RefCell::new(std::collections::HashMap::new()),
@@ -5616,6 +5621,22 @@ func routes() {
         10_000,
         |_| 0
     );
+
+    /// The hidden records of a long chain of mounts must not each build the path of the chain.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_the_hidden_records_of_a_chain_of_mounts_cost_linear_time() {
+        assert_scales_linearly("mount chain", 10_000, |size| scenario_mount_chain(size).1);
+    }
+
+    /// The handler of each package must not search all the imports of the file.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_the_handlers_of_many_imported_packages_cost_linear_time() {
+        assert_scales_linearly("imported packages", 8_000, |size| {
+            scenario_packages_with_one_handler_name(size).1
+        });
+    }
 
     fn scenario_packages_with_one_handler_name(count: usize) -> Search {
         let mut imports = vec!["\"net/http\"".to_string(), CHI.to_string()];

@@ -1033,6 +1033,16 @@ fn build_summary(results: &[FileResult]) -> AnalysisSummary {
 mod tests {
     use super::*;
 
+    /// The complexity analysis does not read Vue components yet: the
+    /// functions of a template are not functions of the script.
+    #[test]
+    fn test_a_component_is_not_analyzed() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("App.vue");
+        std::fs::write(&path, "<template><p @click=\"() => go()\"/></template>\n<script setup>\nfunction go() {}\n</script>\n").unwrap();
+        assert!(Analyzer::new().analyze_file(&path).is_err());
+    }
+
     #[test]
     fn test_metrics_default() {
         let metrics = Metrics::default();

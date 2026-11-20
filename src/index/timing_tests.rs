@@ -31,16 +31,18 @@ fn test_stopwatch_counts_work_and_not_a_wait() {
         "{:?}",
         watch.elapsed()
     );
+    // A loaded runner can give this thread little processor time in a fixed
+    // wall time, so the loop runs until the stopwatch shows the work.
     let watch = Stopwatch::start();
     let started = std::time::Instant::now();
-    while started.elapsed() < Duration::from_millis(50) {
+    while watch.elapsed() < Duration::from_millis(20) {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the stopwatch counted no work in 60 s: {:?}",
+            watch.elapsed()
+        );
         std::hint::black_box(0);
     }
-    assert!(
-        watch.elapsed() > Duration::from_millis(10),
-        "{:?}",
-        watch.elapsed()
-    );
 }
 
 #[test]
