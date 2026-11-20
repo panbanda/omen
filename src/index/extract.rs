@@ -440,6 +440,11 @@ impl<'tree> Context<'_, 'tree> {
         node.utf8_text(self.source).unwrap_or("").to_string()
     }
 
+    /// Tells if the text of `node` is `text`, without a copy of the text of the node.
+    pub fn text_is(&self, node: Node<'_>, text: &str) -> bool {
+        self.source.get(node.byte_range()) == Some(text.as_bytes())
+    }
+
     /// The nearest scope that is a type or a function.
     pub fn container(&self) -> Option<&Scope<'tree>> {
         self.scopes
