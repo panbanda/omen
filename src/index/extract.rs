@@ -440,6 +440,11 @@ impl<'tree> Context<'_, 'tree> {
         node.utf8_text(self.source).unwrap_or("").to_string()
     }
 
+    /// Tells if the text of `node` is `text`, without a copy of the text of the node.
+    pub fn text_is(&self, node: Node<'_>, text: &str) -> bool {
+        self.source.get(node.byte_range()) == Some(text.as_bytes())
+    }
+
     /// The nearest scope that is a type or a function.
     pub fn container(&self) -> Option<&Scope<'tree>> {
         self.scopes
@@ -2639,7 +2644,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_deeply_nested_go_closures_are_extracted_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("go closures", 5_000, |size| {
+        crate::index::timing::assert_scales_linearly("go closures", 40_000, |size| {
             let source = format!(
                 "package p\nfunc f() {{\n{}{}\n}}\n",
                 "func() {".repeat(size),
