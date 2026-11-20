@@ -11,6 +11,7 @@ pub mod external;
 mod function_references;
 #[cfg(test)]
 mod go_calls;
+mod local_blocks;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
@@ -19,7 +20,9 @@ use parking_lot::RwLock;
 use rayon::prelude::*;
 
 use super::calls::{element_type, one_result, required_type, split_list, split_type, Argument};
-use super::extract::{name_path, FileSymbols, LinkFacts, Local, ReferenceFacts, ValueSites};
+use super::extract::{
+    name_path, FileSymbols, GeneratedFor, LinkFacts, Local, ReferenceFacts, ValueSites,
+};
 use super::imports::Manifests;
 use super::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ReferenceKind, Resolution,
@@ -282,6 +285,9 @@ struct Resolver<'a> {
     /// source order. Many functions of a file can bind one name, and a lookup
     /// reads only the names of one function.
     locals_by_owner: Vec<HashMap<&'a str, PositionsByOwner>>,
+    /// For each file, the index of the blocks of the local names of one owner and one name,
+    /// when the owner binds the name many times.
+    local_blocks: Vec<HashMap<(&'a str, Option<usize>), local_blocks::LocalBlocks>>,
     /// For each file, the positions of the references by start byte, in source order.
     references_by_start: Vec<HashMap<usize, Vec<usize>>>,
     /// For each file, the end byte and the position of the references by
@@ -378,6 +384,10 @@ type TypeQuery = (usize, String, Option<String>);
 /// The positions of the local names of one name, by the definition that binds them.
 type PositionsByOwner = HashMap<Option<usize>, Vec<usize>>;
 
+/// The number of bindings of one name by one owner from which the resolver builds an index of
+/// their blocks. A look at fewer bindings costs less than the index.
+const LOCAL_BLOCKS_MINIMUM: usize = 16;
+
 /// The packages of the files: the files of the package of each file, and
 /// the symbols of each group of files by name.
 struct Packages<'a> {
@@ -439,6 +449,33 @@ impl<'a> Resolver<'a> {
                 }
                 positions
             })
+            .collect();
+        let local_blocks = files
+            .iter()
+            .zip(&locals_by_owner)
+            .map(
+                |(facts, by_name): (&FileSymbols, &HashMap<&str, PositionsByOwner>)| {
+                    let mut index = HashMap::new();
+                    for (name, by_owner) in by_name {
+                        for (owner, positions) in by_owner {
+                            if positions.len() < LOCAL_BLOCKS_MINIMUM {
+                                continue;
+                            }
+                            let bindings: Vec<local_blocks::Binding<'_>> = positions
+                                .iter()
+                                .map(|position| {
+                                    let local = &facts.locals[*position];
+                                    (local.block.as_ref(), local.name.value_start)
+                                })
+                                .collect();
+                            if let Some(blocks) = local_blocks::LocalBlocks::new(&bindings) {
+                                index.insert((*name, *owner), blocks);
+                            }
+                        }
+                    }
+                    index
+                },
+            )
             .collect();
         let locals_by_name = files
             .iter()
@@ -550,6 +587,7 @@ impl<'a> Resolver<'a> {
             by_file,
             locals_by_name,
             locals_by_owner,
+            local_blocks,
             references_by_start,
             references_by_span,
             ruby_children: OnceLock::new(),
@@ -1044,20 +1082,40 @@ impl<'a> Resolver<'a> {
             });
             return found;
         }
-        // More than one type can have the name. The qualifier selects the
-        // types whose containers have the names of the qualifier, or whose
-        // file declares the package that the qualifier names.
-        if found.len() > 1 {
-            let within = |id: &Id| {
-                let declared = self.files[id.0]
-                    .modules
-                    .iter()
-                    .any(|module| segments(module) == path);
-                declared || containers(id).ends_with(&path)
-            };
-            if found.iter().any(within) {
-                found.retain(within);
+        // The qualifier selects the types whose containers have the names
+        // of the qualifier, or whose file declares the package that the
+        // qualifier names.
+        let within = |id: &Id| {
+            let declared = self.files[id.0]
+                .modules
+                .iter()
+                .any(|module| segments(module) == path);
+            declared || containers(id).ends_with(&path)
+        };
+        // In these languages a qualifier that is not an import and that no
+        // type of the repository has names a type outside the repository,
+        // also when a type of the repository has the name.
+        let strict = matches!(
+            self.family(file),
+            Family::Ruby | Family::Python | Family::Ecma
+        ) && !self.is_import_qualifier(qualifier.unwrap_or_default(), file);
+        if strict {
+            // The search by name prefers the types of this file, of its
+            // package, and of the files that it imports. When none of these
+            // has the qualifier, the qualifier selects from all the types
+            // with the name.
+            found.retain(within);
+            if found.is_empty() {
+                found = self
+                    .named(name, file)
+                    .filter(|id| is_container(self.symbol(*id)) || self.facts(*id).defined_type)
+                    .filter(within)
+                    .collect();
             }
+            return found;
+        }
+        if found.len() > 1 && found.iter().any(within) {
+            found.retain(within);
         }
         found
     }
@@ -1067,6 +1125,21 @@ impl<'a> Resolver<'a> {
     fn is_import_qualifier(&self, qualifier: &str, file: usize) -> bool {
         let last = segments(qualifier).last().copied().unwrap_or(qualifier);
         self.imports_named(file, last).next().is_some()
+            || self.python_module_import(qualifier, file).is_some()
+    }
+
+    /// The Python imports `import a.b` that give the module of the qualifier
+    /// `a.b`. The import binds only the first name, `a`.
+    fn python_module_import(&self, qualifier: &str, file: usize) -> Option<Vec<&'a ImportBinding>> {
+        if self.family(file) != Family::Python {
+            return None;
+        }
+        let first = segments(qualifier).first().copied()?;
+        let bindings: Vec<&ImportBinding> = self
+            .imports_named(file, first)
+            .filter(|binding| binding.module_path == qualifier)
+            .collect();
+        (!bindings.is_empty()).then_some(bindings)
     }
 
     fn types_by_name(&self, name: &str, qualifier: Option<&str>, file: usize) -> Vec<Id> {
@@ -1091,6 +1164,13 @@ impl<'a> Resolver<'a> {
                     found.extend(self.exported(*target, name).iter().copied().filter(is_type));
                 }
                 return found;
+            }
+            if let Some(bindings) = self.python_module_import(qualifier, file) {
+                let imported: Vec<usize> = bindings
+                    .into_iter()
+                    .flat_map(|binding| self.target_files(binding))
+                    .collect();
+                return in_files(&imported);
             }
             // A Go qualifier of a type is always the name of an imported
             // package. The import of a package of the repository has the
@@ -1250,10 +1330,7 @@ impl<'a> Resolver<'a> {
         self.facts(owner)
             .prepends
             .iter()
-            .flat_map(|module| {
-                let (qualifier, name) = split_type(module);
-                self.types(&name, qualifier.as_deref(), owner.0)
-            })
+            .flat_map(|module| self.ruby_constant(owner, module, false))
             .collect()
     }
 
@@ -1279,8 +1356,10 @@ impl<'a> Resolver<'a> {
                     // Two types can have one name. A member in the same file
                     // belongs to this type when its path is the path of the
                     // type. A member in a different file belongs to this type
-                    // only when that file gives this type for the name.
-                    && (namespace
+                    // only when that file gives this type for the name. A
+                    // Ruby module has the members whose path is its path, in
+                    // any file that opens it.
+                    && ((namespace && (family != Family::Ruby || *member_path == owner_path))
                         || (id.0 == owner.0
                             && (member_path.is_empty() || *member_path == owner_path))
                         || (id.0 != owner.0
@@ -1371,12 +1450,87 @@ impl<'a> Resolver<'a> {
     }
 
     fn parents(&self, owner: Id) -> Vec<Id> {
-        self.symbol(owner)
-            .supertypes
+        let supertypes = &self.symbol(owner).supertypes;
+        if self.family(owner.0) == Family::Ruby {
+            // The extractor puts the superclass first, and `bases` has it
+            // only when the class has a superclass.
+            let has_superclass = !self.facts(owner).bases.is_empty();
+            return supertypes
+                .iter()
+                .enumerate()
+                .flat_map(|(index, parent)| {
+                    let outside = has_superclass && index == 0;
+                    self.ruby_constant(owner, parent, outside)
+                })
+                .collect();
+        }
+        supertypes
             .iter()
             .flat_map(|parent| {
                 let (qualifier, name) = split_type(parent);
                 self.types(&name, qualifier.as_deref(), owner.0)
+            })
+            .collect()
+    }
+
+    /// The types that the Ruby constant `text` names in the body of the type
+    /// `owner`, or just before the body when `outside` is true, as Ruby reads
+    /// a superclass. Ruby searches the modules that enclose the code, the
+    /// innermost first, and then the top level. A constant `A::B` that no
+    /// type of the repository has as its path names a type outside the
+    /// repository, also when a type of the repository has the name `B`.
+    fn ruby_constant(&self, owner: Id, text: &str, outside: bool) -> Vec<Id> {
+        let path = segments(text);
+        let Some((name, qualifier)) = path.split_last() else {
+            return Vec::new();
+        };
+        let candidates: Vec<Id> = self
+            .named(name, owner.0)
+            .filter(|id| is_container(self.symbol(*id)) || self.facts(*id).defined_type)
+            .collect();
+        let mut nesting = Vec::new();
+        if !text.starts_with("::") {
+            let mut current = if outside {
+                self.facts(owner).parent.map(|position| (owner.0, position))
+            } else {
+                Some(owner)
+            };
+            while let Some(id) = current {
+                if is_container(self.symbol(id)) {
+                    nesting.push(self.member_path(id));
+                }
+                current = self.facts(id).parent.map(|position| (id.0, position));
+            }
+        }
+        nesting.push(Vec::new());
+        for scope in nesting {
+            let found: Vec<Id> = candidates
+                .iter()
+                .copied()
+                .filter(|id| {
+                    let full = self.member_path(*id);
+                    full.len() == scope.len() + path.len()
+                        && full.starts_with(&scope)
+                        && full[scope.len()..].iter().eq(path.iter())
+                })
+                .collect();
+            if !found.is_empty() {
+                return found;
+            }
+        }
+        // A constant of a parent type, or a module that the repository
+        // opens only in a form this search does not see.
+        if qualifier.is_empty() {
+            return self.types(name, None, owner.0);
+        }
+        candidates
+            .into_iter()
+            .filter(|id| {
+                let containers = &self.facts(*id).container_path;
+                containers.len() >= qualifier.len()
+                    && containers[containers.len() - qualifier.len()..]
+                        .iter()
+                        .eq(qualifier.iter())
             })
             .collect()
     }
@@ -1406,6 +1560,27 @@ impl<'a> Resolver<'a> {
     fn own_constructors(&self, owner: Id, arity: usize) -> Vec<Id> {
         let type_symbol = self.symbol(owner);
         let owner_path = self.member_path(owner);
+        // A Ruby class that many files open is one class. Two programs of
+        // a repository can also define one class each with the same name,
+        // thus the `initialize` of the file of the class comes first.
+        if self.family(owner.0) == Family::Ruby {
+            let mut found: Vec<Id> = self
+                .by_container
+                .get(&(type_symbol.name.as_str(), "initialize"))
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|id| {
+                    self.family(id.0) == Family::Ruby
+                        && self.symbol(*id).kind == SymbolKind::Constructor
+                        && self.facts(*id).container_path == owner_path
+                })
+                .collect();
+            if found.iter().any(|id| id.0 == owner.0) {
+                found.retain(|id| id.0 == owner.0);
+            }
+            return self.preferred(found, arity);
+        }
         let in_file = self.constructors_by_container[owner.0]
             .get(type_symbol.name.as_str())
             .map_or(&[][..], Vec::as_slice);
@@ -1519,6 +1694,15 @@ impl<'a> Resolver<'a> {
     fn local(&self, chain: &[Id], file: usize, name: &str, at: Option<usize>) -> Option<&'a Local> {
         let owners = chain.iter().map(|id| Some(id.1)).chain([None]);
         for owner in owners {
+            if let Some(blocks) = self.local_blocks[file].get(&(name, owner)) {
+                match blocks.nearest(at) {
+                    Some(rank) => {
+                        let position = self.locals_by_owner[file][name][&owner][rank];
+                        return Some(&self.files[file].locals[position]);
+                    }
+                    None => continue,
+                }
+            }
             let found = self
                 .locals_of(file, owner, name)
                 .filter(|local| {
@@ -1554,6 +1738,9 @@ impl<'a> Resolver<'a> {
     /// not in scope after the block.
     fn is_local_value(&self, chain: &[Id], file: usize, name: &str, start: usize) -> bool {
         chain.iter().any(|id| {
+            if let Some(blocks) = self.local_blocks[file].get(&(name, Some(id.1))) {
+                return blocks.has_binding_in_scope(start);
+            }
             self.locals_of(file, Some(id.1), name).any(|local| {
                 local.name.value_start.is_none_or(|value| value < start)
                     && local
@@ -1775,6 +1962,23 @@ impl<'a> Resolver<'a> {
         self.result_types_of(file, position, depth, false, None)
     }
 
+    /// The types that the receiver of a Ruby `Type.new` call names.
+    fn ruby_new_receiver_types(&self, file: usize, reference: &Reference) -> Option<Vec<Id>> {
+        if self.family(file) != Family::Ruby || reference.name != "new" {
+            return None;
+        }
+        let text = match (&reference.qualifier, &reference.receiver) {
+            (Some(qualifier), _) => qualifier.as_str(),
+            (None, Some(Receiver::Name(name))) => name.as_str(),
+            _ => return None,
+        };
+        let path = segments(text);
+        let (last, before) = path.split_last()?;
+        let before = (!before.is_empty()).then(|| before.join("."));
+        let types = self.types(last, before.as_deref(), file);
+        (!types.is_empty()).then_some(types)
+    }
+
     /// The types of one result of a call, or of the elements of that result.
     /// `index` selects one result of a call that gives two or more results.
     fn result_types_of(
@@ -1821,6 +2025,11 @@ impl<'a> Resolver<'a> {
         if symbol.kind == SymbolKind::Constructor || is_container(symbol) {
             if !whole {
                 return None;
+            }
+            // Ruby `Type.new` gives an object of `Type`, also when
+            // `initialize` comes from a parent type or from a module.
+            if let Some(types) = self.ruby_new_receiver_types(file, reference) {
+                return Some(types);
             }
             return if is_container(symbol) {
                 Some(vec![*callee])
@@ -2059,6 +2268,35 @@ impl<'a> Resolver<'a> {
         }
         if types.is_empty() {
             return Outcome::none(Status::Unresolved);
+        }
+        // Each file that opens a Ruby class or module gives a symbol, and
+        // all these symbols are one type.
+        let path = self.member_path(types[0]);
+        if self.family(file) == Family::Ruby
+            && types.len() > 1
+            && types.iter().all(|id| self.member_path(*id) == path)
+        {
+            let found: Vec<Id> = types
+                .iter()
+                .flat_map(|owner| match name {
+                    "new" => self.constructors(*owner, arity),
+                    _ => self.members(*owner, name, arity, &mut BTreeSet::new()),
+                })
+                .collect();
+            // `constructors` gives the type itself when the type has no
+            // `initialize`. One symbol then stands for the type.
+            let found = if name == "new" {
+                let constructors: Vec<Id> =
+                    found.into_iter().filter(|id| !types.contains(id)).collect();
+                if constructors.is_empty() {
+                    vec![types[0]]
+                } else {
+                    constructors
+                }
+            } else {
+                found
+            };
+            return Outcome::of(basis, found).unwrap_or_else(|| Outcome::none(Status::Unresolved));
         }
         let dynamic = types.iter().any(|id| {
             matches!(
@@ -2755,7 +2993,13 @@ impl<'a> Resolver<'a> {
             Family::Java | Family::CSharp | Family::C | Family::Ruby
         ) {
             if let Some(owner) = self.enclosing_type(chain) {
-                let members = self.members(owner, name, arity, &mut BTreeSet::new());
+                let mut members = self.members(owner, name, arity, &mut BTreeSet::new());
+                // In a class body `self` is the class, not an object of it.
+                if chain.first() == Some(&owner) {
+                    members.retain(|member| {
+                        self.facts(*member).generated != Some(GeneratedFor::Instances)
+                    });
+                }
                 if let Some(outcome) = Outcome::of(Basis::EnclosingType, members) {
                     return outcome;
                 }
@@ -4753,6 +4997,17 @@ mod false_edge_tests {
     }
 
     #[test]
+    fn test_ruby_instance_variable_that_a_writer_named_by_a_string_sets_has_no_type() {
+        let store = "class Store\n  def add(item)\n    item\n  end\nend\n\nclass Cache\n  def add(item)\n    item\n  end\nend\n";
+        let report = "class Report\n  attr_writer 'store'\n\n  def initialize\n    @store = Store.new\n  end\n\n  def fill\n    @store.add(1)\n  end\nend\n";
+        let files = [("store.rb", store), ("report.rb", report)];
+        assert!(rows(&files, "report.rb").contains(
+            &"9 Report.fill>(..).add Ambiguous NameOnly [store.rb#Cache.add, store.rb#Store.add]"
+                .to_string()
+        ));
+    }
+
+    #[test]
     fn test_ruby_instance_variable_type_is_each_file_that_opens_the_class() {
         let wizard = "class Wizard\n  def append_step\n  end\nend\n";
         // In `Wizard::Builder`, `Wizard` is the class that `wizard.rb` opens
@@ -4760,11 +5015,8 @@ mod false_edge_tests {
         let builder = "class Wizard\n  class Builder\n    def initialize\n      @wizard = Wizard.new\n    end\n\n    def build\n      @wizard.append_step\n    end\n  end\nend\n";
         let files = [("wizard.rb", wizard), ("builder.rb", builder)];
         let rows = rows(&files, "builder.rb");
-        let call = rows
-            .iter()
-            .find(|row| row.starts_with("8 Wizard.Builder.build>(..).append_step "));
         assert!(
-            call.is_some_and(|row| row.ends_with(" [wizard.rb#Wizard.append_step]")),
+            rows.contains(&"8 Wizard.Builder.build>(..).append_step UniqueCandidate ReceiverDeclaredType [wizard.rb#Wizard.append_step]".to_string()),
             "{rows:?}"
         );
     }
@@ -4785,6 +5037,229 @@ mod false_edge_tests {
             "{rows:?}"
         );
         assert!(rows.contains(&"17 Report.fill>(..).add UniqueCandidate ReceiverDeclaredType [store.rb#Store.add]".to_string()), "{rows:?}");
+    }
+
+    #[test]
+    fn test_python_qualified_base_outside_the_repository_is_not_a_repository_type() {
+        let tools = "class Base:\n    def current_user(self):\n        return 1\n";
+        let row = |admin: &str| rows(&[("tools.py", tools), ("admin.py", admin)], "admin.py");
+        let external = "import vendor.auth\n\n\nclass Admin(vendor.auth.Base):\n    def show(self):\n        return self.current_user()\n";
+        assert_eq!(
+            row(external),
+            ["6 Admin.show>self.current_user Ambiguous NameOnly [tools.py#Base.current_user]"]
+        );
+        let unbound =
+            "class Admin(vendor.Base):\n    def show(self):\n        return self.current_user()\n";
+        assert_eq!(
+            row(unbound),
+            ["3 Admin.show>self.current_user Ambiguous NameOnly [tools.py#Base.current_user]"]
+        );
+    }
+
+    #[test]
+    fn test_python_qualified_base_of_a_repository_module_is_the_type() {
+        let tools = "class Base:\n    def current_user(self):\n        return 1\n";
+        let other = "class Base:\n    def current_user(self):\n        return 2\n";
+        let row = |admin: &str| {
+            rows(
+                &[
+                    ("pkg/tools.py", tools),
+                    ("pkg/other.py", other),
+                    ("pkg/__init__.py", ""),
+                    ("admin.py", admin),
+                ],
+                "admin.py",
+            )
+        };
+        let dotted = "import pkg.tools\n\n\nclass Admin(pkg.tools.Base):\n    def show(self):\n        return self.current_user()\n";
+        assert_eq!(row(dotted), ["6 Admin.show>self.current_user UniqueCandidate EnclosingType [pkg/tools.py#Base.current_user]"]);
+        let from = "from pkg import tools\n\n\nclass Admin(tools.Base):\n    def show(self):\n        return self.current_user()\n";
+        assert_eq!(row(from), ["6 Admin.show>self.current_user UniqueCandidate EnclosingType [pkg/tools.py#Base.current_user]"]);
+    }
+
+    #[test]
+    fn test_typescript_qualified_base_that_is_not_an_import_is_not_a_repository_type() {
+        let tools = "export class Base {\n  currentUser() { return 1; }\n}\n";
+        let row = |admin: &str| rows(&[("tools.ts", tools), ("admin.ts", admin)], "admin.ts");
+        let declared = "declare const vendor: any;\n\nexport class Admin extends vendor.Base {\n  show() { return this.currentUser(); }\n}\n";
+        assert_eq!(
+            row(declared),
+            ["4 Admin.show>self.currentUser Ambiguous NameOnly [tools.ts#Base.currentUser]"]
+        );
+        let imported = "import * as tools from './tools';\n\nexport class Admin extends tools.Base {\n  show() { return this.currentUser(); }\n}\n";
+        assert_eq!(row(imported), ["4 Admin.show>self.currentUser UniqueCandidate EnclosingType [tools.ts#Base.currentUser]"]);
+    }
+
+    #[test]
+    fn test_ruby_qualified_parent_that_matches_no_container_is_not_a_repository_type() {
+        let tools =
+            "module Tools\n  class Base\n    def current_user\n      nil\n    end\n  end\nend\n";
+        let session = "module Session\n  def current_user\n    1\n  end\nend\n";
+        let admin = "class Admin < Vendor::Base\n  include Session\n\n  def show\n    current_user\n  end\nend\n";
+        let files = [
+            ("tools.rb", tools),
+            ("session.rb", session),
+            ("admin.rb", admin),
+        ];
+        assert_eq!(
+            rows_of(&files, "admin.rb", "current_user"),
+            ["5 Admin.show>current_user UniqueCandidate EnclosingType [session.rb#Session.current_user]"]
+        );
+        // A qualified mixin follows the same rule.
+        let admin = "class Admin\n  include Vendor::Base\n  include Session\n\n  def show\n    current_user\n  end\nend\n";
+        let files = [
+            ("tools.rb", tools),
+            ("session.rb", session),
+            ("admin.rb", admin),
+        ];
+        assert_eq!(
+            rows_of(&files, "admin.rb", "current_user"),
+            ["6 Admin.show>current_user UniqueCandidate EnclosingType [session.rb#Session.current_user]"]
+        );
+    }
+
+    #[test]
+    fn test_ruby_qualified_call_selects_from_all_the_types_with_the_name() {
+        // `runner.rb` has its own `Llm`, which the qualifier does not name.
+        let llm = "module DiscourseAi\n  module Completions\n    class Llm\n      def self.text_from_response(response)\n        response\n      end\n    end\n  end\nend\n";
+        let runner = "module DiscourseAi\n  module Agents\n    class ToolRunner\n      module Llm\n        def self.run(response)\n          DiscourseAi::Completions::Llm.text_from_response(response)\n        end\n      end\n    end\n  end\nend\n";
+        assert_eq!(
+            rows(&[("llm.rb", llm), ("runner.rb", runner)], "runner.rb")[0],
+            "6 DiscourseAi.Agents.ToolRunner.Llm.run>DiscourseAi::Completions::Llm::text_from_response UniqueCandidate QualifiedPath [llm.rb#DiscourseAi.Completions.Llm.text_from_response]"
+        );
+    }
+
+    #[test]
+    fn test_ruby_qualified_call_prefers_the_module_that_its_file_opens() {
+        // Three files open `Migrations::Database`. The file of the call opens
+        // it, thus that module, with the members of all its files, is the type.
+        let database = "module Migrations\n  module Database\n    def self.format_boolean(value)\n      value\n    end\n  end\nend\n";
+        let upload = "module Migrations::Database\n  module FilesDB\n    def self.insert(value)\n      Migrations::Database.format_boolean(value)\n    end\n  end\nend\n";
+        let other = "module Migrations\n  module Database\n    VERSION = 1\n  end\nend\n";
+        assert_eq!(
+            rows(&[("database.rb", database), ("upload.rb", upload), ("other.rb", other)], "upload.rb")[0],
+            "4 Migrations.Database.FilesDB.insert>Migrations::Database::format_boolean UniqueCandidate QualifiedPath [database.rb#Migrations.Database.format_boolean]"
+        );
+    }
+
+    #[test]
+    fn test_ruby_class_that_files_open_again_is_one_class() {
+        // `requested.rb` defines `initialize`. `after.rb` opens the class
+        // again to add `After`, whose `super` calls that `initialize`.
+        let requested = "module Page\n  class Requested\n    def initialize(size)\n      @size = size\n    end\n\n    def size\n      @size\n    end\n  end\nend\n";
+        let after = "module Page\n  class Requested\n    class After < Requested\n      def initialize(cursor)\n        super(1)\n        @cursor = cursor\n      end\n\n      def total\n        size\n      end\n    end\n  end\nend\n";
+        let files = [("requested.rb", requested), ("after.rb", after)];
+        assert_eq!(
+            rows(&files, "after.rb"),
+            [
+                "5 Page.Requested.After.initialize>super.super UniqueCandidate EnclosingType [requested.rb#Page.Requested.initialize]",
+                "6 Page.Requested.After.initialize>cursor Unresolved - []",
+                "10 Page.Requested.After.total>size UniqueCandidate EnclosingType [requested.rb#Page.Requested.size]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ruby_new_gives_the_receiver_type_when_initialize_comes_from_a_module() {
+        let source = "module Engine\n  def initialize(url)\n    @url = url\n  end\nend\n\nclass Onebox\n  include Engine\n\n  def data\n    @url\n  end\nend\n\ndef run\n  box = Onebox.new(1)\n  box.data\nend\n";
+        assert_eq!(
+            rows_of(&[("a.rb", source)], "a.rb", "data"),
+            ["17 run>box.data UniqueCandidate ReceiverDeclaredType [a.rb#Onebox.data]"]
+        );
+    }
+
+    #[test]
+    fn test_ruby_qualified_call_of_a_type_that_files_open_again() {
+        let schema = "module Flows\n  module Schema\n    class << self\n      def merge(left)\n        left\n      end\n    end\n  end\nend\n";
+        let more = "module Flows\n  module Schema\n    DRAFT = 1\n  end\nend\n";
+        let job = "module Kit\n  class Job\n    def initialize(size)\n      @size = size\n    end\n  end\nend\n";
+        let job_run = "module Kit\n  class Job\n    def run\n      @size\n    end\n  end\nend\n";
+        let caller = "module Assign\n  module Schema\n    def self.build\n      Flows::Schema.merge(1)\n      Kit::Job.new(2).run\n    end\n  end\nend\n";
+        let files = [
+            ("schema.rb", schema),
+            ("more.rb", more),
+            ("job.rb", job),
+            ("job_run.rb", job_run),
+            ("caller.rb", caller),
+        ];
+        assert_eq!(
+            rows(&files, "caller.rb"),
+            [
+                "4 Assign.Schema.build>Flows::Schema::merge UniqueCandidate QualifiedPath [schema.rb#Flows.Schema.merge]",
+                "5 Assign.Schema.build>(..).run UniqueCandidate ReceiverDeclaredType [job_run.rb#Kit.Job.run]",
+                "5 Assign.Schema.build>Kit::Job::new UniqueCandidate QualifiedPath [job.rb#Kit.Job.initialize]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ruby_initialize_of_the_file_of_the_class_comes_first() {
+        // Two import scripts each define `Scripts::Drupal`.
+        let drupal = "module Scripts\n  class Drupal\n    def initialize\n      @a = 1\n    end\n\n    def perform\n      @a\n    end\n  end\nend\n\nScripts::Drupal.new.perform\n";
+        let drupal_six = "module Scripts\n  class Drupal\n    def initialize\n      @b = 1\n    end\n  end\nend\n";
+        let files = [("drupal.rb", drupal), ("drupal_six.rb", drupal_six)];
+        assert_eq!(
+            rows(&files, "drupal.rb"),
+            [
+                "13 ->(..).perform UniqueCandidate ReceiverDeclaredType [drupal.rb#Scripts.Drupal.perform]",
+                "13 ->Scripts::Drupal::new UniqueCandidate QualifiedPath [drupal.rb#Scripts.Drupal.initialize]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ruby_qualified_parent_selects_the_type_of_its_qualifier() {
+        let kit = "module Kit\n  class Widget\n    def draw\n      1\n    end\n  end\nend\n";
+        let panel = "class Panel < Kit::Widget\n  def show\n    draw\n  end\nend\n";
+        let files = [("kit.rb", kit), ("panel.rb", panel)];
+        assert_eq!(
+            rows_of(&files, "panel.rb", "draw"),
+            ["3 Panel.show>draw UniqueCandidate EnclosingType [kit.rb#Kit.Widget.draw]"]
+        );
+    }
+
+    #[test]
+    fn test_ruby_mixin_name_resolves_in_the_enclosing_modules_first() {
+        // `include Fields` in `Kit::Resource` names `Kit::Fields`, not `Other::Fields`.
+        let source = "module Other\n  class Fields\n    def kind\n      1\n    end\n  end\nend\n\nmodule Kit\n  module Fields\n    def kind\n      2\n    end\n  end\n\n  class Resource\n    include Fields\n\n    def show\n      kind\n    end\n  end\nend\n";
+        assert_eq!(
+            rows_of(&[("a.rb", source)], "a.rb", "kind"),
+            ["20 Kit.Resource.show>kind UniqueCandidate EnclosingType [a.rb#Kit.Fields.kind]"]
+        );
+        // The innermost module that has the name wins.
+        let source = "module Kit\n  module Helpers\n    def tag\n      1\n    end\n  end\n\n  class Panel\n    module Helpers\n      def tag\n        2\n      end\n    end\n\n    include Helpers\n\n    def render\n      tag\n    end\n  end\nend\n";
+        assert_eq!(
+            rows_of(&[("a.rb", source)], "a.rb", "tag"),
+            ["18 Kit.Panel.render>tag UniqueCandidate EnclosingType [a.rb#Kit.Panel.Helpers.tag]"]
+        );
+        // With no enclosing module that has the name, the top level has it.
+        let source = "module Audit\n  def audit\n    1\n  end\nend\n\nmodule Deep\n  module Audit\n    def audit\n      2\n    end\n  end\nend\n\nmodule Kit\n  class Job\n    include Audit\n\n    def run\n      audit\n    end\n  end\nend\n";
+        assert_eq!(
+            rows_of(&[("a.rb", source)], "a.rb", "audit"),
+            ["20 Kit.Job.run>audit UniqueCandidate EnclosingType [a.rb#Audit.audit]"]
+        );
+    }
+
+    #[test]
+    fn test_ruby_compact_class_does_not_open_the_modules_of_its_qualifier() {
+        // `class Kit::Job` has only `Kit::Job` in its nesting, thus `Audit`
+        // is the top-level module, not `Kit::Audit`.
+        let source = "module Audit\n  def audit\n    1\n  end\nend\n\nmodule Kit\n  module Audit\n    def audit\n      2\n    end\n  end\nend\n\nclass Kit::Job\n  include Audit\n\n  def run\n    audit\n  end\nend\n";
+        assert_eq!(
+            rows_of(&[("a.rb", source)], "a.rb", "audit"),
+            ["19 Kit.Job.run>audit UniqueCandidate EnclosingType [a.rb#Audit.audit]"]
+        );
+    }
+
+    #[test]
+    fn test_ruby_superclass_resolves_outside_the_class_that_it_opens() {
+        // Ruby reads `Base` in `class Form < Base` before the body opens, thus
+        // `Form::Base` is not the parent.
+        let source = "module Kit\n  class Base\n    def setup\n      1\n    end\n  end\n\n  class Form < Base\n    class Base\n      def setup\n        2\n      end\n    end\n\n    def build\n      setup\n    end\n  end\nend\n";
+        assert_eq!(
+            rows_of(&[("a.rb", source)], "a.rb", "setup"),
+            ["16 Kit.Form.build>setup UniqueCandidate EnclosingType [a.rb#Kit.Base.setup]"]
+        );
     }
 
     #[test]
@@ -5745,6 +6220,42 @@ mod false_edge_tests {
             resolver.packages().entries() <= 3 * symbols,
             "{} entries for {symbols} symbols",
             resolver.packages().entries()
+        );
+    }
+
+    /// One Go function with `depth` nested closures. Each closure has a parameter `r`, and
+    /// calls its method after the closure inside it, so that the nearest block of each use is far from
+    /// the last block that starts before it. Each `r` is a local name of the function.
+    fn nested_closures_resolve_at(depth: usize) -> std::time::Duration {
+        let mut source = String::from(
+            "package p\n\ntype T struct{}\n\nfunc (T) Run() {}\n\nfunc Run() {\n\t_ = ",
+        );
+        source.push_str(&"func(r T) {\n\t_ = ".repeat(depth));
+        source.push_str("0\n");
+        source.push_str(&"\tr.Run()\n}\n".repeat(depth));
+        source.push_str("}\n");
+        let files = [("p/run.go", source.as_str())];
+        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        let locals = facts[0]
+            .locals
+            .iter()
+            .filter(|local| local.name.name == "r")
+            .count();
+        assert_eq!(locals, depth);
+        let started = crate::index::timing::Stopwatch::start();
+        super::resolve_references_with(&mut facts, &manifests);
+        started.elapsed()
+    }
+
+    /// The nearest local name of many names of one function is found without a look at each
+    /// of them.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_the_locals_of_nested_closures_resolve_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "nested closures",
+            16_000,
+            nested_closures_resolve_at,
         );
     }
 

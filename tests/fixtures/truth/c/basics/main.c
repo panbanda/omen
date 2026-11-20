@@ -61,6 +61,6 @@ int main(void) {
     struct Square square = {2.0};
     enum Unit unit = METRE;
     printf("%s %f %f\n", describe(), circle_area(&circle), measure(&square));
-    printf("%d %d %d %d %d\n", run(), shadow(), dynamic(unit == FOOT), external(), other_tag());
+    fprintf(stdout, "%d %d %d %d %d\n", run(), shadow(), dynamic(unit == FOOT), external(), other_tag());
     return 0;
 }

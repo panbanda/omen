@@ -268,7 +268,7 @@ fn analyze_revision(
 ) -> Result<Analysis> {
     let source = TreeSource::new(repository, revision)?;
     let file_set = FileSet::from_tree_source(&source, config)?;
-    let files: Vec<PathBuf> = file_set.iter().cloned().collect();
+    let files: Vec<PathBuf> = file_set.index_files();
     let read = |path: &Path| source.read(path);
     let index = CodeIndex::build(Path::new(""), &files, &read, &|directory| {
         source.list_directory(directory).unwrap_or_default()

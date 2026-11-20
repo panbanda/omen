@@ -119,6 +119,7 @@ pub struct ProjectConfig {
     pub paths: Option<PathPatterns>,
     pub out_dir: Option<String>,
     pub root_dir: Option<String>,
+    pub composite: Option<bool>,
 }
 
 /// The options of a project file after `extends`. Each path is relative to
@@ -312,6 +313,9 @@ pub fn project_config(text: &str) -> Option<ProjectConfig> {
         paths,
         out_dir: text_option("outDir"),
         root_dir: text_option("rootDir"),
+        composite: options
+            .and_then(|options| options.get("composite"))
+            .and_then(serde_json::Value::as_bool),
     })
 }
 
@@ -331,6 +335,7 @@ pub struct Inherited {
     paths: Option<(PathPatterns, String)>,
     out_dir: Option<Located>,
     root_dir: Option<Located>,
+    composite: Option<bool>,
 }
 
 /// The text of a path option and the directory of the config that has it.
@@ -497,7 +502,12 @@ impl ProjectConfigs {
             paths: inherited.paths.clone(),
             config_directory: leaf.to_string(),
             out_dir: located(&inherited.out_dir),
-            root_dir: located(&inherited.root_dir),
+            // A composite project without `rootDir` has the directory of
+            // its own config as the root, whatever the version of `tsc`.
+            root_dir: match (&inherited.root_dir, inherited.composite) {
+                (None, Some(true)) => Some(leaf.to_string()),
+                (root_dir, _) => located(root_dir),
+            },
         }
     }
 
@@ -567,6 +577,7 @@ impl ProjectConfigs {
                     options.paths = inherited.paths.or(options.paths.take());
                     options.out_dir = inherited.out_dir.or(options.out_dir.take());
                     options.root_dir = inherited.root_dir.or(options.root_dir.take());
+                    options.composite = inherited.composite.or(options.composite.take());
                 }
             }
             let Some(frame) = stack.last_mut() else {
@@ -638,6 +649,9 @@ fn own_options(path: &str, config: &ProjectConfig, mut options: Inherited) -> In
     }
     if config.root_dir.is_some() {
         options.root_dir = located(&config.root_dir);
+    }
+    if config.composite.is_some() {
+        options.composite = config.composite;
     }
     options
 }
