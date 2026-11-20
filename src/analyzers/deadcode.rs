@@ -337,6 +337,13 @@ impl AnalyzerTrait for Analyzer {
                 .collect(),
             by_name: &keys_by_name,
         };
+        let barrels_not_resolved: Vec<String> = index
+            .files
+            .iter()
+            .filter(|facts| facts.barrel_not_resolved)
+            .map(|facts| facts.file.clone())
+            .collect();
+        let behind_barrels = files_behind_barrels(&index.files);
         let mut unresolved_paths = 0usize;
         for path_use in &path_uses {
             let found = rust_paths.resolve(path_use);
@@ -406,6 +413,18 @@ impl AnalyzerTrait for Analyzer {
         for root in roots {
             if all_definitions.contains_key(&root) && reachable.insert(root.clone()) {
                 queue.push(root);
+            }
+        }
+
+        // A barrel that the index did not resolve can export each exported
+        // definition of a file that it re-exports with a wildcard.
+        let mut definitions_behind_barrels_not_resolved = 0;
+        for (key, def) in &all_definitions {
+            if def.exported && behind_barrels.contains(def.file.as_str()) {
+                definitions_behind_barrels_not_resolved += 1;
+                if reachable.insert(key.clone()) {
+                    queue.push(key.clone());
+                }
             }
         }
 
@@ -554,6 +573,8 @@ impl AnalyzerTrait for Analyzer {
                 total_definitions: all_definitions.len(),
                 reachable_count: reachable.len(),
                 unresolved_paths,
+                barrels_not_resolved,
+                definitions_behind_barrels_not_resolved,
                 components_not_analyzed,
             },
         };
@@ -566,6 +587,40 @@ impl AnalyzerTrait for Analyzer {
 
         Ok(analysis)
     }
+}
+
+/// The files that a file of the index marks `barrel_not_resolved` reaches
+/// with wildcard re-exports, directly or through other files.
+fn files_behind_barrels(files: &[FileSymbols]) -> HashSet<&str> {
+    use crate::index::model::{ImportKind, ImportTarget};
+    let by_path: HashMap<&str, &FileSymbols> = files
+        .iter()
+        .map(|facts| (facts.file.as_str(), facts))
+        .collect();
+    let mut pending: Vec<&FileSymbols> = files
+        .iter()
+        .filter(|facts| facts.barrel_not_resolved)
+        .collect();
+    let mut reached: HashSet<&str> = HashSet::new();
+    while let Some(facts) = pending.pop() {
+        let python = facts.language == Language::Python;
+        for binding in &facts.imports {
+            let wildcard = binding.kind == ImportKind::ReExportWildcard
+                || (python && binding.kind == ImportKind::Wildcard);
+            let ImportTarget::Resolved(target) = &binding.target_file else {
+                continue;
+            };
+            if !wildcard {
+                continue;
+            }
+            if let Some(next) = by_path.get(target.as_str()) {
+                if reached.insert(next.file.as_str()) {
+                    pending.push(next);
+                }
+            }
+        }
+    }
+    reached
 }
 
 /// Collect definitions and usages from a parsed file.
@@ -2360,10 +2415,24 @@ pub struct AnalysisSummary {
     /// each function with the last name of such a path alive.
     #[serde(default)]
     pub unresolved_paths: usize,
+    /// The files whose wildcard re-exports the index did not resolve,
+    /// because they need more work than its cap gives. A name that such a
+    /// file gives with a wildcard re-export has no definition.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub barrels_not_resolved: Vec<String>,
+    /// The exported definitions of the files that a barrel of
+    /// `barrels_not_resolved` reaches with wildcard re-exports. Such a barrel
+    /// can export them, thus deadcode keeps them and their callees alive.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub definitions_behind_barrels_not_resolved: usize,
     /// The Vue components whose templates the analysis cannot read
     /// completely. No definition of their scripts is reported.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components_not_analyzed: Vec<ComponentNotAnalyzed>,
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4698,6 +4767,78 @@ mod index_tests {
             .collect();
         dead.sort();
         (dead, result.summary.unresolved_paths)
+    }
+
+    /// Many barrels re-export the same two large files. The export tables
+    /// read more entries than their cap, thus the last barrels keep only
+    /// their own names, and the summary lists them.
+    #[test]
+    fn test_summary_lists_the_barrels_that_are_not_resolved() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let mut files: Vec<(String, String)> = Vec::new();
+        for module in ["x", "y"] {
+            let mut text: String = (0..500)
+                .map(|position| format!("export function {module}{position}() {{}}\n"))
+                .collect();
+            text.push_str(&format!(
+                "function helper() {{}}\nexport function {module}_calls() {{\n\thelper();\n}}\nfunction unused_{module}() {{}}\n"
+            ));
+            files.push((format!("{module}.ts"), text));
+        }
+        for position in 0..150 {
+            files.push((
+                format!("b{position:03}.ts"),
+                "export * from './x';\nexport * from './y';\n".to_string(),
+            ));
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let mut names: Vec<PathBuf> = Vec::new();
+        for (name, text) in &files {
+            std::fs::write(directory.path().join(name), text).unwrap();
+            names.push(PathBuf::from(name));
+        }
+        names.sort();
+        let set = FileSet::from_files(directory.path().to_path_buf(), names);
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&set, &config, Some(directory.path()));
+        let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+        // A barrel that is not resolved can export each exported definition
+        // of `x.ts` and `y.ts`, thus no such definition is reported, and the
+        // helper that one of them calls is not reported. A barrel cannot
+        // export a definition that is not exported.
+        let reported: Vec<&str> = result
+            .items
+            .iter()
+            .filter(|item| item.kind == "function")
+            .map(|item| item.name.as_str())
+            .collect();
+        assert_eq!(reported, ["unused_x", "unused_y"]);
+        assert_eq!(result.summary.definitions_behind_barrels_not_resolved, 1002);
+        let listed = &result.summary.barrels_not_resolved;
+        assert!(!listed.is_empty());
+        assert!(listed.len() < 150, "{listed:?}");
+        assert!(
+            listed.iter().all(|file| file.starts_with('b')),
+            "{listed:?}"
+        );
+        assert!(listed.windows(2).all(|pair| pair[0] < pair[1]));
+        let json = serde_json::to_value(&result.summary).unwrap();
+        assert!(json.get("barrels_not_resolved").is_some(), "{json}");
+    }
+
+    #[test]
+    fn test_summary_has_no_barrels_field_when_each_barrel_is_resolved() {
+        let summary = AnalysisSummary::default();
+        let json = serde_json::to_value(&summary).unwrap();
+        assert!(json.get("barrels_not_resolved").is_none(), "{json}");
+        assert!(
+            json.get("definitions_behind_barrels_not_resolved")
+                .is_none(),
+            "{json}"
+        );
     }
 
     #[test]
