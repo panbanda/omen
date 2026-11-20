@@ -1,0 +1,301 @@
+{
+  "version": 1,
+  "language": "ruby",
+  "split": "development",
+  "oracle": "Author-reviewed. `ruby -wc` (Ruby 3.4.7) accepts each file. `ruby -w -I. main.rb` in the case directory prints `check a` and `api b` with no warning: in `Check#problem` the nesting is `[Check]`, so `Problem` is `Check::Problem` and not `Blog::Problem`; in `Api::Contract#build` the nesting is `[Api::Contract, Api]`, so `Body::Location` is `Api::Body::Location` and not `Other::Body::Location`. The harness does not run the code.",
+  "closed_world": true,
+  "symbols": [
+    {
+      "label": "check_outer",
+      "category": "type",
+      "file": "problem.rb",
+      "name": "Check",
+      "kind": "class",
+      "container": null,
+      "start_line": 3,
+      "end_line": 13,
+      "exported": true
+    },
+    {
+      "label": "check_problem",
+      "category": "type",
+      "file": "problem.rb",
+      "name": "Problem",
+      "kind": "class",
+      "container": "Check",
+      "start_line": 4,
+      "end_line": 12,
+      "exported": true
+    },
+    {
+      "label": "check_problem_init",
+      "category": "constructor",
+      "file": "problem.rb",
+      "name": "initialize",
+      "kind": "constructor",
+      "container": "Problem",
+      "start_line": 5,
+      "end_line": 7,
+      "exported": true
+    },
+    {
+      "label": "check_problem_text",
+      "category": "method",
+      "file": "problem.rb",
+      "name": "text",
+      "kind": "method",
+      "container": "Problem",
+      "start_line": 9,
+      "end_line": 11,
+      "exported": true
+    },
+    {
+      "label": "blog",
+      "category": "type",
+      "file": "blog.rb",
+      "name": "Blog",
+      "kind": "module",
+      "container": null,
+      "start_line": 3,
+      "end_line": 13,
+      "exported": true
+    },
+    {
+      "label": "blog_problem",
+      "category": "type",
+      "file": "blog.rb",
+      "name": "Problem",
+      "kind": "class",
+      "container": "Blog",
+      "start_line": 4,
+      "end_line": 12,
+      "exported": true
+    },
+    {
+      "label": "blog_problem_init",
+      "category": "constructor",
+      "file": "blog.rb",
+      "name": "initialize",
+      "kind": "constructor",
+      "container": "Problem",
+      "start_line": 5,
+      "end_line": 7,
+      "exported": true
+    },
+    {
+      "label": "blog_problem_text",
+      "category": "method",
+      "file": "blog.rb",
+      "name": "text",
+      "kind": "method",
+      "container": "Problem",
+      "start_line": 9,
+      "end_line": 11,
+      "exported": true
+    },
+    {
+      "label": "api",
+      "category": "type",
+      "file": "locations.rb",
+      "name": "Api",
+      "kind": "module",
+      "container": null,
+      "start_line": 3,
+      "end_line": 11,
+      "exported": true
+    },
+    {
+      "label": "api_body",
+      "category": "type",
+      "file": "locations.rb",
+      "name": "Body",
+      "kind": "module",
+      "container": "Api",
+      "start_line": 4,
+      "end_line": 10,
+      "exported": true
+    },
+    {
+      "label": "api_location",
+      "category": "type",
+      "file": "locations.rb",
+      "name": "Location",
+      "kind": "class",
+      "container": "Body",
+      "start_line": 5,
+      "end_line": 9,
+      "exported": true
+    },
+    {
+      "label": "api_location_for",
+      "category": "method",
+      "file": "locations.rb",
+      "name": "for",
+      "kind": "method",
+      "container": "Location",
+      "start_line": 6,
+      "end_line": 8,
+      "exported": true
+    },
+    {
+      "label": "other",
+      "category": "type",
+      "file": "locations.rb",
+      "name": "Other",
+      "kind": "module",
+      "container": null,
+      "start_line": 13,
+      "end_line": 21,
+      "exported": true
+    },
+    {
+      "label": "other_body",
+      "category": "type",
+      "file": "locations.rb",
+      "name": "Body",
+      "kind": "module",
+      "container": "Other",
+      "start_line": 14,
+      "end_line": 20,
+      "exported": true
+    },
+    {
+      "label": "other_location",
+      "category": "type",
+      "file": "locations.rb",
+      "name": "Location",
+      "kind": "class",
+      "container": "Body",
+      "start_line": 15,
+      "end_line": 19,
+      "exported": true
+    },
+    {
+      "label": "other_location_for",
+      "category": "method",
+      "file": "locations.rb",
+      "name": "for",
+      "kind": "method",
+      "container": "Location",
+      "start_line": 16,
+      "end_line": 18,
+      "exported": true
+    },
+    {
+      "label": "check_reopened",
+      "category": "type",
+      "file": "main.rb",
+      "name": "Check",
+      "kind": "class",
+      "container": null,
+      "start_line": 7,
+      "end_line": 12,
+      "exported": true
+    },
+    {
+      "label": "check_problem_call",
+      "category": "method",
+      "file": "main.rb",
+      "name": "problem",
+      "kind": "method",
+      "container": "Check",
+      "start_line": 8,
+      "end_line": 11,
+      "exported": true
+    },
+    {
+      "label": "api_reopened",
+      "category": "type",
+      "file": "main.rb",
+      "name": "Api",
+      "kind": "module",
+      "container": null,
+      "start_line": 14,
+      "end_line": 20,
+      "exported": true
+    },
+    {
+      "label": "contract",
+      "category": "type",
+      "file": "main.rb",
+      "name": "Contract",
+      "kind": "class",
+      "container": "Api",
+      "start_line": 15,
+      "end_line": 19,
+      "exported": true
+    },
+    {
+      "label": "contract_build",
+      "category": "method",
+      "file": "main.rb",
+      "name": "build",
+      "kind": "method",
+      "container": "Contract",
+      "start_line": 16,
+      "end_line": 18,
+      "exported": true
+    }
+  ],
+  "calls": [
+    {
+      "label": "constant_in_enclosing_class",
+      "category": "constructor",
+      "caller": "check_problem_call",
+      "line": 9,
+      "callee_text": "Problem.new",
+      "expected": [
+        "check_problem_init"
+      ]
+    },
+    {
+      "label": "object_of_constant_in_enclosing_class",
+      "category": "inferred_receiver",
+      "caller": "check_problem_call",
+      "line": 10,
+      "callee_text": "found.text",
+      "expected": [
+        "check_problem_text"
+      ]
+    },
+    {
+      "label": "qualified_constant_in_enclosing_module",
+      "category": "qualified",
+      "caller": "contract_build",
+      "line": 17,
+      "callee_text": "Body::Location.for",
+      "expected": [
+        "api_location_for"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "label": "require_relative_problem",
+      "category": "relative",
+      "file": "main.rb",
+      "line": 3,
+      "path": "problem",
+      "names": [],
+      "required_file": "problem.rb"
+    },
+    {
+      "label": "require_relative_blog",
+      "category": "relative",
+      "file": "main.rb",
+      "line": 4,
+      "path": "blog",
+      "names": [],
+      "required_file": "blog.rb"
+    },
+    {
+      "label": "require_relative_locations",
+      "category": "relative",
+      "file": "main.rb",
+      "line": 5,
+      "path": "locations",
+      "names": [],
+      "required_file": "locations.rb"
+    }
+  ]
+}

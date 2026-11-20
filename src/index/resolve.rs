@@ -1549,6 +1549,10 @@ impl<'a> Resolver<'a> {
         // A constant of a parent type, or a module that the repository
         // opens only in a form this search does not see.
         if qualifier.is_empty() {
+            // A core class that no enclosing module has is the core class.
+            if external::is_ruby_core_class(name) {
+                return Vec::new();
+            }
             return self.types(name, None, owner.0);
         }
         candidates
@@ -1561,6 +1565,83 @@ impl<'a> Resolver<'a> {
                         .eq(qualifier.iter())
             })
             .collect()
+    }
+
+    /// The types that a Ruby constant names at a call in `chain`, as
+    /// `ruby_constant` finds them from the innermost type or module that
+    /// encloses the call. `None` when the code is not Ruby or no type or
+    /// module encloses the call.
+    fn ruby_constant_at(&self, file: usize, chain: &[Id], text: &str) -> Option<Vec<Id>> {
+        if self.family(file) != Family::Ruby {
+            return None;
+        }
+        let scope = chain
+            .iter()
+            .copied()
+            .find(|id| is_container(self.symbol(*id)))?;
+        Some(self.ruby_constant(scope, text, false))
+    }
+
+    /// The repository types that open the Ruby core class that the constant
+    /// `text` names at a call in `chain` again, as a script opens `Thread`
+    /// to add a method. Empty when no file opens the class again. `None`
+    /// when the code is not Ruby, `text` is not a core class, a singleton
+    /// class rebinds it, or a type of the repository with the name hides the
+    /// core class at the call.
+    fn ruby_core_types(&self, file: usize, chain: &[Id], text: &str) -> Option<Vec<Id>> {
+        let class = text.strip_prefix("::").unwrap_or(text);
+        // `class << File` can give the core class a method that is not a
+        // symbol of `File`, and the old search reads that.
+        if self.family(file) != Family::Ruby
+            || !external::is_ruby_core_class(class)
+            || class.contains("::")
+            || self.is_rebound(file, class)
+        {
+            return None;
+        }
+        let top_level = |id: &Id| self.member_path(*id) == [class];
+        let types = match self.ruby_constant_at(file, chain, text) {
+            Some(types) => types,
+            None => self
+                .named(class, file)
+                .filter(|id| is_container(self.symbol(*id)) && top_level(id))
+                .collect(),
+        };
+        types.iter().all(top_level).then_some(types)
+    }
+
+    /// A call of a method of a Ruby core class. `new` calls the `initialize`
+    /// that the repository defines for the class, else the core one. Another
+    /// method is a method that the repository adds to the class, as a file
+    /// that opens the class or its singleton class again adds it, else a
+    /// core method. `None` when `ruby_core_types` gives none.
+    fn ruby_core_call(
+        &self,
+        file: usize,
+        chain: &[Id],
+        text: &str,
+        name: &str,
+        arity: usize,
+    ) -> Option<Outcome> {
+        self.ruby_core_types(file, chain, text)?;
+        let class = text.strip_prefix("::").unwrap_or(text);
+        let method = if name == "new" { "initialize" } else { name };
+        let found: Vec<Id> = self
+            .by_container
+            .get(&(class, method))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|id| {
+                self.family(id.0) == Family::Ruby
+                    && self.facts(*id).container_path == [class]
+                    && (name != "new" || self.symbol(*id).kind == SymbolKind::Constructor)
+            })
+            .collect();
+        Some(
+            Outcome::of(Basis::QualifiedPath, self.preferred(found, arity))
+                .unwrap_or_else(|| Outcome::none(Status::External)),
+        )
     }
 
     /// The constructors of a type or of its nearest parent type that has one.
@@ -1989,7 +2070,12 @@ impl<'a> Resolver<'a> {
     }
 
     /// The types that the receiver of a Ruby `Type.new` call names.
-    fn ruby_new_receiver_types(&self, file: usize, reference: &Reference) -> Option<Vec<Id>> {
+    fn ruby_new_receiver_types(
+        &self,
+        file: usize,
+        reference: &Reference,
+        owner: Option<usize>,
+    ) -> Option<Vec<Id>> {
         if self.family(file) != Family::Ruby || reference.name != "new" {
             return None;
         }
@@ -1998,6 +2084,13 @@ impl<'a> Resolver<'a> {
             (None, Some(Receiver::Name(name))) => name.as_str(),
             _ => return None,
         };
+        let chain = self.chain(file, owner);
+        let types = self
+            .ruby_core_types(file, &chain, text)
+            .or_else(|| self.ruby_constant_at(file, &chain, text));
+        if let Some(types) = types {
+            return (!types.is_empty()).then_some(types);
+        }
         let path = segments(text);
         let (last, before) = path.split_last()?;
         let before = (!before.is_empty()).then(|| before.join("."));
@@ -2037,6 +2130,12 @@ impl<'a> Resolver<'a> {
             return Some(self.enclosing_type(&chain).into_iter().collect());
         }
         let outcome = self.resolve(file, position, depth + 1);
+        // `Thread.new` calls the core `initialize`, and the object has the
+        // methods that the repository adds to `Thread`.
+        if whole && outcome.status == Status::External {
+            let owner = facts.reference_facts[position].owner;
+            return self.ruby_new_receiver_types(file, reference, owner);
+        }
         let [callee] = outcome.candidates.as_slice() else {
             return None;
         };
@@ -2054,7 +2153,8 @@ impl<'a> Resolver<'a> {
             }
             // Ruby `Type.new` gives an object of `Type`, also when
             // `initialize` comes from a parent type or from a module.
-            if let Some(types) = self.ruby_new_receiver_types(file, reference) {
+            let owner = facts.reference_facts[position].owner;
+            if let Some(types) = self.ruby_new_receiver_types(file, reference, owner) {
                 return Some(types);
             }
             return if is_container(symbol) {
@@ -2294,6 +2394,19 @@ impl<'a> Resolver<'a> {
         }
         if types.is_empty() {
             return Outcome::none(Status::Unresolved);
+        }
+        // A Ruby core class that files of the repository open again has the
+        // methods of the core and the methods that these files add.
+        let core = |id: &Id| {
+            let path = self.member_path(*id);
+            path.len() == 1 && external::is_ruby_core_class(&path[0])
+        };
+        if self.family(file) == Family::Ruby && name != "new" && types.iter().all(core) {
+            let found: Vec<Id> = types
+                .iter()
+                .flat_map(|owner| self.members(*owner, name, arity, &mut BTreeSet::new()))
+                .collect();
+            return Outcome::of(basis, found).unwrap_or_else(|| Outcome::none(Status::External));
         }
         // Each file that opens a Ruby class or module gives a symbol, and
         // all these symbols are one type.
@@ -2816,7 +2929,12 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
-        let types = self.types(x, None, file);
+        if let Some(outcome) = self.ruby_core_call(file, chain, x, name, arity) {
+            return outcome;
+        }
+        let types = self
+            .ruby_constant_at(file, chain, x)
+            .unwrap_or_else(|| self.types(x, None, file));
         if types.is_empty() {
             return match self.own_field(file, chain, x) {
                 Some((text, text_file)) => {
@@ -2912,7 +3030,14 @@ impl<'a> Resolver<'a> {
         }
         if let Some(last) = path.last() {
             let before = (path.len() > 1).then(|| path[..path.len() - 1].join("."));
-            let types = self.types(last, before.as_deref(), file);
+            if let Some(outcome) =
+                self.ruby_core_call(file, chain, qualifier, name, reference.arity)
+            {
+                return outcome;
+            }
+            let types = self
+                .ruby_constant_at(file, chain, qualifier)
+                .unwrap_or_else(|| self.types(last, before.as_deref(), file));
             if !types.is_empty() {
                 return self.on_types(&types, name, reference.arity, Basis::QualifiedPath, file);
             }
@@ -5229,6 +5354,74 @@ mod false_edge_tests {
         assert_eq!(
             rows(&[("database.rb", database), ("upload.rb", upload), ("other.rb", other)], "upload.rb")[0],
             "4 Migrations.Database.FilesDB.insert>Migrations::Database::format_boolean UniqueCandidate QualifiedPath [database.rb#Migrations.Database.format_boolean]"
+        );
+    }
+
+    #[test]
+    fn test_ruby_core_class_reopened_by_the_repository() {
+        // `class Thread` in a script opens the core class again to add
+        // `origin`. `Thread.new` calls the core `initialize`, and a call of
+        // a method that the repository adds binds to that method.
+        let patch = "class Thread\n  attr_accessor :origin\n\n  def describe\n    origin\n  end\nend\n\nclass Array\n  def initialize(size)\n    super(size)\n  end\nend\n";
+        let chat = "module Chat\n  class Thread\n    def title\n      1\n    end\n  end\nend\n";
+        let caller = "class Job\n  def run\n    worker = Thread.new { 1 }\n    worker.describe\n    worker.join\n    Thread.current\n    Array.new(3)\n    Hash.new\n  end\nend\n\nmodule Chat\n  class Poster\n    def post\n      Thread.new\n    end\n  end\nend\n\nThread.new { 2 }\n";
+        let files = [
+            ("script/patch.rb", patch),
+            ("chat.rb", chat),
+            ("job.rb", caller),
+        ];
+        assert_eq!(
+            rows(&files, "job.rb"),
+            [
+                "3 Job.run>Thread.new External - []",
+                "4 Job.run>worker.describe UniqueCandidate ReceiverDeclaredType [script/patch.rb#Thread.describe]",
+                "4 Job.run>worker Unresolved - []",
+                "5 Job.run>worker.join External - []",
+                "5 Job.run>worker Unresolved - []",
+                "6 Job.run>Thread.current External - []",
+                "7 Job.run>Array.new UniqueCandidate QualifiedPath [script/patch.rb#Array.initialize]",
+                "8 Job.run>Hash.new External - []",
+                "15 Chat.Poster.post>Thread.new UniqueCandidate QualifiedPath [chat.rb#Chat.Thread]",
+                "20 ->Thread.new External - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ruby_constant_receiver_resolves_in_the_enclosing_modules_first() {
+        // Ruby finds `Problem` in `Check` before the top level, thus
+        // `Blog::Problem` is not a candidate.
+        let check = "class Check\n  class Problem\n    def initialize(text)\n      @text = text\n    end\n\n    def text\n      @text\n    end\n  end\nend\n";
+        let blog = "module Blog\n  class Problem\n    def initialize(text)\n      @text = text\n    end\n\n    def text\n      @text\n    end\n  end\nend\n";
+        let caller = "class Check\n  def problem\n    found = Problem.new('a')\n    found.text\n  end\nend\n";
+        let files = [
+            ("check/problem.rb", check),
+            ("blog/problem.rb", blog),
+            ("check.rb", caller),
+        ];
+        assert_eq!(
+            rows(&files, "check.rb"),
+            [
+                "3 Check.problem>Problem.new UniqueCandidate QualifiedPath [check/problem.rb#Check.Problem.initialize]",
+                "4 Check.problem>found.text UniqueCandidate ReceiverDeclaredType [check/problem.rb#Check.Problem.text]",
+                "4 Check.problem>found Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ruby_qualified_constant_receiver_resolves_in_the_enclosing_modules_first() {
+        let api = "module Api\n  module Body\n    class Location\n      def self.for(name)\n        name\n      end\n    end\n  end\nend\n";
+        let other = "module Other\n  module Body\n    class Location\n      def self.for(name)\n        name\n      end\n    end\n  end\nend\n";
+        let caller = "module Api\n  class Contract\n    def build\n      Body::Location.for('a')\n    end\n  end\nend\n";
+        let files = [
+            ("api.rb", api),
+            ("other.rb", other),
+            ("contract.rb", caller),
+        ];
+        assert_eq!(
+            rows(&files, "contract.rb"),
+            ["4 Api.Contract.build>Body::Location::for UniqueCandidate QualifiedPath [api.rb#Api.Body.Location.for]"]
         );
     }
 
