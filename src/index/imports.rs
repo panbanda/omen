@@ -734,7 +734,10 @@ impl Repository<'_> {
             .filter(|file| file.language == Language::Python)
         {
             let here = directory(&file.file);
-            let named = exact.is_none() || here == suffix;
+            let named = match exact {
+                Some(_) => here == suffix,
+                None => self.is_python_root(&here[..here.len() - module.len()]),
+            };
             if named && !module.is_empty() {
                 directories
                     .entry(here)
@@ -743,6 +746,17 @@ impl Repository<'_> {
             }
         }
         directories.into_values().collect()
+    }
+
+    /// Python can look for a top-level module in `prefix`, a directory with
+    /// its `/`, or the empty text for the root. A directory with
+    /// `__init__.py` is a package: a module in it has the name of the
+    /// package before its own name.
+    fn is_python_root(&self, prefix: &str) -> bool {
+        prefix.is_empty()
+            || !["__init__.py", "__init__.pyi"]
+                .iter()
+                .any(|init| self.paths.contains(format!("{prefix}{init}").as_str()))
     }
 
     /// The files of the Python module `segments` below `base`. If `base` is
@@ -760,7 +774,11 @@ impl Repository<'_> {
                 let form = format!("{form}{stub}");
                 match base {
                     Some(base) => found.extend(self.existing(join(base, &form))),
-                    None => found.extend(self.with_suffix(&form, &[Language::Python])),
+                    None => found.extend(
+                        self.with_suffix(&form, &[Language::Python])
+                            .into_iter()
+                            .filter(|file| self.is_python_root(&file[..file.len() - form.len()])),
+                    ),
                 }
             }
             found
@@ -807,10 +825,19 @@ impl Repository<'_> {
         if !module.is_empty() {
             return target_of(module, not_found);
         }
-        one_package(
-            self.python_directories(base.as_deref(), &segments),
-            not_found,
-        )
+        let directories = self.python_directories(base.as_deref(), &segments);
+        if base.is_some() {
+            return one_package(directories, not_found);
+        }
+        // A directory without `__init__.py` is a namespace package. Python
+        // uses it only when no regular module or package of the name is on
+        // the search path, and the modules outside the repository are not known.
+        let files: Vec<String> = directories.into_iter().flatten().collect();
+        if files.is_empty() {
+            not_found
+        } else {
+            ImportTarget::Ambiguous(files)
+        }
     }
 
     fn ecma(&self, binding: &ImportBinding) -> ImportTarget {
@@ -1331,6 +1358,11 @@ impl Repository<'_> {
             if let Some(rest) = path.strip_prefix(prefix) {
                 path = rest;
             }
+        }
+        // Bash looks for a path without a slash in each directory of PATH and
+        // then in the working directory, thus the file is known only at run time.
+        if !binding.module_path.contains('/') {
+            return ImportTarget::Unresolved;
         }
         if path.starts_with('/') || path.starts_with('~') {
             return ImportTarget::External;
