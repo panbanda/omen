@@ -1252,7 +1252,7 @@ impl<'a> Resolver<'a> {
         self.references_within(file, start, end)
             .iter()
             .rev()
-            .map(|(_, other)| *other)
+            .copied()
             .find(|other| *other != position)
     }
 
