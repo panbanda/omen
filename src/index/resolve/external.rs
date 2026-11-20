@@ -880,6 +880,82 @@ const RUBY_RECEIVERS: &[&str] = &[
     "Time",
 ];
 
+/// The classes and modules of the Ruby core, sorted. Each Ruby program has
+/// them without `require`. A repository can open one of them again to add
+/// methods, but the class stays the core class. A class of the standard
+/// library needs its `require`, see `RUBY_MODULES`.
+const RUBY_CORE_CLASSES: &[&str] = &[
+    "ArgumentError",
+    "Array",
+    "BasicObject",
+    "Binding",
+    "Class",
+    "Comparable",
+    "Complex",
+    "ConditionVariable",
+    "Data",
+    "Dir",
+    "Encoding",
+    "Enumerable",
+    "Enumerator",
+    "Errno",
+    "Exception",
+    "FalseClass",
+    "Fiber",
+    "File",
+    "Float",
+    "FrozenError",
+    "Hash",
+    "IO",
+    "IOError",
+    "IndexError",
+    "Integer",
+    "Kernel",
+    "KeyError",
+    "Marshal",
+    "MatchData",
+    "Math",
+    "Method",
+    "Module",
+    "Mutex",
+    "NameError",
+    "NilClass",
+    "NoMethodError",
+    "NotImplementedError",
+    "Numeric",
+    "Object",
+    "ObjectSpace",
+    "Proc",
+    "Process",
+    "Queue",
+    "Random",
+    "Range",
+    "RangeError",
+    "Rational",
+    "Regexp",
+    "RuntimeError",
+    "ScriptError",
+    "Signal",
+    "SizedQueue",
+    "StandardError",
+    "StopIteration",
+    "String",
+    "Struct",
+    "Symbol",
+    "SystemExit",
+    "Thread",
+    "Time",
+    "TrueClass",
+    "TypeError",
+    "UnboundMethod",
+    "ZeroDivisionError",
+];
+
+/// Tells if `name` is a class or a module of the Ruby core.
+pub(super) fn is_ruby_core_class(name: &str) -> bool {
+    RUBY_CORE_CLASSES.binary_search(&name).is_ok()
+}
+
 const RUBY_MODULES: &[(&str, &[&str])] = &[
     ("fileutils", &["FileUtils"]),
     ("json", &["JSON"]),
@@ -931,6 +1007,11 @@ const BASH_BUILTINS: &[&str] = &[
     "getopts", "kill", "local", "popd", "printf", "pushd", "pwd", "read", "readonly", "return",
     "set", "shift", "test", "trap", "type", "typeset", "unalias", "unset", "wait",
 ];
+
+/// A builtin of Python, or `object`, which can be a base class.
+pub(super) fn is_python_builtin_class(name: &str) -> bool {
+    name == "object" || PYTHON_BUILTINS.contains(&name)
+}
 
 /// The rules of a language. Each language has an entry.
 pub fn rules(language: Language) -> Rules {
@@ -1084,11 +1165,11 @@ impl<'a> Resolver<'a> {
         evidence.then(|| Outcome::none(Status::External))
     }
 
-    fn binding_of(&self, file: usize, name: &str) -> Option<&'a ImportBinding> {
+    pub(super) fn binding_of(&self, file: usize, name: &str) -> Option<&'a ImportBinding> {
         self.imports_named(file, name).next()
     }
 
-    fn is_external_binding(&self, binding: &ImportBinding) -> bool {
+    pub(super) fn is_external_binding(&self, binding: &ImportBinding) -> bool {
         binding.target_file == ImportTarget::External && self.target_files(binding).is_empty()
     }
 
@@ -1098,7 +1179,7 @@ impl<'a> Resolver<'a> {
 
     /// A wildcard import of the file names a module of the repository. The
     /// module can bind any name, also with an assignment that is not a symbol.
-    fn has_repository_wildcard(&self, file: usize) -> bool {
+    pub(super) fn has_repository_wildcard(&self, file: usize) -> bool {
         self.repository_wildcards.get_or_init(|| {
             self.files
                 .iter()
@@ -1113,7 +1194,7 @@ impl<'a> Resolver<'a> {
 
     /// A file of the repository binds the name again with a macro, an alias,
     /// an assignment to the global object, or a singleton class.
-    fn is_rebound(&self, file: usize, name: &str) -> bool {
+    pub(super) fn is_rebound(&self, file: usize, name: &str) -> bool {
         self.rebound.contains(&(self.family(file), name))
     }
 
@@ -1571,6 +1652,16 @@ mod tests {
         }
         assert!(is_standard_member("Object", "keys"));
         assert!(!is_standard_member("Reflect", "getMetadata"));
+    }
+
+    #[test]
+    fn test_ruby_core_classes_are_sorted_and_unique() {
+        let mut sorted = RUBY_CORE_CLASSES.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, RUBY_CORE_CLASSES);
+        assert!(is_ruby_core_class("Thread"));
+        assert!(!is_ruby_core_class("Circle"));
     }
 
     #[test]
