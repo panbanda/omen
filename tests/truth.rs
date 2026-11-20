@@ -265,6 +265,10 @@ fn observed_calls(files: &[FileSymbols]) -> Vec<ObservedCall> {
         calls.push(ObservedCall {
             caller: locations[caller].clone(),
             call: reference.name.clone(),
+            position: (
+                reference.name_range.start_line,
+                reference.name_range.start_column,
+            ),
             edges,
             candidates: offered,
             external: vec![reference.resolution.status == ResolutionStatus::External],
