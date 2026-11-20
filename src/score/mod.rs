@@ -1076,6 +1076,8 @@ mod tests {
                 total_definitions: 0,
                 reachable_count: 0,
                 unresolved_paths: 0,
+                barrels_not_resolved: Vec::new(),
+                definitions_behind_barrels_not_resolved: 0,
                 components_not_analyzed: Vec::new(),
             },
         };
@@ -1105,6 +1107,8 @@ mod tests {
                 total_definitions: 10,
                 reachable_count: 7,
                 unresolved_paths: 0,
+                barrels_not_resolved: Vec::new(),
+                definitions_behind_barrels_not_resolved: 0,
                 components_not_analyzed: Vec::new(),
             },
         };
@@ -1135,6 +1139,8 @@ mod tests {
                 total_definitions: 100,
                 reachable_count: 50,
                 unresolved_paths: 0,
+                barrels_not_resolved: Vec::new(),
+                definitions_behind_barrels_not_resolved: 0,
                 components_not_analyzed: Vec::new(),
             },
         };
