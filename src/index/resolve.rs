@@ -235,7 +235,7 @@ fn is_callable(symbol: &Symbol) -> bool {
 }
 
 /// The object that a Ruby instance variable belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum RubyObject {
     /// An object of the class: the object of an instance method.
     Instance,
@@ -286,6 +286,22 @@ struct RubyHierarchy {
     paths: Vec<TypePath>,
     ancestors: condensed::Condensed,
     descendants: condensed::Condensed,
+}
+
+/// The name and the object of a Ruby instance variable, without its type.
+type VariableName = (String, RubyObject);
+
+/// The work of the regions of all the Ruby instance variables is at most this
+/// factor, times the size of the hierarchy, times the logarithm of that size.
+const RUBY_VARIABLE_BUDGET_FACTOR: usize = 4;
+
+/// The components of `RubyHierarchy` that can see a write of one Ruby
+/// instance variable: in `ancestors`, each component with a write in its
+/// ancestors; in `descendants`, each component with such a component in its
+/// descendants.
+struct VariableRegion {
+    ancestors: HashSet<usize>,
+    descendants: HashSet<usize>,
 }
 
 /// For one `VariableSearch`, the join of the written types over the
@@ -354,6 +370,10 @@ struct Resolver<'a> {
     /// sooner, and thus the order of the searches does not change a result.
     ruby_instance_variable_cache: RwLock<HashMap<(InstanceVariable, usize), Types>>,
     ruby_hierarchy: OnceLock<RubyHierarchy>,
+    /// The region of each Ruby instance variable with a write. `None` when
+    /// the regions of the variables before it, in the order of their first
+    /// writes, used the budget: the variable then has no type.
+    ruby_variable_regions: OnceLock<HashMap<VariableName, Option<VariableRegion>>>,
     /// The joins of each search for the types of Ruby instance variables.
     /// A search of one key holds its lock while it reads the writes, and a
     /// write searches only at a greater depth, thus two searches never wait
@@ -675,6 +695,7 @@ impl<'a> Resolver<'a> {
             ruby_instance_variables: OnceLock::new(),
             ruby_instance_variable_cache: RwLock::new(HashMap::new()),
             ruby_hierarchy: OnceLock::new(),
+            ruby_variable_regions: OnceLock::new(),
             ruby_written_joins: RwLock::new(HashMap::new()),
             go_embedders: OnceLock::new(),
             go_methods: OnceLock::new(),
@@ -3571,6 +3592,14 @@ impl<'a> Resolver<'a> {
         let (owner_path, name, object) = variable;
         let hierarchy = self.ruby_hierarchy();
         let node = *hierarchy.nodes.get(owner_path)?;
+        let region = self
+            .ruby_variable_regions()
+            .get(&(name.clone(), *object))?
+            .as_ref()?;
+        let start = hierarchy.descendants.component(node);
+        if !region.descendants.contains(&start) {
+            return None;
+        }
         let joins = Arc::clone(
             self.ruby_written_joins
                 .write()
@@ -3583,14 +3612,20 @@ impl<'a> Resolver<'a> {
             descendants,
         } = &mut *joins;
         let written = hierarchy.descendants.join(
-            hierarchy.descendants.component(node),
+            start,
+            &region.descendants,
             descendants,
             |component| {
                 hierarchy.descendants.members(component).iter().fold(
                     WrittenType::Nothing,
                     |value, node| {
+                        let above = hierarchy.ancestors.component(*node);
+                        if !region.ancestors.contains(&above) {
+                            return value;
+                        }
                         let above = hierarchy.ancestors.join(
-                            hierarchy.ancestors.component(*node),
+                            above,
+                            &region.ancestors,
                             ancestors,
                             |component| {
                                 self.ruby_component_writes(
@@ -3689,6 +3724,73 @@ impl<'a> Resolver<'a> {
                 }
             }
             by_path
+        })
+    }
+
+    fn ruby_variable_regions(&self) -> &HashMap<VariableName, Option<VariableRegion>> {
+        self.ruby_variable_regions.get_or_init(|| {
+            let hierarchy = self.ruby_hierarchy();
+            // The first write and the nodes of the writes of each variable.
+            let mut writes: HashMap<VariableName, ((usize, usize), Vec<usize>)> = HashMap::new();
+            for ((path, name, object), positions) in self.ruby_instance_variables() {
+                let (Some(node), Some(first)) = (hierarchy.nodes.get(path), positions.iter().min())
+                else {
+                    continue;
+                };
+                let entry = writes
+                    .entry((name.clone(), *object))
+                    .or_insert((*first, Vec::new()));
+                entry.0 = entry.0.min(*first);
+                entry.1.push(*node);
+            }
+            let mut order: Vec<_> = writes.into_iter().collect();
+            order.sort_by(|(left, (left_first, _)), (right, (right_first, _))| {
+                (left_first, left).cmp(&(right_first, right))
+            });
+            let size = hierarchy.ancestors.size() + hierarchy.descendants.size();
+            let logarithm = (usize::BITS - size.leading_zeros()) as usize;
+            let mut budget = RUBY_VARIABLE_BUDGET_FACTOR * size * logarithm.max(1);
+            let mut used = false;
+            let mut regions = HashMap::new();
+            for (variable, (_, nodes)) in order {
+                let region = if used {
+                    None
+                } else {
+                    self.ruby_variable_region(hierarchy, &nodes, &mut budget)
+                };
+                used = region.is_none();
+                regions.insert(variable, region);
+            }
+            regions
+        })
+    }
+
+    /// The region of a variable with writes in the types of `nodes`. `None`
+    /// when the walks need more than `budget`.
+    fn ruby_variable_region(
+        &self,
+        hierarchy: &RubyHierarchy,
+        nodes: &[usize],
+        budget: &mut usize,
+    ) -> Option<VariableRegion> {
+        let starts = nodes
+            .iter()
+            .map(|node| hierarchy.ancestors.component(*node));
+        let ancestors = hierarchy.ancestors.reaching(starts, budget)?;
+        let mut starts = Vec::new();
+        for component in &ancestors {
+            let members = hierarchy.ancestors.members(*component);
+            *budget = budget.checked_sub(members.len())?;
+            starts.extend(
+                members
+                    .iter()
+                    .map(|node| hierarchy.descendants.component(*node)),
+            );
+        }
+        let descendants = hierarchy.descendants.reaching(starts, budget)?;
+        Some(VariableRegion {
+            ancestors,
+            descendants,
         })
     }
 
@@ -5771,6 +5873,17 @@ mod false_edge_tests {
         size: usize,
         distinct: bool,
     ) -> std::time::Duration {
+        let (elapsed, typed) = instance_variables_in_a_chain_typed_at(size, distinct);
+        assert_eq!(typed, (1..=size).collect::<Vec<_>>());
+        elapsed
+    }
+
+    /// The time of the resolution of a chain, and the classes whose read
+    /// gets the type of the writes, in ascending order.
+    fn instance_variables_in_a_chain_typed_at(
+        size: usize,
+        distinct: bool,
+    ) -> (std::time::Duration, Vec<usize>) {
         let mut source = String::from("class Store\n  def add\n  end\nend\n\nclass Link0\nend\n");
         for index in 1..=size {
             let variable = if distinct {
@@ -5788,16 +5901,35 @@ mod false_edge_tests {
         let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
         super::resolve_references_with(&mut facts, &manifests);
         let elapsed = started.elapsed();
-        let bound = facts
+        let mut typed: Vec<usize> = facts
             .iter()
             .flat_map(|file| &file.references)
             .filter(|reference| {
                 reference.name == "add"
                     && reference.resolution.status == super::Status::UniqueCandidate
             })
-            .count();
-        assert_eq!(bound, size);
-        elapsed
+            .filter_map(|reference| {
+                let enclosing = reference.enclosing.as_deref()?;
+                enclosing
+                    .strip_prefix("a.rb#Link")?
+                    .strip_suffix(".read")?
+                    .parse()
+                    .ok()
+            })
+            .collect();
+        typed.sort_unstable();
+        (elapsed, typed)
+    }
+
+    /// Each variable of a chain has the region of the whole chain. The
+    /// budget gives a type to the variables of the first classes, in source
+    /// order, and no type to the others.
+    #[test]
+    fn test_distinct_instance_variables_in_a_long_chain_stop_at_the_budget() {
+        let size = 2_000;
+        let (_, typed) = instance_variables_in_a_chain_typed_at(size, true);
+        assert!(!typed.is_empty() && typed.len() < size, "{}", typed.len());
+        assert_eq!(typed, (1..=typed.len()).collect::<Vec<_>>());
     }
 
     #[test]
@@ -5812,6 +5944,15 @@ mod false_edge_tests {
     fn timing_instance_variables_in_a_chain_resolve_in_linear_time() {
         assert_scales_linearly("chain", 2_000, |size| {
             instance_variables_in_a_chain_resolve_at(size, false)
+        });
+    }
+
+    /// The budget bounds the work of a variable of each class of a chain.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_distinct_instance_variables_in_a_chain_resolve_in_linear_time() {
+        assert_scales_linearly("distinct chain", 2_000, |size| {
+            instance_variables_in_a_chain_typed_at(size, true).0
         });
     }
 
