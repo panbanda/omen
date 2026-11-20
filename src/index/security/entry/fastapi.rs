@@ -120,14 +120,17 @@ impl Outer {
 }
 
 impl Drop for Outer {
-    /// Releases a chain of links in a loop. The default drop calls itself for each link, and
-    /// a long chain can overflow the stack of the thread.
+    /// Releases the links of the two chains in a loop. The default drop calls itself for each
+    /// link, and a long chain can overflow the stack of the thread. The two fields can share a
+    /// link, so a link is released only when this is its last owner.
     fn drop(&mut self) {
-        let mut next = self.above.take();
-        while let Some(link) = next {
-            next = Rc::try_unwrap(link)
-                .ok()
-                .and_then(|mut link| link.above.take());
+        let mut pending: Vec<Rc<Outer>> = self.above.take().into_iter().collect();
+        pending.extend(self.above_with_guards.take());
+        while let Some(link) = pending.pop() {
+            if let Ok(mut link) = Rc::try_unwrap(link) {
+                pending.extend(link.above.take());
+                pending.extend(link.above_with_guards.take());
+            }
         }
     }
 }
