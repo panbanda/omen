@@ -17,7 +17,7 @@
 
 use super::{
     is_callable, segments, split_type, Id, ImportBinding, ImportKind, ImportTarget, Local, Outcome,
-    Receiver, Reference, ReferenceFacts, ReferenceKind, Resolver, Status, SymbolKind,
+    Receiver, Reference, ReferenceKind, Resolver, Status, SymbolKind,
 };
 use crate::core::Language;
 use crate::index::calls::{one_result, required_type};
@@ -1030,13 +1030,16 @@ struct Scope<'s> {
 impl<'a> Resolver<'a> {
     /// The outcome `External` when the source shows that the call names a
     /// definition outside the repository. The caller gives only a call that has no candidate.
+    /// `reference` is the reference at `position`, with the first word of the
+    /// alias value as its name when its name is a Bash alias.
     pub(super) fn external(
         &self,
         file: usize,
+        position: usize,
         reference: &Reference,
-        site: &ReferenceFacts,
         depth: usize,
     ) -> Option<Outcome> {
+        let site = &self.files[file].reference_facts[position];
         let rules = rules(self.files[file].language);
         let chain = self.chain(file, site.owner);
         let scope = Scope {

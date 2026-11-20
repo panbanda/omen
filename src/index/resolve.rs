@@ -3513,7 +3513,7 @@ impl<'a> Resolver<'a> {
         // The other rules found no candidate. The source can still show a
         // definition outside the repository.
         if outcome.status == Status::Unresolved && outcome.candidates.is_empty() {
-            if let Some(external) = self.external(file, reference, site, depth) {
+            if let Some(external) = self.external(file, position, reference, depth) {
                 return external;
             }
         }
