@@ -1078,6 +1078,7 @@ mod tests {
                 unresolved_paths: 0,
                 barrels_not_resolved: Vec::new(),
                 definitions_behind_barrels_not_resolved: 0,
+                components_not_analyzed: Vec::new(),
             },
         };
         assert_eq!(calculate_deadcode_score(&result), 100.0);
@@ -1108,6 +1109,7 @@ mod tests {
                 unresolved_paths: 0,
                 barrels_not_resolved: Vec::new(),
                 definitions_behind_barrels_not_resolved: 0,
+                components_not_analyzed: Vec::new(),
             },
         };
         let score = calculate_deadcode_score(&result);
@@ -1139,6 +1141,7 @@ mod tests {
                 unresolved_paths: 0,
                 barrels_not_resolved: Vec::new(),
                 definitions_behind_barrels_not_resolved: 0,
+                components_not_analyzed: Vec::new(),
             },
         };
         let score = calculate_deadcode_score(&result);

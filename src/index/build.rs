@@ -112,26 +112,35 @@ fn discover_manifests(
     let mut found: Vec<ManifestFile> = Vec::new();
     let mut manifests = Manifests::default();
     let mut tried: BTreeSet<String> = BTreeSet::new();
-    // A config that `extends` names is a config, whatever its name.
-    let add = |path: PathBuf,
-               extended: bool,
-               manifests: &mut Manifests,
-               found: &mut Vec<ManifestFile>| {
-        let content = read(&path).ok();
-        if let Some(content) = &content {
-            let text = String::from_utf8_lossy(content);
-            if extended {
-                manifests.add_project(&relative(root, &path), &text);
-            } else {
-                manifests.add(&relative(root, &path), &text);
+    // Reads the files of one step, and adds them with one sort of the
+    // packages. A config that `extends` names is a config, whatever its name.
+    let add_all =
+        |paths: Vec<(PathBuf, bool)>, manifests: &mut Manifests, found: &mut Vec<ManifestFile>| {
+            let mut texts: Vec<(String, String, bool)> = Vec::new();
+            for (path, extended) in paths {
+                let content = read(&path).ok();
+                if let Some(content) = &content {
+                    let text = String::from_utf8_lossy(content).into_owned();
+                    texts.push((relative(root, &path), text, extended));
+                }
+                found.push((path, content));
             }
-        }
-        found.push((path, content));
-    };
+            for (path, text, _) in texts.iter().filter(|(_, _, extended)| *extended) {
+                manifests.add_project(path, text);
+            }
+            manifests.add_each(
+                texts
+                    .iter()
+                    .filter(|(_, _, extended)| !*extended)
+                    .map(|(path, text, _)| (path.as_str(), text.as_str())),
+            );
+        };
+    let mut paths: Vec<(PathBuf, bool)> = Vec::new();
     for path in manifest_paths(root, files, list) {
         tried.insert(relative(root, &path));
-        add(path, false, &mut manifests, &mut found);
+        paths.push((path, false));
     }
+    add_all(paths, &mut manifests, &mut found);
     // The search for a package that `extends` names and that the index has
     // not read tries each parent directory of the known packages. The number
     // of names times the number of parents can grow faster than the
@@ -179,19 +188,19 @@ fn discover_manifests(
             path.parent()
                 .is_some_and(|directory| list(directory).iter().any(|entry| entry == path))
         };
-        let mut added = false;
+        let mut paths: Vec<(PathBuf, bool)> = Vec::new();
         for (path, extended) in wanted {
             let path = in_form(&path);
             // Only a file that the listing of its directory has is read.
             if !listed(&path) {
                 continue;
             }
-            add(path, extended, &mut manifests, &mut found);
-            added = true;
+            paths.push((path, extended));
         }
-        if !added {
+        if paths.is_empty() {
             break;
         }
+        add_all(paths, &mut manifests, &mut found);
     }
     (found, manifests)
 }
@@ -234,8 +243,11 @@ impl CodeIndex {
         let mut facts: Vec<FileSymbols> = files
             .par_iter()
             .filter_map(|path| {
-                let language = Language::detect(path)?;
+                if !Language::is_source_path(path) {
+                    return None;
+                }
                 let content = read(path).ok()?;
+                let language = Language::detect_with_content(path, &content)?;
                 let parsed = super::headers::parse(path, language, &content)?;
                 Some(extract_file(&parsed, &relative(root, path)))
             })
@@ -542,6 +554,152 @@ mod manifest_timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_missing_extended_packages_are_probed_in_linear_time() {
-        assert_scales_linearly("missing packages", 2_000, missing_extended_packages_at);
+        assert_scales_linearly("missing packages", 8_000, missing_extended_packages_at);
+    }
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+    use crate::index::model::{ImportTarget, ResolutionStatus};
+
+    const APP: &str = "<template>\n  <div>\n    <Card :title=\"format(label)\" @click=\"save\" />\n    <li v-for=\"item in items\" :key=\"item.id\">{{ item.name }}</li>\n  </div>\n</template>\n\n<script setup lang=\"ts\">\nimport Card from './Card.vue';\nimport { format } from './util';\nconst props = defineProps<{ a: string }>();\nconst label = 'x';\nconst items = [];\nfunction save() {}\nfunction item() {}\nfunction unused() {}\n</script>\n";
+    const CARD: &str = "<template><p>{{ title }}</p></template>\n<script setup lang=\"ts\">\ndefineProps<{ title: string }>();\n</script>\n";
+    const UTILITY: &str = "export function format(value: string): string {\n  return value;\n}\n";
+
+    fn index_of(sources: &[(&str, &str)]) -> CodeIndex {
+        let read = |path: &Path| {
+            sources
+                .iter()
+                .find(|(name, _)| Path::new(name) == path)
+                .map(|(_, text)| text.as_bytes().to_vec())
+                .ok_or_else(|| crate::core::Error::git("no such file".to_string()))
+        };
+        let list = |_: &Path| -> Vec<PathBuf> { Vec::new() };
+        let files: Vec<PathBuf> = sources
+            .iter()
+            .map(|(name, _)| PathBuf::from(name))
+            .collect();
+        CodeIndex::build(Path::new("."), &files, &read, &list)
+    }
+
+    fn app() -> CodeIndex {
+        index_of(&[
+            ("src/App.vue", APP),
+            ("src/Card.vue", CARD),
+            ("src/util.ts", UTILITY),
+        ])
+    }
+
+    #[test]
+    fn test_a_component_is_in_the_index_with_the_language_of_its_script() {
+        let index = app();
+        let facts = index
+            .files
+            .iter()
+            .find(|facts| facts.file == "src/App.vue")
+            .unwrap();
+        assert_eq!(facts.language, Language::TypeScript);
+        assert_eq!(facts.component.as_ref().unwrap().abstention, None);
+        assert!(facts.is_content_of_facts(APP.as_bytes()));
+        let names: Vec<&str> = facts
+            .symbols
+            .iter()
+            .map(|symbol| symbol.name.as_str())
+            .collect();
+        for name in ["save", "item", "unused"] {
+            assert!(names.contains(&name), "{names:?}");
+        }
+    }
+
+    #[test]
+    fn test_the_imports_of_a_component_resolve() {
+        let index = app();
+        let facts = index
+            .files
+            .iter()
+            .find(|facts| facts.file == "src/App.vue")
+            .unwrap();
+        let targets: Vec<(&str, &ImportTarget)> = facts
+            .imports
+            .iter()
+            .map(|binding| (binding.module_path.as_str(), &binding.target_file))
+            .collect();
+        assert_eq!(
+            targets,
+            [
+                (
+                    "./Card.vue",
+                    &ImportTarget::Resolved("src/Card.vue".to_string())
+                ),
+                ("./util", &ImportTarget::Resolved("src/util.ts".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_the_template_uses_the_names_of_the_script() {
+        let index = app();
+        let facts = index
+            .files
+            .iter()
+            .find(|facts| facts.file == "src/App.vue")
+            .unwrap();
+        let format = facts
+            .references
+            .iter()
+            .find(|reference| reference.name == "format")
+            .unwrap();
+        assert_eq!(format.resolution.candidates, ["src/util.ts#format"]);
+        assert_eq!(format.name_range.start_line, 3);
+        assert_eq!(format.enclosing, None);
+        let values: Vec<&str> = facts
+            .function_references
+            .iter()
+            .flat_map(|reference| {
+                reference
+                    .resolution
+                    .candidates
+                    .iter()
+                    .map(|key| key.as_str())
+            })
+            .collect();
+        assert!(values.contains(&"src/App.vue#save"), "{values:?}");
+        let all = facts.references.iter().chain(&facts.function_references);
+        for reference in all {
+            assert!(
+                !reference
+                    .resolution
+                    .candidates
+                    .iter()
+                    .any(|key| key == "src/App.vue#item"),
+                "a `v-for` alias names the function `item`: {reference:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_compiler_macro_is_external() {
+        let index = app();
+        for file in ["src/App.vue", "src/Card.vue"] {
+            let facts = index.files.iter().find(|facts| facts.file == file).unwrap();
+            let macro_call = facts
+                .references
+                .iter()
+                .find(|reference| reference.name == "defineProps")
+                .unwrap();
+            assert_eq!(
+                macro_call.resolution.status,
+                ResolutionStatus::External,
+                "{file}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_compiler_macro_is_not_external_outside_a_component() {
+        let index = index_of(&[("src/a.ts", "defineProps();\n")]);
+        let call = &index.files[0].references[0];
+        assert_ne!(call.resolution.status, ResolutionStatus::External);
     }
 }
