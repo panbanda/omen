@@ -961,6 +961,20 @@ mod tests {
     use crate::core::Language;
     use crate::index::security::entry::{EntryKind, EntryPoint};
 
+    #[test]
+    fn a_deep_chain_of_routers_with_guards_drops_on_a_small_stack() {
+        use crate::parser::deep::{on_small_stack, DEPTH};
+        use std::rc::Rc;
+        on_small_stack(|| {
+            let mut link: Option<Rc<super::Outer>> = None;
+            for position in 0..DEPTH {
+                let guards = vec!["guard".to_string()];
+                link = Some(Rc::new(super::Outer::new(position, 0, guards, link)));
+            }
+            drop(link);
+        });
+    }
+
     fn routes(source: &str) -> Vec<EntryPoint> {
         entries(Language::Python, &[("main.py", source)])
             .into_iter()
