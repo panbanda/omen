@@ -9,6 +9,7 @@ pub mod go;
 pub mod java;
 pub mod php;
 pub mod python;
+pub mod python_classes;
 pub mod ruby;
 pub mod rust;
 pub mod values;

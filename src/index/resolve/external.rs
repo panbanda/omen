@@ -932,6 +932,11 @@ const BASH_BUILTINS: &[&str] = &[
     "set", "shift", "test", "trap", "type", "typeset", "unalias", "unset", "wait",
 ];
 
+/// A builtin of Python, or `object`, which can be a base class.
+pub(super) fn is_python_builtin_class(name: &str) -> bool {
+    name == "object" || PYTHON_BUILTINS.contains(&name)
+}
+
 /// The rules of a language. Each language has an entry.
 pub fn rules(language: Language) -> Rules {
     const NO_DECLARED_TYPES: &str = "The language has no declared types.";
@@ -1084,11 +1089,11 @@ impl<'a> Resolver<'a> {
         evidence.then(|| Outcome::none(Status::External))
     }
 
-    fn binding_of(&self, file: usize, name: &str) -> Option<&'a ImportBinding> {
+    pub(super) fn binding_of(&self, file: usize, name: &str) -> Option<&'a ImportBinding> {
         self.imports_named(file, name).next()
     }
 
-    fn is_external_binding(&self, binding: &ImportBinding) -> bool {
+    pub(super) fn is_external_binding(&self, binding: &ImportBinding) -> bool {
         binding.target_file == ImportTarget::External && self.target_files(binding).is_empty()
     }
 
@@ -1098,7 +1103,7 @@ impl<'a> Resolver<'a> {
 
     /// A wildcard import of the file names a module of the repository. The
     /// module can bind any name, also with an assignment that is not a symbol.
-    fn has_repository_wildcard(&self, file: usize) -> bool {
+    pub(super) fn has_repository_wildcard(&self, file: usize) -> bool {
         self.repository_wildcards.get_or_init(|| {
             self.files
                 .iter()
