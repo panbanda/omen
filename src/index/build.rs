@@ -112,26 +112,35 @@ fn discover_manifests(
     let mut found: Vec<ManifestFile> = Vec::new();
     let mut manifests = Manifests::default();
     let mut tried: BTreeSet<String> = BTreeSet::new();
-    // A config that `extends` names is a config, whatever its name.
-    let add = |path: PathBuf,
-               extended: bool,
-               manifests: &mut Manifests,
-               found: &mut Vec<ManifestFile>| {
-        let content = read(&path).ok();
-        if let Some(content) = &content {
-            let text = String::from_utf8_lossy(content);
-            if extended {
-                manifests.add_project(&relative(root, &path), &text);
-            } else {
-                manifests.add(&relative(root, &path), &text);
+    // Reads the files of one step, and adds them with one sort of the
+    // packages. A config that `extends` names is a config, whatever its name.
+    let add_all =
+        |paths: Vec<(PathBuf, bool)>, manifests: &mut Manifests, found: &mut Vec<ManifestFile>| {
+            let mut texts: Vec<(String, String, bool)> = Vec::new();
+            for (path, extended) in paths {
+                let content = read(&path).ok();
+                if let Some(content) = &content {
+                    let text = String::from_utf8_lossy(content).into_owned();
+                    texts.push((relative(root, &path), text, extended));
+                }
+                found.push((path, content));
             }
-        }
-        found.push((path, content));
-    };
+            for (path, text, _) in texts.iter().filter(|(_, _, extended)| *extended) {
+                manifests.add_project(path, text);
+            }
+            manifests.add_each(
+                texts
+                    .iter()
+                    .filter(|(_, _, extended)| !*extended)
+                    .map(|(path, text, _)| (path.as_str(), text.as_str())),
+            );
+        };
+    let mut paths: Vec<(PathBuf, bool)> = Vec::new();
     for path in manifest_paths(root, files, list) {
         tried.insert(relative(root, &path));
-        add(path, false, &mut manifests, &mut found);
+        paths.push((path, false));
     }
+    add_all(paths, &mut manifests, &mut found);
     // The search for a package that `extends` names and that the index has
     // not read tries each parent directory of the known packages. The number
     // of names times the number of parents can grow faster than the
@@ -179,19 +188,19 @@ fn discover_manifests(
             path.parent()
                 .is_some_and(|directory| list(directory).iter().any(|entry| entry == path))
         };
-        let mut added = false;
+        let mut paths: Vec<(PathBuf, bool)> = Vec::new();
         for (path, extended) in wanted {
             let path = in_form(&path);
             // Only a file that the listing of its directory has is read.
             if !listed(&path) {
                 continue;
             }
-            add(path, extended, &mut manifests, &mut found);
-            added = true;
+            paths.push((path, extended));
         }
-        if !added {
+        if paths.is_empty() {
             break;
         }
+        add_all(paths, &mut manifests, &mut found);
     }
     (found, manifests)
 }
@@ -545,7 +554,7 @@ mod manifest_timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_missing_extended_packages_are_probed_in_linear_time() {
-        assert_scales_linearly("missing packages", 2_000, missing_extended_packages_at);
+        assert_scales_linearly("missing packages", 8_000, missing_extended_packages_at);
     }
 }
 
