@@ -236,6 +236,22 @@ fn search_results_have_one_order() {
     assert!(different.is_empty(), "{}", different.join("\n"));
 }
 
+/// A base directory without the retrieval corpus of the base branch fails the
+/// comparison. A pass would hide that no comparison was made.
+#[test]
+fn ledger_comparison_fails_without_base_cases() {
+    let fixtures = retrieval_root().parent().unwrap().to_path_buf();
+    for base in [fixtures.clone(), fixtures.join("missing")] {
+        let failure = std::panic::catch_unwind(|| ledger_never_grows_from(&base))
+            .expect_err(&format!("{} passed", base.display()));
+        let message = failure
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(message.contains("OMEN_RETRIEVAL_BASE_DIR"), "{message}");
+    }
+}
+
 /// The ledger must not get an entry for a query of the base branch, a query
 /// of the base branch must not change or go without a `retired` entry, and a
 /// rank must not get worse. A label that a base query uses must keep its
@@ -248,14 +264,19 @@ fn ledger_never_grows() {
     let base = PathBuf::from(
         std::env::var_os("OMEN_RETRIEVAL_BASE_DIR").expect("set OMEN_RETRIEVAL_BASE_DIR"),
     );
-    if !base.join(CORPUS_FILE).is_file() {
-        // The base branch does not have the corpus. Thus each entry is new.
-        return;
-    }
+    ledger_never_grows_from(&base);
+}
+
+fn ledger_never_grows_from(base: &Path) {
+    assert!(
+        base.join(CORPUS_FILE).is_file() && base.join(LEDGER_FILE).is_file(),
+        "{} has no {CORPUS_FILE} or no {LEDGER_FILE}: set OMEN_RETRIEVAL_BASE_DIR to tests/fixtures/retrieval of the base branch",
+        base.display()
+    );
     let root = retrieval_root();
-    let base_corpus = load_corpus(&base);
+    let base_corpus = load_corpus(base);
     let base_labels = load_labels_from(&base.join("../truth"), &base_corpus);
-    let base_ledger = load_ledger(&base);
+    let base_ledger = load_ledger(base);
     let corpus = load_corpus(&root);
     let labels = load_labels(&corpus);
     let ledger = load_ledger(&root);
@@ -274,9 +295,9 @@ fn ledger_never_grows() {
         },
         &accepted_queries,
     );
-    let base_accepted: Vec<AcceptedRankRegression> = load_accepted(&base).unwrap();
+    let base_accepted: Vec<AcceptedRankRegression> = load_accepted(base).unwrap();
     let report = check_accepted_ranks(
-        &rank_regressions(&base_corpus, &load_ranks(&base), &load_ranks(&root)),
+        &rank_regressions(&base_corpus, &load_ranks(base), &load_ranks(&root)),
         &accepted,
         &base_accepted,
     );

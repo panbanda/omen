@@ -757,6 +757,22 @@ fn each_supported_language_has_a_case() {
     assert!(missing.is_empty(), "no fixture case for: {missing:?}");
 }
 
+/// A base directory without the truth cases of the base branch fails the
+/// comparison. A pass would hide that no comparison was made.
+#[test]
+fn ledger_comparison_fails_without_base_cases() {
+    let fixtures = truth_root().parent().unwrap().to_path_buf();
+    for base in [fixtures.clone(), fixtures.join("missing")] {
+        let failure = std::panic::catch_unwind(|| ledger_never_grows_from(&base))
+            .expect_err(&format!("{} passed", base.display()));
+        let message = failure
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(message.contains("OMEN_TRUTH_BASE_DIR"), "{message}");
+    }
+}
+
 /// CI runs this test with `OMEN_TRUTH_BASE_DIR` set to the fixture directory of
 /// the base branch.
 #[test]
@@ -764,11 +780,21 @@ fn each_supported_language_has_a_case() {
 fn ledger_never_grows() {
     let base =
         PathBuf::from(std::env::var_os("OMEN_TRUTH_BASE_DIR").expect("set OMEN_TRUTH_BASE_DIR"));
-    if !base.is_dir() {
-        // The base branch does not have fixtures. Thus each entry is new.
-        return;
-    }
-    let base_cases = load_cases(&base);
+    ledger_never_grows_from(&base);
+}
+
+fn ledger_never_grows_from(base: &Path) {
+    assert!(
+        base.join(LEDGER_FILE).is_file(),
+        "{} has no {LEDGER_FILE}: set OMEN_TRUTH_BASE_DIR to tests/fixtures/truth of the base branch",
+        base.display()
+    );
+    let base_cases = load_cases(base);
+    assert!(
+        !base_cases.is_empty(),
+        "{} has no truth cases: set OMEN_TRUTH_BASE_DIR to tests/fixtures/truth of the base branch",
+        base.display()
+    );
     let mut base_ids = BTreeSet::new();
     for case in &base_cases {
         base_ids.extend(label_assertion_ids(&case.id, &case.labels).unwrap());
@@ -777,11 +803,11 @@ fn ledger_never_grows() {
     let grown = ledger_growth(
         &base_ids,
         &base_case_ids,
-        &load_ledger(&base),
+        &load_ledger(base),
         &load_ledger(&truth_root()),
     );
     let accepted: Vec<AcceptedFact> = load_accepted(&truth_root()).unwrap();
-    let base_accepted: Vec<AcceptedFact> = load_accepted(&base).unwrap();
+    let base_accepted: Vec<AcceptedFact> = load_accepted(base).unwrap();
     let report = check_accepted_facts(&grown, &accepted, &base_accepted);
     for note in &report.notes {
         println!("note: {note}");
