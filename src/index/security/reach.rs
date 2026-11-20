@@ -206,6 +206,9 @@ type Reached = (usize, u64, Option<(usize, ResolutionBasis, EdgeKind)>);
 /// The result of one search from one entry point.
 struct Search {
     reached: BTreeMap<usize, Reached>,
+    /// For each reached symbol, the symbols one step before it on a shortest path. These
+    /// edges make the graph of all shortest paths from the start.
+    predecessors: BTreeMap<usize, Vec<usize>>,
 }
 
 /// What the searches of some entry points give.
@@ -266,6 +269,7 @@ fn edges_of(
 fn search(view: &CallView, start: usize, min_basis: ResolutionBasis) -> Search {
     let mut reached: BTreeMap<usize, Reached> = BTreeMap::new();
     reached.insert(start, (0, 1, None));
+    let mut predecessors: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     let mut queue = VecDeque::from([start]);
     while let Some(current) = queue.pop_front() {
         let (distance, count, _) = reached[&current];
@@ -273,10 +277,12 @@ fn search(view: &CallView, start: usize, min_basis: ResolutionBasis) -> Search {
             match reached.get_mut(&target) {
                 None => {
                     reached.insert(target, (distance + 1, count, Some((current, basis, kind))));
+                    predecessors.insert(target, vec![current]);
                     queue.push_back(target);
                 }
                 Some(entry) if entry.0 == distance + 1 => {
                     entry.1 = entry.1.saturating_add(count);
+                    predecessors.entry(target).or_default().push(current);
                     // The path that the result shows uses a call when a call
                     // and a function reference go to the symbol in the same
                     // number of steps.
@@ -291,49 +297,31 @@ fn search(view: &CallView, start: usize, min_basis: ResolutionBasis) -> Search {
             }
         }
     }
-    Search { reached }
+    Search {
+        reached,
+        predecessors,
+    }
 }
 
-/// The keys of the symbols on any shortest path from the start of `result` to `target`. A
-/// symbol is on one when its distance from the start and its distance to the target add up
-/// to the distance of the target.
-fn shortest_path_members(
-    view: &CallView,
-    result: &Search,
-    target: usize,
-    min_basis: ResolutionBasis,
-) -> Vec<String> {
-    let Some((total, _, _)) = result.reached.get(&target) else {
+/// The keys of the symbols on any shortest path from the start of `result` to `target`: the
+/// symbols from which the edges of the shortest paths lead to `target`. The walk reads only
+/// those symbols and their edges.
+fn shortest_path_members(view: &CallView, result: &Search, target: usize) -> Vec<String> {
+    if !result.reached.contains_key(&target) {
         return Vec::new();
-    };
-    let mut callers: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for symbol in result.reached.keys() {
-        for callee in edges_of(view, *symbol, min_basis).into_keys() {
-            if result.reached.contains_key(&callee) {
-                callers.entry(callee).or_default().push(*symbol);
+    }
+    let mut seen = BTreeSet::from([target]);
+    let mut pending = vec![target];
+    while let Some(current) = pending.pop() {
+        for previous in result.predecessors.get(&current).into_iter().flatten() {
+            if seen.insert(*previous) {
+                pending.push(*previous);
             }
         }
     }
-    let mut to_target: BTreeMap<usize, usize> = BTreeMap::from([(target, 0)]);
-    let mut queue = VecDeque::from([target]);
-    while let Some(current) = queue.pop_front() {
-        let distance = to_target[&current];
-        for caller in callers.get(&current).into_iter().flatten() {
-            if !to_target.contains_key(caller) {
-                to_target.insert(*caller, distance + 1);
-                queue.push_back(*caller);
-            }
-        }
-    }
-    let mut members: Vec<String> = result
-        .reached
-        .iter()
-        .filter(|(symbol, (from_start, _, _))| {
-            to_target
-                .get(symbol)
-                .is_some_and(|to| from_start + to == *total)
-        })
-        .map(|(symbol, _)| view.symbols[*symbol].qualified_name.clone())
+    let mut members: Vec<String> = seen
+        .into_iter()
+        .map(|symbol| view.symbols[symbol].qualified_name.clone())
         .collect();
     members.sort();
     members
@@ -517,6 +505,8 @@ pub fn reachability(
             .collect();
         // The paths keep the order of the sinks.
         reached_sinks.sort_unstable();
+        // Many sinks can have one symbol.
+        let mut members_of: BTreeMap<usize, Vec<String>> = BTreeMap::new();
         for position in reached_sinks {
             let (sink, symbol) = &sink_symbols[position];
             let Some(symbol) = symbol else {
@@ -548,7 +538,10 @@ pub fn reachability(
                     }
                 })
                 .collect();
-            let members = shortest_path_members(view, &result, *symbol, min_basis);
+            let members = members_of
+                .entry(*symbol)
+                .or_insert_with(|| shortest_path_members(view, &result, *symbol))
+                .clone();
             found.paths.push(SinkPath {
                 entry: entry.key.clone(),
                 sink: sink.key.clone(),
