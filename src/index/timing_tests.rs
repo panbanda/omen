@@ -49,7 +49,7 @@ fn test_stopwatch_counts_work_and_not_a_wait() {
 fn test_sizes_alternate_and_each_run_has_a_new_thread() {
     let runs = runs_of(above_the_floor);
     let sizes: Vec<usize> = runs.iter().map(|(size, _)| *size).collect();
-    assert_eq!(sizes, [10, 20, 10, 20, 10, 20]);
+    assert_eq!(sizes, [10, 40, 10, 40, 10, 40]);
     let threads: std::collections::HashSet<_> = runs.iter().map(|(_, id)| *id).collect();
     assert_eq!(threads.len(), runs.len());
     assert!(!threads.contains(&std::thread::current().id()));
@@ -79,15 +79,15 @@ fn test_best_time_of_each_size_is_compared() {
     runs_of(|size| {
         let run = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         match (size, run) {
-            (20, 1) => Duration::from_secs(5),
-            (20, _) => Duration::from_millis(250),
+            (40, 1) => Duration::from_secs(5),
+            (40, _) => Duration::from_millis(400),
             _ => Duration::from_millis(100),
         }
     });
 }
 
 #[test]
-#[should_panic(expected = "quadratic: 100ms at 10, 400ms at 20")]
+#[should_panic(expected = "quadratic: 100ms at 10, 1.6s at 40")]
 fn test_time_that_grows_with_the_square_fails() {
     assert_scales_linearly("quadratic", 10, |size| {
         Duration::from_millis((size * size) as u64)
@@ -97,7 +97,7 @@ fn test_time_that_grows_with_the_square_fails() {
 /// Below the floor, a ratio of two times is noise. The check thus doubles
 /// the two sizes until the small size takes the floor, and compares there.
 #[test]
-#[should_panic(expected = "quadratic: 102.4ms at 320, 409.6ms at 640")]
+#[should_panic(expected = "quadratic: 102.4ms at 320, 1.6384s at 1280")]
 fn test_short_quadratic_time_grows_to_the_floor_and_fails() {
     assert_scales_linearly("quadratic", 10, |size| {
         Duration::from_micros((size * size) as u64)
@@ -113,7 +113,7 @@ fn test_short_linear_time_grows_to_the_floor_and_passes() {
     });
     let sizes = sizes.into_inner().unwrap();
     assert_eq!(sizes.first(), Some(&10));
-    assert_eq!(sizes.iter().max(), Some(&320));
+    assert_eq!(sizes.iter().max(), Some(&640));
 }
 
 /// A case that cannot take the floor at 64 times its size cannot show a

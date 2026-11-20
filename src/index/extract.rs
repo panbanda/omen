@@ -2578,9 +2578,11 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_deeply_nested_python_lambdas_are_extracted_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("python lambdas", 5_000, |size| {
+        crate::index::timing::assert_scales_linearly("python lambdas", 160_000, |size| {
             let source = format!("def f():\n    return {}1\n", "lambda: ".repeat(size));
-            extract_time(Language::Python, "a.py", source)
+            (0..4)
+                .map(|_| extract_time(Language::Python, "a.py", source.clone()))
+                .sum()
         });
     }
 

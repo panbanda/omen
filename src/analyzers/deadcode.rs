@@ -2376,8 +2376,10 @@ pub struct ComponentNotAnalyzed {
 mod tests {
     use super::*;
 
-    /// The time of `collect_file_data` on `depth` nested TypeScript functions, each a symbol.
-    fn file_data_of_nested_functions_at(depth: usize) -> std::time::Duration {
+    /// The time of `collect_file_data` on `depth` nested TypeScript functions, each a symbol, run
+    /// `rounds` times. The key of each function names the functions around it, so the facts grow
+    /// with the square of the depth: the depth stays small, and the rounds give the time.
+    fn file_data_of_nested_functions_at(depth: usize, rounds: usize) -> std::time::Duration {
         let source = format!("{}{}\n", "function f() {".repeat(depth), "}".repeat(depth));
         let result = parser::Parser::new()
             .parse(
@@ -2388,20 +2390,19 @@ mod tests {
             .expect("parse");
         let facts = crate::index::extract::extract_file(&result, "a.ts");
         let started = crate::index::timing::Stopwatch::start();
-        let data = collect_file_data(&result, &facts);
-        let elapsed = started.elapsed();
-        assert_eq!(data.definitions.len(), depth);
-        elapsed
+        for _ in 0..rounds {
+            let data = collect_file_data(&result, &facts);
+            assert_eq!(data.definitions.len(), depth);
+        }
+        started.elapsed()
     }
 
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_definitions_of_nested_functions_are_read_in_linear_time() {
-        crate::index::timing::assert_scales_linearly(
-            "nested functions",
-            2_500,
-            file_data_of_nested_functions_at,
-        );
+        crate::index::timing::assert_scales_linearly("nested functions", 1_000, |depth| {
+            file_data_of_nested_functions_at(depth, 150)
+        });
     }
 
     /// The time of `extract_rust_function_attributes` on `depth` nested modules.

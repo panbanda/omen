@@ -1692,7 +1692,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_deeply_nested_for_aliases_are_read_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("levels", 2_000, |size| {
+        crate::index::timing::assert_scales_linearly("levels", 64_000, |size| {
             let mut template = String::new();
             for level in 0..size {
                 template.push_str(&format!(
@@ -1700,21 +1700,23 @@ mod tests {
                 ));
             }
             template.push_str(&"</div>".repeat(size));
-            translate_in(&format!(
+            let content = format!(
                 "<template>{template}</template>\n<script setup>\nconst items = [];\n</script>\n"
-            ))
+            );
+            (0..5).map(|_| translate_in(&content)).sum()
         });
     }
 
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_elements_are_read_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("elements", 5_000, |size| {
+        crate::index::timing::assert_scales_linearly("elements", 160_000, |size| {
             let template = "<MyCard :title=\"label\" @click=\"count++; save($event)\">{{ format(value) }}</MyCard>\n"
                 .repeat(size);
-            translate_in(&format!(
+            let content = format!(
                 "<template>{template}</template>\n<script setup>\nconst label = 1;\n</script>\n"
-            ))
+            );
+            (0..4).map(|_| translate_in(&content)).sum()
         });
     }
 
@@ -1722,11 +1724,12 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_texts_without_mustaches_are_read_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("elements", 20_000, |size| {
+        crate::index::timing::assert_scales_linearly("elements", 640_000, |size| {
             let template = "<div>a</div>".repeat(size);
-            translate_in(&format!(
+            let content = format!(
                 "<template>{template}</template>\n<script setup>\nconst a = 1;\n</script>\n"
-            ))
+            );
+            (0..5).map(|_| translate_in(&content)).sum()
         });
     }
 
