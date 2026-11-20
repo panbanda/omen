@@ -1328,6 +1328,11 @@ impl Repository<'_> {
                 path = rest;
             }
         }
+        // Bash looks for a path without a slash in each directory of PATH and
+        // then in the working directory, thus the file is known only at run time.
+        if !binding.module_path.contains('/') {
+            return ImportTarget::Unresolved;
+        }
         if path.starts_with('/') || path.starts_with('~') {
             return ImportTarget::External;
         }
@@ -1612,7 +1617,8 @@ pub(crate) mod testing {
                 manifests.add_project(file, source);
                 continue;
             }
-            let language = Language::detect(Path::new(file)).unwrap();
+            let language =
+                Language::detect_with_content(Path::new(file), source.as_bytes()).unwrap();
             let parsed = Parser::new()
                 .parse(source.as_bytes(), language, Path::new(file))
                 .unwrap();

@@ -31,6 +31,21 @@ impl Language {
         Self::from_extension(extension)
     }
 
+    /// The language of a file from its path, or from its content for a Vue
+    /// component, whose script blocks give the language.
+    pub fn detect_with_content(path: &Path, content: &[u8]) -> Option<Self> {
+        if crate::parser::vue::is_component(path) {
+            return crate::parser::vue::script_language(content);
+        }
+        Self::detect(path)
+    }
+
+    /// The file can have a language: its path has the extension of a
+    /// language, or it is a Vue component.
+    pub fn is_source_path(path: &Path) -> bool {
+        Self::detect(path).is_some() || crate::parser::vue::is_component(path)
+    }
+
     /// Get language from file extension.
     pub fn from_extension(ext: &str) -> Option<Self> {
         let matches = |candidate| ext.eq_ignore_ascii_case(candidate);
