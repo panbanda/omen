@@ -20,7 +20,9 @@ use parking_lot::RwLock;
 use rayon::prelude::*;
 
 use super::calls::{element_type, one_result, required_type, split_list, split_type, Argument};
-use super::extract::{name_path, FileSymbols, LinkFacts, Local, ReferenceFacts, ValueSites};
+use super::extract::{
+    name_path, FileSymbols, GeneratedFor, LinkFacts, Local, ReferenceFacts, ValueSites,
+};
 use super::imports::Manifests;
 use super::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ReferenceKind, Resolution,
@@ -2953,7 +2955,13 @@ impl<'a> Resolver<'a> {
             Family::Java | Family::CSharp | Family::C | Family::Ruby
         ) {
             if let Some(owner) = self.enclosing_type(chain) {
-                let members = self.members(owner, name, arity, &mut BTreeSet::new());
+                let mut members = self.members(owner, name, arity, &mut BTreeSet::new());
+                // In a class body `self` is the class, not an object of it.
+                if chain.first() == Some(&owner) {
+                    members.retain(|member| {
+                        self.facts(*member).generated != Some(GeneratedFor::Instances)
+                    });
+                }
                 if let Some(outcome) = Outcome::of(Basis::EnclosingType, members) {
                     return outcome;
                 }

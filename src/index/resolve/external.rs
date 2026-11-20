@@ -27,7 +27,7 @@ use crate::index::imports::TestRunners;
 const MAXIMUM_DEPTH: usize = 4;
 
 /// The version of the lists in this module.
-pub const LIST_VERSION: u32 = 2;
+pub const LIST_VERSION: u32 = 3;
 
 /// A list of names, or the reason why the rule does not apply to the language.
 #[derive(Debug, Clone, Copy)]
@@ -232,6 +232,18 @@ const ECMA_BUILTINS: &[&str] = &[
     "setInterval",
     "setTimeout",
     "structuredClone",
+];
+
+/// The compiler of Vue replaces these calls in the script of a component.
+/// No module gives them, and no import binds them.
+const VUE_COMPILER_MACROS: &[&str] = &[
+    "defineEmits",
+    "defineExpose",
+    "defineModel",
+    "defineOptions",
+    "defineProps",
+    "defineSlots",
+    "withDefaults",
 ];
 
 const ECMA_RECEIVERS: &[&str] = &[
@@ -1263,7 +1275,10 @@ impl<'a> Resolver<'a> {
         } else {
             name.to_string()
         };
+        let compiler_macro = self.files[scope.file].component.is_some()
+            && VUE_COMPILER_MACROS.contains(&name.as_str());
         rules.bare.contains(&name)
+            || compiler_macro
             || self.is_provided(scope.file, &name)
             || self.is_test_global(scope.file, &name)
     }
@@ -1573,7 +1588,7 @@ mod tests {
 
     #[test]
     fn test_list_version_is_one() {
-        assert_eq!(LIST_VERSION, 2);
+        assert_eq!(LIST_VERSION, 3);
     }
 
     #[test]
@@ -1792,6 +1807,18 @@ mod tests {
     /// that depends on the runner, when nothing in the file binds the name.
     /// A call on the result of such a call is outside the repository too,
     /// unless a function or a method of the repository has its name.
+    #[test]
+    fn test_vue_component_gets_the_test_runner_globals_of_its_package() {
+        let vitest = "{\"name\": \"app\", \"devDependencies\": {\"vitest\": \"1.0.0\"}}";
+        let none = "{\"name\": \"app\", \"dependencies\": {\"vue\": \"3.0.0\"}}";
+        let component = "<script setup lang=\"ts\">\ndescribe('a', () => {\n  expect(1).toBe(1);\n});\n</script>\n";
+        let files = [("package.json", vitest), ("src/Probe.vue", component)];
+        assert!(external(&files, "src/Probe.vue", "describe"));
+        assert!(external(&files, "src/Probe.vue", "expect"));
+        let files = [("package.json", none), ("src/Probe.vue", component)];
+        assert!(!external(&files, "src/Probe.vue", "describe"));
+    }
+
     #[test]
     fn test_ecma_test_runner_globals() {
         let vitest = "{\"name\": \"app\", \"devDependencies\": {\"vitest\": \"1.0.0\"}}";
