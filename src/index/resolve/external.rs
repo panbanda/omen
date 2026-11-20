@@ -880,6 +880,82 @@ const RUBY_RECEIVERS: &[&str] = &[
     "Time",
 ];
 
+/// The classes and modules of the Ruby core, sorted. Each Ruby program has
+/// them without `require`. A repository can open one of them again to add
+/// methods, but the class stays the core class. A class of the standard
+/// library needs its `require`, see `RUBY_MODULES`.
+const RUBY_CORE_CLASSES: &[&str] = &[
+    "ArgumentError",
+    "Array",
+    "BasicObject",
+    "Binding",
+    "Class",
+    "Comparable",
+    "Complex",
+    "ConditionVariable",
+    "Data",
+    "Dir",
+    "Encoding",
+    "Enumerable",
+    "Enumerator",
+    "Errno",
+    "Exception",
+    "FalseClass",
+    "Fiber",
+    "File",
+    "Float",
+    "FrozenError",
+    "Hash",
+    "IO",
+    "IOError",
+    "IndexError",
+    "Integer",
+    "Kernel",
+    "KeyError",
+    "Marshal",
+    "MatchData",
+    "Math",
+    "Method",
+    "Module",
+    "Mutex",
+    "NameError",
+    "NilClass",
+    "NoMethodError",
+    "NotImplementedError",
+    "Numeric",
+    "Object",
+    "ObjectSpace",
+    "Proc",
+    "Process",
+    "Queue",
+    "Random",
+    "Range",
+    "RangeError",
+    "Rational",
+    "Regexp",
+    "RuntimeError",
+    "ScriptError",
+    "Signal",
+    "SizedQueue",
+    "StandardError",
+    "StopIteration",
+    "String",
+    "Struct",
+    "Symbol",
+    "SystemExit",
+    "Thread",
+    "Time",
+    "TrueClass",
+    "TypeError",
+    "UnboundMethod",
+    "ZeroDivisionError",
+];
+
+/// Tells if `name` is a class or a module of the Ruby core.
+pub(super) fn is_ruby_core_class(name: &str) -> bool {
+    RUBY_CORE_CLASSES.binary_search(&name).is_ok()
+}
+
 const RUBY_MODULES: &[(&str, &[&str])] = &[
     ("fileutils", &["FileUtils"]),
     ("json", &["JSON"]),
@@ -1118,7 +1194,7 @@ impl<'a> Resolver<'a> {
 
     /// A file of the repository binds the name again with a macro, an alias,
     /// an assignment to the global object, or a singleton class.
-    fn is_rebound(&self, file: usize, name: &str) -> bool {
+    pub(super) fn is_rebound(&self, file: usize, name: &str) -> bool {
         self.rebound.contains(&(self.family(file), name))
     }
 
@@ -1210,6 +1286,12 @@ impl<'a> Resolver<'a> {
     fn is_declared_for(&self, file: usize, name: &str) -> bool {
         if self.is_ecma_global_in(file, name) || self.is_test_global(file, name) {
             self.named_in(name, file).next().is_some()
+        } else if self.family(file) == super::Family::Python {
+            // Only a top-level definition of a module can hide a builtin. A
+            // member is in the scope of its class, and a nested function is
+            // in the scope of its function, where the lexical rules find it.
+            self.named(name, file)
+                .any(|id| self.symbol(id).container.is_none())
         } else {
             self.by_name.contains_key(name)
         }
@@ -1573,6 +1655,16 @@ mod tests {
     }
 
     #[test]
+    fn test_ruby_core_classes_are_sorted_and_unique() {
+        let mut sorted = RUBY_CORE_CLASSES.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, RUBY_CORE_CLASSES);
+        assert!(is_ruby_core_class("Thread"));
+        assert!(!is_ruby_core_class("Circle"));
+    }
+
+    #[test]
     fn test_ecma_global_names_are_sorted_and_unique() {
         let mut sorted = ECMA_GLOBAL_NAMES.to_vec();
         sorted.sort_unstable();
@@ -1648,6 +1740,22 @@ mod tests {
             ("util.py", "def print(a):\n    return a\n"),
         ];
         assert!(!external(&files, "app.py", "print"));
+    }
+
+    #[test]
+    fn test_python_builtin_is_not_hidden_by_a_member_or_a_nested_function() {
+        let app = "def other():\n    def filter(a, b):\n        return a\n    return filter\n\n\ndef run(items):\n    filter(None, items)\n    next(iter(items))\n    return type(items)\n";
+        let models = "class QuerySet:\n    def filter(self, **query):\n        return self\n\n    def next(self):\n        return self\n\n    class type:\n        pass\n";
+        let script = "export function filter(a) {\n  return a;\n}\n";
+        let files = [
+            ("app.py", app),
+            ("models.py", models),
+            ("filter.js", script),
+        ];
+        assert!(external(&files, "app.py", "next"));
+        assert!(external(&files, "app.py", "type"));
+        let found = statuses(&files, "app.py", "filter");
+        assert_eq!(found, ["External"], "{found:?}");
     }
 
     #[test]
