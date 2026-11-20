@@ -390,6 +390,10 @@ pub struct OnDemandTrees<'a> {
     parsed: parking_lot::Mutex<std::collections::HashMap<usize, Cell>>,
     kept: parking_lot::Mutex<std::collections::HashMap<usize, std::sync::Arc<ParseResult>>>,
     shared: EntryShared,
+    /// A test runs this before a thread reads the parse that another thread
+    /// stored, and thus orders that read against the other threads.
+    #[cfg(test)]
+    before_read_of_stored_parse: Option<&'a (dyn Fn() + Sync)>,
 }
 
 /// The parse of a file. The first thread that asks parses the file, and the other
@@ -406,6 +410,8 @@ impl<'a> OnDemandTrees<'a> {
             parsed: parking_lot::Mutex::new(std::collections::HashMap::new()),
             kept: parking_lot::Mutex::new(std::collections::HashMap::new()),
             shared: EntryShared::default(),
+            #[cfg(test)]
+            before_read_of_stored_parse: None,
         }
     }
 
@@ -463,6 +469,10 @@ impl TreeSource for OnDemandTrees<'_> {
                 (Some(tree), _) => break tree,
                 (None, None) => return None,
                 (None, Some(weak)) => {
+                    #[cfg(test)]
+                    if let Some(hook) = self.before_read_of_stored_parse {
+                        hook();
+                    }
                     if let Some(tree) = weak.upgrade() {
                         break tree;
                     }
@@ -2545,33 +2555,38 @@ pub(super) mod tests {
         assert_eq!(parses.load(Ordering::SeqCst), 2);
     }
 
+    /// The first thread parses the file and releases the tree before the
+    /// second thread reads the stored parse. The second thread then parses the
+    /// file again and keeps that parse for the later requests. The hook makes
+    /// each read of a stored parse wait until the first thread has released
+    /// its tree, thus the order does not depend on the speed of the threads.
     #[test]
     fn a_waiter_whose_tree_was_released_publishes_its_parse_for_later_requests() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         let parses = AtomicUsize::new(0);
-        let waiting = AtomicBool::new(false);
+        let released = AtomicBool::new(false);
         let parse_file = |_: usize| {
-            if parses.fetch_add(1, Ordering::SeqCst) == 0 {
-                // The second thread must wait on the cell while the first parses.
-                while !waiting.load(Ordering::SeqCst) {
-                    std::thread::yield_now();
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
+            parses.fetch_add(1, Ordering::SeqCst);
             Ok(Parser::new()
                 .parse(b"x = 1\n", Language::Python, Path::new("a.py"))
                 .ok())
         };
-        let trees = OnDemandTrees::new(&parse_file);
+        let wait_for_release = || {
+            while !released.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+        };
+        let mut trees = OnDemandTrees::new(&parse_file);
+        trees.before_read_of_stored_parse = Some(&wait_for_release);
         std::thread::scope(|scope| {
-            let first = scope.spawn(|| drop(trees.transient_tree(0)));
+            let first = scope.spawn(|| {
+                drop(trees.transient_tree(0));
+                released.store(true, Ordering::SeqCst);
+            });
             while parses.load(Ordering::SeqCst) == 0 {
                 std::thread::yield_now();
             }
-            let second = scope.spawn(|| {
-                waiting.store(true, Ordering::SeqCst);
-                trees.transient_tree(0)
-            });
+            let second = scope.spawn(|| trees.transient_tree(0));
             first.join().unwrap();
             let held = second.join().unwrap();
             assert!(held.is_some());
