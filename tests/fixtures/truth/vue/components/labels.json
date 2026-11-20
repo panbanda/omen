@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "language": "typescript",
+  "host": "vue",
+  "split": "development",
+  "oracle": "Author-reviewed. Each component is a Vue 3 single-file component with `<script setup lang=\"ts\">`, as the Vue documentation describes it. In `<script setup>`, the template can use each top-level binding and each import of the script. A `v-for` alias and the props of a scoped slot are names of the template, not of the script. `defineEmits` and `defineProps` are compiler macros, which no import binds. A custom directive `v-focus` uses the binding `vFocus` of `<script setup>`; without that binding the application registers the directive globally, and the template has no use of a script name for it. The harness does not compile or run the code.",
+  "closed_world": false,
+  "imports": [
+    {"label": "component_default", "category": "default", "file": "App.vue", "line": 20, "path": "./SearchBox.vue", "names": [{"name": "default", "alias": "SearchBox"}], "required_file": "SearchBox.vue"},
+    {"label": "component_default_list", "category": "default", "file": "App.vue", "line": 21, "path": "./ItemList.vue", "names": [{"name": "default", "alias": "ItemList"}], "required_file": "ItemList.vue"},
+    {"label": "script_named", "category": "relative", "file": "App.vue", "line": 22, "path": "./format", "names": [{"name": "formatName", "alias": null}], "required_file": "format.ts"},
+    {"label": "framework_named", "category": "external", "file": "App.vue", "line": 19, "path": "vue", "names": [{"name": "ref", "alias": null}], "required_file": null}
+  ],
+  "template_uses": [
+    {"label": "handler_value", "file": "App.vue", "line": 3, "name": "search", "expected": ["App.vue#search"]},
+    {"label": "bound_call", "file": "App.vue", "line": 4, "name": "total", "expected": ["App.vue#total"]},
+    {"label": "component_tag", "file": "App.vue", "line": 4, "name": "Badge", "expected": ["App.vue#Badge"]},
+    {"label": "handler_call_with_alias", "file": "App.vue", "line": 6, "name": "select", "expected": ["App.vue#select"]},
+    {"label": "imported_call_in_mustache", "file": "App.vue", "line": 7, "name": "formatName", "expected": ["format.ts#formatName"]},
+    {"label": "call_in_scoped_slot", "file": "App.vue", "line": 12, "name": "describe", "expected": ["App.vue#describe"]},
+    {"label": "for_alias", "file": "App.vue", "line": 6, "name": "item", "expected": []},
+    {"label": "slot_prop", "file": "App.vue", "line": 12, "name": "row", "expected": []},
+    {"label": "local_directive", "file": "Directives.vue", "line": 2, "name": "vFocus", "expected": ["focus.ts#vFocus"]},
+    {"label": "object_bind_call", "file": "Directives.vue", "line": 2, "name": "buildAttributes", "expected": ["Directives.vue#buildAttributes"]},
+    {"label": "global_directive_value", "file": "Directives.vue", "line": 3, "name": "describeTip", "expected": ["Directives.vue#describeTip"]},
+    {"label": "global_directive_is_not_a_use", "file": "Directives.vue", "line": 3, "name": "vTooltip", "expected": []}
+  ],
+  "dead_code": [
+    {"label": "handler_only_in_template", "file": "App.vue", "name": "search", "line": 28, "dead": false},
+    {"label": "call_only_in_template", "file": "App.vue", "name": "total", "line": 29, "dead": false},
+    {"label": "call_with_alias_argument", "file": "App.vue", "name": "select", "line": 32, "dead": false},
+    {"label": "call_in_slot", "file": "App.vue", "name": "describe", "line": 35, "dead": false},
+    {"label": "tag_only_in_template", "file": "App.vue", "name": "Badge", "line": 38, "dead": false},
+    {"label": "same_name_as_for_alias", "file": "App.vue", "name": "item", "line": 41, "dead": true},
+    {"label": "same_name_as_slot_prop", "file": "App.vue", "name": "row", "line": 42, "dead": true},
+    {"label": "unused", "file": "App.vue", "name": "unused", "line": 43, "dead": true},
+    {"label": "abstained_component_stays_alive", "file": "Dynamic.vue", "name": "helper", "line": 9, "dead": false},
+    {"label": "call_only_in_object_bind", "file": "Directives.vue", "name": "buildAttributes", "line": 12, "dead": false},
+    {"label": "value_of_global_directive", "file": "Directives.vue", "name": "describeTip", "line": 15, "dead": false}
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "language": "python",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. CPython 3 accepts the files. `app` has `__init__.py`, thus it is a regular package: `app/collections.py` is the module `app.collections`, and `from collections import defaultdict` names the standard library module. `.semgrep/rules/logging` has no `__init__.py`. A directory without `__init__.py` is a namespace package, which Python uses only when no regular module of the name is on the search path; the standard library has `logging`, thus `import logging` names the standard library module. The repository does not show which modules are on the search path, so the call through `logging` has no status label: an index can only abstain on it.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "local_defaultdict", "category": "free_function", "file": "app/collections.py", "name": "defaultdict", "kind": "function", "container": null, "start_line": 1, "end_line": 2, "exported": true},
+    {"label": "run", "category": "free_function", "file": "app/main.py", "name": "run", "kind": "function", "container": null, "start_line": 7, "end_line": 11, "exported": true}
+  ],
+  "calls": [
+    {"label": "stdlib_name_shadowed_by_a_package_module", "category": "external", "caller": "run", "line": 8, "callee_text": "defaultdict", "expected": [], "status": "external"},
+    {"label": "stdlib_module_shadowed_by_a_namespace_directory", "category": "external", "caller": "run", "line": 9, "callee_text": "logging.getLogger", "expected": []},
+    {"label": "package_module_by_its_full_name", "category": "cross_file_import", "caller": "run", "line": 11, "callee_text": "local_default", "expected": ["local_defaultdict"], "status": "not_external"}
+  ],
+  "imports": [
+    {"label": "stdlib_module_shadowed_by_a_namespace_directory", "category": "external", "file": "app/main.py", "line": 1, "path": "logging", "names": [{"name": "logging", "alias": null}], "required_file": null},
+    {"label": "stdlib_name_shadowed_by_a_package_module", "category": "external", "file": "app/main.py", "line": 2, "path": "collections", "names": [{"name": "defaultdict", "alias": null}], "required_file": null},
+    {"label": "package_module_by_its_full_name", "category": "absolute", "file": "app/main.py", "line": 4, "path": "app.collections", "names": [{"name": "defaultdict", "alias": "local_default"}], "required_file": "app/collections.py"}
+  ]
+}

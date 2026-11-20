@@ -730,7 +730,10 @@ impl Repository<'_> {
             .filter(|file| file.language == Language::Python)
         {
             let here = directory(&file.file);
-            let named = exact.is_none() || here == suffix;
+            let named = match exact {
+                Some(_) => here == suffix,
+                None => self.is_python_root(&here[..here.len() - module.len()]),
+            };
             if named && !module.is_empty() {
                 directories
                     .entry(here)
@@ -739,6 +742,17 @@ impl Repository<'_> {
             }
         }
         directories.into_values().collect()
+    }
+
+    /// Python can look for a top-level module in `prefix`, a directory with
+    /// its `/`, or the empty text for the root. A directory with
+    /// `__init__.py` is a package: a module in it has the name of the
+    /// package before its own name.
+    fn is_python_root(&self, prefix: &str) -> bool {
+        prefix.is_empty()
+            || !["__init__.py", "__init__.pyi"]
+                .iter()
+                .any(|init| self.paths.contains(format!("{prefix}{init}").as_str()))
     }
 
     /// The files of the Python module `segments` below `base`. If `base` is
@@ -756,7 +770,11 @@ impl Repository<'_> {
                 let form = format!("{form}{stub}");
                 match base {
                     Some(base) => found.extend(self.existing(join(base, &form))),
-                    None => found.extend(self.with_suffix(&form, &[Language::Python])),
+                    None => found.extend(
+                        self.with_suffix(&form, &[Language::Python])
+                            .into_iter()
+                            .filter(|file| self.is_python_root(&file[..file.len() - form.len()])),
+                    ),
                 }
             }
             found
@@ -803,10 +821,19 @@ impl Repository<'_> {
         if !module.is_empty() {
             return target_of(module, not_found);
         }
-        one_package(
-            self.python_directories(base.as_deref(), &segments),
-            not_found,
-        )
+        let directories = self.python_directories(base.as_deref(), &segments);
+        if base.is_some() {
+            return one_package(directories, not_found);
+        }
+        // A directory without `__init__.py` is a namespace package. Python
+        // uses it only when no regular module or package of the name is on
+        // the search path, and the modules outside the repository are not known.
+        let files: Vec<String> = directories.into_iter().flatten().collect();
+        if files.is_empty() {
+            not_found
+        } else {
+            ImportTarget::Ambiguous(files)
+        }
     }
 
     fn ecma(&self, binding: &ImportBinding) -> ImportTarget {
@@ -1328,6 +1355,11 @@ impl Repository<'_> {
                 path = rest;
             }
         }
+        // Bash looks for a path without a slash in each directory of PATH and
+        // then in the working directory, thus the file is known only at run time.
+        if !binding.module_path.contains('/') {
+            return ImportTarget::Unresolved;
+        }
         if path.starts_with('/') || path.starts_with('~') {
             return ImportTarget::External;
         }
@@ -1612,7 +1644,8 @@ pub(crate) mod testing {
                 manifests.add_project(file, source);
                 continue;
             }
-            let language = Language::detect(Path::new(file)).unwrap();
+            let language =
+                Language::detect_with_content(Path::new(file), source.as_bytes()).unwrap();
             let parsed = Parser::new()
                 .parse(source.as_bytes(), language, Path::new(file))
                 .unwrap();
@@ -2085,6 +2118,59 @@ mod typescript_tests {
         assert_eq!(target(&files, main, "root-lib"), "index.ts");
         assert_eq!(target(&files, main, "root-lib/open"), "open.ts");
         assert_eq!(target(&files, main, "root-lib/private"), "unresolved");
+    }
+
+    /// A composite project without `rootDir` has the directory of its own
+    /// config as the root, also when a config that it extends sets
+    /// `composite`. A project that is not composite abstains, because the
+    /// default root of `tsc` depends on its version and on its inputs.
+    #[test]
+    fn test_root_directory_of_a_composite_project() {
+        let files = [
+            (
+                "packages/config/package.json",
+                "{\"name\": \"@acme/config\"}",
+            ),
+            (
+                "packages/config/composite.json",
+                "{\"compilerOptions\": {\"composite\": true}}",
+            ),
+            (
+                "packages/nodes/package.json",
+                "{\"name\": \"@acme/nodes\", \"exports\": {\".\": \"./dist/index.js\", \"./mcp/core\": {\"types\": \"./dist/nodes/mcp/index.d.ts\", \"require\": \"./dist/nodes/mcp/index.js\"}}}",
+            ),
+            (
+                "packages/nodes/tsconfig.build.json",
+                "{\"extends\": [\"./tsconfig.json\", \"@acme/config/composite.json\"], \"compilerOptions\": {\"outDir\": \"dist\"}}",
+            ),
+            ("packages/nodes/tsconfig.json", "{\"compilerOptions\": {}}"),
+            ("packages/nodes/index.ts", "export function all() {}\n"),
+            ("packages/nodes/nodes/mcp/index.ts", "export function core() {}\n"),
+            // `composite: false` in the leaf config replaces the inherited value.
+            (
+                "packages/plain/package.json",
+                "{\"name\": \"@acme/plain\", \"exports\": {\"./*\": \"./dist/*.js\"}}",
+            ),
+            (
+                "packages/plain/tsconfig.json",
+                "{\"extends\": \"@acme/config/composite.json\", \"compilerOptions\": {\"composite\": false, \"outDir\": \"dist\"}}",
+            ),
+            ("packages/plain/lib/a.ts", "export function a() {}\n"),
+            (
+                "app/main.ts",
+                "import { all } from '@acme/nodes';\nimport { core } from '@acme/nodes/mcp/core';\nimport { a } from '@acme/plain/lib/a';\n",
+            ),
+        ];
+        let main = "app/main.ts";
+        assert_eq!(
+            target(&files, main, "@acme/nodes"),
+            "packages/nodes/index.ts"
+        );
+        assert_eq!(
+            target(&files, main, "@acme/nodes/mcp/core"),
+            "packages/nodes/nodes/mcp/index.ts"
+        );
+        assert_eq!(target(&files, main, "@acme/plain/lib/a"), "unresolved");
     }
 
     #[test]

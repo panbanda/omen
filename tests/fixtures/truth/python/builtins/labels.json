@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "language": "python",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. CPython 3 accepts the files. A method or a class attribute is a name in the scope of its class, not of the module, thus `filter`, `next`, and `type` in `app.py` name the builtins.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "run", "category": "free_function", "file": "app.py", "name": "run", "kind": "function", "container": null, "start_line": 1, "end_line": 4, "exported": true},
+    {"label": "queryset_filter", "category": "method", "file": "models.py", "name": "filter", "kind": "method", "container": "QuerySet", "start_line": 2, "end_line": 3, "exported": true},
+    {"label": "queryset_next", "category": "method", "file": "models.py", "name": "next", "kind": "method", "container": "QuerySet", "start_line": 5, "end_line": 6, "exported": true}
+  ],
+  "calls": [
+    {"label": "builtin_with_a_method_name", "category": "external", "caller": "run", "line": 2, "callee_text": "filter", "expected": [], "status": "external"},
+    {"label": "builtin_with_a_second_method_name", "category": "external", "caller": "run", "line": 3, "callee_text": "next", "expected": [], "status": "external"},
+    {"label": "builtin_with_a_class_attribute_name", "category": "external", "caller": "run", "line": 4, "callee_text": "type", "expected": [], "status": "external"}
+  ]
+}

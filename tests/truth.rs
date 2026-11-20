@@ -22,8 +22,8 @@ use omen::benchmark::truth::{
     bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth,
     render_sink_table, render_table, summarize, summarize_sinks, Assertion, ImportedName, Kind,
     Labels, LedgerEntry, Location, Observed, ObservedCall, ObservedEntryPoint, ObservedImport,
-    ObservedPath, ObservedReference, ObservedSink, ObservedSymbol, ObservedTestLines,
-    ObservedTestSymbol,
+    ObservedPath, ObservedReference, ObservedSink, ObservedSymbol, ObservedTemplateUse,
+    ObservedTestLines, ObservedTestSymbol,
 };
 use omen::core::Language;
 use omen::index::extract::{extract_file, link_files, FileSymbols};
@@ -60,7 +60,7 @@ fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for path in sorted_entries(dir) {
         if path.is_dir() {
             source_files(&path, out);
-        } else if Language::detect(&path).is_some() {
+        } else if Language::is_source_path(&path) {
             out.push(path);
         }
     }
@@ -102,8 +102,11 @@ fn load_cases(root: &Path) -> Vec<Case> {
             let language = language_dir.file_name().unwrap().to_string_lossy();
             assert_eq!(
                 language,
-                language_name(labels.language),
-                "{}: the directory name and the label language must agree",
+                labels
+                    .host
+                    .clone()
+                    .unwrap_or_else(|| language_name(labels.language)),
+                "{}: the directory name and the label host or language must agree",
                 labels_path.display()
             );
             let case = dir.file_name().unwrap().to_string_lossy();
@@ -205,8 +208,11 @@ fn observed_imports(bindings: &[ImportBinding]) -> Vec<ObservedImport> {
         // Each binding can target a different file.
         let targets = match &binding.target_file {
             ImportTarget::Resolved(file) => vec![file.clone()],
-            ImportTarget::Package(files) | ImportTarget::Ambiguous(files) => files.clone(),
-            ImportTarget::External | ImportTarget::Unresolved => Vec::new(),
+            ImportTarget::Package(files) => files.clone(),
+            // An ambiguous import has candidates, but it names no file.
+            ImportTarget::Ambiguous(_) | ImportTarget::External | ImportTarget::Unresolved => {
+                Vec::new()
+            }
         };
         for target in targets {
             if !imports[position].resolved_files.contains(&target) {
@@ -334,7 +340,11 @@ fn index_case(dir: &Path) -> (Vec<omen::parser::ParseResult>, Vec<FileSymbols>) 
     let mut trees = Vec::new();
     for path in &files {
         let file = relative(dir, path);
-        let parsed = Parser::new().parse_file(path).expect("parse");
+        let content = std::fs::read(path).expect("read");
+        let language = Language::detect_with_content(path, &content).expect("language");
+        let parsed = Parser::new()
+            .parse(&content, language, path)
+            .expect("parse");
         index_files.push(extract_file(&parsed, &file));
         trees.push(parsed);
     }
@@ -431,8 +441,64 @@ fn observed_paths(dir: &Path) -> Vec<ObservedPath> {
     paths
 }
 
-fn observe(dir: &Path, with_paths: bool) -> Observed {
+/// The uses of names in the templates of Vue components: the references of
+/// top-level code of a component.
+fn observed_template_uses(files: &[FileSymbols]) -> Vec<ObservedTemplateUse> {
+    let components = files.iter().filter(|file| file.component.is_some());
+    let mut uses = Vec::new();
+    for file in components {
+        for reference in file.references.iter().chain(&file.function_references) {
+            if reference.enclosing.is_some() {
+                continue;
+            }
+            let edge = matches!(
+                reference.resolution.status,
+                ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
+            );
+            let candidates = reference.resolution.candidates.iter();
+            uses.push(ObservedTemplateUse {
+                file: file.file.clone(),
+                line: reference.name_range.start_line,
+                name: reference.name.clone(),
+                edges: candidates
+                    .filter(|_| edge)
+                    .map(|key| key.to_string())
+                    .collect(),
+            });
+        }
+    }
+    uses
+}
+
+/// The definitions that the dead code analysis reports at each confidence.
+fn observed_dead_code(dir: &Path) -> Vec<Location> {
+    use omen::core::Analyzer as _;
+    let config = omen::config::Config::default();
+    let files = omen::core::FileSet::from_path(dir, &config).unwrap();
+    let ctx = omen::core::AnalysisContext::new(&files, &config, Some(dir));
+    let analysis = omen::analyzers::deadcode::Analyzer::new()
+        .with_confidence(0.0)
+        .analyze(&ctx)
+        .unwrap();
+    analysis
+        .items
+        .into_iter()
+        .map(|item| Location {
+            file: item.file,
+            name: item.name,
+            start_line: item.line,
+        })
+        .collect()
+}
+
+fn observe(dir: &Path, with_paths: bool, with_dead_code: bool) -> Observed {
     let (trees, index_files) = index_case(dir);
+    let template_uses = observed_template_uses(&index_files);
+    let dead_code = if with_dead_code {
+        observed_dead_code(dir)
+    } else {
+        Vec::new()
+    };
     let paths = if with_paths {
         observed_paths(dir)
     } else {
@@ -503,13 +569,19 @@ fn observe(dir: &Path, with_paths: bool) -> Observed {
         test_symbols,
         test_lines,
         references,
+        template_uses,
+        dead_code,
     }
 }
 
 fn run_cases(cases: &[Case]) -> Vec<Assertion> {
     let mut assertions = Vec::new();
     for case in cases {
-        let observed = observe(&case.dir, !case.labels.paths.is_empty());
+        let observed = observe(
+            &case.dir,
+            !case.labels.paths.is_empty(),
+            !case.labels.dead_code.is_empty(),
+        );
         assertions.extend(
             compare(&case.id, &case.labels, &observed)
                 .unwrap_or_else(|error| panic!("{}: {error}", case.id)),
@@ -535,7 +607,13 @@ fn reported_facts_agree_with_labels_or_the_ledger() {
     // An author who writes a new case uses this mode to see each failure of one
     // language. This mode does not read or enforce the ledger.
     if let Ok(language) = std::env::var("OMEN_TRUTH_LANGUAGE") {
-        cases.retain(|case| language_name(case.labels.language) == language);
+        cases.retain(|case| {
+            case.labels
+                .host
+                .clone()
+                .unwrap_or_else(|| language_name(case.labels.language))
+                == language
+        });
         assert!(!cases.is_empty(), "no fixture cases for {language}");
         let assertions = run_cases(&cases);
         println!("{}", render_table(&summarize(&assertions)));
