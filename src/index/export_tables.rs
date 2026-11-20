@@ -1036,7 +1036,9 @@ mod tests {
 #[cfg(test)]
 mod timing_tests {
     use super::*;
-    use crate::index::timing::{assert_scales_linearly, on_one_thread, Stopwatch};
+    use crate::index::timing::{
+        assert_scales_linearly, assert_scales_linearly_above, on_one_thread, Stopwatch,
+    };
 
     struct Graph(Vec<Member<'static, usize>>);
 
@@ -1214,9 +1216,16 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_tables_of_a_tree_build_in_n_log_n_time() {
-        assert_scales_linearly("tree", 1 << 17, |size| tree(size).elapsed);
-        assert_counts_scale("tree", 1 << 17, tree);
-        assert_eq!(tree(1 << 17).not_resolved, 0);
+        // Each name is in the table of each barrel above it, thus the tables
+        // hold `size * log2(size)` entries. From `2^17` to `2^18` the work
+        // grows 2.1 times and the memory grows to 800 MB; the time grew 3
+        // times on CI. At this size the memory is small. The floor is low so
+        // that the check of the time still fails for a quadratic build.
+        let size = 1 << 15;
+        let floor = std::time::Duration::from_millis(40);
+        assert_scales_linearly_above("tree", size, floor, |size| tree(size).elapsed);
+        assert_counts_scale("tree", size, tree);
+        assert_eq!(tree(2 * size).not_resolved, 0);
     }
 
     /// The cap stops the dense case: its work grows as `n log n`, and some
