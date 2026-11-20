@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "language": "typescript",
+  "split": "development",
+  "oracle": "Author-reviewed against the Pinia 2 API of `defineStore`. A setup store has the keys of the one object that its setup function returns, and a later spread replaces an earlier key. An options store has the functions of `actions`, and `$reset`. The case does not install Pinia, and no compiler ran. The harness does not run the code.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "users_add_user", "category": "nested_function", "file": "stores.ts", "name": "addUser", "kind": "function", "container": null, "start_line": 6, "end_line": 8, "exported": false},
+    {"label": "users_logout", "category": "nested_function", "file": "stores.ts", "name": "logout", "kind": "function", "container": null, "start_line": 9, "end_line": 11, "exported": false},
+    {"label": "users_hidden", "category": "nested_function", "file": "stores.ts", "name": "hidden", "kind": "function", "container": null, "start_line": 12, "end_line": 12, "exported": false},
+    {"label": "counter_increment", "category": "method", "file": "stores.ts", "name": "increment", "kind": "method", "container": null, "start_line": 19, "end_line": 21, "exported": false},
+    {"label": "merged_save", "category": "nested_function", "file": "stores.ts", "name": "save", "kind": "function", "container": null, "start_line": 26, "end_line": 26, "exported": false},
+    {"label": "merged_load", "category": "nested_function", "file": "stores.ts", "name": "load", "kind": "function", "container": null, "start_line": 27, "end_line": 27, "exported": false},
+    {"label": "make_saver", "category": "free_function", "file": "extra.ts", "name": "makeSaver", "kind": "function", "container": null, "start_line": 1, "end_line": 3, "exported": true},
+    {"label": "session_logout", "category": "same_name_methods", "file": "session.ts", "name": "logout", "kind": "method", "container": "Session", "start_line": 2, "end_line": 2, "exported": true},
+    {"label": "session_hidden", "category": "same_name_methods", "file": "session.ts", "name": "hidden", "kind": "method", "container": "Session", "start_line": 3, "end_line": 3, "exported": true},
+    {"label": "session_save", "category": "same_name_methods", "file": "session.ts", "name": "save", "kind": "method", "container": "Session", "start_line": 4, "end_line": 4, "exported": true},
+    {"label": "session_increment", "category": "same_name_methods", "file": "session.ts", "name": "increment", "kind": "method", "container": "Session", "start_line": 5, "end_line": 5, "exported": true},
+    {"label": "add_ada", "category": "free_function", "file": "view.ts", "name": "addAda", "kind": "function", "container": null, "start_line": 3, "end_line": 8, "exported": true},
+    {"label": "sign_out", "category": "free_function", "file": "view.ts", "name": "signOut", "kind": "function", "container": null, "start_line": 10, "end_line": 12, "exported": true},
+    {"label": "count_up", "category": "free_function", "file": "view.ts", "name": "countUp", "kind": "function", "container": null, "start_line": 14, "end_line": 18, "exported": true},
+    {"label": "merge", "category": "free_function", "file": "view.ts", "name": "merge", "kind": "function", "container": null, "start_line": 20, "end_line": 24, "exported": true}
+  ],
+  "calls": [
+    {"label": "store_function_is_external", "category": "external", "caller": "add_ada", "line": 4, "callee_text": "useUsersStore", "expected": [], "status": "external"},
+    {"label": "setup_store_member_of_a_local_store_value", "category": "inferred_receiver", "caller": "add_ada", "line": 5, "callee_text": "usersStore.addUser", "expected": ["users_add_user"]},
+    {"label": "member_that_the_setup_store_does_not_return", "category": "wrong_receiver", "caller": "add_ada", "line": 7, "callee_text": "usersStore.hidden", "expected": []},
+    {"label": "setup_store_member_of_a_direct_call", "category": "inferred_receiver", "caller": "sign_out", "line": 11, "callee_text": "useUsersStore().logout", "expected": ["users_logout"]},
+    {"label": "options_store_action", "category": "inferred_receiver", "caller": "count_up", "line": 16, "callee_text": "counter.increment", "expected": ["counter_increment"]},
+    {"label": "pinia_api_member", "category": "external", "caller": "count_up", "line": 17, "callee_text": "counter.$reset", "expected": [], "status": "external"},
+    {"label": "key_that_a_later_spread_replaces", "category": "wrong_receiver", "caller": "merge", "line": 22, "callee_text": "merged.save", "expected": []},
+    {"label": "key_after_a_spread", "category": "inferred_receiver", "caller": "merge", "line": 23, "callee_text": "merged.load", "expected": ["merged_load"]}
+  ]
+}

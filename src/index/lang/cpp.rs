@@ -593,6 +593,7 @@ impl LanguageSpec for Cpp {
             element: false,
             result_index: None,
             visible: None,
+            constant: false,
         };
         match node.kind() {
             NAMESPACE_ALIAS_DEFINITION => {
@@ -608,6 +609,7 @@ impl LanguageSpec for Cpp {
                     let end = block.map_or(node.end_byte(), |block| block.end_byte());
                     out.push(LocalName {
                         visible: Some(node.start_byte()..end),
+                        constant: false,
                         ..namespace(context.text(alias), target)
                     });
                 }
@@ -638,6 +640,7 @@ impl LanguageSpec for Cpp {
                         element: true,
                         result_index: None,
                         visible: None,
+                        constant: false,
                     });
                 }
             }

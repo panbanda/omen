@@ -245,6 +245,7 @@ impl LanguageSpec for Java {
                     element: true,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
             return;
@@ -274,6 +275,7 @@ impl LanguageSpec for Java {
                     element: false,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
             return;
@@ -298,6 +300,7 @@ impl LanguageSpec for Java {
                     element: false,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
             return;
@@ -336,6 +339,7 @@ impl LanguageSpec for Java {
                 element: false,
                 result_index: None,
                 visible: None,
+                constant: false,
             });
         }
     }

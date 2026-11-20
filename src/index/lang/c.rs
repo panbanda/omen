@@ -355,6 +355,7 @@ pub(crate) fn declared_names(node: Node<'_>, context: &Context<'_, '_>, out: &mu
             element: false,
             result_index: None,
             visible: None,
+            constant: false,
         });
     }
 }

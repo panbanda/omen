@@ -279,6 +279,7 @@ impl LanguageSpec for Python {
                     element: true,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
             return;
@@ -308,6 +309,7 @@ impl LanguageSpec for Python {
                     element: false,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
         }
