@@ -1563,6 +1563,8 @@ pub struct FileSymbols {
     /// The whole file is test code: its path follows a test convention, or a
     /// `#[cfg(test)]` declaration of a different file names it.
     pub test_file: bool,
+    /// The facts of a Vue component, or `None` for a file of a language.
+    pub component: Option<crate::parser::vue::Facts>,
 }
 
 impl FileSymbols {
@@ -2373,10 +2375,14 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         path_targets: BTreeMap::new(),
         rebound: rebound_names(parsed),
         members: member_facts,
-        content_hash: *blake3::hash(&parsed.source).as_bytes(),
+        content_hash: parsed.component.as_ref().map_or_else(
+            || *blake3::hash(&parsed.source).as_bytes(),
+            |component| component.content_hash,
+        ),
         test_ranges: mark_table.ranges,
         test_lines: mark_table.lines,
         test_file,
+        component: parsed.component.clone(),
     }
 }
 

@@ -5,7 +5,7 @@ use std::path::Path;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result, SourceFile};
+use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result, SourceFile};
 use crate::index::extract::FileSymbols;
 use crate::index::model::{Exported, Symbol, SymbolKind};
 
@@ -38,6 +38,10 @@ pub struct OutlineClass {
 pub struct FileOutline {
     pub file: String,
     pub language: String,
+    /// `vue` for a Vue component, whose script blocks have the language.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// The lines of code. For a component, only the lines of the script blocks.
     pub loc: u32,
     pub imports: Vec<String>,
     pub classes: Vec<OutlineClass>,
@@ -58,10 +62,16 @@ impl OutlineResult {
             if i > 0 {
                 out.push('\n');
             }
-            out.push_str(&format!(
-                "## {}  [{}, {} loc]\n",
-                file.file, file.language, file.loc
-            ));
+            match &file.host {
+                Some(host) => out.push_str(&format!(
+                    "## {}  [{} in {host}, {} script loc]\n",
+                    file.file, file.language, file.loc
+                )),
+                None => out.push_str(&format!(
+                    "## {}  [{}, {} loc]\n",
+                    file.file, file.language, file.loc
+                )),
+            }
             if !file.imports.is_empty() {
                 out.push_str(&format!("imports: {}\n", file.imports.join(", ")));
             }
@@ -96,7 +106,17 @@ impl OutlineResult {
 
 /// Analyze a single file and return its outline.
 pub fn outline_file(path: &Path) -> Result<FileOutline> {
-    let file = SourceFile::load(path)?;
+    let file = if crate::parser::vue::is_component(path) {
+        let content = std::fs::read(path)?;
+        let language = Language::detect_with_content(path, &content).ok_or_else(|| {
+            crate::core::Error::UnsupportedLanguage {
+                path: path.to_path_buf(),
+            }
+        })?;
+        SourceFile::from_content(path, language, content)
+    } else {
+        SourceFile::load(path)?
+    };
     outline_source(&file)
 }
 
@@ -139,7 +159,21 @@ fn outline_source(file: &SourceFile) -> Result<FileOutline> {
             path: file.path.clone(),
         })?;
     let facts = crate::index::extract::extract_file(&parsed, &file.path.to_string_lossy());
-    Ok(outline_from_facts(&facts, file.lines_of_code() as u32))
+    Ok(outline_from_facts(
+        &facts,
+        lines_of_code(&file.path, file.language, &file.content),
+    ))
+}
+
+/// The lines of code of a file. For a Vue component, only the lines of the
+/// script blocks count.
+fn lines_of_code(path: &Path, language: Language, content: &[u8]) -> u32 {
+    let content = if crate::parser::vue::is_component(path) {
+        crate::parser::vue::script_text(content).unwrap_or_default()
+    } else {
+        content.to_vec()
+    };
+    SourceFile::from_content(path, language, content).lines_of_code() as u32
 }
 
 /// Builds the outline of one file from the facts of the shared index.
@@ -216,6 +250,7 @@ fn outline_from_facts(facts: &FileSymbols, loc: u32) -> FileOutline {
     FileOutline {
         file: facts.file.clone(),
         language: language.to_string(),
+        host: facts.component.as_ref().map(|_| "vue".to_string()),
         loc,
         imports,
         classes,
@@ -291,10 +326,7 @@ impl AnalyzerTrait for Analyzer {
             .map(|facts| {
                 let loc = ctx
                     .read_file(Path::new(&facts.file))
-                    .map(|content| {
-                        SourceFile::from_content(Path::new(&facts.file), facts.language, content)
-                            .lines_of_code() as u32
-                    })
+                    .map(|content| lines_of_code(Path::new(&facts.file), facts.language, &content))
                     .unwrap_or(0);
                 outline_from_facts(facts, loc)
             })
@@ -312,6 +344,48 @@ impl AnalyzerTrait for Analyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const COMPONENT: &str = "<template>\n  <p>{{ title() }}</p>\n</template>\n\n<script setup lang=\"ts\">\n// The title.\nfunction title() {\n  return 'a';\n}\n</script>\n\n<style>\n.a { color: red; }\n</style>\n";
+
+    #[test]
+    fn test_the_outline_of_a_component_names_its_host_and_counts_its_script() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("App.vue"), COMPONENT).unwrap();
+        std::fs::write(directory.path().join("a.ts"), "export function a() {}\n").unwrap();
+        let files = FileSet::from_files(
+            directory.path().to_path_buf(),
+            vec![PathBuf::from("App.vue"), PathBuf::from("a.ts")],
+        );
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(directory.path()));
+        let result = Analyzer.analyze(&ctx).unwrap();
+        let component = &result.files[0];
+        assert_eq!(component.file, "App.vue");
+        assert_eq!(component.language, "TypeScript");
+        assert_eq!(component.host.as_deref(), Some("vue"));
+        assert_eq!(component.loc, 3);
+        assert_eq!(component.functions[0].name, "title");
+        assert_eq!(component.functions[0].start_line, 7);
+        let json = serde_json::to_value(&result.files[1]).unwrap();
+        assert!(json.get("host").is_none(), "{json}");
+        assert!(result
+            .to_markdown()
+            .contains("## App.vue  [TypeScript in vue, 3 script loc]"));
+    }
+
+    #[test]
+    fn test_the_outline_of_one_component_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("App.vue");
+        std::fs::write(&path, COMPONENT).unwrap();
+        let outline = outline_file_in(directory.path(), &path).unwrap();
+        assert_eq!(outline.host.as_deref(), Some("vue"));
+        assert_eq!(outline.loc, 3);
+        assert_eq!(outline.functions[0].name, "title");
+    }
 
     #[test]
     fn test_analyzer_uses_content_source_for_historical_commits() {
@@ -744,6 +818,7 @@ impl A {
             files: vec![FileOutline {
                 file: "src/foo.rs".to_string(),
                 language: "rust".to_string(),
+                host: None,
                 loc: 50,
                 imports: vec!["std::path::Path".to_string()],
                 classes: vec![OutlineClass {

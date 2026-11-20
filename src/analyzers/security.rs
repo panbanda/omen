@@ -229,7 +229,7 @@ impl Report {
 /// The analysis of the files of a context. The context gives the index and the content of
 /// the files, thus a context of a commit gives the analysis of that commit.
 pub fn analyze_context(ctx: &AnalysisContext<'_>) -> Result<Analysis> {
-    let files: Vec<PathBuf> = ctx.files.iter().cloned().collect();
+    let files: Vec<PathBuf> = ctx.files.index_files();
     let index = ctx.code_index()?;
     let options = options_of(&ctx.config.security)?;
     analyze_with_index(
@@ -440,7 +440,7 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Report> {
-        let files: Vec<PathBuf> = ctx.files.iter().cloned().collect();
+        let files: Vec<PathBuf> = ctx.files.index_files();
         let index = ctx.code_index()?;
         let analysis = analyze_with_index(
             &index,

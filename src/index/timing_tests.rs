@@ -26,16 +26,18 @@ fn test_stopwatch_counts_work_and_not_a_wait() {
         "{:?}",
         watch.elapsed()
     );
+    // A loaded runner can give this thread little processor time in a fixed
+    // wall time, so the loop runs until the stopwatch shows the work.
     let watch = Stopwatch::start();
     let started = std::time::Instant::now();
-    while started.elapsed() < Duration::from_millis(50) {
+    while watch.elapsed() < Duration::from_millis(20) {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the stopwatch counted no work in 60 s: {:?}",
+            watch.elapsed()
+        );
         std::hint::black_box(0);
     }
-    assert!(
-        watch.elapsed() > Duration::from_millis(10),
-        "{:?}",
-        watch.elapsed()
-    );
 }
 
 #[test]
@@ -123,8 +125,15 @@ fn timing_linear_work_passes_the_check() {
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_quadratic_work_fails_the_check() {
+    // Below the floor the check passes any ratio, so the small size must
+    // take at least twice the floor on this machine.
+    let mut size = 20_000;
+    while work(size, true) < FLOOR * 2 {
+        size *= 2;
+        assert!(size <= 1 << 24, "quadratic work never reached the floor");
+    }
     let failed = std::panic::catch_unwind(|| {
-        assert_scales_linearly("quadratic", 20_000, |size| work(size, true));
+        assert_scales_linearly("quadratic", size, |size| work(size, true));
     });
     assert!(failed.is_err(), "quadratic work passed the check");
 }
