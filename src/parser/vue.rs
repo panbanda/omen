@@ -155,9 +155,10 @@ pub fn translate(content: &[u8]) -> Option<Translation> {
         setup,
         uses: Vec::new(),
     };
-    writer.put(template.start, b";[");
-    writer.put(template.close, b"];");
-    let result = Template::new(content, &mut writer).run(template.content.clone());
+    let result = writer
+        .put(template.start, b";[")
+        .and_then(|()| writer.put(template.close, b"];"))
+        .and_then(|()| Template::new(content, &mut writer).run(template.content.clone()));
     let uses = std::mem::take(&mut writer.uses);
     translation.template = Some(template.start..template.close + 2);
     if let Err(reason) = result {
@@ -513,8 +514,14 @@ struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    fn put(&mut self, position: usize, bytes: &[u8]) {
-        self.text[position..position + bytes.len()].copy_from_slice(bytes);
+    /// Writes `bytes` at `position`. A text that is too short for them is an
+    /// error, not a panic.
+    fn put(&mut self, position: usize, bytes: &[u8]) -> Result<(), String> {
+        self.text
+            .get_mut(position..position + bytes.len())
+            .ok_or("the translation of the template is longer than the file")?
+            .copy_from_slice(bytes);
+        Ok(())
     }
 
     /// The expression at `range` becomes an element of the array. `glue` is
@@ -856,7 +863,8 @@ enum Directive {
     For,
     Slot,
     BindAll,
-    Custom(String),
+    /// The bytes of the name, which can be other than UTF-8.
+    Custom(Vec<u8>),
 }
 
 fn directive_of(name: &[u8]) -> (Directive, Option<Range<usize>>) {
@@ -878,10 +886,11 @@ fn directive_of(name: &[u8]) -> (Directive, Option<Range<usize>>) {
         .iter()
         .position(|byte| *byte == b':' || *byte == b'.')
         .unwrap_or(rest.len());
-    let directive = String::from_utf8_lossy(&rest[..end]).into_owned();
+    let directive = &rest[..end];
     let has_argument = rest.get(end) == Some(&b':');
     let argument = argument(2 + end);
-    let kind = match directive.as_str() {
+    let known = std::str::from_utf8(directive).unwrap_or_default();
+    let kind = match known {
         "bind" if !has_argument => Directive::BindAll,
         "on" => Directive::Handler,
         "for" => Directive::For,
@@ -889,7 +898,7 @@ fn directive_of(name: &[u8]) -> (Directive, Option<Range<usize>>) {
         "pre" => Directive::Pre,
         name if EXPRESSION_DIRECTIVES.contains(&name) => Directive::Expression,
         name if PLAIN_DIRECTIVES.contains(&name) => Directive::Plain,
-        _ => Directive::Custom(directive),
+        _ => Directive::Custom(directive.to_vec()),
     };
     (kind, argument)
 }
@@ -1023,11 +1032,11 @@ impl<'a, 'w> Template<'a, 'w> {
             if is_component_tag(name)
                 && !BUILT_IN_COMPONENTS.contains(&&*String::from_utf8_lossy(name))
             {
-                self.writer.put(start, b",");
+                self.writer.put(start, b",")?;
                 if name.contains(&b'-') {
                     let pascal = pascal_case(name);
                     blank(&mut self.writer.text[tag.name.clone()]);
-                    self.writer.put(tag.name.start, &pascal);
+                    self.writer.put(tag.name.start, &pascal)?;
                 } else {
                     self.writer.copy(tag.name.clone(), &Scope::default());
                 }
@@ -1149,16 +1158,19 @@ impl<'a, 'w> Template<'a, 'w> {
             Directive::Plain | Directive::Pre => {}
             Directive::Custom(directive) => {
                 if self.writer.setup {
+                    let Ok(text) = std::str::from_utf8(&directive) else {
+                        return Err("the name of a custom directive is not UTF-8".to_string());
+                    };
                     let start = attribute.name.start;
                     if start == 0 || !is_space(content[start - 1]) {
                         return Err(format!(
-                            "the custom directive `v-{directive}` has no space before it"
+                            "the custom directive `v-{text}` has no space before it"
                         ));
                     }
                     let mut binding = b"v".to_vec();
-                    binding.extend(pascal_case(directive.as_bytes()));
+                    binding.extend(pascal_case(&directive));
                     self.writer.text[start - 1] = b',';
-                    self.writer.put(start, &binding);
+                    self.writer.put(start, &binding)?;
                     self.writer.uses.push(ScriptUse {
                         range: start - 1..start + binding.len(),
                         name: binding,
@@ -1197,9 +1209,9 @@ impl<'a, 'w> Template<'a, 'w> {
                     );
                 }
                 check_entities(text)?;
-                self.writer.put(value.range.start - prefix.len(), prefix);
+                self.writer.put(value.range.start - prefix.len(), prefix)?;
                 self.writer.copy(value.range.clone(), scope);
-                self.writer.put(value.range.end, b"}");
+                self.writer.put(value.range.end, b"}")?;
             }
             Directive::For => {
                 let Some(value) = value else {
@@ -1600,6 +1612,51 @@ mod tests {
             ),
             ";[,vFocus,value,vN8nHtml,arg,html,vTip];"
         );
+    }
+
+    /// A directive name whose bytes are not valid UTF-8 makes the component
+    /// abstain. A name in UTF-8 keeps its bytes, so that the translation has
+    /// the length of the file.
+    #[test]
+    fn test_a_custom_directive_name_is_read_as_bytes() {
+        let wrap = |name: &[u8]| {
+            let mut content = b"<template><input ".to_vec();
+            content.extend_from_slice(name);
+            content.extend_from_slice(
+                b"=\"value\"></template>\n<script setup lang=\"ts\"></script>\n",
+            );
+            content
+        };
+        let long = [b"v-".as_slice(), &[0xff; 100]].concat();
+        for name in [
+            long.as_slice(),
+            b"v-\xff",
+            b"v-a\xff\xfe-b",
+            b"v-\xe9t\xe9",
+            b"v-\xf0\x9f",
+            b"v-x\xff\xff\xff\xff\xff\xff:arg",
+        ] {
+            let content = wrap(name);
+            let translation = translate(&content).expect("a supported language");
+            assert_eq!(translation.text.len(), content.len(), "{name:?}");
+            assert!(translation.abstention.is_some(), "{name:?}");
+        }
+        for (name, binding) in [
+            ("v-f\u{f6}cus", "vF\u{f6}cus"),
+            ("v-\u{e9}t\u{e9}-x", "v\u{e9}t\u{e9}X"),
+            ("v-\u{1d523}oo", "v\u{1d523}oo"),
+        ] {
+            let content = wrap(name.as_bytes());
+            let translation = translate(&content).expect("a supported language");
+            assert_eq!(translation.text.len(), content.len(), "{name}");
+            assert_eq!(translation.abstention, None, "{name}");
+            let names: Vec<&[u8]> = translation
+                .uses
+                .iter()
+                .map(|used| used.name.as_slice())
+                .collect();
+            assert_eq!(names, [binding.as_bytes()], "{name}");
+        }
     }
 
     #[test]
