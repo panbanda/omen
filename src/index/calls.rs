@@ -81,7 +81,7 @@ impl CallSyntax {
     }
 
     fn is_word(words: &[&str], node: Node<'_>, context: &Context<'_, '_>) -> bool {
-        words.contains(&node.kind()) || words.contains(&context.text(node).as_str())
+        words.contains(&node.kind()) || words.iter().any(|word| context.text_is(node, word))
     }
 
     /// The receiver or the qualifier that an expression before a name gives.

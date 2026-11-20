@@ -6,6 +6,7 @@
 //! package give [`ImportTarget::Package`], which is a certain target.
 
 pub mod cargo;
+mod symbols;
 pub mod typescript;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -57,6 +58,8 @@ struct Repository<'a> {
     /// The options of each TypeScript project file after `extends`.
     project_options: RwLock<HashMap<String, std::sync::Arc<typescript::ProjectOptions>>>,
     inherited_options: typescript::InheritedMemo,
+    /// The symbol table of each file that an import asked for.
+    symbol_tables: std::sync::OnceLock<crate::index::export_tables::Tables<'a, &'a str>>,
 }
 
 /// The module tree of the Rust files of an index: which file is the root of a crate, the
@@ -157,6 +160,7 @@ impl<'a> Repository<'a> {
             rust_parents: RwLock::new(HashMap::new()),
             project_options: RwLock::new(HashMap::new()),
             inherited_options: RwLock::new(HashMap::new()),
+            symbol_tables: std::sync::OnceLock::new(),
         };
         repository.read_rust_packages();
         repository
@@ -1390,77 +1394,6 @@ impl Repository<'_> {
             Language::Bash => self.bash(binding),
         }
     }
-
-    /// Finds the key of the top-level symbol `name` of `file`. If the file
-    /// does not define the name, the search follows the re-exports of the file.
-    fn symbol(
-        &self,
-        file: &str,
-        name: &str,
-        visited: &mut BTreeSet<(String, String)>,
-    ) -> Option<String> {
-        if !visited.insert((file.to_string(), name.to_string())) {
-            return None;
-        }
-        let facts = &self.files[*self.by_path.get(file)?];
-        let mut defined = facts
-            .symbols
-            .iter()
-            .filter(|symbol| symbol.container.is_none() && symbol.name == name);
-        if let Some(first) = defined.next() {
-            return defined.next().is_none().then(|| first.key.to_string());
-        }
-        // `export { original as name }` gives the name to a symbol of the file.
-        let mut aliased = facts
-            .symbols
-            .iter()
-            .zip(&facts.link_facts)
-            .filter(|(_, link)| link.export_aliases.iter().any(|alias| alias == name));
-        if let Some((first, _)) = aliased.next() {
-            return aliased.next().is_none().then(|| first.key.to_string());
-        }
-        if let Some(key) = inline_module_symbol(facts, name) {
-            return Some(key);
-        }
-        // Each import of a Python module is a name of that module.
-        let python = facts.language == Language::Python;
-        let mut found = BTreeSet::new();
-        for binding in &facts.imports {
-            let ImportTarget::Resolved(target) = &binding.target_file else {
-                continue;
-            };
-            let named = binding.kind == ImportKind::ReExportNamed
-                || (python && binding.kind == ImportKind::Named);
-            let wildcard = binding.kind == ImportKind::ReExportWildcard
-                || (python && binding.kind == ImportKind::Wildcard);
-            if named && binding.local_name.as_deref() == Some(name) {
-                let source = binding.imported_name.as_deref().unwrap_or(name);
-                found.extend(self.symbol(target, source, visited));
-            } else if wildcard && binding.local_name.is_none() {
-                found.extend(self.symbol(target, name, visited));
-            }
-        }
-        (found.len() == 1)
-            .then(|| found.into_iter().next())
-            .flatten()
-    }
-}
-
-/// The one symbol `name` of a file that is in a module in the file, as a
-/// Rust `mod tests { ... }` has it.
-fn inline_module_symbol(facts: &FileSymbols, name: &str) -> Option<String> {
-    let in_module = |symbol: &&crate::index::model::Symbol| {
-        symbol.name == name
-            && symbol.container.as_ref().is_some_and(|container| {
-                facts.symbols.iter().any(|module| {
-                    module.kind == crate::index::model::SymbolKind::Module
-                        && module.name == *container
-                })
-            })
-    };
-    let mut found = facts.symbols.iter().filter(in_module);
-    let first = found.next()?;
-    found.next().is_none().then(|| first.key.to_string())
 }
 
 /// Gives a Go import without an alias the name that the package clause of
@@ -1513,11 +1446,12 @@ fn go_package_names(files: &mut [FileSymbols]) {
 ///
 /// The result does not depend on the order of `files`.
 pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
-    let resolve = |files: &[FileSymbols],
-                   symbols: bool|
-     -> Vec<Vec<(ImportTarget, Option<String>)>> {
+    // The results of each binding, and the files whose symbol tables keep
+    // only their own names.
+    type Results = (Vec<Vec<(ImportTarget, Option<String>)>>, Vec<usize>);
+    let resolve = |files: &[FileSymbols], symbols: bool| -> Results {
         let repository = Repository::new(files, manifests);
-        files
+        let results = files
             .par_iter()
             .map(|file| {
                 file.imports
@@ -1530,7 +1464,7 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
                             matches!(binding.kind, ImportKind::Named | ImportKind::ReExportNamed);
                         let symbol = match (&binding.target_file, &binding.imported_name) {
                             (ImportTarget::Resolved(target), Some(name)) if named => {
-                                repository.symbol(target, name, &mut BTreeSet::new())
+                                repository.symbol_of(target, name)
                             }
                             _ => None,
                         };
@@ -1538,7 +1472,13 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
                     })
                     .collect()
             })
-            .collect()
+            .collect();
+        let not_resolved = if symbols {
+            repository.symbol_tables().not_resolved().to_vec()
+        } else {
+            Vec::new()
+        };
+        (results, not_resolved)
     };
     let path_targets: Vec<BTreeMap<String, String>> = {
         let repository = Repository::new(files, manifests);
@@ -1603,7 +1543,10 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
     }
     // The symbol search reads the targets of all files. Thus the targets come first.
     for symbols in [false, true] {
-        let results = resolve(files, symbols);
+        let (results, not_resolved) = resolve(files, symbols);
+        for position in not_resolved {
+            files[position].barrel_not_resolved = true;
+        }
         for (file, results) in files.iter_mut().zip(results) {
             for (binding, (target, symbol)) in file.imports.iter_mut().zip(results) {
                 binding.target_file = target;
@@ -2093,6 +2036,35 @@ mod typescript_tests {
         let main = "app/src/main.ts";
         assert_eq!(target(&files, main, "@/a"), "app/lib/a.ts");
         assert_eq!(target(&files, main, "@/b"), "app/src/other/b.ts");
+    }
+
+    /// A name that two wildcard re-exports of one module give is ambiguous.
+    /// A module that re-exports that module is ambiguous too, as
+    /// `ResolveExport` of ECMAScript tells, also when it re-exports one of
+    /// the definitions again. A cycle of re-exports still gives the name.
+    #[test]
+    fn test_symbol_of_wildcard_re_exports_through_a_diamond_and_a_cycle() {
+        let files = [
+            ("d.ts", "export function x() {}\n"),
+            ("e.ts", "export function x() {}\n"),
+            ("b.ts", "export * from './d';\nexport * from './e';\n"),
+            ("c.ts", "export * from './d';\n"),
+            ("a.ts", "export * from './b';\nexport * from './c';\n"),
+            ("left.ts", "export * from './right';\nexport function y() {}\n"),
+            ("right.ts", "export * from './left';\n"),
+            (
+                "main.ts",
+                "import { x } from './a';\nimport { x as z } from './b';\nimport { y } from './right';\n",
+            ),
+        ];
+        let (facts, _) = crate::index::imports::testing::index_with_manifests(&files);
+        let main = facts.iter().find(|file| file.file == "main.ts").unwrap();
+        let symbols: Vec<Option<&str>> = main
+            .imports
+            .iter()
+            .map(|binding| binding.target_symbol.as_deref())
+            .collect();
+        assert_eq!(symbols, [None, None, Some("left.ts#y")]);
     }
 
     #[test]
