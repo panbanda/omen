@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "language": "python",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. CPython 3 accepts the files. `super()` in a method of a class searches the class dictionaries of the method resolution order after that class. `Command` has only `BaseCommand` of Django after it, thus `super().__init__` is in Django. In the order of `Combined`, the class `Mixin` of the repository follows `Loud` and the bases of `BaseCommand`, thus `super().handle` in `Loud` can be `Mixin.handle`. `__getattr__`, a metaclass, and the write `BaseCommand.flush = print` can each give an attribute that the class bodies do not show, so those calls have no status. Django adds the manager `objects` of class `django.db.models.Manager` to a model that declares no manager, thus `Product.objects.filter` is in Django. `Archived` declares the manager `items`, so Django adds no `objects`, and the call fails: it is not a call of the repository either. `Tagged` inherits the manager `objects` that the abstract model `Base` declares, so its call has no status.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "command_init", "category": "constructor", "file": "shop/commands.py", "name": "__init__", "kind": "constructor", "container": "Command", "start_line": 5, "end_line": 6, "exported": true},
+    {"label": "mixin_handle", "category": "method", "file": "shop/commands.py", "name": "handle", "kind": "method", "container": "Mixin", "start_line": 10, "end_line": 11, "exported": true},
+    {"label": "loud_handle", "category": "method", "file": "shop/commands.py", "name": "handle", "kind": "method", "container": "Loud", "start_line": 15, "end_line": 16, "exported": true},
+    {"label": "dynamic_execute", "category": "method", "file": "shop/commands.py", "name": "execute", "kind": "method", "container": "Dynamic", "start_line": 27, "end_line": 28, "exported": true},
+    {"label": "typed_check", "category": "method", "file": "shop/commands.py", "name": "check", "kind": "method", "container": "Typed", "start_line": 36, "end_line": 37, "exported": true},
+    {"label": "patched_flush", "category": "method", "file": "shop/commands.py", "name": "flush", "kind": "method", "container": "Patched", "start_line": 41, "end_line": 42, "exported": true},
+    {"label": "products", "category": "free_function", "file": "shop/models.py", "name": "products", "kind": "function", "container": null, "start_line": 23, "end_line": 24, "exported": true},
+    {"label": "archived", "category": "free_function", "file": "shop/models.py", "name": "archived", "kind": "function", "container": null, "start_line": 27, "end_line": 28, "exported": true},
+    {"label": "tagged", "category": "free_function", "file": "shop/models.py", "name": "tagged", "kind": "function", "container": null, "start_line": 31, "end_line": 32, "exported": true}
+  ],
+  "calls": [
+    {"label": "super_into_an_external_base", "category": "external", "caller": "command_init", "line": 6, "callee_text": "super().__init__", "expected": [], "status": "external"},
+    {"label": "super_with_a_mixin_after_the_external_base", "category": "super_call", "caller": "loud_handle", "line": 16, "callee_text": "super().handle", "expected": [], "status": "not_external"},
+    {"label": "super_with_getattr", "category": "super_call", "caller": "dynamic_execute", "line": 28, "callee_text": "super().execute", "expected": [], "status": "not_external"},
+    {"label": "super_with_a_metaclass", "category": "super_call", "caller": "typed_check", "line": 37, "callee_text": "super().check", "expected": [], "status": "not_external"},
+    {"label": "super_of_a_patched_attribute", "category": "super_call", "caller": "patched_flush", "line": 42, "callee_text": "super().flush", "expected": [], "status": "not_external"},
+    {"label": "default_manager", "category": "external", "caller": "products", "line": 24, "callee_text": "Product.objects.filter", "expected": [], "status": "external"},
+    {"label": "manager_of_a_different_name", "category": "external", "caller": "archived", "line": 28, "callee_text": "Archived.objects.exclude", "expected": [], "status": "external"},
+    {"label": "manager_of_an_abstract_base", "category": "field_receiver", "caller": "tagged", "line": 32, "callee_text": "Tagged.objects.order_by", "expected": [], "status": "not_external"}
+  ]
+}

@@ -21,6 +21,13 @@ candidate does not change. The rules give one of three kinds of evidence.
 - **Declared type**: the receiver is a local name with a declared type. The type is a
   builtin type, or an import from outside the repository binds it. No repository type
   has the name.
+- **Python base class**: `super().name()` without arguments, in a method of a class
+  whose ancestry the source shows completely. At least one base is outside the
+  repository, and no class of the repository in the ancestry binds `name` in its body.
+  Also `Model.objects.name()`, where `Model` reaches `django.db.models.Model` and no
+  class of the repository in its ancestry, an abstract model included, binds `objects`:
+  Django then adds a manager of its own. The rules are in
+  `src/index/resolve/python_bases.rs`.
 
 A rule does not apply in these cases:
 
@@ -35,6 +42,16 @@ A rule does not apply in these cases:
   name, `std` and `core` included, is not external in a repository that has such a macro.
 - A PHP function, method, or class name matches a repository name when the case is
   ignored. A property or a constant has a case-sensitive name and does not hide a function.
+- For a Python base class rule: a class of the repository in the ancestry has a
+  decorator, a keyword argument such as `metaclass`, `__getattr__`,
+  `__getattribute__`, or `__init_subclass__`, or its body uses `setattr`, `exec`,
+  `locals`, `vars`, or `__dict__`. A base of the ancestry is not a class of the
+  repository and no import from outside the repository binds it. The ancestry has more
+  than 64 classes of the repository. For `super()`, a different base of a subclass can
+  follow the class in the method resolution order. The repository writes the attribute
+  on an object other than `self`. A `setattr` or a `delattr` with a name that is not a
+  literal stops both rules in the whole repository, because it can write any attribute
+  of a class.
 
 - A repository symbol has the name of a builtin, a class, or a namespace.
 - A local name that the call sees has the name.
@@ -175,6 +192,9 @@ reference that is wrong. A sample is not a measurement of precision.
   them. They stay `Unresolved`.
 - The deadcode analyzer keeps a definition alive when an `Unresolved` call or an
   `External` call has its name. A wrong `External` status cannot make a definition dead.
+- The Python base class rules do not read writes that a library makes, as
+  `mock.patch.object` does. A patch whose replacement is a repository function makes
+  the `External` status of the patched call wrong while the patch is active.
 - A repository symbol with the name of a builtin stops the rule in the whole
   repository, also in a file that cannot see the symbol. This choice loses some
   references and gives no wrong reference.

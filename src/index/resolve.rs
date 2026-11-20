@@ -12,6 +12,7 @@ mod function_references;
 #[cfg(test)]
 mod go_calls;
 mod local_blocks;
+mod python_bases;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
@@ -340,6 +341,12 @@ struct Resolver<'a> {
     /// For each file, the names that its imports from outside the repository
     /// provide by the rules of its language.
     provided_names: OnceLock<Vec<HashSet<&'static str>>>,
+    /// The Python classes that a class of the repository can follow in a
+    /// method resolution order. See `python_bases`.
+    python_followed: OnceLock<HashSet<Id>>,
+    /// The attributes that a Python file of the repository writes on an
+    /// object other than `self`.
+    python_writes: OnceLock<HashSet<&'a str>>,
     /// The results of `constructor_position`, by the function and the type
     /// parameter.
     constructor_position_cache: RwLock<HashMap<(Id, String), Option<usize>>>,
@@ -608,6 +615,8 @@ impl<'a> Resolver<'a> {
             imports_by_path,
             repository_wildcards: OnceLock::new(),
             provided_names: OnceLock::new(),
+            python_followed: OnceLock::new(),
+            python_writes: OnceLock::new(),
             php_names,
             constructors_by_container,
             by_name,
@@ -3879,6 +3888,11 @@ impl<'a> Resolver<'a> {
             None => &facts.references[position],
         };
         let mut outcome = self.resolve_site(file, reference, site, depth);
+        if outcome.status != Status::UniqueCandidate
+            && self.is_call_into_external_base(file, position)
+        {
+            return Outcome::none(Status::External);
+        }
         // The other rules found no candidate. The source can still show a
         // definition outside the repository.
         if outcome.status == Status::Unresolved && outcome.candidates.is_empty() {
