@@ -5780,3 +5780,34 @@ fn precedence(entries: &[Option<(usize, Vec<String>)>], echo: bool, kept: &mut [
         }
     }
 }
+
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+    use crate::parser::deep::{on_small_stack, DEPTH};
+
+    #[test]
+    fn a_deep_chain_of_path_parts_drops_on_a_small_stack() {
+        on_small_stack(|| {
+            let mut top: Option<Rc<Piece>> = None;
+            for _ in 0..DEPTH {
+                top = Some(Rc::new(Piece {
+                    text: "a".to_string(),
+                    parent: top,
+                }));
+            }
+            drop(top);
+        });
+    }
+
+    #[test]
+    fn a_deep_chain_of_guard_lists_drops_on_a_small_stack() {
+        on_small_stack(|| {
+            let mut chain: Option<Rc<Chain>> = None;
+            for _ in 0..DEPTH {
+                chain = push_chain(&chain, vec!["guard".to_string()]);
+            }
+            drop(chain);
+        });
+    }
+}

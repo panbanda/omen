@@ -120,14 +120,17 @@ impl Outer {
 }
 
 impl Drop for Outer {
-    /// Releases a chain of links in a loop. The default drop calls itself for each link, and
-    /// a long chain can overflow the stack of the thread.
+    /// Releases the links of the two chains in a loop. The default drop calls itself for each
+    /// link, and a long chain can overflow the stack of the thread. The two fields can share a
+    /// link, so a link is released only when this is its last owner.
     fn drop(&mut self) {
-        let mut next = self.above.take();
-        while let Some(link) = next {
-            next = Rc::try_unwrap(link)
-                .ok()
-                .and_then(|mut link| link.above.take());
+        let mut pending: Vec<Rc<Outer>> = self.above.take().into_iter().collect();
+        pending.extend(self.above_with_guards.take());
+        while let Some(link) = pending.pop() {
+            if let Ok(mut link) = Rc::try_unwrap(link) {
+                pending.extend(link.above.take());
+                pending.extend(link.above_with_guards.take());
+            }
         }
     }
 }
@@ -960,6 +963,20 @@ mod tests {
     use super::super::tests::{assert_scales_linearly, entries, entries_lean};
     use crate::core::Language;
     use crate::index::security::entry::{EntryKind, EntryPoint};
+
+    #[test]
+    fn a_deep_chain_of_routers_with_guards_drops_on_a_small_stack() {
+        use crate::parser::deep::{on_small_stack, DEPTH};
+        use std::rc::Rc;
+        on_small_stack(|| {
+            let mut link: Option<Rc<super::Outer>> = None;
+            for position in 0..DEPTH {
+                let guards = vec!["guard".to_string()];
+                link = Some(Rc::new(super::Outer::new(position, 0, guards, link)));
+            }
+            drop(link);
+        });
+    }
 
     fn routes(source: &str) -> Vec<EntryPoint> {
         entries(Language::Python, &[("main.py", source)])

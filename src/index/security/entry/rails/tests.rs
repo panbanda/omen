@@ -1599,3 +1599,67 @@ fn timing_a_relative_superclass_in_deep_modules_takes_the_time_of_an_absolute_on
         "absolute {absolute:?}, relative {relative:?} at {size}"
     );
 }
+
+mod drops {
+    use super::super::{Callback, Link, Modules, Prefix, Program};
+    use crate::parser::deep::{on_small_stack, DEPTH};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    #[test]
+    fn a_deep_route_prefix_drops_on_a_small_stack() {
+        on_small_stack(|| {
+            let mut prefix = Prefix::root();
+            for _ in 0..DEPTH {
+                prefix = prefix.push("a").expect("a plain part");
+            }
+            drop(prefix);
+        });
+    }
+
+    #[test]
+    fn a_deep_chain_of_modules_drops_on_a_small_stack() {
+        on_small_stack(|| {
+            let names: Vec<String> = (0..DEPTH).map(|_| "A".to_string()).collect();
+            drop(Modules::default().extend(names));
+        });
+    }
+
+    #[test]
+    fn a_deep_chain_of_superclass_layers_drops_on_a_small_stack() {
+        on_small_stack(|| {
+            let mut program: Option<Arc<Program>> = None;
+            for _ in 0..DEPTH {
+                program = Some(Arc::new(Program::layer(program, Vec::new(), None, None)));
+            }
+            drop(program);
+        });
+    }
+
+    /// The jump of a link keeps an older link, so the older link is not free when the newer
+    /// link drops it.
+    #[test]
+    fn a_deep_chain_of_callbacks_with_jumps_drops_on_a_small_stack() {
+        on_small_stack(|| {
+            let callback = Arc::new(Callback {
+                skip: false,
+                names: vec!["auth".to_string()],
+                places: HashMap::from([("auth".to_string(), 0)]),
+                only: None,
+                except: None,
+                unreadable: false,
+                conditional: false,
+                prepend: false,
+                unnamed_block: false,
+            });
+            let mut link: Option<Arc<Link>> = None;
+            for index in 0..DEPTH {
+                let older = link.clone();
+                let newer = Link::new(&callback, index, older.clone());
+                newer.jump.lock().insert("show".to_string(), older);
+                link = Some(newer);
+            }
+            drop(link);
+        });
+    }
+}
