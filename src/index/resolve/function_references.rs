@@ -277,7 +277,8 @@ fn timing_one_parameter_name_in_many_functions_scales_linearly() {
 
 /// One file has a chain of imports: each import gives a new name to the name
 /// of the import after it, and the last import names a function.
-fn chain_of_import_names_at(size: usize) -> std::time::Duration {
+/// The time of `rounds` removals, each on a new copy of the facts.
+fn chain_of_import_names_at(size: usize, rounds: usize) -> std::time::Duration {
     let mut source = String::new();
     for position in 0..size {
         source.push_str(&format!(
@@ -288,23 +289,29 @@ fn chain_of_import_names_at(size: usize) -> std::time::Duration {
     source.push_str("\n\ndef run(pool):\n    pool.submit(name_0)\n");
     let other = format!("def name_{size}():\n    pass\n");
     let files = [("a.py", source.as_str()), ("b.py", other.as_str())];
-    let mut facts = crate::index::imports::testing::index(&files);
-    let started = crate::index::timing::Stopwatch::start();
-    super::drop_values_that_name_no_function(&mut facts);
-    let elapsed = started.elapsed();
-    assert_eq!(facts[0].value_sites.len(), 1);
+    let facts = crate::index::imports::testing::index(&files);
+    let mut elapsed = std::time::Duration::ZERO;
+    for _ in 0..rounds {
+        let mut copy = facts.clone();
+        let started = crate::index::timing::Stopwatch::start();
+        super::drop_values_that_name_no_function(&mut copy);
+        elapsed += started.elapsed();
+        assert_eq!(copy[0].value_sites.len(), 1);
+    }
     elapsed
 }
 
 #[test]
 fn test_chain_of_import_names_keeps_the_last_name() {
-    chain_of_import_names_at(200);
+    chain_of_import_names_at(200, 1);
 }
 
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_chain_of_import_names_scales_linearly() {
-    assert_scales_linearly("chain of import names", 320_000, chain_of_import_names_at);
+    assert_scales_linearly("chain of import names", 80_000, |size| {
+        chain_of_import_names_at(size, 4)
+    });
 }
 
 /// One function uses `size` functions as values. With `one_name`, each use

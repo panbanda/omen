@@ -5484,7 +5484,7 @@ mod go_tests {
     /// The time of `go_interface_methods` for `size` types and `size`
     /// interfaces that all have the method `Close`. Type `i` has the second
     /// method of interface `i` only, thus it implements one interface.
-    fn interface_methods_found_at(size: usize) -> std::time::Duration {
+    fn interface_methods_found_at(size: usize, rounds: usize) -> std::time::Duration {
         let mut source = String::from("package shop\n");
         for position in 0..size {
             source.push_str(&format!(
@@ -5497,16 +5497,19 @@ mod go_tests {
         ];
         let (facts, _) = crate::index::imports::testing::index_with_manifests(&files);
         let started = crate::index::timing::Stopwatch::start();
-        let found = go_interface_methods(&facts);
-        let elapsed = started.elapsed();
-        assert_eq!(found.len(), size * 2);
-        elapsed
+        for _ in 0..rounds {
+            assert_eq!(go_interface_methods(&facts).len(), size * 2);
+        }
+        started.elapsed()
     }
 
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_interface_methods_of_many_types_are_found_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("types", 64_000, interface_methods_found_at);
+        // The search repeats, so that a size of little memory takes enough time.
+        crate::index::timing::assert_scales_linearly("types", 16_000, |size| {
+            interface_methods_found_at(size, 4)
+        });
     }
     use crate::config::Config;
     use crate::core::FileSet;

@@ -1153,9 +1153,9 @@ mod tests {
             text.push_str("}\n");
             text
         };
-        // The index of one large function is outside the measure. Only the steps of the inline
-        // handlers are measured.
-        crate::index::timing::assert_scales_linearly("inline handlers", 8_000, |size| {
+        // The index of one large function is outside the measure, and it takes much longer than
+        // the steps of the inline handlers. The size thus stays small, and the steps repeat.
+        crate::index::timing::assert_scales_linearly("inline handlers", 2_000, |size| {
             let text = source(size);
             let paths = [PathBuf::from("server.js")];
             let read = |_: &Path| Ok(text.as_bytes().to_vec());
@@ -1163,19 +1163,20 @@ mod tests {
             let analysis = run(&[("server.js", text.as_str())], DEFAULT_MIN_BASIS);
             assert_eq!(analysis.reachability.paths.len(), size);
             let start = crate::index::timing::Stopwatch::start();
-            let view = CallView::from_index_with_function_values(
-                &index,
-                &inline_handlers(&index, &analysis.entry_points),
-            );
-            let found = reachability(
-                &view,
-                &analysis.sinks,
-                &analysis.entry_points,
-                DEFAULT_MIN_BASIS,
-            );
-            let took = start.elapsed();
-            assert_eq!(found.paths.len(), size);
-            took
+            for _ in 0..10 {
+                let view = CallView::from_index_with_function_values(
+                    &index,
+                    &inline_handlers(&index, &analysis.entry_points),
+                );
+                let found = reachability(
+                    &view,
+                    &analysis.sinks,
+                    &analysis.entry_points,
+                    DEFAULT_MIN_BASIS,
+                );
+                assert_eq!(found.paths.len(), size);
+            }
+            start.elapsed()
         });
     }
 }

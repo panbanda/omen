@@ -1476,10 +1476,13 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_deeply_nested_cfg_predicate_is_read_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("nested cfg", 6_400_000, |depth| {
+        // The predicate is read several times, so that a size of little memory takes enough time.
+        crate::index::timing::assert_scales_linearly("nested cfg", 1_600_000, |depth| {
             let predicate = nested_cfg(depth);
             let started = crate::index::timing::Stopwatch::start();
-            assert!(cfg_requires_test(&predicate));
+            for _ in 0..4 {
+                assert!(cfg_requires_test(&predicate));
+            }
             started.elapsed()
         });
     }

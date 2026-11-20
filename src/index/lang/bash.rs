@@ -533,7 +533,7 @@ mod alias_timing_tests {
 
     use crate::core::Language;
     use crate::index::extract::extract_file;
-    use crate::index::timing::{assert_scales_linearly, assert_scales_linearly_above, Stopwatch};
+    use crate::index::timing::{assert_scales_linearly, Stopwatch};
     use crate::parser::Parser;
 
     /// `size` aliases and `size` functions, then one call of each alias.
@@ -610,13 +610,10 @@ mod alias_timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_unalias_all_is_read_in_linear_time() {
-        // The linear work is small, thus a lower floor shows a quadratic
-        // growth before the growth uses much memory.
-        assert_scales_linearly_above(
-            "unalias -a",
-            3_000,
-            std::time::Duration::from_millis(5),
-            removals_at,
-        );
+        // The linear work is small, and a quadratic growth uses much memory
+        // at a large size. The size thus stays small, and the case repeats.
+        assert_scales_linearly("unalias -a", 3_000, |size| {
+            (0..32).map(|_| removals_at(size)).sum()
+        });
     }
 }

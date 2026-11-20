@@ -893,7 +893,10 @@ fn the_linear_cases_give_each_route() {
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_sibling_loops_resolve_in_linear_time() {
-    assert_scales_linearly("sibling loops", 8_000, sibling_loops_at);
+    // The large size stays under the limit of the work of the loops of one file.
+    assert_scales_linearly("sibling loops", 4_000, |size| {
+        (0..2).map(|_| sibling_loops_at(size)).sum()
+    });
 }
 
 #[test]

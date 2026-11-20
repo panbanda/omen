@@ -6450,7 +6450,8 @@ mod false_edge_tests {
     /// One Go function with `depth` nested closures. Each closure has a parameter `r`, and
     /// calls its method after the closure inside it, so that the nearest block of each use is far from
     /// the last block that starts before it. Each `r` is a local name of the function.
-    fn nested_closures_resolve_at(depth: usize) -> std::time::Duration {
+    /// The time of `rounds` resolutions, each on a new copy of the facts.
+    fn nested_closures_resolve_at(depth: usize, rounds: usize) -> std::time::Duration {
         let mut source = String::from(
             "package p\n\ntype T struct{}\n\nfunc (T) Run() {}\n\nfunc Run() {\n\t_ = ",
         );
@@ -6459,16 +6460,21 @@ mod false_edge_tests {
         source.push_str(&"\tr.Run()\n}\n".repeat(depth));
         source.push_str("}\n");
         let files = [("p/run.go", source.as_str())];
-        let (mut facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
+        let (facts, manifests) = crate::index::imports::testing::index_with_manifests(&files);
         let locals = facts[0]
             .locals
             .iter()
             .filter(|local| local.name.name == "r")
             .count();
         assert_eq!(locals, depth);
-        let started = crate::index::timing::Stopwatch::start();
-        super::resolve_references_with(&mut facts, &manifests);
-        started.elapsed()
+        let mut elapsed = std::time::Duration::ZERO;
+        for _ in 0..rounds {
+            let mut copy = facts.clone();
+            let started = crate::index::timing::Stopwatch::start();
+            super::resolve_references_with(&mut copy, &manifests);
+            elapsed += started.elapsed();
+        }
+        elapsed
     }
 
     /// The nearest local name of many names of one function is found without a look at each
@@ -6476,11 +6482,9 @@ mod false_edge_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_the_locals_of_nested_closures_resolve_in_linear_time() {
-        crate::index::timing::assert_scales_linearly(
-            "nested closures",
-            16_000,
-            nested_closures_resolve_at,
-        );
+        crate::index::timing::assert_scales_linearly("nested closures", 4_000, |depth| {
+            nested_closures_resolve_at(depth, 4)
+        });
     }
 
     /// The files of a package are found without a comparison of each file of
