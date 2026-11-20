@@ -6,6 +6,7 @@
 //! name. A qualifier or a receiver that fails does not continue to the rules
 //! for a bare name.
 
+mod exports;
 pub mod external;
 #[cfg(test)]
 mod function_references;
@@ -319,8 +320,8 @@ struct Resolver<'a> {
     /// The results of `types`, `package_files`, and `visible_files`. The
     /// resolution of one call asks for the same facts many times.
     types_cache: RwLock<HashMap<TypeQuery, Vec<Id>>>,
-    /// The results of `exported`, by the file and the name.
-    exported_cache: RwLock<HashMap<ExportQuery, Arc<Vec<Id>>>>,
+    /// The export table of each file that a query asked for.
+    export_tables: std::sync::OnceLock<crate::index::export_tables::Tables<'a, Id>>,
     /// For each file, the files of its package. Files of one package share
     /// one list.
     packages: OnceLock<Packages<'a>>,
@@ -382,9 +383,6 @@ type TwinQuery = (Vec<Id>, String, usize);
 /// A type and the name of one of its methods.
 /// For each method name of an interface, the methods that implement it.
 type ImplementationsByName = HashMap<String, Arc<Vec<Id>>>;
-
-/// The file and the name of one lookup of an exported name.
-type ExportQuery = (usize, String);
 
 /// The file, the name, and the qualifier of one type lookup.
 type TypeQuery = (usize, String, Option<String>);
@@ -641,7 +639,7 @@ impl<'a> Resolver<'a> {
             module_scopes_cache: RwLock::new(HashMap::new()),
             constructor_position_cache: RwLock::new(HashMap::new()),
             alias_constructs_cache: RwLock::new(HashMap::new()),
-            exported_cache: RwLock::new(HashMap::new()),
+            export_tables: std::sync::OnceLock::new(),
             packages: OnceLock::new(),
             visible_cache: RwLock::new(HashMap::new()),
         }
@@ -954,92 +952,14 @@ impl<'a> Resolver<'a> {
         self.symbol(id).container.is_none() && self.facts(id).parent.is_none()
     }
 
-    /// The top-level definition `name` of a file, or the definition that the
-    /// re-exports of the file give.
-    fn exported_name(
-        &self,
-        file: usize,
-        name: &str,
-        seen: &mut BTreeSet<(usize, String)>,
-    ) -> Vec<Id> {
-        if !seen.insert((file, name.to_string())) {
-            return Vec::new();
-        }
-        if name == "default" {
-            let facts = &self.files[file];
-            let defaults: Vec<Id> = (0..facts.symbols.len())
-                .filter(|position| facts.link_facts[*position].default_export)
-                .map(|position| (file, position))
-                .collect();
-            if !defaults.is_empty() {
-                return defaults;
-            }
-        }
-        let found = self.top_level(name, &[file]);
-        if !found.is_empty() {
-            return found;
-        }
-        // `export { original as name }` gives the name to a symbol of the file.
-        let aliased: Vec<Id> = (0..self.files[file].symbols.len())
-            .filter(|position| {
-                self.files[file].link_facts[*position]
-                    .export_aliases
-                    .iter()
-                    .any(|alias| alias == name)
-            })
-            .map(|position| (file, position))
-            .collect();
-        if !aliased.is_empty() {
-            return aliased;
-        }
-        // A name in a module in the file, as a Rust `mod testing { ... }` has it.
-        let in_module: Vec<Id> = self
-            .named_in(name, file)
-            .filter(|id| {
-                id.0 == file
-                    && self.facts(*id).parent.is_some_and(|parent| {
-                        self.symbol((file, parent)).kind == SymbolKind::Module
-                    })
-            })
-            .collect();
-        if let [only] = in_module.as_slice() {
-            return vec![*only];
-        }
-        let python = self.family(file) == Family::Python;
-        let mut found = Vec::new();
-        for binding in &self.files[file].imports {
-            let named = binding.kind == ImportKind::ReExportNamed
-                || (python && binding.kind == ImportKind::Named);
-            let wildcard = binding.kind == ImportKind::ReExportWildcard
-                || (python && binding.kind == ImportKind::Wildcard);
-            for target in self.target_files(binding) {
-                if named && binding.local_name.as_deref() == Some(name) {
-                    let source = binding.imported_name.as_deref().unwrap_or(name);
-                    found.extend(self.exported_name(target, source, seen));
-                } else if wildcard {
-                    found.extend(self.exported_name(target, name, seen));
-                }
-            }
-        }
-        found
-    }
-
-    /// The definitions that `exported_name` gives for a name of a file. Many
-    /// files can import one module with a wildcard, and each asks for the
-    /// same names. Thus the function keeps each result.
+    /// The definitions that the name `name` of a file gives: its own
+    /// definition, or the definitions that its re-exports give.
     fn exported(&self, file: usize, name: &str) -> Arc<Vec<Id>> {
-        let query = (file, name.to_string());
-        if let Some(found) = self.exported_cache.read().get(&query) {
-            return Arc::clone(found);
-        }
-        let mut found = self.exported_name(file, name, &mut BTreeSet::new());
-        found.sort();
-        found.dedup();
-        let found = Arc::new(found);
-        self.exported_cache
-            .write()
-            .insert(query, Arc::clone(&found));
-        found
+        Arc::new(
+            self.export_entry(file, name)
+                .map(|found| found.to_vec())
+                .unwrap_or_default(),
+        )
     }
 
     /// The types that a name can refer to in `file`. The first rule that
@@ -4276,7 +4196,7 @@ pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests)
     // The function references of a file. `None` means that this is a second
     // resolution: the uses are not there, and the list of the file stays.
     type Resolutions = (Vec<Resolution>, Option<Vec<Reference>>);
-    let resolutions: Vec<Resolutions> = {
+    let (resolutions, not_resolved): (Vec<Resolutions>, Vec<usize>) = {
         let resolver = Resolver::new(files, manifests);
         let resolution = |outcome: Outcome| {
             let keys = |ids: &[Id]| {
@@ -4294,7 +4214,7 @@ pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests)
                 candidates: keys(&outcome.candidates),
             }
         };
-        (0..files.len())
+        let resolutions = (0..files.len())
             .into_par_iter()
             .map(|file| {
                 let calls = (0..files[file].references.len())
@@ -4323,8 +4243,15 @@ pub fn resolve_references_with(files: &mut [FileSymbols], manifests: &Manifests)
                 });
                 (calls, values)
             })
-            .collect()
+            .collect();
+        (
+            resolutions,
+            resolver.export_tables().not_resolved().to_vec(),
+        )
     };
+    for position in not_resolved {
+        files[position].barrel_not_resolved = true;
+    }
     for (file, (calls, values)) in files.iter_mut().zip(resolutions) {
         for (reference, resolution) in file.references.iter_mut().zip(calls) {
             reference.resolution = resolution;

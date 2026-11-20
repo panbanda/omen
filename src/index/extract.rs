@@ -1586,6 +1586,10 @@ pub struct FileSymbols {
     /// The whole file is test code: its path follows a test convention, or a
     /// `#[cfg(test)]` declaration of a different file names it.
     pub test_file: bool,
+    /// The export table of the file has only its own names and its named
+    /// re-exports, because its wildcard re-exports need more work than the
+    /// cap of `crate::index::export_tables` gives.
+    pub barrel_not_resolved: bool,
     /// The facts of a Vue component, or `None` for a file of a language.
     pub component: Option<crate::parser::vue::Facts>,
 }
@@ -2421,6 +2425,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         test_ranges: mark_table.ranges,
         test_lines: mark_table.lines,
         test_file,
+        barrel_not_resolved: false,
         component: parsed.component.clone(),
     }
 }
