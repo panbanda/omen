@@ -880,6 +880,82 @@ const RUBY_RECEIVERS: &[&str] = &[
     "Time",
 ];
 
+/// The classes and modules of the Ruby core, sorted. Each Ruby program has
+/// them without `require`. A repository can open one of them again to add
+/// methods, but the class stays the core class. A class of the standard
+/// library needs its `require`, see `RUBY_MODULES`.
+const RUBY_CORE_CLASSES: &[&str] = &[
+    "ArgumentError",
+    "Array",
+    "BasicObject",
+    "Binding",
+    "Class",
+    "Comparable",
+    "Complex",
+    "ConditionVariable",
+    "Data",
+    "Dir",
+    "Encoding",
+    "Enumerable",
+    "Enumerator",
+    "Errno",
+    "Exception",
+    "FalseClass",
+    "Fiber",
+    "File",
+    "Float",
+    "FrozenError",
+    "Hash",
+    "IO",
+    "IOError",
+    "IndexError",
+    "Integer",
+    "Kernel",
+    "KeyError",
+    "Marshal",
+    "MatchData",
+    "Math",
+    "Method",
+    "Module",
+    "Mutex",
+    "NameError",
+    "NilClass",
+    "NoMethodError",
+    "NotImplementedError",
+    "Numeric",
+    "Object",
+    "ObjectSpace",
+    "Proc",
+    "Process",
+    "Queue",
+    "Random",
+    "Range",
+    "RangeError",
+    "Rational",
+    "Regexp",
+    "RuntimeError",
+    "ScriptError",
+    "Signal",
+    "SizedQueue",
+    "StandardError",
+    "StopIteration",
+    "String",
+    "Struct",
+    "Symbol",
+    "SystemExit",
+    "Thread",
+    "Time",
+    "TrueClass",
+    "TypeError",
+    "UnboundMethod",
+    "ZeroDivisionError",
+];
+
+/// Tells if `name` is a class or a module of the Ruby core.
+pub(super) fn is_ruby_core_class(name: &str) -> bool {
+    RUBY_CORE_CLASSES.binary_search(&name).is_ok()
+}
+
 const RUBY_MODULES: &[(&str, &[&str])] = &[
     ("fileutils", &["FileUtils"]),
     ("json", &["JSON"]),
@@ -1113,7 +1189,7 @@ impl<'a> Resolver<'a> {
 
     /// A file of the repository binds the name again with a macro, an alias,
     /// an assignment to the global object, or a singleton class.
-    fn is_rebound(&self, file: usize, name: &str) -> bool {
+    pub(super) fn is_rebound(&self, file: usize, name: &str) -> bool {
         self.rebound.contains(&(self.family(file), name))
     }
 
@@ -1571,6 +1647,16 @@ mod tests {
         }
         assert!(is_standard_member("Object", "keys"));
         assert!(!is_standard_member("Reflect", "getMetadata"));
+    }
+
+    #[test]
+    fn test_ruby_core_classes_are_sorted_and_unique() {
+        let mut sorted = RUBY_CORE_CLASSES.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, RUBY_CORE_CLASSES);
+        assert!(is_ruby_core_class("Thread"));
+        assert!(!is_ruby_core_class("Circle"));
     }
 
     #[test]
