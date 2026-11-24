@@ -367,12 +367,24 @@ Omen gives a route of these frameworks only when the file proves the framework:
 The project of a C# file is the directory of its nearest `.csproj` file. A repository with no
 `.csproj` file is one project.
 
-A Go function or method that the file calls in a branch has the conditions of its call. A call
-`x.name()` is a call of each method of the file with that name. When the calls are in different
-branches, or the function has a use that is not a call, as a function value or a reference from
-another file, Omen does not use its guards as complete, and its routes do not replace other
-routes. Omen reads each case of a `switch` as its own branch, also after `fallthrough`. Thus a
-route of the next case does not replace a route of the case before it, and both stay. For `net/http`, the patterns of different functions do not cover each
+Middleware that a Go function or method adds counts as unconditional only when the top of its body
+surely runs with the router. This holds when the function has one use in the repository, the use
+is a direct call in the same file, the call is at the top of the body of its caller (in no branch,
+loop, closure, `defer`, or `go`), and the same holds for the caller. A use counts as a call in
+`references` or as a function value in `function_references`. A method call `x.name()` names a
+method only when the file has one method of that name. In each other case the guards are
+`conditional_middleware`. For gin, which adds middleware only to later routes, middleware from
+another function also gives `conditional_middleware`, because the order of two functions is not
+known.
+
+Omen trusts the order of two registrations only when both are in one function body, or both are
+at the level of the package. The walk reads a function where the file declares it, not where a
+call runs it. Thus a chi or echo route does not replace, and a gorilla/mux route does not hide, a
+route of another function, and both stay. For `net/http`, the patterns of different functions do
+not cover each other. Omen reads each case of a `switch` as its own branch, also after
+`fallthrough`. Thus a route of the next case does not replace a route of the case before it, and
+both stay.
+ For `net/http`, the patterns of different functions do not cover each
 other.
 
 Omen matches an ASP.NET controller attribute, as `[HttpGet]`, by its name. These attributes need

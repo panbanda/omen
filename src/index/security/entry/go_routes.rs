@@ -664,8 +664,10 @@ struct Router {
     base: Vec<String>,
     /// The innermost branch at the place that made the router.
     created_in: BranchId,
-    /// The body of the function or the method that made the router.
-    created_body: Option<BranchId>,
+    /// The bodies of the functions of the calls that added middleware.
+    guard_bodies: GuardBodies,
+    /// The place of the middleware that does not run whenever the router exists.
+    conditional_place: GuardBodies,
     /// The position of the first guard that a call in another branch added.
     conditional_from: usize,
     /// A call in another branch added a guard that runs before the lookup of the route.
@@ -1990,29 +1992,29 @@ impl<'a> Context<'a> {
     /// switch variable. The scope of a parameter is the function. The scope of another
     /// binding starts after its declaration, and ends with its block, its statement, or its
     /// case clause.
-    /// Tells if a Go file other than this one has a reference to the key.
-    pub(super) fn is_go_referenced_elsewhere(&self, key: &str) -> bool {
-        let files = self.all_parsed.shared().go_reference_files.get_or_init(|| {
-            let mut files: HashMap<String, Option<String>> = HashMap::new();
+    /// The number of uses of the key in the Go files of the repository: the calls in
+    /// `references` and the function values in `function_references`. A use with more than one
+    /// candidate makes the key ambiguous, and then the count is not a proof.
+    pub(super) fn go_use_count(&self, key: &str) -> Option<usize> {
+        let counts = self.all_parsed.shared().go_use_counts.get_or_init(|| {
+            let mut counts: HashMap<String, (usize, bool)> = HashMap::new();
             for file in self.all.iter().filter(|file| file.language == Language::Go) {
-                for reference in &file.references {
-                    for candidate in reference.resolution.candidates.iter() {
-                        files
-                            .entry(candidate.to_string())
-                            .and_modify(|known| {
-                                if known.as_deref() != Some(file.file.as_str()) {
-                                    *known = None;
-                                }
-                            })
-                            .or_insert_with(|| Some(file.file.clone()));
+                for reference in file.references.iter().chain(&file.function_references) {
+                    let candidates = &reference.resolution.candidates;
+                    for candidate in candidates.iter() {
+                        let count = counts.entry(candidate.to_string()).or_default();
+                        count.0 += 1;
+                        count.1 |= candidates.len() > 1;
                     }
                 }
             }
-            files
+            counts
         });
-        files
-            .get(key)
-            .is_some_and(|only| only.as_deref() != Some(self.file.file.as_str()))
+        match counts.get(key) {
+            None => Some(0),
+            Some((_, true)) => None,
+            Some((count, false)) => Some(*count),
+        }
     }
 
     pub(super) fn is_go_local(&self, node: Node<'_>) -> bool {
@@ -2870,7 +2872,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             helper_branches: HashMap::new(),
             helper_bodies: HashSet::new(),
             method_bodies: HashMap::new(),
-            unresolved_bodies: HashSet::new(),
+            body_keys: HashMap::new(),
+            anchors: Vec::new(),
             guard_sites: Vec::new(),
             route_calls: HashMap::new(),
             functions: HashMap::new(),
@@ -2923,8 +2926,10 @@ struct Routes<'c, 'a, 't> {
     helper_bodies: HashSet<BranchId>,
     /// The bodies of the methods of the file, by the name of the method.
     method_bodies: HashMap<String, Vec<BranchId>>,
-    /// The bodies of the functions and the methods with a use that is not a call in this file.
-    unresolved_bodies: HashSet<BranchId>,
+    /// The key of the symbol of each body.
+    body_keys: HashMap<BranchId, Option<String>>,
+    /// The place at which the code of each branch surely runs. See `helper_anchors`.
+    anchors: Vec<BranchId>,
     /// Each call that added middleware. `settle_branches` decides if it is conditional, because
     /// the calls of a helper are known only after the walk.
     guard_sites: Vec<GuardSite>,
@@ -3020,56 +3025,55 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         self.settle_branches(root);
     }
 
-    /// Puts the body of each helper at the branch of its calls, and marks the middleware that
-    /// does not run whenever its router exists.
+    /// Gives each record and link the body of its function, and marks the middleware that does
+    /// not run whenever its router exists.
     fn settle_branches(&mut self, root: Node<'t>) {
-        let (sites, unresolved) = self.helper_call_sites(root);
         let bodies = self.branch_tree.bodies(&self.helper_bodies);
-        let settled = self.branch_tree.settle(&sites, &unresolved);
+        let anchors = self.helper_anchors(root);
         for record in &mut self.records {
             record.body = bodies[record.branch];
-            record.branch = settled[record.branch];
         }
         for router in &mut self.routers {
-            router.created_body = bodies[router.created_in];
-            router.created_in = settled[router.created_in];
             for link in &mut router.links {
                 link.body = bodies[link.branch];
-                link.branch = settled[link.branch];
             }
         }
-
         for site in std::mem::take(&mut self.guard_sites) {
             let router = &mut self.routers[site.router];
-            if settled[site.branch] == router.created_in {
+            router.guard_bodies.add(bodies[site.branch]);
+            let place = anchors[site.branch];
+            if place == anchors[router.created_in] {
                 continue;
             }
+            router.conditional_place.add(Some(place));
             if site.before_routing {
                 router.pre_conditional = true;
             } else {
                 router.conditional_from = router.conditional_from.min(site.added_at);
             }
         }
+        self.anchors = anchors;
     }
 
-    /// The branches of the calls of each function and each method of the file, and the bodies
-    /// with a use that is not a call. A call of a method is a call of each method of the file with
-    /// that name. A mention in a branch that never runs does not count, and a local variable with
-    /// the name of a function is not a mention of it.
-    fn helper_call_sites(
-        &self,
-        root: Node<'t>,
-    ) -> (HashMap<BranchId, Vec<BranchId>>, HashSet<BranchId>) {
+    /// The place at which the code of each branch surely runs. The top of the body of a function
+    /// or a method runs whenever the top of the body of its caller runs only when all of these
+    /// are true: the function has one use in the repository, that use is a direct call in this
+    /// file, the call is at the top of the body of the caller (in no branch, loop, closure,
+    /// `defer`, or `go`), and the same holds for the caller. A method call names a method of the
+    /// file only when the file has one method of that name. Each other branch is its own place.
+    fn helper_anchors(&self, root: Node<'t>) -> Vec<BranchId> {
         #[derive(Clone, Copy, PartialEq)]
         enum Role {
             Callee,
             Declaration,
             Other,
         }
-        let mut unresolved = self.unresolved_bodies.clone();
-        let mut calls: Vec<(usize, BranchId)> = Vec::new();
-        let mut pending = vec![(root, Role::Other)];
-        while let Some((node, role)) = pending.pop() {
+        // For each name: the number of mentions, and the start of the last one if it is a
+        // direct call outside a closure, `defer`, and `go`.
+        let mut functions: HashMap<&str, (usize, Option<usize>)> = HashMap::new();
+        let mut methods: HashMap<&str, (usize, Option<usize>)> = HashMap::new();
+        let mut pending = vec![(root, Role::Other, false)];
+        while let Some((node, role, inside)) = pending.pop() {
             let callee = match node.kind() {
                 "call_expression" => node.child_by_field_name("function"),
                 "selector_expression" if role == Role::Callee => node.child_by_field_name("field"),
@@ -3079,6 +3083,11 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 "function_declaration" | "method_declaration" => node.child_by_field_name("name"),
                 _ => None,
             };
+            let inner = inside
+                || matches!(
+                    node.kind(),
+                    "func_literal" | "defer_statement" | "go_statement"
+                );
             let mut cursor = node.walk();
             pending.extend(node.named_children(&mut cursor).map(|child| {
                 let role = if Some(child) == callee {
@@ -3088,43 +3097,58 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 } else {
                     Role::Other
                 };
-                (child, role)
+                (child, role, inner)
             }));
-            let bodies: &[BranchId] = match node.kind() {
-                "identifier" if !self.context.is_go_local(node) => self
-                    .helper_branches
-                    .get(self.text(node))
-                    .map_or(&[][..], std::slice::from_ref),
-                "field_identifier" => self
-                    .method_bodies
-                    .get(self.text(node))
-                    .map_or(&[][..], Vec::as_slice),
-                _ => &[],
+            let table = match node.kind() {
+                "identifier"
+                    if self.helper_branches.contains_key(self.text(node))
+                        && !self.context.is_go_local(node) =>
+                {
+                    &mut functions
+                }
+                "field_identifier" if self.method_bodies.contains_key(self.text(node)) => {
+                    &mut methods
+                }
+                _ => continue,
             };
-            if bodies.is_empty()
-                || role == Role::Declaration
-                || self.context.go_in_dead_branch(node)
-            {
+            if role == Role::Declaration || self.context.go_in_dead_branch(node) {
                 continue;
             }
-            for body in bodies {
-                if role == Role::Callee {
-                    calls.push((node.start_byte(), *body));
-                } else {
-                    unresolved.insert(*body);
-                }
+            let mention = table.entry(self.text(node)).or_default();
+            mention.0 += 1;
+            mention.1 = (role == Role::Callee && !inside).then_some(node.start_byte());
+        }
+        let only_call = |mention: Option<&(usize, Option<usize>)>| match mention {
+            Some((1, Some(start))) => Some(*start),
+            _ => None,
+        };
+        let mut calls: Vec<(usize, BranchId)> = Vec::new();
+        for (name, body) in &self.helper_branches {
+            if let Some(start) = only_call(functions.get(name.as_str())) {
+                calls.push((start, *body));
             }
         }
+        for (name, bodies) in &self.method_bodies {
+            if let ([body], Some(start)) =
+                (bodies.as_slice(), only_call(methods.get(name.as_str())))
+            {
+                calls.push((start, *body));
+            }
+        }
+        // The one use in the file must be the one use in the repository.
+        calls.retain(|(_, body)| {
+            self.body_keys
+                .get(body)
+                .and_then(Option::as_ref)
+                .is_some_and(|key| self.context.go_use_count(key) == Some(1))
+        });
         calls.sort_unstable();
-        let mut sites: HashMap<BranchId, Vec<BranchId>> = self
-            .helper_bodies
-            .iter()
-            .map(|helper| (*helper, Vec::new()))
-            .collect();
+        // The branch of each call.
+        let mut caller: HashMap<BranchId, BranchId> = HashMap::new();
         let spans = self.branch_tree.by_start();
         let mut next = 0;
         let mut open: Vec<(usize, BranchId)> = Vec::new();
-        for (start, helper) in calls {
+        for (start, body) in calls {
             while let Some(&(from, end, branch)) = spans.get(next) {
                 if from > start {
                     break;
@@ -3139,11 +3163,47 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 open.pop();
             }
             let branch = open.last().map_or(ALWAYS_RUNS, |(_, branch)| *branch);
-            if let Some(list) = sites.get_mut(&helper) {
-                list.push(branch);
+            if branch == ALWAYS_RUNS || self.helper_bodies.contains(&branch) {
+                caller.insert(body, branch);
             }
         }
-        (sites, unresolved)
+        // Each body follows its callers to the first body that has no proved caller. A cycle
+        // of calls proves nothing, so each body on it stays its own place.
+        let count = self.branch_tree.parents.len();
+        let mut anchors: Vec<BranchId> = (0..count).collect();
+        let mut done = vec![false; count];
+        for start in 0..count {
+            if done[start] {
+                continue;
+            }
+            let mut path = vec![start];
+            let mut on_path: HashSet<BranchId> = HashSet::from([start]);
+            let mut current = start;
+            let end = loop {
+                match caller.get(&current) {
+                    Some(&above) if done[above] => break anchors[above],
+                    Some(&above) if on_path.contains(&above) => {
+                        for branch in &path {
+                            anchors[*branch] = *branch;
+                            done[*branch] = true;
+                        }
+                        path.clear();
+                        break current;
+                    }
+                    Some(&above) => {
+                        path.push(above);
+                        on_path.insert(above);
+                        current = above;
+                    }
+                    None => break current,
+                }
+            };
+            for branch in path {
+                anchors[branch] = end;
+                done[branch] = true;
+            }
+        }
+        anchors
     }
 
     /// The package-level variables that an assignment inside a function writes. The walk
@@ -3346,13 +3406,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     }
                 }
             }
-            // A call in another file has a branch that this walk does not read.
-            let called_elsewhere = name
-                .and_then(|name| self.context.symbol_at(name))
-                .is_none_or(|key| self.context.is_go_referenced_elsewhere(&key));
-            if called_elsewhere {
-                self.unresolved_bodies.insert(body);
-            }
+            let key = name.and_then(|name| self.context.symbol_at(name));
+            self.body_keys.insert(body, key);
             self.branches.push(body);
         }
         on_grown_stack(|| self.read_declared(node, declared));
@@ -3848,7 +3903,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             external: false,
             base: Vec::new(),
             created_in: self.current_branch(),
-            created_body: None,
+            guard_bodies: GuardBodies::None,
+            conditional_place: GuardBodies::None,
             conditional_from: usize::MAX,
             pre_conditional: false,
         });
@@ -3884,7 +3940,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             external: false,
             base: Vec::new(),
             created_in: self.current_branch(),
-            created_body: None,
+            guard_bodies: GuardBodies::None,
+            conditional_place: GuardBodies::None,
             conditional_from: usize::MAX,
             pre_conditional: false,
         });
@@ -5161,6 +5218,36 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
 
     /// The prefixes and the guards that the routers above a router give. Each router has
     /// one result, which shares its list with the result of its parent.
+    /// Tells if the branch is the top of a function body or the level of the package: no
+    /// condition of the body is around it.
+    fn at_top(&self, branch: BranchId) -> bool {
+        branch == ALWAYS_RUNS || self.helper_bodies.contains(&branch)
+    }
+
+    /// Tells if a registration in a branch that is not the place of the middleware still sees
+    /// it: all the middleware that does not run with the router runs at one place, the
+    /// registration runs only when that place runs, and the order is known or does not matter.
+    fn runs_after_guards(&self, router: &Router, record: &Record, order: &BranchOrder) -> bool {
+        let GuardBodies::One(Some(place)) = router.conditional_place else {
+            return false;
+        };
+        let ordered = router.retroactive || router.guard_bodies == GuardBodies::One(record.body);
+        let at = self
+            .anchors
+            .get(record.branch)
+            .copied()
+            .unwrap_or(record.branch);
+        ordered && order.runs_whenever(place, at)
+    }
+
+    /// Tells if middleware of a router that adds middleware only for later routes comes from
+    /// another body than the registration. The order of two bodies is not known.
+    fn unordered(router: &Router, body: Option<BranchId>) -> bool {
+        !router.retroactive
+            && !matches!(router.guard_bodies, GuardBodies::None)
+            && router.guard_bodies != GuardBodies::One(body)
+    }
+
     fn up_of(&self, id: usize, memo: &mut [Option<Up>]) {
         let mut path = Vec::new();
         let mut current = id;
@@ -5216,7 +5303,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     guards,
                     conditional: parent.conditional
                         || above.pre_conditional
-                        || count > above.conditional_from,
+                        || count > above.conditional_from
+                        || Self::unordered(above, link.body),
                     dead: parent.dead || above.partial,
                 }
             }
@@ -5224,7 +5312,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         }
     }
 
-    fn finish(mut self, out: &mut Vec<Draft>) {
+    fn finish(self, out: &mut Vec<Draft>) {
         let mut memo: Vec<Option<Up>> = (0..self.routers.len()).map(|_| None).collect();
         // The tree of a chi router is the tree of the router that `With` or `Group` came
         // from. A parent has a lower number than its child.
@@ -5261,8 +5349,6 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 }
             }
         }
-        let mut factory_bodies: HashMap<(Option<BranchId>, usize), Option<BranchId>> =
-            HashMap::new();
         for (fresh, name) in &self.fresh_of {
             if !self.registered_fresh.contains(name) {
                 continue;
@@ -5276,10 +5362,6 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             match returned.filter(|_| exact) {
                 Some(returned) => {
                     mapping[*fresh] = returned;
-                    factory_bodies.insert(
-                        (self.routers[returned].created_body, root_of[returned]),
-                        self.routers[*fresh].created_body,
-                    );
                     for router in own {
                         root_of[router] = root_of[returned];
                         if tree_of[router] == *fresh {
@@ -5291,14 +5373,6 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     blocked.extend(self.components.get(name).into_iter().flatten().copied());
                     blocked.extend(own);
                 }
-            }
-        }
-        // The one call of a factory runs its registrations on the router that it returns before
-        // the caller registers on the result. Thus these registrations take the order of the
-        // body of the caller, before its registrations on the result.
-        for record in &mut self.records {
-            if let Some(body) = factory_bodies.get(&(record.body, root_of[record.router])) {
-                record.body = *body;
             }
         }
         // chi's `Mount` registers the pattern, the pattern and a slash, and the pattern and `/*`
@@ -5317,7 +5391,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             if record.opaque {
                 match framework {
                     Framework::Chi => {
-                        if record.branch == ALWAYS_RUNS {
+                        if self.at_top(record.branch) {
                             chi_opaque.insert(tree_of[record.router]);
                         }
                         chi_opaque_at
@@ -5325,7 +5399,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                             .or_default()
                             .push(tree_of[record.router]);
                     }
-                    Framework::Echo if record.branch == ALWAYS_RUNS => {
+                    Framework::Echo if self.at_top(record.branch) => {
                         echo_opaque.insert(root_of[record.router]);
                     }
                     _ => {}
@@ -5394,12 +5468,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 own_replaced[*id] = opaque.get(&tree).is_some_and(|count| *count > 0)
                     || has_key_under(&keys, tree, &link.prefix)
                     || chi_mount_keys(&link.prefix).iter().any(|key| {
-                        // A later route replaces the mount. The order is known in one body, and
-                        // each function runs after the code at the level of the package.
-                        let indexes = match link.body {
-                            None => keys.get(&(tree, key.clone())),
-                            Some(_) => by_body.get(&(tree, key.clone(), link.body)),
-                        };
+                        // A later route replaces the mount, and the order is known only in one
+                        // body.
+                        let indexes = by_body.get(&(tree, key.clone(), link.body));
                         indexes
                             .and_then(|indexes| indexes.last())
                             .is_some_and(|at| *at >= link.at)
@@ -5488,8 +5559,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             let count = Self::visible_guards(router, Some(record.limit));
             extend_capped(&mut guards, router.guards[..count].iter());
             extend_capped(&mut guards, record.guards.iter());
-            let conditional =
-                up.conditional || router.pre_conditional || count > router.conditional_from;
+            let conditional = up.conditional
+                || (router.pre_conditional || count > router.conditional_from)
+                    && !self.runs_after_guards(router, record, &order)
+                || Self::unordered(router, record.body);
             let duplicate = match framework {
                 Framework::Chi => {
                     Duplicate::Chi(tree_of[record.router], chi_tree_key(&record.path))
@@ -5651,6 +5724,24 @@ type BranchId = usize;
 /// The code that always runs. It is the root of each `BranchTree`.
 const ALWAYS_RUNS: BranchId = 0;
 
+/// One value, or a note that there are several.
+#[derive(Clone, Copy, PartialEq)]
+enum GuardBodies {
+    None,
+    One(Option<BranchId>),
+    Several,
+}
+
+impl GuardBodies {
+    fn add(&mut self, value: Option<BranchId>) {
+        *self = match *self {
+            Self::None => Self::One(value),
+            Self::One(known) if known == value => Self::One(known),
+            _ => Self::Several,
+        };
+    }
+}
+
 /// A call that added middleware to a router.
 struct GuardSite {
     router: usize,
@@ -5672,13 +5763,6 @@ impl Default for BranchTree {
             spans: vec![(0, usize::MAX)],
         }
     }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum HelperVisit {
-    New,
-    Open,
-    Done,
 }
 
 impl BranchTree {
@@ -5714,87 +5798,6 @@ impl BranchTree {
             };
         }
         bodies
-    }
-
-    /// Moves the body of each helper to the branch of its calls and gives the new id of each
-    /// branch. A helper with no call stays at the code that always runs. When the calls are in
-    /// different branches, a cycle of calls reaches the helper, or the helper has a use that is not
-    /// a call of this file, no one branch tells when it runs, so the body stays a branch of its own: it replaces nothing outside itself.
-    fn settle(
-        &mut self,
-        sites: &HashMap<BranchId, Vec<BranchId>>,
-        unresolved: &HashSet<BranchId>,
-    ) -> Vec<BranchId> {
-        let count = self.parents.len();
-        let mut owner: Vec<Option<BranchId>> = vec![None; count];
-        for branch in 1..count {
-            let parent = self.parents[branch];
-            owner[branch] = if sites.contains_key(&parent) {
-                Some(parent)
-            } else {
-                owner[parent]
-            };
-        }
-        let owner_of = |site: BranchId| {
-            if sites.contains_key(&site) {
-                Some(site)
-            } else {
-                owner[site]
-            }
-        };
-        let mut settled: Vec<BranchId> = (0..count).collect();
-        let mut visits = vec![HelperVisit::New; count];
-        let mut cyclic = vec![false; count];
-        let mut helpers: Vec<BranchId> = sites.keys().copied().collect();
-        helpers.sort_unstable();
-        for start in helpers {
-            if visits[start] != HelperVisit::New {
-                continue;
-            }
-            visits[start] = HelperVisit::Open;
-            let mut stack = vec![(start, 0_usize)];
-            while let Some((helper, next)) = stack.last_mut() {
-                let helper = *helper;
-                if let Some(site) = sites[&helper].get(*next).copied() {
-                    *next += 1;
-                    match owner_of(site) {
-                        // A call of the helper in its own body is a cycle.
-                        Some(found) if found == helper => cyclic[helper] = true,
-                        Some(found) => match visits[found] {
-                            HelperVisit::New => {
-                                visits[found] = HelperVisit::Open;
-                                stack.push((found, 0));
-                            }
-                            HelperVisit::Open => cyclic[helper] = true,
-                            HelperVisit::Done => {}
-                        },
-                        _ => {}
-                    }
-                    continue;
-                }
-                stack.pop();
-                visits[helper] = HelperVisit::Done;
-                let mut places = sites[&helper]
-                    .iter()
-                    .filter(|site| owner_of(**site) != Some(helper))
-                    .map(|site| settled[*site]);
-                settled[helper] = match places.next() {
-                    _ if unresolved.contains(&helper) => helper,
-                    None => ALWAYS_RUNS,
-                    Some(_) if cyclic[helper] => helper,
-                    Some(first) if places.all(|place| place == first) => first,
-                    Some(_) => helper,
-                };
-            }
-        }
-        for branch in 1..count {
-            self.parents[branch] = if settled[branch] == branch {
-                settled[self.parents[branch]]
-            } else {
-                settled[branch]
-            };
-        }
-        settled
     }
 
     /// The places of the branches in one walk of the tree.
@@ -5899,8 +5902,8 @@ impl BranchCover {
 
 /// The records that can be the last registration of one key, by the body of their function. The
 /// walk reads a function where the file declares it, not where a call runs it, so the order of
-/// the records is the order of the registrations only in one body. The code at the level of the
-/// package runs before each function.
+/// the records is the order of the registrations only in one body, or in the code at the level
+/// of the package. This is the one rule of order for chi, echo, and gorilla/mux.
 #[derive(Default)]
 struct BodyRecords(HashMap<Option<BranchId>, LiveRecords>);
 
@@ -5912,7 +5915,7 @@ impl BodyRecords {
             .add(order, place.0, index);
     }
 
-    /// Removes the records that the registration replaces, and adds it.
+    /// Removes the records of the same body that the registration replaces, and adds it.
     fn replace(
         &mut self,
         order: &BranchOrder,
@@ -5920,14 +5923,8 @@ impl BodyRecords {
         index: usize,
         mut dropped: impl FnMut(usize),
     ) {
-        let (branch, body) = place;
-        for earlier in [body, None]
-            .into_iter()
-            .take(if body.is_some() { 2 } else { 1 })
-        {
-            if let Some(live) = self.0.get_mut(&earlier) {
-                live.replace_under(order, branch, &mut dropped);
-            }
+        if let Some(live) = self.0.get_mut(&place.1) {
+            live.replace_under(order, place.0, &mut dropped);
         }
         self.add(order, place, index);
     }
@@ -6382,6 +6379,10 @@ fn mux_order(
     }
     let mut everything: HashMap<usize, MethodTries> = HashMap::new();
     let mut by_router: HashMap<(usize, usize), MethodTries> = HashMap::new();
+    // The order of two routes is known only in one body. See `BodyRecords`.
+    let mut by_body: HashMap<(usize, usize, Option<BranchId>), MethodTries> = HashMap::new();
+    let mut unreadable_by_body: HashMap<(usize, usize, Option<BranchId>), BTreeSet<usize>> =
+        HashMap::new();
     let mut unreadable: HashMap<usize, HashMap<usize, BTreeSet<usize>>> = HashMap::new();
     order.walk(|branch, entering| {
         let here = at_branch.get(&branch).map_or(&[][..], Vec::as_slice);
@@ -6396,8 +6397,17 @@ fn mux_order(
                         if let Some(tries) = by_router.get_mut(&(root, router)) {
                             tries.remove(method, literal, kind, index);
                         }
+                        let body = records[index].body;
+                        if let Some(tries) = by_body.get_mut(&(root, router, body)) {
+                            tries.remove(method, literal, kind, index);
+                        }
                     }
                     None => {
+                        if let Some(indexes) =
+                            unreadable_by_body.get_mut(&(root, router, records[index].body))
+                        {
+                            indexes.remove(&index);
+                        }
                         if let Some(routers) = unreadable.get_mut(&root) {
                             if let Some(indexes) = routers.get_mut(&router) {
                                 indexes.remove(&index);
@@ -6423,8 +6433,16 @@ fn mux_order(
                         .entry((root, router))
                         .or_default()
                         .insert(method, literal, kind, index);
+                    by_body
+                        .entry((root, router, records[index].body))
+                        .or_default()
+                        .insert(method, literal, kind, index);
                 }
                 None => {
+                    unreadable_by_body
+                        .entry((root, router, records[index].body))
+                        .or_default()
+                        .insert(index);
                     unreadable
                         .entry(root)
                         .or_default()
@@ -6443,8 +6461,9 @@ fn mux_order(
             let routers = unreadable.get(&root);
             let others_unreadable = routers
                 .is_some_and(|routers| routers.len() > usize::from(routers.contains_key(&router)));
-            let own_unreadable = routers
-                .and_then(|routers| routers.get(&router))
+            let body = records[index].body;
+            let own_unreadable = unreadable_by_body
+                .get(&(root, router, body))
                 .and_then(BTreeSet::first)
                 .is_some_and(|first| *first < index);
             let all = everything
@@ -6452,7 +6471,8 @@ fn mux_order(
                 .map_or(0, |tries| tries.overlaps(method, literal, kind));
             let own_tries = by_router.get(&(root, router));
             let own = own_tries.map_or(0, |tries| tries.overlaps(method, literal, kind));
-            let before = own_tries
+            let before = by_body
+                .get(&(root, router, body))
                 .and_then(|tries| tries.earliest(method, literal, kind))
                 .is_some_and(|first| first < index);
             if others_unreadable || own_unreadable || all > own || before {

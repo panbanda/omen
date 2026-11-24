@@ -389,8 +389,9 @@ pub struct EntryShared {
     /// The names of the top-level Java types of each directory.
     java_package_types:
         std::sync::OnceLock<std::collections::HashMap<String, std::collections::HashSet<String>>>,
-    /// The file of the Go references to each key, or `None` for references in more than one file.
-    go_reference_files: std::sync::OnceLock<std::collections::HashMap<String, Option<String>>>,
+    /// The number of Go uses of each key in the repository, and if a use has more than one
+    /// candidate.
+    go_use_counts: std::sync::OnceLock<std::collections::HashMap<String, (usize, bool)>>,
     /// Tells if the Rust files of the repository import rocket, and if they import actix-web.
     rust_web: std::sync::OnceLock<[bool; 2]>,
     /// The framework of each verb that an import of a Rust file binds.
@@ -943,7 +944,7 @@ fn java_member_types(root: Node<'_>, source: &[u8]) -> std::collections::HashMap
 }
 
 /// The names that a Python module binds, other than by its own imports. A function, a class body,
-/// and a lambda have their own scopes. A binding in such a scope counts only when the scope
+/// and the body of a lambda have their own scopes. A binding in such a scope counts only when the scope
 /// declares the name `global`. A `global` statement alone binds nothing.
 fn python_module_bindings(root: Node<'_>, source: &[u8]) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
@@ -994,9 +995,13 @@ fn read_python_scope<'t>(
                 }
                 continue;
             }
+            // The defaults of a lambda are read in this scope. Only the body has a scope of its
+            // own.
             "lambda" => {
-                scopes.push((node, false));
-                continue;
+                body = node.child_by_field_name("body");
+                if let Some(body) = body {
+                    scopes.push((body, false));
+                }
             }
             "function_definition" | "class_definition" => {
                 targets.extend(node.child_by_field_name("name"));
@@ -1017,7 +1022,11 @@ fn read_python_scope<'t>(
                     targets.extend(target);
                 }
             }
-            "assignment" | "augmented_assignment" | "for_statement" if !in_comprehension => {
+            // An annotation with no value, as `path: object`, binds nothing.
+            "assignment" if !in_comprehension && node.child_by_field_name("right").is_some() => {
+                targets.extend(node.child_by_field_name("left"));
+            }
+            "augmented_assignment" | "for_statement" if !in_comprehension => {
                 targets.extend(node.child_by_field_name("left"));
             }
             "as_pattern" if !in_comprehension => {
@@ -1036,8 +1045,16 @@ fn read_python_scope<'t>(
                 "identifier" => {
                     bound.insert(syntax::text(target, source).to_string());
                 }
-                "pattern_list" | "tuple_pattern" | "list_pattern" | "list_splat_pattern"
-                | "as_pattern_target" | "dotted_name" => {
+                "pattern_list"
+                | "tuple_pattern"
+                | "list_pattern"
+                | "list_splat_pattern"
+                | "as_pattern_target"
+                | "dotted_name"
+                | "tuple"
+                | "list"
+                | "parenthesized_expression"
+                | "list_splat" => {
                     let mut cursor = target.walk();
                     targets.extend(target.named_children(&mut cursor));
                 }
@@ -6240,7 +6257,7 @@ func routes() {
     }
 
     #[test]
-    fn a_caller_that_registers_on_the_result_of_a_factory_shares_one_order_with_it() {
+    fn a_caller_that_registers_on_the_result_of_a_factory_has_no_known_order_with_it() {
         let chi = go_source(
             &[CHI],
             r#"func newAPI() *chi.Mux { r := chi.NewRouter(); r.Get("/x", show); return r }
@@ -6252,8 +6269,12 @@ func main() {
 }
 "#,
         );
-        // chi keeps the last registration of a key, and the registrations of both are in order.
-        assert_eq!(go_routes(&[("main.go", &chi)]), ["chi GET /x [] list"]);
+        // chi keeps the last registration of a key. The walk reads `newAPI` where the file
+        // declares it, and the order of two bodies is not known, so both routes stay.
+        assert_eq!(
+            go_routes(&[("main.go", &chi)]),
+            ["chi GET /x [] show", "chi GET /x [] list"]
+        );
         let api = go_source(
             &[CHI],
             "func newAPI() *chi.Mux { r := chi.NewRouter(); r.Get(\"/x\", show); return r }\n",
@@ -6277,10 +6298,11 @@ func main() {
 }
 "#,
         );
-        // gorilla/mux takes the first route that matches.
+        // gorilla/mux takes the first route that matches, and the order of two bodies is not
+        // known.
         assert_eq!(
             go_routes(&[("main.go", &mux)]),
-            ["gorilla/mux ANY /x [] show"]
+            ["gorilla/mux ANY /x [] show", "gorilla/mux ANY /x [] list"]
         );
         let echo = go_source(
             &[ECHO],
@@ -6296,6 +6318,7 @@ func main() {
         assert_eq!(
             go_routes(&[("main.go", &echo)]),
             [
+                "echo GET /x [] show",
                 "echo GET /keep [] show",
                 "echo GET /x [] list",
                 "echo GET /other [] list"

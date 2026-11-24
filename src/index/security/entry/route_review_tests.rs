@@ -1701,9 +1701,7 @@ fn a_guard_of_a_helper_called_in_and_out_of_a_branch_is_not_proved() {
 fn a_guard_of_a_helper_that_always_runs_stays_complete() {
     for body in [
         format!("var r = chi.NewRouter()\n\nfunc routes() {{\n\thelper()\n\tr.Get(\"/x\", first)\n}}\n\n{CHI_PLAIN_GUARD_HELPER}"),
-        format!("var r = chi.NewRouter()\n\nfunc routes() {{\n\touter()\n\tr.Get(\"/x\", first)\n}}\n\nfunc outer() {{\n\thelper()\n}}\n\n{CHI_PLAIN_GUARD_HELPER}"),
-        format!("var r = chi.NewRouter()\n\nfunc routes() {{\n\tone()\n\ttwo()\n\tr.Get(\"/x\", first)\n}}\n\nfunc one() {{\n\thelper()\n}}\n\nfunc two() {{\n\thelper()\n}}\n\n{CHI_PLAIN_GUARD_HELPER}"),
-    ] {
+        format!("var r = chi.NewRouter()\n\nfunc routes() {{\n\touter()\n\tr.Get(\"/x\", first)\n}}\n\nfunc outer() {{\n\thelper()\n}}\n\n{CHI_PLAIN_GUARD_HELPER}"),    ] {
         let entry = only_go_entry(CHI, &body);
         assert_eq!(entry.guards, ["auth"]);
         assert!(entry.guards_complete, "{body}");
@@ -1765,14 +1763,16 @@ fn a_mux_route_of_a_helper_called_in_a_branch_does_not_hide_a_route() {
     );
 }
 
+/// The walk reads `helper` where the file declares it, so the order of the two routes is not
+/// known, and both stay.
 #[test]
-fn a_mux_route_of_a_helper_that_always_runs_hides_a_route() {
+fn a_mux_route_of_another_function_hides_no_route() {
     assert_eq!(
         go_rows(
             MUX,
             "var r = mux.NewRouter()\n\nfunc helper() {\n\tr.HandleFunc(\"/x\", first)\n}\n\nfunc routes() {\n\thelper()\n\tr.HandleFunc(\"/x\", second)\n}"
         ),
-        ["gorilla/mux ANY /x first"]
+        ["gorilla/mux ANY /x first", "gorilla/mux ANY /x second"]
     );
 }
 
@@ -2076,4 +2076,178 @@ fn a_type_of_the_package_hides_only_a_wildcard_import() {
         ("src/app/Routes.java", &wildcard),
     ]);
     assert_eq!(elsewhere, ["spring GET /x handler"]);
+}
+
+// The sixth review: one rule for helpers.
+
+#[test]
+fn a_guard_of_a_helper_with_a_value_use_in_another_file_is_not_proved() {
+    let helper = go(
+        CHI,
+        "var r = chi.NewRouter()\n\nfunc helper() {\n\tr.Use(auth)\n}\n\nfunc routes() {\n\thelper()\n\tr.Get(\"/x\", first)\n}",
+    );
+    let other = "package p\n\nvar hook = helper\n";
+    let found = entries(Language::Go, &[("a.go", &helper), ("b.go", other)]);
+    assert_eq!(
+        found.len(),
+        1,
+        "{:?}",
+        found.iter().map(row).collect::<Vec<_>>()
+    );
+    assert_conditional_guard(&found[0]);
+}
+
+#[test]
+fn mux_routes_of_two_functions_have_no_known_order() {
+    assert_eq!(
+        go_rows(
+            MUX,
+            "var r = mux.NewRouter()\n\nfunc routes() {\n\thelper()\n\tr.HandleFunc(\"/x\", second)\n}\n\nfunc helper() {\n\tr.HandleFunc(\"/x\", first)\n}"
+        ),
+        ["gorilla/mux ANY /x first", "gorilla/mux ANY /x second"]
+    );
+}
+
+#[test]
+fn a_guard_and_a_route_of_one_function_on_a_package_router_stay_complete() {
+    let entry = only_go_entry(
+        CHI,
+        "var r = chi.NewRouter()\n\nfunc routes() {\n\tr.Use(auth)\n\tr.Get(\"/x\", first)\n}",
+    );
+    assert_eq!(entry.guards, ["auth"]);
+    assert!(entry.guards_complete);
+}
+
+#[test]
+fn a_guard_of_a_helper_is_proved_only_through_one_unconditional_call() {
+    let complete = |body: &str| {
+        let entry = only_go_entry(CHI, body);
+        assert!(!entry.guards.is_empty(), "{body}");
+        entry.guards_complete
+    };
+    let proved = [
+        "var r = chi.NewRouter()\n\nfunc routes() {\n\thelper()\n\tr.Get(\"/x\", first)\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+        "var r = chi.NewRouter()\n\nfunc routes() {\n\touter()\n\tr.Get(\"/x\", first)\n}\n\nfunc outer() {\n\thelper()\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+    ];
+    for body in proved {
+        assert!(complete(body), "{body}");
+    }
+    let unproved = [
+        "var r = chi.NewRouter()\n\nfunc routes() {\n\thelper()\n\thelper()\n\tr.Get(\"/x\", first)\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+        "var r = chi.NewRouter()\n\nfunc routes() {\n\tdefer helper()\n\tr.Get(\"/x\", first)\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+        "var r = chi.NewRouter()\n\nfunc routes() {\n\tgo helper()\n\tr.Get(\"/x\", first)\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+        "var r = chi.NewRouter()\n\nfunc routes() {\n\trun := func() { helper() }\n\trun()\n\tr.Get(\"/x\", first)\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+        "var r = chi.NewRouter()\n\nfunc routes(n int) {\n\tfor i := 0; i < n; i++ {\n\t\thelper()\n\t}\n\tr.Get(\"/x\", first)\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+        "var r = chi.NewRouter()\n\nfunc routes() {\n\tr.Get(\"/x\", first)\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+        "var r = chi.NewRouter()\n\nfunc routes(on bool) {\n\tif on {\n\t\touter()\n\t}\n\tr.Get(\"/x\", first)\n}\n\nfunc outer() {\n\thelper()\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+        "var r = chi.NewRouter()\n\nfunc routes() {\n\tone()\n\ttwo()\n\tr.Get(\"/x\", first)\n}\n\nfunc one() {\n\thelper()\n}\n\nfunc two() {\n\thelper()\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+        "var r = chi.NewRouter()\n\ntype a struct{}\n\ntype b struct{}\n\nfunc (a) setup() {\n\tr.Use(auth)\n}\n\nfunc (b) setup() {}\n\nfunc routes(x a) {\n\tx.setup()\n\tr.Get(\"/x\", first)\n}",
+    ];
+    for body in unproved {
+        assert!(!complete(body), "{body}");
+    }
+}
+
+const GIN: &str = "\t\"github.com/gin-gonic/gin\"";
+
+#[test]
+fn a_gin_route_before_a_guard_of_another_function_is_not_complete() {
+    let entry = only_go_entry(
+        GIN,
+        "var r = gin.New()\n\nfunc routes(on bool) {\n\tif on {\n\t\thelper()\n\t}\n\tr.GET(\"/x\", first)\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+    );
+    assert!(!entry.guards_complete, "{:?}", entry.guards);
+    assert_eq!(
+        entry.guards_unknown_reason,
+        Some(GuardsUnknownReason::ConditionalMiddleware)
+    );
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_many_methods_and_calls_of_one_name_cost_linear_time() {
+    assert_scales_linearly("methods of one name", 2_000, |size| {
+        let mut body = String::from("var r = chi.NewRouter()\n\n");
+        for method in 0..size {
+            writeln!(
+                body,
+                "type T{method} struct{{}}\n\nfunc (T{method}) setup() {{}}\n"
+            )
+            .unwrap();
+        }
+        body.push_str("func use(x interface{ setup() }) {\n");
+        for _ in 0..size {
+            body.push_str("\tx.setup()\n");
+        }
+        body.push_str("\tr.Get(\"/x\", first)\n}");
+        search_time(Language::Go, "main.go", &go(CHI, &body))
+    });
+}
+
+/// Each Python form after `from django.urls import path`, and if it binds `path` again in the
+/// module.
+#[test]
+fn each_python_form_has_a_known_effect_on_a_django_import() {
+    let forms: [(&str, bool); 38] = [
+        ("path = fake\n", true),
+        ("path += fake\n", true),
+        ("path: object = fake\n", true),
+        ("path: object\n", false),
+        ("path, other = fake, fake\n", true),
+        ("[path, other] = fake, fake\n", true),
+        ("*path, other = [fake]\n", true),
+        ("for path in []:\n    pass\n", true),
+        ("with gate() as path:\n    pass\n", true),
+        ("with gate() as (path, other):\n    pass\n", true),
+        (
+            "try:\n    pass\nexcept ValueError as path:\n    pass\n",
+            true,
+        ),
+        ("import other as path\n", true),
+        ("from other import thing as path\n", true),
+        ("def path():\n    pass\n", true),
+        ("class path:\n    pass\n", true),
+        ("(path := fake)\n", true),
+        ("[(path := fake) for _ in [0]]\n", true),
+        ("{(path := fake) for _ in [0]}\n", true),
+        ("{0: (path := fake) for _ in [0]}\n", true),
+        ("list((path := fake) for _ in [0])\n", true),
+        ("check = lambda unused=(path := fake): None\n", true),
+        ("match 1:\n    case path:\n        pass\n", true),
+        ("match 1:\n    case [path]:\n        pass\n", true),
+        ("match 1:\n    case other.path:\n        pass\n", false),
+        ("def configure():\n    global path\n    path = fake\n", true),
+        (
+            "def configure():\n    global path\n    import other as path\n",
+            true,
+        ),
+        (
+            "def configure():\n    global path\n    [(path := fake) for _ in [0]]\n",
+            true,
+        ),
+        (
+            "def outer():\n    def inner():\n        global path\n        path = fake\n",
+            true,
+        ),
+        ("class Holder:\n    global path\n    path = fake\n", true),
+        ("def configure():\n    global path\n", false),
+        (
+            "def configure():\n    global path\n    print(path)\n",
+            false,
+        ),
+        ("def configure():\n    path = fake\n", false),
+        ("def configure(path=fake):\n    pass\n", false),
+        ("class Holder:\n    path = fake\n", false),
+        ("values = [path for path in [0]]\n", false),
+        ("check = lambda: (path := fake)\n", false),
+        ("check = lambda path: path\n", false),
+        (
+            "def outer():\n    global path\n    def inner():\n        path = fake\n",
+            false,
+        ),
+    ];
+    for (form, rebinds) in forms {
+        let found = django_rows(form);
+        assert_eq!(found.is_empty(), rebinds, "{form}: {found:?}");
+    }
 }
