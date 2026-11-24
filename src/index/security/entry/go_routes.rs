@@ -635,7 +635,7 @@ enum Step<'t> {
     Read(Node<'t>),
     LeaveBlock,
     /// The start of a part of the code that can run or not run.
-    EnterBranch,
+    EnterBranch((usize, usize)),
     LeaveBranch,
 }
 
@@ -755,7 +755,8 @@ impl<'a> Context<'a> {
     /// The calls of the patterns with a final `{name...}` that have siblings at the same prefix
     /// for each number of remaining segments: `{$}` for none, `{name}` for one, and
     /// `{name}/{rest...}` for two or more. A sibling covers a pattern when it has the same method
-    /// or no method, and when it runs whenever the pattern runs. Together the siblings take each
+    /// or no method, and when it runs whenever the pattern runs. The patterns of different
+    /// functions do not cover each other, because a call of a function can be in a branch. Together the siblings take each
     /// request of the pattern, so the pattern gives no entry. Omen ignores the hosts here.
     pub(super) fn go_covered_patterns(&self) -> &HashSet<usize> {
         self.go_covered.get_or_init(|| {
@@ -770,8 +771,10 @@ impl<'a> Context<'a> {
                         | "type_case"
                         | "communication_case"
                         | "func_literal"
+                        | "function_declaration"
+                        | "method_declaration"
                 ) {
-                    tree.child_of(branch)
+                    tree.child_of(branch, (node.start_byte(), node.end_byte()))
                 } else {
                     branch
                 };
@@ -793,7 +796,7 @@ impl<'a> Context<'a> {
                 let mut cursor = node.walk();
                 for child in node.named_children(&mut cursor) {
                     let inner = if arms.contains(&Some(child)) {
-                        tree.child_of(branch)
+                        tree.child_of(branch, (child.start_byte(), child.end_byte()))
                     } else {
                         branch
                     };
@@ -2832,6 +2835,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             consumed: HashSet::new(),
             branches: Vec::new(),
             branch_tree: BranchTree::default(),
+            helper_branches: HashMap::new(),
+            helper_bodies: HashSet::new(),
+            guard_sites: Vec::new(),
             route_calls: HashMap::new(),
             functions: HashMap::new(),
             walked: HashSet::new(),
@@ -2878,6 +2884,12 @@ struct Routes<'c, 'a, 't> {
     /// The branches around the current node, from outer to inner.
     branches: Vec<BranchId>,
     branch_tree: BranchTree,
+    /// The branch of the body of each named function of the file.
+    helper_branches: HashMap<String, BranchId>,
+    helper_bodies: HashSet<BranchId>,
+    /// Each call that added middleware. `settle_branches` decides if it is conditional, because
+    /// the calls of a helper are known only after the walk.
+    guard_sites: Vec<GuardSite>,
     /// The router that a call of `Route` made, by the node of the call.
     route_calls: HashMap<usize, usize>,
     functions: HashMap<String, Node<'t>>,
@@ -2967,6 +2979,89 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         {
             self.visit(*child);
         }
+        self.settle_branches(root);
+    }
+
+    /// Puts the body of each helper at the branch of its calls, and marks the middleware that
+    /// does not run whenever its router exists.
+    fn settle_branches(&mut self, root: Node<'t>) {
+        let sites = self.helper_call_sites(root);
+        let settled = self.branch_tree.settle(&sites);
+        for record in &mut self.records {
+            record.branch = settled[record.branch];
+        }
+        for router in &mut self.routers {
+            router.created_in = settled[router.created_in];
+            for link in &mut router.links {
+                link.branch = settled[link.branch];
+            }
+        }
+        for site in std::mem::take(&mut self.guard_sites) {
+            let router = &mut self.routers[site.router];
+            if settled[site.branch] == router.created_in {
+                continue;
+            }
+            if site.before_routing {
+                router.pre_conditional = true;
+            } else {
+                router.conditional_from = router.conditional_from.min(site.added_at);
+            }
+        }
+    }
+
+    /// The branches of the calls of each named function. A call in a branch that never runs
+    /// does not count, and a local variable with the name of the function is not a call of it.
+    fn helper_call_sites(&self, root: Node<'t>) -> HashMap<BranchId, Vec<BranchId>> {
+        let mut calls: Vec<(usize, BranchId)> = Vec::new();
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            let mut cursor = node.walk();
+            pending.extend(node.named_children(&mut cursor));
+            if node.kind() != "call_expression" {
+                continue;
+            }
+            let Some(function) = node
+                .child_by_field_name("function")
+                .filter(|function| function.kind() == "identifier")
+            else {
+                continue;
+            };
+            let Some(helper) = self.helper_branches.get(self.text(function)) else {
+                continue;
+            };
+            if !self.context.is_go_local(function) && !self.context.go_in_dead_branch(node) {
+                calls.push((node.start_byte(), *helper));
+            }
+        }
+        calls.sort_unstable();
+        let mut sites: HashMap<BranchId, Vec<BranchId>> = self
+            .helper_branches
+            .values()
+            .map(|helper| (*helper, Vec::new()))
+            .collect();
+        let spans = self.branch_tree.by_start();
+        let mut next = 0;
+        let mut open: Vec<(usize, BranchId)> = Vec::new();
+        for (start, helper) in calls {
+            while let Some(&(from, end, branch)) = spans.get(next) {
+                if from > start {
+                    break;
+                }
+                next += 1;
+                while open.last().is_some_and(|(top_end, _)| *top_end <= from) {
+                    open.pop();
+                }
+                open.push((end, branch));
+            }
+            while open.last().is_some_and(|(top_end, _)| *top_end <= start) {
+                open.pop();
+            }
+            let branch = open.last().map_or(ALWAYS_RUNS, |(_, branch)| *branch);
+            if let Some(list) = sites.get_mut(&helper) {
+                list.push(branch);
+            }
+        }
+        sites
     }
 
     /// The package-level variables that an assignment inside a function writes. The walk
@@ -3015,7 +3110,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 Step::LeaveBlock => {
                     self.scopes.pop();
                 }
-                Step::EnterBranch => self.enter_branch(),
+                Step::EnterBranch(span) => self.enter_branch(span),
                 Step::LeaveBranch => {
                     self.branches.pop();
                 }
@@ -3036,15 +3131,15 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     fn push_branch(node: Node<'t>, stack: &mut Vec<Step<'t>>) {
         stack.push(Step::LeaveBranch);
         stack.push(Step::Read(node));
-        stack.push(Step::EnterBranch);
+        stack.push(Step::EnterBranch((node.start_byte(), node.end_byte())));
     }
 
     fn current_branch(&self) -> BranchId {
         self.branches.last().copied().unwrap_or(ALWAYS_RUNS)
     }
 
-    fn enter_branch(&mut self) {
-        let branch = self.branch_tree.child_of(self.current_branch());
+    fn enter_branch(&mut self, span: (usize, usize)) {
+        let branch = self.branch_tree.child_of(self.current_branch(), span);
         self.branches.push(branch);
     }
 
@@ -3090,7 +3185,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             "expression_case" | "default_case" | "type_case" | "communication_case" => {
                 stack.push(Step::LeaveBranch);
                 Self::push_children(node, None, stack);
-                stack.push(Step::EnterBranch);
+                stack.push(Step::EnterBranch((node.start_byte(), node.end_byte())));
                 return;
             }
             "for_statement" => {
@@ -3111,7 +3206,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             }
             "func_literal" => {
                 if !self.consumed.contains(&node.id()) {
-                    self.enter_branch();
+                    self.enter_branch((node.start_byte(), node.end_byte()));
                     self.closure(node, None);
                     self.branches.pop();
                 }
@@ -3150,8 +3245,16 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     /// Reads the body of a function in a scope of its own, one time. `declared` is the name
     /// of the function. A pure function that returns a router it made gets a summary.
     fn walk_declared(&mut self, node: Node<'t>, declared: Option<&str>) {
-        let branches = std::mem::take(&mut self.branches);
+        let mut branches = std::mem::take(&mut self.branches);
+        if let Some(name) = declared.filter(|name| !self.walked.contains(*name)) {
+            let span = (node.start_byte(), node.end_byte());
+            let body = self.branch_tree.child_of(ALWAYS_RUNS, span);
+            self.helper_branches.insert(name.to_string(), body);
+            self.helper_bodies.insert(body);
+            self.branches.push(body);
+        }
         on_grown_stack(|| self.read_declared(node, declared));
+        std::mem::swap(&mut self.branches, &mut branches);
         self.branches = branches;
     }
 
@@ -4037,17 +4140,30 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         }
         let guards = self.guard_names(arguments);
         self.touch(router);
-        if !guards.is_empty() && self.current_branch() != self.routers[router].created_in {
+        if !guards.is_empty() {
+            let branch = self.current_branch();
             let added_at = self.routers[router].guards.len();
-            let target = &mut self.routers[router];
-            if before_routing {
-                target.pre_conditional = true;
-            } else {
-                target.conditional_from = target.conditional_from.min(added_at);
-            }
+            self.guard_sites.push(GuardSite {
+                router,
+                added_at,
+                before_routing,
+                branch,
+            });
+            // The body of a helper counts as the code that always runs here: a summary is for
+            // one call of the function.
+            let in_body = |candidate: BranchId| {
+                if self.helper_bodies.contains(&candidate) {
+                    ALWAYS_RUNS
+                } else {
+                    candidate
+                }
+            };
+            let differs = in_body(branch) != in_body(self.routers[router].created_in);
             // A summary of the function cannot tell a caller that the guard is conditional.
-            if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
-                frame.pure = false;
+            if differs {
+                if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
+                    frame.pure = false;
+                }
             }
         }
         if before_routing {
@@ -5397,40 +5513,154 @@ type BranchId = usize;
 /// The code that always runs. It is the root of each `BranchTree`.
 const ALWAYS_RUNS: BranchId = 0;
 
+/// A call that added middleware to a router.
+struct GuardSite {
+    router: usize,
+    added_at: usize,
+    before_routing: bool,
+    branch: BranchId,
+}
+
 /// The branches of a file, each with a link to the branch around it.
 struct BranchTree {
     parents: Vec<BranchId>,
+    spans: Vec<(usize, usize)>,
 }
 
 impl Default for BranchTree {
     fn default() -> Self {
         Self {
             parents: vec![ALWAYS_RUNS],
+            spans: vec![(0, usize::MAX)],
         }
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum HelperVisit {
+    New,
+    Open,
+    Done,
+}
+
 impl BranchTree {
-    fn child_of(&mut self, parent: BranchId) -> BranchId {
+    fn child_of(&mut self, parent: BranchId, span: (usize, usize)) -> BranchId {
         self.parents.push(parent);
+        self.spans.push(span);
         self.parents.len() - 1
     }
 
-    /// The places of the branches in one walk of the tree. A parent has a lower id than its
-    /// children, so two passes over the ids are enough.
-    fn order(&self) -> BranchOrder {
+    /// The start, the end, and the id of each branch. An outer branch is before the branches in
+    /// it.
+    fn by_start(&self) -> Vec<(usize, usize, BranchId)> {
+        let mut spans: Vec<(usize, usize, BranchId)> = self
+            .spans
+            .iter()
+            .enumerate()
+            .map(|(branch, (start, end))| (*start, *end, branch))
+            .collect();
+        spans.sort_unstable_by_key(|(start, end, branch)| {
+            (*start, std::cmp::Reverse(*end), *branch)
+        });
+        spans
+    }
+
+    /// Moves the body of each helper to the branch of its calls and gives the new id of each
+    /// branch. A helper with no call stays at the code that always runs. When the calls are in
+    /// different branches, or a cycle of calls reaches the helper, no one branch tells when it
+    /// runs, so the body stays a branch of its own: it replaces nothing outside itself.
+    fn settle(&mut self, sites: &HashMap<BranchId, Vec<BranchId>>) -> Vec<BranchId> {
         let count = self.parents.len();
-        let mut sizes = vec![1_usize; count];
-        for branch in (1..count).rev() {
-            sizes[self.parents[branch]] += sizes[branch];
-        }
-        let mut starts = vec![0_usize; count];
-        let mut next = vec![1_usize; count];
+        let mut owner: Vec<Option<BranchId>> = vec![None; count];
         for branch in 1..count {
             let parent = self.parents[branch];
-            starts[branch] = next[parent];
-            next[parent] += sizes[branch];
-            next[branch] = starts[branch] + 1;
+            owner[branch] = if sites.contains_key(&parent) {
+                Some(parent)
+            } else {
+                owner[parent]
+            };
+        }
+        let owner_of = |site: BranchId| {
+            if sites.contains_key(&site) {
+                Some(site)
+            } else {
+                owner[site]
+            }
+        };
+        let mut settled: Vec<BranchId> = (0..count).collect();
+        let mut visits = vec![HelperVisit::New; count];
+        let mut cyclic = vec![false; count];
+        let mut helpers: Vec<BranchId> = sites.keys().copied().collect();
+        helpers.sort_unstable();
+        for start in helpers {
+            if visits[start] != HelperVisit::New {
+                continue;
+            }
+            visits[start] = HelperVisit::Open;
+            let mut stack = vec![(start, 0_usize)];
+            while let Some((helper, next)) = stack.last_mut() {
+                let helper = *helper;
+                if let Some(site) = sites[&helper].get(*next).copied() {
+                    *next += 1;
+                    match owner_of(site) {
+                        Some(found) if found != helper => match visits[found] {
+                            HelperVisit::New => {
+                                visits[found] = HelperVisit::Open;
+                                stack.push((found, 0));
+                            }
+                            HelperVisit::Open => cyclic[helper] = true,
+                            HelperVisit::Done => {}
+                        },
+                        _ => {}
+                    }
+                    continue;
+                }
+                stack.pop();
+                visits[helper] = HelperVisit::Done;
+                let mut places = sites[&helper]
+                    .iter()
+                    .filter(|site| owner_of(**site) != Some(helper))
+                    .map(|site| settled[*site]);
+                settled[helper] = match places.next() {
+                    None => ALWAYS_RUNS,
+                    Some(_) if cyclic[helper] => helper,
+                    Some(first) if places.all(|place| place == first) => first,
+                    Some(_) => helper,
+                };
+            }
+        }
+        for branch in 1..count {
+            self.parents[branch] = if settled[branch] == branch {
+                settled[self.parents[branch]]
+            } else {
+                settled[branch]
+            };
+        }
+        settled
+    }
+
+    /// The places of the branches in one walk of the tree.
+    fn order(&self) -> BranchOrder {
+        let count = self.parents.len();
+        let mut children: Vec<Vec<BranchId>> = vec![Vec::new(); count];
+        for branch in 1..count {
+            children[self.parents[branch]].push(branch);
+        }
+        let mut starts = vec![0_usize; count];
+        let mut sizes = vec![1_usize; count];
+        let mut place = 0;
+        let mut stack = vec![(ALWAYS_RUNS, false)];
+        while let Some((branch, leaving)) = stack.pop() {
+            if leaving {
+                if branch != ALWAYS_RUNS {
+                    sizes[self.parents[branch]] += sizes[branch];
+                }
+                continue;
+            }
+            starts[branch] = place;
+            place += 1;
+            stack.push((branch, true));
+            stack.extend(children[branch].iter().rev().map(|child| (*child, false)));
         }
         BranchOrder { starts, sizes }
     }

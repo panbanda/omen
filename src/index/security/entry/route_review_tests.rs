@@ -1642,3 +1642,285 @@ fn a_mux_route_stays_hidden_after_a_helper_runs_between_the_routes() {
         ["gorilla/mux ANY /h third", "gorilla/mux ANY /x first"]
     );
 }
+
+// The fourth review.
+
+fn assert_conditional_guard(entry: &EntryPoint) {
+    assert_eq!(entry.guards, ["auth"]);
+    assert!(!entry.guards_complete);
+    assert_eq!(
+        entry.guards_unknown_reason,
+        Some(GuardsUnknownReason::ConditionalMiddleware)
+    );
+}
+
+const CHI_GUARD_HELPER: &str = "func helper() chi.Router {\n\tr.Use(auth)\n\treturn r\n}";
+const CHI_PLAIN_GUARD_HELPER: &str = "func helper() {\n\tr.Use(auth)\n}";
+
+#[test]
+fn a_guard_of_a_helper_called_in_a_branch_is_conditional() {
+    for helper in [CHI_GUARD_HELPER, CHI_PLAIN_GUARD_HELPER] {
+        let call = if helper == CHI_GUARD_HELPER {
+            "_ = helper()"
+        } else {
+            "helper()"
+        };
+        let entry = only_go_entry(
+            CHI,
+            &format!(
+                "var r = chi.NewRouter()\n\nfunc routes(on bool) {{\n\tif on {{\n\t\t{call}\n\t}}\n\tr.Get(\"/x\", first)\n}}\n\n{helper}"
+            ),
+        );
+        assert_conditional_guard(&entry);
+    }
+}
+
+#[test]
+fn a_guard_of_a_helper_declared_first_and_called_in_a_branch_is_conditional() {
+    let entry = only_go_entry(
+        CHI,
+        &format!(
+            "var r = chi.NewRouter()\n\n{CHI_PLAIN_GUARD_HELPER}\n\nfunc routes(on bool) {{\n\tif on {{\n\t\thelper()\n\t}}\n\tr.Get(\"/x\", first)\n}}"
+        ),
+    );
+    assert_conditional_guard(&entry);
+}
+
+#[test]
+fn a_guard_of_a_helper_called_in_and_out_of_a_branch_is_not_proved() {
+    let entry = only_go_entry(
+        CHI,
+        &format!(
+            "var r = chi.NewRouter()\n\nfunc routes(on bool) {{\n\tif on {{\n\t\thelper()\n\t}}\n\thelper()\n\tr.Get(\"/x\", first)\n}}\n\n{CHI_PLAIN_GUARD_HELPER}"
+        ),
+    );
+    assert_conditional_guard(&entry);
+}
+
+#[test]
+fn a_guard_of_a_helper_that_always_runs_stays_complete() {
+    for body in [
+        format!("var r = chi.NewRouter()\n\nfunc routes() {{\n\thelper()\n\tr.Get(\"/x\", first)\n}}\n\n{CHI_PLAIN_GUARD_HELPER}"),
+        format!("var r = chi.NewRouter()\n\nfunc routes() {{\n\touter()\n\tr.Get(\"/x\", first)\n}}\n\nfunc outer() {{\n\thelper()\n}}\n\n{CHI_PLAIN_GUARD_HELPER}"),
+        format!("var r = chi.NewRouter()\n\nfunc routes() {{\n\tone()\n\ttwo()\n\tr.Get(\"/x\", first)\n}}\n\nfunc one() {{\n\thelper()\n}}\n\nfunc two() {{\n\thelper()\n}}\n\n{CHI_PLAIN_GUARD_HELPER}"),
+    ] {
+        let entry = only_go_entry(CHI, &body);
+        assert_eq!(entry.guards, ["auth"]);
+        assert!(entry.guards_complete, "{body}");
+    }
+}
+
+#[test]
+fn a_guard_of_mutually_recursive_helpers_is_not_proved() {
+    let entry = only_go_entry(
+        CHI,
+        "var r = chi.NewRouter()\n\nfunc routes(on bool) {\n\tif on {\n\t\tone()\n\t}\n\tr.Get(\"/x\", first)\n}\n\nfunc one() {\n\ttwo()\n}\n\nfunc two() {\n\tr.Use(auth)\n\tone()\n}",
+    );
+    assert_conditional_guard(&entry);
+}
+
+#[test]
+fn a_chi_route_of_a_helper_called_in_a_branch_does_not_replace_a_route() {
+    assert_eq!(
+        go_rows(
+            CHI,
+            "var r = chi.NewRouter()\n\nfunc routes(on bool) {\n\tr.Get(\"/x\", first)\n\tif on {\n\t\thelper()\n\t}\n}\n\nfunc helper() {\n\tr.Get(\"/x\", second)\n}"
+        ),
+        ["chi GET /x first", "chi GET /x second"]
+    );
+}
+
+#[test]
+fn a_chi_route_of_a_helper_that_always_runs_replaces_a_route() {
+    assert_eq!(
+        go_rows(
+            CHI,
+            "var r = chi.NewRouter()\n\nfunc routes() {\n\tr.Get(\"/x\", first)\n\thelper()\n}\n\nfunc helper() {\n\tr.Get(\"/x\", second)\n}"
+        ),
+        ["chi GET /x second"]
+    );
+}
+
+#[test]
+fn a_chi_route_of_a_helper_called_in_and_out_of_a_branch_keeps_the_route() {
+    assert_eq!(
+        go_rows(
+            CHI,
+            "var r = chi.NewRouter()\n\nfunc routes(on bool) {\n\tr.Get(\"/x\", first)\n\tif on {\n\t\thelper()\n\t}\n\thelper()\n}\n\nfunc helper() {\n\tr.Get(\"/x\", second)\n}"
+        ),
+        ["chi GET /x first", "chi GET /x second"]
+    );
+}
+
+#[test]
+fn a_mux_route_of_a_helper_called_in_a_branch_does_not_hide_a_route() {
+    assert_eq!(
+        go_rows(
+            MUX,
+            "var r = mux.NewRouter()\n\nfunc helper() {\n\tr.HandleFunc(\"/x\", first)\n}\n\nfunc routes(on bool) {\n\tif on {\n\t\thelper()\n\t}\n\tr.HandleFunc(\"/x\", second)\n}"
+        ),
+        ["gorilla/mux ANY /x first", "gorilla/mux ANY /x second"]
+    );
+}
+
+#[test]
+fn a_mux_route_of_a_helper_that_always_runs_hides_a_route() {
+    assert_eq!(
+        go_rows(
+            MUX,
+            "var r = mux.NewRouter()\n\nfunc helper() {\n\tr.HandleFunc(\"/x\", first)\n}\n\nfunc routes() {\n\thelper()\n\tr.HandleFunc(\"/x\", second)\n}"
+        ),
+        ["gorilla/mux ANY /x first"]
+    );
+}
+
+#[test]
+fn a_mux_route_of_a_helper_called_in_and_out_of_a_branch_does_not_hide_a_route() {
+    assert_eq!(
+        go_rows(
+            MUX,
+            "var r = mux.NewRouter()\n\nfunc helper() {\n\tr.HandleFunc(\"/x\", first)\n}\n\nfunc routes(on bool) {\n\tif on {\n\t\thelper()\n\t}\n\thelper()\n\tr.HandleFunc(\"/x\", second)\n}"
+        ),
+        ["gorilla/mux ANY /x first", "gorilla/mux ANY /x second"]
+    );
+}
+
+#[test]
+fn net_http_siblings_in_a_helper_called_in_a_branch_do_not_cover_a_catch_all() {
+    let rows = go_rows(
+        "",
+        &format!(
+            "var m = http.NewServeMux()\n\nfunc routes(on bool) {{\n\t{NET_CATCH_ALL}\tif on {{\n\t\thelper()\n\t}}\n}}\n\nfunc helper() {{\n\t{NET_SIBLINGS}}}"
+        ),
+    );
+    assert!(has_catch_all(&rows), "{rows:?}");
+}
+
+#[test]
+fn net_http_siblings_in_a_helper_called_in_and_out_of_a_branch_do_not_cover_a_catch_all() {
+    let rows = go_rows(
+        "",
+        &format!(
+            "var m = http.NewServeMux()\n\nfunc routes(on bool) {{\n\t{NET_CATCH_ALL}\tif on {{\n\t\thelper()\n\t}}\n\thelper()\n}}\n\nfunc helper() {{\n\t{NET_SIBLINGS}}}"
+        ),
+    );
+    assert!(has_catch_all(&rows), "{rows:?}");
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_many_helpers_called_in_branches_cost_linear_time() {
+    assert_scales_linearly("helpers in branches", 1_500, |size| {
+        let mut body = String::from("var r = chi.NewRouter()\n\nfunc routes(on bool) {\n");
+        for helper in 0..size {
+            writeln!(body, "if on {{\nh{helper}()\n}}").unwrap();
+        }
+        body.push_str("}\n");
+        for helper in 0..size {
+            let next = if helper + 1 < size {
+                format!("if on {{\nh{}()\n}}\n", helper + 1)
+            } else {
+                String::new()
+            };
+            writeln!(
+                body,
+                "func h{helper}() {{\nvar on bool\n{next}r.Use(auth)\nr.Get(\"/r{helper}\", first)\n}}"
+            )
+            .unwrap();
+        }
+        search_time(Language::Go, "main.go", &go(CHI, &body))
+    });
+}
+
+const DJANGO_HEAD: &str = "from django.urls import path\n\ndef view(request):\n    pass\n\n";
+const DJANGO_ROUTES: &str = "urlpatterns = [path(\"x/\", view)]\n";
+
+fn django_rows(form: &str) -> Vec<String> {
+    let source = format!("{DJANGO_HEAD}{form}{DJANGO_ROUTES}");
+    http_rows(Language::Python, &[("urls.py", &source)])
+}
+
+#[test]
+fn a_global_statement_with_no_assignment_keeps_a_django_import() {
+    for form in [
+        "def configure():\n    global path\n",
+        "def configure():\n    global path\n    print(path)\n",
+        "def configure():\n    global other\n    path = 1\n",
+        "def configure():\n    global path\n    def inner():\n        path = 1\n",
+    ] {
+        assert_eq!(django_rows(form).len(), 1, "{form}");
+    }
+}
+
+#[test]
+fn each_binding_form_under_a_global_statement_hides_a_django_import() {
+    for form in [
+        "def configure():\n    global path\n    path = 1\n",
+        "def configure():\n    global path\n    for path in []:\n        pass\n",
+        "def configure():\n    global path\n    with gate() as path:\n        pass\n",
+        "def configure():\n    global path\n    import other as path\n",
+        "def configure():\n    global path\n    from other import path\n",
+        "def configure():\n    global path\n    def path():\n        pass\n",
+        "def configure():\n    global path\n    (path := 1)\n",
+        "def configure():\n    global path\n    [(path := 1) for _ in []]\n",
+        "class Holder:\n    global path\n    path = 1\n",
+        "def outer():\n    def inner():\n        global path\n        path = 1\n",
+    ] {
+        let found = django_rows(form);
+        assert!(found.is_empty(), "{form}: {found:?}");
+    }
+}
+
+#[test]
+fn a_walrus_in_a_comprehension_binds_in_the_containing_scope() {
+    for form in [
+        "[(path := fake) for _ in [0]]\n",
+        "{(path := fake) for _ in [0]}\n",
+        "{0: (path := fake) for _ in [0]}\n",
+        "list((path := fake) for _ in [0])\n",
+        "[[(path := fake) for _ in [0]] for _ in [0]]\n",
+    ] {
+        let found = django_rows(form);
+        assert!(found.is_empty(), "{form}: {found:?}");
+    }
+    for form in [
+        "def local():\n    [(path := fake) for _ in [0]]\n",
+        "values = [path for path in [0]]\n",
+        "check = lambda: (path := 1)\n",
+    ] {
+        assert_eq!(django_rows(form).len(), 1, "{form}");
+    }
+}
+
+#[test]
+fn a_java_method_or_field_does_not_hide_a_spring_annotation() {
+    const IMPORT: &str = "import org.springframework.web.bind.annotation.*;\n\n";
+    for class in [
+        "class C {\n    @GetMapping(\"/x\")\n    void GetMapping() {}\n}\n",
+        "class C {\n    int GetMapping;\n    @GetMapping(\"/x\")\n    void GetMapping() {}\n}\n",
+    ] {
+        let source = format!("{IMPORT}{class}");
+        assert_eq!(
+            http_rows(Language::Java, &[("C.java", &source)]),
+            ["spring GET /x GetMapping"],
+            "{class}"
+        );
+    }
+}
+
+#[test]
+fn a_java_type_declaration_hides_a_spring_annotation() {
+    const IMPORT: &str = "import org.springframework.web.bind.annotation.*;\n\n";
+    const ROUTE: &str = "class C {\n    @GetMapping(\"/x\")\n    void handler() {}\n}\n";
+    for declaration in [
+        "@interface GetMapping { String value(); }\n",
+        "class GetMapping {}\n",
+        "interface GetMapping {}\n",
+        "enum GetMapping { A }\n",
+        "record GetMapping(int a) {}\n",
+    ] {
+        let source = format!("{IMPORT}{declaration}{ROUTE}");
+        let found = http_rows(Language::Java, &[("C.java", &source)]);
+        assert!(found.is_empty(), "{declaration}: {found:?}");
+    }
+}

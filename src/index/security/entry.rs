@@ -856,76 +856,124 @@ struct SpringNames<'f> {
     wildcard: bool,
 }
 
-/// The names that a Python module binds at its own level, other than by an import. A function, a
-/// class body, a lambda, and a comprehension have their own scopes, so a binding there does not
-/// count, but a `global` statement in a function makes the name a binding of the module.
+/// The names that a Python module binds, other than by its own imports. A function, a class body,
+/// and a lambda have their own scopes. A binding in such a scope counts only when the scope
+/// declares the name `global`. A `global` statement alone binds nothing.
 fn python_module_bindings(root: Node<'_>, source: &[u8]) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
-    let mut pending = vec![(root, true)];
-    while let Some((node, at_module)) = pending.pop() {
-        if node.kind() == "global_statement" {
-            let mut cursor = node.walk();
-            for name in node
-                .named_children(&mut cursor)
-                .filter(|child| child.kind() == "identifier")
-            {
-                names.insert(syntax::text(name, source).to_string());
-            }
-            continue;
+    let mut scopes = vec![(root, true)];
+    while let Some((scope, is_module)) = scopes.pop() {
+        let (bound, globals) = read_python_scope(scope, is_module, source, &mut scopes);
+        if is_module {
+            names.extend(bound);
+        } else {
+            names.extend(bound.into_iter().filter(|name| globals.contains(name)));
         }
-        let mut inner_scope = !at_module;
-        let target = if at_module {
-            match node.kind() {
-                "function_definition" | "class_definition" => {
-                    inner_scope = true;
-                    node.child_by_field_name("name")
+    }
+    names
+}
+
+/// The names that one Python scope binds and the names that it declares `global`. The scopes
+/// inside it go to `scopes`. A comprehension has its own loop variables, but a walrus in it binds
+/// in the scope that contains the comprehension.
+fn read_python_scope<'t>(
+    scope: Node<'t>,
+    is_module: bool,
+    source: &[u8],
+    scopes: &mut Vec<(Node<'t>, bool)>,
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+) {
+    let mut bound = std::collections::HashSet::new();
+    let mut globals = std::collections::HashSet::new();
+    let mut pending: Vec<(Node<'t>, bool)> = Vec::new();
+    let mut cursor = scope.walk();
+    pending.extend(
+        scope
+            .named_children(&mut cursor)
+            .map(|child| (child, false)),
+    );
+    while let Some((node, in_comprehension)) = pending.pop() {
+        let mut targets: Vec<Node<'t>> = Vec::new();
+        let mut body = None;
+        match node.kind() {
+            "global_statement" => {
+                let mut cursor = node.walk();
+                for name in node
+                    .named_children(&mut cursor)
+                    .filter(|child| child.kind() == "identifier")
+                {
+                    globals.insert(syntax::text(name, source).to_string());
                 }
-                "lambda"
-                | "list_comprehension"
-                | "set_comprehension"
-                | "dictionary_comprehension"
-                | "generator_expression" => {
-                    inner_scope = true;
-                    None
+                continue;
+            }
+            "lambda" => {
+                scopes.push((node, false));
+                continue;
+            }
+            "function_definition" | "class_definition" => {
+                targets.extend(node.child_by_field_name("name"));
+                body = node.child_by_field_name("body");
+                if let Some(body) = body {
+                    scopes.push((body, false));
                 }
-                "assignment" | "augmented_assignment" | "for_statement" => {
-                    node.child_by_field_name("left")
+            }
+            "named_expression" => targets.extend(node.child_by_field_name("name")),
+            "import_statement" | "import_from_statement" if !is_module => {
+                let mut cursor = node.walk();
+                for name in node.children_by_field_name("name", &mut cursor) {
+                    let target = if name.kind() == "aliased_import" {
+                        name.child_by_field_name("alias")
+                    } else {
+                        name.named_child(0)
+                    };
+                    targets.extend(target);
                 }
-                "named_expression" => node.child_by_field_name("name"),
-                "as_pattern" => node.child_by_field_name("alias"),
-                "case_pattern" => node
-                    .named_child(0)
+            }
+            "assignment" | "augmented_assignment" | "for_statement" if !in_comprehension => {
+                targets.extend(node.child_by_field_name("left"));
+            }
+            "as_pattern" if !in_comprehension => {
+                targets.extend(node.child_by_field_name("alias"));
+            }
+            "case_pattern" if !in_comprehension => targets.extend(
+                node.named_child(0)
                     .filter(|_| node.named_child_count() == 1)
                     .filter(|child| child.kind() == "dotted_name")
                     .filter(|child| child.named_child_count() == 1),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        if let Some(target) = target {
-            let mut targets = vec![target];
-            while let Some(target) = targets.pop() {
-                match target.kind() {
-                    "identifier" => {
-                        names.insert(syntax::text(target, source).to_string());
-                    }
-                    "pattern_list" | "tuple_pattern" | "list_pattern" | "list_splat_pattern"
-                    | "as_pattern_target" | "dotted_name" => {
-                        let mut cursor = target.walk();
-                        targets.extend(target.named_children(&mut cursor));
-                    }
-                    _ => {}
+            ),
+            _ => {}
+        }
+        while let Some(target) = targets.pop() {
+            match target.kind() {
+                "identifier" => {
+                    bound.insert(syntax::text(target, source).to_string());
                 }
+                "pattern_list" | "tuple_pattern" | "list_pattern" | "list_splat_pattern"
+                | "as_pattern_target" | "dotted_name" => {
+                    let mut cursor = target.walk();
+                    targets.extend(target.named_children(&mut cursor));
+                }
+                _ => {}
             }
         }
+        let inner = in_comprehension
+            || matches!(
+                node.kind(),
+                "list_comprehension"
+                    | "set_comprehension"
+                    | "dictionary_comprehension"
+                    | "generator_expression"
+            );
         let mut cursor = node.walk();
         pending.extend(
             node.named_children(&mut cursor)
-                .map(|child| (child, !inner_scope)),
+                .filter(|child| Some(*child) != body)
+                .map(|child| (child, inner)),
         );
     }
-    names
+    (bound, globals)
 }
 
 /// The crates of the Rust frameworks with verb attributes, and the name of each framework.
@@ -1387,7 +1435,8 @@ impl<'a> Context<'a> {
 
     /// Tells if a Java annotation is the Spring annotation of that name: by its full name, by the
     /// import of that annotation, or by the wildcard import of its package. An import of the same
-    /// name from another package, or a declaration in the file, hides a wildcard import.
+    /// name from another package, or a type that the file declares, hides a wildcard import. A
+    /// method or a field has a different namespace, so it does not hide the annotation.
     fn is_spring_annotation(&self, name: &str) -> bool {
         const PACKAGE: &str = "org.springframework.web.bind.annotation";
         if let Some((qualifier, _)) = name.rsplit_once('.') {
@@ -1414,9 +1463,13 @@ impl<'a> Context<'a> {
                     _ => {}
                 }
             }
-            names
-                .hidden
-                .extend(self.file.symbols.iter().map(|symbol| symbol.name.as_str()));
+            names.hidden.extend(
+                self.file
+                    .symbols
+                    .iter()
+                    .filter(|symbol| symbol.kind.is_type())
+                    .map(|symbol| symbol.name.as_str()),
+            );
             names
         });
         names.imported.contains(name) || (names.wildcard && !names.hidden.contains(name))
