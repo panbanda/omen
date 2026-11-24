@@ -96,17 +96,8 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           mkdir -p "$RUNNER_TEMP/base"
-          # The base branch has no fixtures before the first pull request that
-          # adds them. The test then accepts each ledger entry as new.
-          if git cat-file -e "origin/$BASE_REF:tests/fixtures/truth" 2>/dev/null; then
-            git archive "origin/$BASE_REF" tests/fixtures/truth | tar -x -C "$RUNNER_TEMP/base"
-          fi
-          if git cat-file -e "origin/$BASE_REF:tests/fixtures/quality" 2>/dev/null; then
-            git archive "origin/$BASE_REF" tests/fixtures/quality | tar -x -C "$RUNNER_TEMP/base"
-          fi
-          if git cat-file -e "origin/$BASE_REF:tests/fixtures/retrieval" 2>/dev/null; then
-            git archive "origin/$BASE_REF" tests/fixtures/retrieval | tar -x -C "$RUNNER_TEMP/base"
-          fi
+          git archive "origin/$BASE_REF" tests/fixtures/truth tests/fixtures/quality tests/fixtures/retrieval \
+            | tar -x -C "$RUNNER_TEMP/base"
 
       - name: Compare the ledger with the base branch
         run: cargo test --test truth -- --ignored ledger_never_grows
@@ -116,15 +107,11 @@ jobs:
       # A regression passes only if the file `accepted_regressions.json` of the
       # fixture directory has an exact entry for it. An entry without a
       # regression fails. See docs/IMPROVEMENT_STANDARD.md.
-      # The base branch can have the corpora without a ledger. The test then
-      # accepts each ledger entry as new.
       - name: Compare the corpus ledger with the base branch
         run: cargo test --test corpus_truth -- --ignored ledger_never_grows
         env:
           OMEN_QUALITY_BASE_DIR: ${{ runner.temp }}/base/tests/fixtures/quality
 
-      # The base branch can be without the retrieval corpus. The test then
-      # accepts each ledger entry as new.
       - name: Compare the retrieval ledger with the base branch
         run: cargo test --test retrieval -- --ignored ledger_never_grows
         env:
