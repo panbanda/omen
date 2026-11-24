@@ -352,6 +352,18 @@ Omen reads no guard layer for an entry point that is not an HTTP handler, such a
 scheduled job. Its list is complete. It is empty, but a Spring scheduled job or message consumer
 lists the security annotations of its method and of its class.
 
+### Proof of the framework
+
+Omen gives a route of these frameworks only when the file proves the framework:
+
+| Framework | Proof | Omen gives no entry for |
+| --- | --- | --- |
+| Next | The function has the export name of a verb, also as `export { handler as GET }` | A verb function with no export, and a re-export from another file |
+| ASP.NET | A `using` or `global using` of `Microsoft.AspNetCore`, a `global using` alias of an ASP.NET type, or a receiver with a whole ASP.NET type name, also through `this.` | A receiver of an unknown type in a project that has only implicit usings |
+| Actix, Rocket | An import of the verb from the crate, also through a chain of named `pub use`, or one framework that the file or the repository imports | A verb from another crate, a verb through a wildcard re-export, and a repository that imports both frameworks with no binding of the verb |
+| Django | An import of the name from `django`, or a wildcard import of `django` | A name that the module binds again with an assignment or a `def` |
+| Spring | The full annotation name, an import of that annotation, or `org.springframework.web.bind.annotation.*` | Any other Spring import, and an annotation that the file declares |
+
 ## Rails routes
 
 Omen reads the routes in each file whose name ends with `routes.rb`. Each route is an
@@ -892,8 +904,8 @@ index, and the other commands, do not know the symbol.
   cannot read, and its guards are not complete, with the reason `unresolved_router`.
   These limits keep the work for each route bounded: a group deeper than 256 groups, a
   chain of more than 256 mounts, and a prefix longer than 4096 bytes give the same
-  `<unresolved>` path. A list of more than 256 guards keeps its first 256 guards and the
-  placeholder `<expression>` in place of the others.
+  `<unresolved>` path. A list of more than 256 guards keeps its first 256 guards, and the
+  reason is `too_many_guards`.
 - Omen does not read the code of a method that changes the path. For example, Gitea removes
   a slash at the end of a pattern, so 16 paths of Gitea that end with a slash have that
   slash in the result of omen, but not in Gitea.

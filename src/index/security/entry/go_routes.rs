@@ -750,17 +750,39 @@ impl<'a> Context<'a> {
         )
     }
 
-    /// The patterns of the file with a final `{name...}` that have siblings at the same prefix for
-    /// each number of remaining segments: `{$}` for none, `{name}` for one, and `{name}/{rest...}`
-    /// for two or more. Together the siblings take each request of the pattern, so the pattern
-    /// gives no entry. Omen ignores the methods and the hosts here.
-    pub(super) fn go_covered_patterns(&self) -> &HashSet<String> {
+    /// The methods and the paths of the patterns with a final `{name...}` that have siblings at
+    /// the same prefix for each number of remaining segments: `{$}` for none, `{name}` for one,
+    /// and `{name}/{rest...}` for two or more. A sibling covers a pattern when it has the same
+    /// method or no method. A sibling in a branch can be absent, so it covers nothing. Together
+    /// the siblings take each request of the pattern, so the pattern gives no entry. Omen
+    /// ignores the hosts here.
+    pub(super) fn go_covered_patterns(&self) -> &HashSet<(String, String)> {
         self.go_covered.get_or_init(|| {
-            let mut paths: HashSet<String> = HashSet::new();
-            let mut pending = vec![self.parsed.root_node()];
-            while let Some(node) = pending.pop() {
+            let mut patterns: HashSet<(String, String)> = HashSet::new();
+            let mut sure: HashSet<(String, String)> = HashSet::new();
+            let mut pending = vec![(self.parsed.root_node(), false)];
+            while let Some((node, inside)) = pending.pop() {
+                let inside = inside
+                    || matches!(
+                        node.kind(),
+                        "expression_case"
+                            | "default_case"
+                            | "type_case"
+                            | "communication_case"
+                            | "func_literal"
+                    );
+                let arms = match node.kind() {
+                    "if_statement" => [
+                        node.child_by_field_name("consequence"),
+                        node.child_by_field_name("alternative"),
+                    ],
+                    "for_statement" => [node.child_by_field_name("body"), None],
+                    _ => [None, None],
+                };
                 let mut cursor = node.walk();
-                pending.extend(node.named_children(&mut cursor));
+                for child in node.named_children(&mut cursor) {
+                    pending.push((child, inside || arms.contains(&Some(child))));
+                }
                 if node.kind() != "call_expression" {
                     continue;
                 }
@@ -786,11 +808,14 @@ impl<'a> Context<'a> {
                 let Some(first) = Self::arguments_of(node).first().copied() else {
                     continue;
                 };
-                if let Some((_, path)) = self
+                if let Some(pattern) = self
                     .go_string(first)
                     .and_then(|pattern| servemux_pattern(&pattern))
                 {
-                    paths.insert(path);
+                    if !inside {
+                        sure.insert(pattern.clone());
+                    }
+                    patterns.insert(pattern);
                 }
             }
             let is_single = |segment: &str| {
@@ -799,32 +824,42 @@ impl<'a> Context<'a> {
                     && !segment.ends_with("...}")
                     && segment != "{$}"
             };
-            let singles: HashSet<&str> = paths
-                .iter()
-                .filter_map(|other| other.rsplit_once('/'))
-                .filter(|(_, tail)| is_single(tail))
-                .map(|(head, _)| head)
-                .collect();
             let is_multi = |segment: &str| segment.starts_with('{') && segment.ends_with("...}");
-            let deep: HashSet<&str> = paths
+            let singles: HashSet<(&str, &str)> = sure
                 .iter()
-                .filter_map(|other| other.rsplit_once('/'))
-                .filter(|(_, tail)| is_multi(tail))
-                .filter_map(|(head, _)| head.rsplit_once('/'))
-                .filter(|(_, middle)| is_single(middle))
-                .map(|(prefix, _)| prefix)
+                .filter_map(|(method, path)| {
+                    let (head, tail) = path.rsplit_once('/')?;
+                    is_single(tail).then_some((method.as_str(), head))
+                })
                 .collect();
-            paths
+            let deep: HashSet<(&str, &str)> = sure
                 .iter()
-                .filter(|path| {
+                .filter_map(|(method, path)| {
+                    let (head, tail) = path.rsplit_once('/')?;
+                    let (prefix, middle) = head.rsplit_once('/')?;
+                    (is_multi(tail) && is_single(middle)).then_some((method.as_str(), prefix))
+                })
+                .collect();
+            let empty: HashSet<(&str, &str)> = sure
+                .iter()
+                .filter_map(|(method, path)| {
+                    let prefix = path.strip_suffix("/{$}")?;
+                    Some((method.as_str(), prefix))
+                })
+                .collect();
+            let has = |set: &HashSet<(&str, &str)>, method: &str, prefix: &str| {
+                set.contains(&(method, prefix)) || set.contains(&("ANY", prefix))
+            };
+            patterns
+                .iter()
+                .filter(|(method, path)| {
                     let Some((prefix, last)) = path.rsplit_once('/') else {
                         return false;
                     };
-                    last.starts_with('{')
-                        && last.ends_with("...}")
-                        && singles.contains(prefix)
-                        && deep.contains(prefix)
-                        && paths.contains(&format!("{prefix}/{{$}}"))
+                    is_multi(last)
+                        && has(&singles, method, prefix)
+                        && has(&deep, method, prefix)
+                        && has(&empty, method, prefix)
                 })
                 .cloned()
                 .collect()
@@ -4998,11 +5033,16 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             let framework = self.routers[record.router].framework;
             if record.opaque {
                 match framework {
-                    Framework::Chi => chi_opaque.insert(tree_of[record.router]),
-                    Framework::Echo => echo_opaque.insert(root_of[record.router]),
+                    Framework::Chi if record.branch.is_none() => {
+                        chi_opaque.insert(tree_of[record.router])
+                    }
+                    Framework::Echo if record.branch.is_none() => {
+                        echo_opaque.insert(root_of[record.router])
+                    }
                     _ => false,
                 };
-            } else if framework == Framework::Chi && !record.mount {
+            // A route in a branch can be absent, so it does not replace a mount.
+            } else if framework == Framework::Chi && !record.mount && record.branch.is_none() {
                 let key = chi_tree_key(&record.path);
                 chi_latest
                     .entry(tree_of[record.router])
@@ -5627,52 +5667,69 @@ fn mux_order(
             let (literal, kind) = mux_literal(path, record.prefix);
             Some((literal, kind, record.method.as_str()))
         };
-        let mut everything = MethodTries::default();
-        let mut by_router: HashMap<usize, MethodTries> = HashMap::new();
-        let mut unreadable: HashMap<usize, usize> = HashMap::new();
+        // A route in a branch hides only the routes of that branch, and a route outside each
+        // branch hides the others. A key of the maps is `None` or the innermost branch.
+        type Branch = Option<(usize, usize)>;
+        let places = |branch: Branch| [Some(None), branch.map(Some)];
+        let mut everything: HashMap<Branch, MethodTries> = HashMap::new();
+        let mut by_router: HashMap<(usize, Branch), MethodTries> = HashMap::new();
+        let mut unreadable: HashMap<Branch, HashMap<usize, usize>> = HashMap::new();
         for &index in indexes {
             let router = mapping[records[index].router];
+            let branch = records[index].branch;
             match readable(index) {
-                // A route in a branch can be absent, so it does not hide another route.
-                Some(_) if records[index].branch.is_some() => {}
                 Some((literal, kind, method)) => {
-                    everything.insert(method, literal, kind);
+                    everything
+                        .entry(branch)
+                        .or_default()
+                        .insert(method, literal, kind);
                     by_router
-                        .entry(router)
+                        .entry((router, branch))
                         .or_default()
                         .insert(method, literal, kind);
                 }
                 None => {
-                    unreadable.entry(router).or_insert(index);
+                    unreadable
+                        .entry(branch)
+                        .or_default()
+                        .entry(router)
+                        .or_insert(index);
                 }
             }
         }
-        let mut earlier: HashMap<usize, MethodTries> = HashMap::new();
+        let mut earlier: HashMap<(usize, Branch), MethodTries> = HashMap::new();
         for &index in indexes {
             let router = mapping[records[index].router];
-            let others_unreadable =
-                unreadable.len() - usize::from(unreadable.contains_key(&router));
-            let own_unreadable = unreadable.get(&router).is_some_and(|first| *first < index);
+            let branch = records[index].branch;
             let Some((literal, kind, method)) = readable(index) else {
                 kept[index] = false;
                 continue;
             };
-            let own = by_router
-                .get(&router)
-                .map_or(0, |tries| tries.overlaps(method, literal, kind));
-            let cross = everything.overlaps(method, literal, kind) - own;
-            let before = earlier
-                .get(&router)
-                .map_or(0, |tries| tries.overlaps(method, literal, kind));
-            if others_unreadable > 0 || own_unreadable || cross > 0 || before > 0 {
+            let (mut others_unreadable, mut own_unreadable) = (false, false);
+            let (mut all, mut own, mut before) = (0, 0, 0);
+            for place in places(branch).into_iter().flatten() {
+                if let Some(routers) = unreadable.get(&place) {
+                    others_unreadable |= routers.len() > usize::from(routers.contains_key(&router));
+                    own_unreadable |= routers.get(&router).is_some_and(|first| *first < index);
+                }
+                let count = |tries: Option<&MethodTries>| {
+                    tries.map_or(0, |tries| tries.overlaps(method, literal, kind))
+                };
+                all += count(everything.get(&place));
+                own += count(by_router.get(&(router, place)));
+                before += count(earlier.get(&(router, place)));
+                if branch.is_none() {
+                    break;
+                }
+            }
+            let cross = all - own;
+            if others_unreadable || own_unreadable || cross > 0 || before > 0 {
                 kept[index] = false;
             }
-            if records[index].branch.is_none() {
-                earlier
-                    .entry(router)
-                    .or_default()
-                    .insert(method, literal, kind);
-            }
+            earlier
+                .entry((router, branch))
+                .or_default()
+                .insert(method, literal, kind);
         }
     }
 }

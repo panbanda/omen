@@ -1709,7 +1709,31 @@ impl<'a> Context<'a> {
             while let Some(node) = stack.pop() {
                 let mut cursor = node.walk();
                 stack.extend(node.named_children(&mut cursor));
-                if !matches!(node.kind(), "assignment" | "operator_assignment") {
+                if !matches!(node.kind(), "assignment" | "operator_assignment" | "for") {
+                    continue;
+                }
+                // Each target of `a, b = list` and of `for a, b in list` holds an unknown value.
+                let destructured = match node.kind() {
+                    "for" => node.child_by_field_name("pattern"),
+                    _ => node
+                        .child_by_field_name("left")
+                        .filter(|left| left.kind() != "identifier"),
+                };
+                if let Some(pattern) = destructured {
+                    let mut targets = vec![pattern];
+                    while let Some(target) = targets.pop() {
+                        if target.kind() == "identifier" {
+                            locals.insert(self.text(target), ConstraintLocal::Unknown);
+                        } else if matches!(
+                            target.kind(),
+                            "left_assignment_list"
+                                | "destructured_left_assignment"
+                                | "rest_assignment"
+                        ) {
+                            let mut inner = target.walk();
+                            targets.extend(target.named_children(&mut inner));
+                        }
+                    }
                     continue;
                 }
                 let Some(left) = node

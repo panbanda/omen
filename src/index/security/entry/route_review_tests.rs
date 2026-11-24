@@ -866,3 +866,309 @@ fn timing_many_net_http_calls_with_many_imports_cost_linear_time() {
         search_time(Language::Go, "a.go", &source)
     });
 }
+
+// The second review: forms of proof, and suppression across branches.
+
+#[test]
+fn a_next_verb_can_be_an_export_alias() {
+    assert_eq!(
+        http_rows(
+            Language::TypeScript,
+            &[(
+                "app/x/route.ts",
+                "function handler() {}\nexport { handler as GET };\n"
+            )]
+        ),
+        ["next GET /x handler"]
+    );
+    assert_eq!(
+        http_rows(
+            Language::TypeScript,
+            &[(
+                "app/x/route.ts",
+                "function GET() {}\nexport { GET as POST };\n"
+            )]
+        ),
+        ["next POST /x GET"]
+    );
+}
+
+#[test]
+fn an_actix_verb_through_a_repository_re_export_is_a_route() {
+    let found = http_rows(
+        Language::Rust,
+        &[
+            ("src/lib.rs", "pub use actix_web::get;\nmod routes;\n"),
+            (
+                "src/routes.rs",
+                "use crate::get;\n\n#[get(\"/x\")]\nasync fn handler() {}\n",
+            ),
+        ],
+    );
+    assert_eq!(found, ["actix GET /x handler"]);
+}
+
+#[test]
+fn a_verb_through_a_re_export_of_another_crate_is_not_a_route() {
+    let found = http_rows(
+        Language::Rust,
+        &[
+            ("src/lib.rs", "pub use my_macros::get;\nmod routes;\n"),
+            (
+                "src/routes.rs",
+                "use crate::get;\n\n#[get(\"/x\")]\nasync fn handler() {}\n",
+            ),
+        ],
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_csharp_global_using_alias_of_another_file_proves_a_receiver() {
+    let found = http_rows(
+        Language::CSharp,
+        &[
+            (
+                "GlobalUsings.cs",
+                "global using Routes = Microsoft.AspNetCore.Routing.IEndpointRouteBuilder;\n",
+            ),
+            (
+                "Api.cs",
+                "static class Api {\n    static void Add(Routes routes) {\n        routes.MapGet(\"/x\", () => 1);\n    }\n}\n",
+            ),
+        ],
+    );
+    assert_eq!(found, ["aspnet GET /x -"]);
+}
+
+#[test]
+fn a_csharp_global_using_of_asp_net_proves_a_receiver() {
+    let found = http_rows(
+        Language::CSharp,
+        &[
+            ("GlobalUsings.cs", "global using Microsoft.AspNetCore.Builder;\n"),
+            (
+                "Api.cs",
+                "class Api {\n    void Add(object endpoints) {\n        endpoints.MapGet(\"/x\", () => 1);\n    }\n}\n",
+            ),
+        ],
+    );
+    assert_eq!(found, ["aspnet GET /x -"]);
+}
+
+#[test]
+fn a_csharp_field_read_through_this_proves_a_receiver() {
+    let field = "class Api {\n    private WebApplication app;\n    void H() {}\n    void Add() {\n        this.app.MapGet(\"/x\", H);\n    }\n}\n";
+    assert_eq!(
+        http_rows(Language::CSharp, &[("Api.cs", field)]),
+        ["aspnet GET /x H"]
+    );
+    let property = "class Api {\n    private WebApplication App { get; }\n    void H() {}\n    void Add() {\n        this.App.MapGet(\"/x\", H);\n    }\n}\n";
+    assert_eq!(
+        http_rows(Language::CSharp, &[("Api.cs", property)]),
+        ["aspnet GET /x H"]
+    );
+}
+
+#[test]
+fn a_csharp_type_must_match_a_whole_name() {
+    let source = "class NotWebApplication {\n    public void MapGet(string path, System.Action handler) {}\n}\nclass C {\n    void H() {}\n    void F(NotWebApplication app) {\n        app.MapGet(\"/x\", H);\n    }\n}\n";
+    let found = http_rows(Language::CSharp, &[("a.cs", source)]);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_fully_qualified_spring_annotation_is_a_route() {
+    let source = "@org.springframework.web.bind.annotation.RequestMapping(\"/api\")\nclass C {\n    @org.springframework.web.bind.annotation.GetMapping(\"/x\")\n    void handler() {}\n}\n";
+    assert_eq!(
+        http_rows(Language::Java, &[("C.java", source)]),
+        ["spring GET /api/x handler"]
+    );
+}
+
+#[test]
+fn another_spring_import_does_not_prove_a_mapping() {
+    let source = "import org.springframework.stereotype.Component;\n\n@interface GetMapping {\n    String value();\n}\n\nclass C {\n    @GetMapping(\"/x\")\n    void handler() {}\n}\n";
+    let found = http_rows(Language::Java, &[("C.java", source)]);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_mapping_of_the_file_hides_a_spring_wildcard_import() {
+    let source = "import org.springframework.web.bind.annotation.*;\n\n@interface GetMapping {\n    String value();\n}\n\nclass C {\n    @GetMapping(\"/x\")\n    void handler() {}\n}\n";
+    let found = http_rows(Language::Java, &[("C.java", source)]);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_conditional_chi_route_does_not_hide_a_mounted_route() {
+    assert_eq!(
+        go_rows(
+            CHI,
+            "func routes(on bool) {\n\tsub := chi.NewRouter()\n\tsub.Get(\"/y\", first)\n\troot := chi.NewRouter()\n\troot.Mount(\"/api\", sub)\n\tif on {\n\t\troot.Get(\"/api/y\", second)\n\t}\n}"
+        ),
+        ["chi GET /api/y first", "chi GET /api/y second"]
+    );
+}
+
+#[test]
+fn a_mux_route_hides_a_later_route_of_its_branch() {
+    assert_eq!(
+        go_rows(
+            MUX,
+            "func routes(on bool) {\n\tr := mux.NewRouter()\n\tif on {\n\t\tr.HandleFunc(\"/x\", first)\n\t\tr.HandleFunc(\"/x\", second)\n\t}\n}"
+        ),
+        ["gorilla/mux ANY /x first"]
+    );
+}
+
+#[test]
+fn a_mux_route_of_a_branch_does_not_hide_a_route_of_the_other_branch() {
+    assert_eq!(
+        go_rows(
+            MUX,
+            "func routes(on bool) {\n\tr := mux.NewRouter()\n\tif on {\n\t\tr.HandleFunc(\"/x\", first)\n\t} else {\n\t\tr.HandleFunc(\"/x\", second)\n\t}\n}"
+        ),
+        ["gorilla/mux ANY /x first", "gorilla/mux ANY /x second"]
+    );
+}
+
+#[test]
+fn an_opaque_mux_route_of_a_branch_does_not_hide_the_other_branch() {
+    assert_eq!(
+        go_rows(
+            MUX,
+            "func routes(on bool, prefix string) {\n\tr := mux.NewRouter()\n\tif on {\n\t\tr.Path(prefix).HandlerFunc(first)\n\t} else {\n\t\tr.HandleFunc(\"/x\", second)\n\t}\n}"
+        ),
+        ["gorilla/mux ANY /x second"]
+    );
+}
+
+#[test]
+fn an_opaque_mux_route_still_hides_a_later_route_that_can_run_with_it() {
+    assert!(go_rows(
+        MUX,
+        "func routes(prefix string) {\n\tr := mux.NewRouter()\n\tr.Path(prefix).HandlerFunc(first)\n\tr.HandleFunc(\"/x\", second)\n}"
+    )
+    .is_empty());
+}
+
+#[test]
+fn net_http_siblings_of_another_method_do_not_cover_a_catch_all() {
+    assert_eq!(
+        go_rows(
+            "",
+            "func routes() {\n\tm := http.NewServeMux()\n\tm.HandleFunc(\"GET /x/{rest...}\", first)\n\tm.HandleFunc(\"POST /x/{$}\", second)\n\tm.HandleFunc(\"POST /x/{id}\", second)\n\tm.HandleFunc(\"POST /x/{id}/{tail...}\", second)\n}"
+        ),
+        [
+            "net/http GET /x/{rest...} first",
+            "net/http POST /x/{$} second",
+            "net/http POST /x/{id} second",
+            "net/http POST /x/{id}/{tail...} second",
+        ]
+    );
+}
+
+#[test]
+fn net_http_siblings_in_a_branch_do_not_cover_a_catch_all() {
+    let found = go_rows(
+        "",
+        "func routes(on bool) {\n\tm := http.NewServeMux()\n\tm.HandleFunc(\"/x/{rest...}\", first)\n\tif on {\n\t\tm.HandleFunc(\"/x/{$}\", second)\n\t\tm.HandleFunc(\"/x/{id}\", second)\n\t\tm.HandleFunc(\"/x/{id}/{tail...}\", second)\n\t}\n}",
+    );
+    assert!(
+        found.contains(&"net/http ANY /x/{rest...} first".to_string()),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn net_http_siblings_without_a_method_cover_a_catch_all_of_a_method() {
+    let found = go_rows(
+        "",
+        "func routes() {\n\tm := http.NewServeMux()\n\tm.HandleFunc(\"GET /x/{rest...}\", first)\n\tm.HandleFunc(\"/x/{$}\", second)\n\tm.HandleFunc(\"/x/{id}\", second)\n\tm.HandleFunc(\"/x/{id}/{tail...}\", second)\n}",
+    );
+    assert!(
+        !found.iter().any(|row| row.contains("{rest...}")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_django_import_that_the_file_binds_again_is_no_proof() {
+    let assigned = "from django.urls import path\n\ndef fake(pattern, handler):\n    return None\n\ndef view(request):\n    pass\n\npath = fake\nurlpatterns = [path(\"x/\", view)]\n";
+    assert!(http_rows(Language::Python, &[("urls.py", assigned)]).is_empty());
+    let defined = "from django.urls import path\n\ndef path(pattern, handler):\n    return None\n\ndef view(request):\n    pass\n\nurlpatterns = [path(\"x/\", view)]\n";
+    assert!(http_rows(Language::Python, &[("urls.py", defined)]).is_empty());
+}
+
+#[test]
+fn a_local_variable_of_a_function_does_not_rebind_a_django_import() {
+    let source = "from django.urls import path\n\ndef view(request):\n    path = request.path\n    return path\n\nurlpatterns = [path(\"x/\", view)]\n";
+    assert_eq!(http_rows(Language::Python, &[("urls.py", source)]).len(), 1);
+}
+
+#[test]
+fn a_placeholder_at_the_limit_does_not_make_a_longer_list() {
+    let mut body = String::from(
+        "func routes(all []func(http.Handler) http.Handler) {\n\tr := chi.NewRouter()\n",
+    );
+    body.push_str(&"\tr.Use(auth)\n".repeat(MAX_GUARDS));
+    body.push_str("\tr.Use(all[0])\n\tr.Get(\"/x\", first)\n}");
+    let entry = only_go_entry(CHI, &body);
+    assert_eq!(entry.guards.len(), MAX_GUARDS);
+    assert!(!entry.guards_complete);
+    assert_eq!(
+        entry.guards_unknown_reason,
+        Some(GuardsUnknownReason::TooManyGuards)
+    );
+}
+
+#[test]
+fn a_destructuring_assignment_makes_a_constraint_local_unknown() {
+    let entry = only_rails_entry(
+        "  gate = {}\n  gate, unused = [RouteGate.new, nil]\n  get \"/x\", to: redirect(\"/y\"), constraints: gate",
+    );
+    assert!(!entry.guards_complete);
+    assert_eq!(
+        entry.guards_unknown_reason,
+        Some(GuardsUnknownReason::UnreadMiddleware)
+    );
+    let only = only_rails_entry(
+        "  gate, unused = [{}, nil]\n  get \"/x\", to: redirect(\"/y\"), constraints: gate",
+    );
+    assert!(!only.guards_complete);
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_many_django_routes_with_many_imports_cost_linear_time() {
+    assert_scales_linearly("django proof", 6_000, |size| {
+        let mut source = String::new();
+        for import in 0..size {
+            writeln!(source, "import m{import}").unwrap();
+        }
+        source.push_str(
+            "from django.urls import path\n\ndef view(request):\n    pass\n\nurlpatterns = [\n",
+        );
+        for route in 0..size {
+            writeln!(source, "    path(\"r{route}/\", view),").unwrap();
+        }
+        source.push_str("]\n");
+        search_time(Language::Python, "urls.py", &source)
+    });
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_many_rust_verbs_with_many_imports_cost_linear_time() {
+    assert_scales_linearly("rust proof", 30_000, |size| {
+        let mut source = String::from("use actix_web::*;\n");
+        for import in 0..size {
+            writeln!(source, "use m{import}::item{import};").unwrap();
+        }
+        for route in 0..size {
+            writeln!(source, "#[get(\"/r{route}\")]\nasync fn h{route}() {{}}").unwrap();
+        }
+        search_time(Language::Rust, "a.rs", &source)
+    });
+}
