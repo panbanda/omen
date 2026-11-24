@@ -386,6 +386,11 @@ pub struct EntryShared {
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
     go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
     go_packages: std::sync::OnceLock<go_routes::GoPackages>,
+    /// The names of the top-level Java types of each directory.
+    java_package_types:
+        std::sync::OnceLock<std::collections::HashMap<String, std::collections::HashSet<String>>>,
+    /// The file of the Go references to each key, or `None` for references in more than one file.
+    go_reference_files: std::sync::OnceLock<std::collections::HashMap<String, Option<String>>>,
     /// Tells if the Rust files of the repository import rocket, and if they import actix-web.
     rust_web: std::sync::OnceLock<[bool; 2]>,
     /// The framework of each verb that an import of a Rust file binds.
@@ -854,6 +859,87 @@ struct SpringNames<'f> {
     imported: std::collections::HashSet<&'f str>,
     hidden: std::collections::HashSet<&'f str>,
     wildcard: bool,
+    /// The bodies in which each member type of the file is in scope.
+    members: std::collections::HashMap<String, Scopes>,
+}
+
+/// Byte ranges, sorted by start, with the highest end up to each range.
+#[derive(Default)]
+struct Scopes {
+    starts: Vec<usize>,
+    highest_ends: Vec<usize>,
+}
+
+impl Scopes {
+    fn contains(&self, at: usize) -> bool {
+        let before = self.starts.partition_point(|start| *start <= at);
+        before > 0 && self.highest_ends[before - 1] > at
+    }
+}
+
+/// The member types of each class body of a Java file, with the body in which each is in scope.
+fn java_member_types(root: Node<'_>, source: &[u8]) -> std::collections::HashMap<String, Scopes> {
+    const TYPES: [&str; 5] = [
+        "class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "record_declaration",
+        "annotation_type_declaration",
+    ];
+    let mut ranges: std::collections::HashMap<String, Vec<(usize, usize)>> =
+        std::collections::HashMap::new();
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        let mut cursor = node.walk();
+        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+        if matches!(
+            node.kind(),
+            "class_body" | "interface_body" | "enum_body" | "annotation_type_body"
+        ) {
+            let mut members = children.clone();
+            for child in children
+                .iter()
+                .filter(|child| child.kind() == "enum_body_declarations")
+            {
+                let mut inner = child.walk();
+                members.extend(child.named_children(&mut inner));
+            }
+            for member in members
+                .iter()
+                .filter(|member| TYPES.contains(&member.kind()))
+            {
+                if let Some(name) = member.child_by_field_name("name") {
+                    ranges
+                        .entry(syntax::text(name, source).to_string())
+                        .or_default()
+                        .push((node.start_byte(), node.end_byte()));
+                }
+            }
+        }
+        pending.extend(children);
+    }
+    ranges
+        .into_iter()
+        .map(|(name, mut list)| {
+            list.sort_unstable();
+            let mut highest = 0;
+            let highest_ends = list
+                .iter()
+                .map(|(_, end)| {
+                    highest = highest.max(*end);
+                    highest
+                })
+                .collect();
+            let starts = list.into_iter().map(|(start, _)| start).collect();
+            (
+                name,
+                Scopes {
+                    starts,
+                    highest_ends,
+                },
+            )
+        })
+        .collect()
 }
 
 /// The names that a Python module binds, other than by its own imports. A function, a class body,
@@ -1293,7 +1379,8 @@ impl<'a> Context<'a> {
                 .find(|annotation| {
                     let name = self.annotation_name(**annotation);
                     name.rsplit('.').next() == Some(route_name)
-                        && (route_name != "RequestMapping" || self.is_spring_annotation(name))
+                        && (route_name != "RequestMapping"
+                            || self.is_spring_annotation(name, annotation.start_byte()))
                 })
                 .and_then(|annotation| self.annotation_value(*annotation, route_keys)),
         });
@@ -1433,11 +1520,13 @@ impl<'a> Context<'a> {
         names.imported.contains(name) || names.wildcard
     }
 
-    /// Tells if a Java annotation is the Spring annotation of that name: by its full name, by the
-    /// import of that annotation, or by the wildcard import of its package. An import of the same
-    /// name from another package, or a type that the file declares, hides a wildcard import. A
-    /// method or a field has a different namespace, so it does not hide the annotation.
-    fn is_spring_annotation(&self, name: &str) -> bool {
+    /// Tells if a Java annotation at the byte `at` is the Spring annotation of that name: by its
+    /// full name, by an import of that annotation, or by the wildcard import of its package. The
+    /// scope rules of Java decide which type a simple name means. A member type of the class
+    /// around the annotation, or of a class around that class, hides each import. A top-level
+    /// type of the file or of its package, and a single-type import from another package, hide a
+    /// wildcard import. A type in an unrelated class, a method, and a field hide nothing.
+    fn is_spring_annotation(&self, name: &str, at: usize) -> bool {
         const PACKAGE: &str = "org.springframework.web.bind.annotation";
         if let Some((qualifier, _)) = name.rsplit_once('.') {
             return qualifier == PACKAGE;
@@ -1463,16 +1552,57 @@ impl<'a> Context<'a> {
                     _ => {}
                 }
             }
-            names.hidden.extend(
-                self.file
-                    .symbols
-                    .iter()
-                    .filter(|symbol| symbol.kind.is_type())
-                    .map(|symbol| symbol.name.as_str()),
-            );
+            names.members = java_member_types(self.parsed.root_node(), self.source);
             names
         });
-        names.imported.contains(name) || (names.wildcard && !names.hidden.contains(name))
+        if names
+            .members
+            .get(name)
+            .is_some_and(|scopes| scopes.contains(at))
+        {
+            return false;
+        }
+        if names.imported.contains(name) {
+            return true;
+        }
+        names.wildcard && !names.hidden.contains(name) && !self.java_package_types().contains(name)
+    }
+
+    /// The names of the top-level types of the files in the directory of this file. Omen reads
+    /// a directory as one package.
+    fn java_package_types(&self) -> &std::collections::HashSet<String> {
+        static NONE: std::sync::LazyLock<std::collections::HashSet<String>> =
+            std::sync::LazyLock::new(std::collections::HashSet::new);
+        let directory = |path: &str| {
+            path.rsplit_once('/')
+                .map_or("", |(parent, _)| parent)
+                .to_string()
+        };
+        self.all_parsed
+            .shared()
+            .java_package_types
+            .get_or_init(|| {
+                let mut types: std::collections::HashMap<
+                    String,
+                    std::collections::HashSet<String>,
+                > = std::collections::HashMap::new();
+                for file in self
+                    .all
+                    .iter()
+                    .filter(|file| file.language == Language::Java)
+                {
+                    let names = types.entry(directory(&file.file)).or_default();
+                    names.extend(
+                        file.symbols
+                            .iter()
+                            .filter(|symbol| symbol.kind.is_type() && symbol.container.is_none())
+                            .map(|symbol| symbol.name.clone()),
+                    );
+                }
+                types
+            })
+            .get(&directory(&self.file.file))
+            .unwrap_or(&NONE)
     }
 
     /// Tells if the receiver of a C# `Map` call is an ASP.NET value: the file uses a namespace of
@@ -2538,7 +2668,7 @@ impl<'a> Context<'a> {
             let name = self.annotation_name(*annotation);
             let spring_method = self
                 .spring_method(*annotation, name.rsplit('.').next().unwrap_or(name))
-                .filter(|_| self.is_spring_annotation(name));
+                .filter(|_| self.is_spring_annotation(name, annotation.start_byte()));
             if let Some(method) = spring_method {
                 let path = self
                     .annotation_value(*annotation, &["value", "path"])

@@ -1730,14 +1730,16 @@ fn a_chi_route_of_a_helper_called_in_a_branch_does_not_replace_a_route() {
     );
 }
 
+/// The walk reads `helper` where the file declares it, not at its call, so the order of the two
+/// routes is not known. Omen keeps both, where only `second` serves.
 #[test]
-fn a_chi_route_of_a_helper_that_always_runs_replaces_a_route() {
+fn a_chi_route_of_another_function_replaces_no_route() {
     assert_eq!(
         go_rows(
             CHI,
             "var r = chi.NewRouter()\n\nfunc routes() {\n\tr.Get(\"/x\", first)\n\thelper()\n}\n\nfunc helper() {\n\tr.Get(\"/x\", second)\n}"
         ),
-        ["chi GET /x second"]
+        ["chi GET /x first", "chi GET /x second"]
     );
 }
 
@@ -1923,4 +1925,155 @@ fn a_java_type_declaration_hides_a_spring_annotation() {
         let found = http_rows(Language::Java, &[("C.java", &source)]);
         assert!(found.is_empty(), "{declaration}: {found:?}");
     }
+}
+
+// Methods and the other uses of a helper.
+
+const SERVER: &str = "var r = chi.NewRouter()\n\ntype server struct{}\n\nfunc (s server) setup() {\n\tr.Use(auth)\n}";
+
+#[test]
+fn a_guard_of_a_method_called_in_a_branch_is_conditional() {
+    let entry = only_go_entry(
+        CHI,
+        &format!("{SERVER}\n\nfunc routes(on bool) {{\n\ts := server{{}}\n\tif on {{\n\t\ts.setup()\n\t}}\n\tr.Get(\"/x\", first)\n}}"),
+    );
+    assert_conditional_guard(&entry);
+}
+
+#[test]
+fn a_guard_of_a_method_that_always_runs_stays_complete() {
+    let entry = only_go_entry(
+        CHI,
+        &format!("{SERVER}\n\nfunc routes() {{\n\ts := server{{}}\n\ts.setup()\n\tr.Get(\"/x\", first)\n}}"),
+    );
+    assert_eq!(entry.guards, ["auth"]);
+    assert!(entry.guards_complete);
+}
+
+#[test]
+fn a_guard_of_a_helper_used_as_a_value_is_not_proved() {
+    for body in [
+        format!("{SERVER}\n\nfunc routes() {{\n\ts := server{{}}\n\tsetup := s.setup\n\tsetup()\n\tr.Get(\"/x\", first)\n}}"),
+        "var r = chi.NewRouter()\n\nfunc helper() {\n\tr.Use(auth)\n}\n\nfunc routes() {\n\thooks := []func(){helper}\n\thooks[0]()\n\tr.Get(\"/x\", first)\n}".to_string(),
+    ] {
+        let entry = only_go_entry(CHI, &body);
+        assert_conditional_guard(&entry);
+    }
+}
+
+#[test]
+fn a_guard_of_a_helper_called_from_another_file_is_not_proved() {
+    let helper = go(CHI, "var r = chi.NewRouter()\n\nfunc helper() {\n\tr.Use(auth)\n}\n\nfunc routes() {\n\tr.Get(\"/x\", first)\n}");
+    let caller = "package p\n\nfunc start(on bool) {\n\tif on {\n\t\thelper()\n\t}\n}\n";
+    let found = entries(Language::Go, &[("a.go", &helper), ("b.go", caller)]);
+    assert_eq!(
+        found.len(),
+        1,
+        "{:?}",
+        found.iter().map(row).collect::<Vec<_>>()
+    );
+    assert_conditional_guard(&found[0]);
+}
+
+#[test]
+fn a_chi_route_of_a_method_called_in_a_branch_does_not_replace_a_route() {
+    assert_eq!(
+        go_rows(
+            CHI,
+            "var r = chi.NewRouter()\n\ntype server struct{}\n\nfunc (s server) setup() {\n\tr.Get(\"/x\", second)\n}\n\nfunc routes(on bool) {\n\ts := server{}\n\tr.Get(\"/x\", first)\n\tif on {\n\t\ts.setup()\n\t}\n}"
+        ),
+        ["chi GET /x first", "chi GET /x second"]
+    );
+}
+
+/// `fallthrough` makes a case run the next case too. Omen reads each case as its own branch, so
+/// it keeps both routes where the second replaces the first. No route is lost.
+#[test]
+fn a_chi_route_after_fallthrough_keeps_the_earlier_route() {
+    assert_eq!(
+        go_rows(
+            CHI,
+            "func routes(mode int) {\n\tr := chi.NewRouter()\n\tswitch mode {\n\tcase 1:\n\t\tr.Get(\"/x\", first)\n\t\tfallthrough\n\tdefault:\n\t\tr.Get(\"/x\", second)\n\t}\n}"
+        ),
+        ["chi GET /x first", "chi GET /x second"]
+    );
+}
+
+#[test]
+fn a_guard_of_a_helper_called_through_a_function_value_is_not_proved() {
+    let entry = only_go_entry(
+        CHI,
+        "var r = chi.NewRouter()\n\nfunc routes(on bool) {\n\tf := helper\n\tif on {\n\t\tf()\n\t}\n\tr.Get(\"/x\", first)\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+    );
+    assert_conditional_guard(&entry);
+}
+
+#[test]
+fn a_route_of_a_helper_that_calls_itself_replaces_no_route() {
+    assert_eq!(
+        go_rows(
+            CHI,
+            "var r = chi.NewRouter()\n\nfunc routes(on, stop bool) {\n\tif on {\n\t\tr.Get(\"/x\", first)\n\t\thelper(stop)\n\t}\n}\n\nfunc helper(stop bool) {\n\tif stop {\n\t\treturn\n\t}\n\tr.Get(\"/x\", second)\n\thelper(true)\n}"
+        ),
+        ["chi GET /x first", "chi GET /x second"]
+    );
+}
+
+const SPRING_ONE: &str = "import org.springframework.web.bind.annotation.GetMapping;\n\n";
+const SPRING_ALL: &str = "import org.springframework.web.bind.annotation.*;\n\n";
+const LOCAL_ANNOTATION: &str = "@interface GetMapping { String value(); }";
+
+fn spring_rows(files: &[(&str, &str)]) -> Vec<String> {
+    http_rows(Language::Java, files)
+}
+
+#[test]
+fn a_nested_type_in_scope_hides_a_spring_import() {
+    for import in [SPRING_ONE, SPRING_ALL] {
+        for class in [
+            format!("class C {{\n    {LOCAL_ANNOTATION}\n\n    @GetMapping(\"/x\")\n    void handler() {{}}\n}}\n"),
+            format!("class D {{\n    {LOCAL_ANNOTATION}\n\n    class C {{\n        @GetMapping(\"/x\")\n        void handler() {{}}\n    }}\n}}\n"),
+        ] {
+            let source = format!("{import}{class}");
+            let found = spring_rows(&[("src/C.java", &source)]);
+            assert!(found.is_empty(), "{source}: {found:?}");
+        }
+    }
+}
+
+#[test]
+fn a_type_nested_in_an_unrelated_class_hides_nothing() {
+    for import in [SPRING_ONE, SPRING_ALL] {
+        let source = format!("{import}class Routes {{\n    @GetMapping(\"/x\")\n    void handler() {{}}\n}}\n\nclass Other {{\n    {LOCAL_ANNOTATION}\n}}\n");
+        assert_eq!(
+            spring_rows(&[("src/Routes.java", &source)]),
+            ["spring GET /x handler"],
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn a_type_of_the_package_hides_only_a_wildcard_import() {
+    const ROUTES: &str = "class Routes {\n    @GetMapping(\"/x\")\n    void handler() {}\n}\n";
+    let other = format!("package app;\n\n{LOCAL_ANNOTATION}\n");
+    let wildcard = format!("package app;\n\n{SPRING_ALL}{ROUTES}");
+    let found = spring_rows(&[
+        ("src/app/GetMapping.java", &other),
+        ("src/app/Routes.java", &wildcard),
+    ]);
+    assert!(found.is_empty(), "{found:?}");
+    let single = format!("package app;\n\n{SPRING_ONE}{ROUTES}");
+    assert_eq!(
+        spring_rows(&[
+            ("src/app/GetMapping.java", &other),
+            ("src/app/Routes.java", &single)
+        ]),
+        ["spring GET /x handler"]
+    );
+    let elsewhere = spring_rows(&[
+        ("src/other/GetMapping.java", &other),
+        ("src/app/Routes.java", &wildcard),
+    ]);
+    assert_eq!(elsewhere, ["spring GET /x handler"]);
 }
