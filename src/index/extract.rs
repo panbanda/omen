@@ -1597,6 +1597,9 @@ pub struct FileSymbols {
     pub barrel_not_resolved: bool,
     /// The facts of a Vue component, or `None` for a file of a language.
     pub component: Option<crate::parser::vue::Facts>,
+    /// The directory of the nearest `.csproj` file above a C# file. `None` is the part of the
+    /// repository that no project file covers.
+    pub csharp_project: Option<String>,
 }
 
 impl FileSymbols {
@@ -2432,6 +2435,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         test_file,
         barrel_not_resolved: false,
         component: parsed.component.clone(),
+        csharp_project: None,
     }
 }
 

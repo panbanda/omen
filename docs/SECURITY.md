@@ -359,10 +359,16 @@ Omen gives a route of these frameworks only when the file proves the framework:
 | Framework | Proof | Omen gives no entry for |
 | --- | --- | --- |
 | Next | The function has the export name of a verb, also as `export { handler as GET }` | A verb function with no export, and a re-export from another file |
-| ASP.NET | A `using` or `global using` of `Microsoft.AspNetCore`, a `global using` alias of an ASP.NET type, or a receiver with a whole ASP.NET type name, also through `this.` | A receiver of an unknown type in a project that has only implicit usings |
-| Actix, Rocket | An import of the verb from the crate, also through a chain of named `pub use`, or one framework that the file or the repository imports | A verb from another crate, a verb through a wildcard re-export, and a repository that imports both frameworks with no binding of the verb |
-| Django | An import of the name from `django`, or a wildcard import of `django` | A name that the module binds again with an assignment or a `def` |
+| ASP.NET minimal API | A `using` of `Microsoft.AspNetCore`, a `global using` of that namespace or an alias of a type in it in the same project, or a receiver with a whole ASP.NET type name, also through `this.` | A receiver of an unknown type in a project that has only implicit usings |
+| Actix, Rocket | An import of the verb from the crate, also through a chain of named `pub use` of at most 32 steps, or one framework that the file or the repository imports | A verb from another crate, a verb through a wildcard re-export, a chain of more than 32 steps, and a repository that imports both frameworks with no binding of the verb |
+| Django | An import of the name from `django`, or a wildcard import of `django` | A name that the module binds again, as an assignment, `def`, `class`, `for`, `with ... as`, `except ... as`, `import ... as`, a `match` capture, or `global` in a function |
 | Spring | The full annotation name, an import of that annotation, or `org.springframework.web.bind.annotation.*` | Any other Spring import, and an annotation that the file declares |
+
+The project of a C# file is the directory of its nearest `.csproj` file. A repository with no
+`.csproj` file is one project.
+
+Omen matches an ASP.NET controller attribute, as `[HttpGet]`, by its name. These attributes need
+no proof of the framework, so a class of the repository with the same name gives a route.
 
 ## Rails routes
 

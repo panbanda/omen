@@ -390,8 +390,8 @@ pub struct EntryShared {
     rust_web: std::sync::OnceLock<[bool; 2]>,
     /// The framework of each verb that an import of a Rust file binds.
     rust_verbs: std::sync::OnceLock<RustVerbs>,
-    /// The `global using` directives of the C# files.
-    csharp_globals: std::sync::OnceLock<CsharpGlobals>,
+    /// The `global using` directives of the C# files, by project.
+    csharp_globals: std::sync::OnceLock<std::collections::HashMap<Option<String>, CsharpGlobals>>,
     ecma: ecma::Shared,
 }
 
@@ -793,15 +793,6 @@ fn has_aspnet_type(text: &str, aliases: &std::collections::HashSet<String>) -> b
         .any(|word| ASPNET_TYPES.contains(&word) || aliases.contains(word))
 }
 
-/// The first name of an expression, as `app` of `app.MapGroup("/x")` and of `this.app.Map()`.
-fn leading_name(text: &str) -> &str {
-    let text = text.strip_prefix("this.").unwrap_or(text);
-    let end = text
-        .find(|character: char| !character.is_alphanumeric() && character != '_')
-        .unwrap_or(text.len());
-    &text[..end]
-}
-
 /// What the `global using` directives of a repository give.
 #[derive(Default)]
 pub struct CsharpGlobals {
@@ -833,16 +824,15 @@ fn read_csharp_globals(root: Node<'_>, source: &[u8], globals: &mut CsharpGlobal
             continue;
         };
         let path: String = syntax::text(path, source).split_whitespace().collect();
-        let in_aspnet = module_is_or_is_under(&path, "Microsoft.AspNetCore");
+        let path = path.strip_prefix("global::").unwrap_or(&path);
+        let in_aspnet = module_is_or_is_under(path, "Microsoft.AspNetCore");
         match alias {
-            Some(alias) => {
-                let last = path.rsplit('.').next().unwrap_or(&path);
-                if in_aspnet || ASPNET_TYPES.contains(&last) {
-                    globals
-                        .aliases
-                        .insert(syntax::text(alias, source).to_string());
-                }
+            Some(alias) if in_aspnet => {
+                globals
+                    .aliases
+                    .insert(syntax::text(alias, source).to_string());
             }
+            Some(_) => {}
             None => globals.aspnet_namespace |= in_aspnet,
         }
     }
@@ -866,26 +856,52 @@ struct SpringNames<'f> {
     wildcard: bool,
 }
 
-/// The names that a Python module binds at its own level, other than by an import. The walk does
-/// not go into a function, a class, or a lambda, which have their own scopes.
+/// The names that a Python module binds at its own level, other than by an import. A function, a
+/// class body, a lambda, and a comprehension have their own scopes, so a binding there does not
+/// count, but a `global` statement in a function makes the name a binding of the module.
 fn python_module_bindings(root: Node<'_>, source: &[u8]) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
-    let mut pending = vec![root];
-    while let Some(node) = pending.pop() {
-        let target = match node.kind() {
-            "function_definition" | "class_definition" => {
-                if let Some(name) = node.child_by_field_name("name") {
-                    names.insert(syntax::text(name, source).to_string());
-                }
-                continue;
+    let mut pending = vec![(root, true)];
+    while let Some((node, at_module)) = pending.pop() {
+        if node.kind() == "global_statement" {
+            let mut cursor = node.walk();
+            for name in node
+                .named_children(&mut cursor)
+                .filter(|child| child.kind() == "identifier")
+            {
+                names.insert(syntax::text(name, source).to_string());
             }
-            "lambda" => continue,
-            "assignment" | "augmented_assignment" => node.child_by_field_name("left"),
-            "for_statement" => node.child_by_field_name("left"),
-            "as_pattern_target" | "named_expression" => node
-                .child_by_field_name("name")
-                .or_else(|| node.named_child(0)),
-            _ => None,
+            continue;
+        }
+        let mut inner_scope = !at_module;
+        let target = if at_module {
+            match node.kind() {
+                "function_definition" | "class_definition" => {
+                    inner_scope = true;
+                    node.child_by_field_name("name")
+                }
+                "lambda"
+                | "list_comprehension"
+                | "set_comprehension"
+                | "dictionary_comprehension"
+                | "generator_expression" => {
+                    inner_scope = true;
+                    None
+                }
+                "assignment" | "augmented_assignment" | "for_statement" => {
+                    node.child_by_field_name("left")
+                }
+                "named_expression" => node.child_by_field_name("name"),
+                "as_pattern" => node.child_by_field_name("alias"),
+                "case_pattern" => node
+                    .named_child(0)
+                    .filter(|_| node.named_child_count() == 1)
+                    .filter(|child| child.kind() == "dotted_name")
+                    .filter(|child| child.named_child_count() == 1),
+                _ => None,
+            }
+        } else {
+            None
         };
         if let Some(target) = target {
             let mut targets = vec![target];
@@ -894,7 +910,8 @@ fn python_module_bindings(root: Node<'_>, source: &[u8]) -> std::collections::Ha
                     "identifier" => {
                         names.insert(syntax::text(target, source).to_string());
                     }
-                    "pattern_list" | "tuple_pattern" | "list_pattern" | "list_splat_pattern" => {
+                    "pattern_list" | "tuple_pattern" | "list_pattern" | "list_splat_pattern"
+                    | "as_pattern_target" | "dotted_name" => {
                         let mut cursor = target.walk();
                         targets.extend(target.named_children(&mut cursor));
                     }
@@ -903,7 +920,10 @@ fn python_module_bindings(root: Node<'_>, source: &[u8]) -> std::collections::Ha
             }
         }
         let mut cursor = node.walk();
-        pending.extend(node.named_children(&mut cursor));
+        pending.extend(
+            node.named_children(&mut cursor)
+                .map(|child| (child, !inner_scope)),
+        );
     }
     names
 }
@@ -1035,7 +1055,7 @@ struct Context<'a> {
     /// The names of the variables that hold a `net/http` multiplexer, in a Go file.
     go_servemuxes: std::sync::OnceLock<std::collections::HashSet<String>>,
     /// The `net/http` patterns of a Go file that other patterns of the file can cover.
-    go_covered: std::sync::OnceLock<std::collections::HashSet<(String, String)>>,
+    go_covered: std::sync::OnceLock<std::collections::HashSet<usize>>,
     /// The start and the highest end of the branches of a Go file that never run, by start.
     go_dead: std::sync::OnceLock<(Vec<usize>, Vec<usize>)>,
     /// The names that the package of a Go file declares at the top level.
@@ -1050,6 +1070,8 @@ struct Context<'a> {
     guard_gap: std::cell::Cell<Option<GuardsUnknownReason>>,
     /// Tells for the text of the receiver of a Python route decorator if it is a framework value.
     python_receivers: std::cell::RefCell<std::collections::HashMap<&'a str, bool>>,
+    /// The names that an `export { name }` clause of this file exports.
+    next_own_exports: std::cell::OnceCell<std::collections::HashSet<&'a str>>,
     /// The names that the imports of a Python file give to `django`.
     django_names: std::cell::OnceCell<DjangoNames<'a>>,
     /// The Spring annotations that a Java file imports.
@@ -1128,6 +1150,7 @@ impl<'a> Context<'a> {
             python_scopes: std::cell::OnceCell::new(),
             guard_gap: std::cell::Cell::new(None),
             python_receivers: std::cell::RefCell::new(std::collections::HashMap::new()),
+            next_own_exports: std::cell::OnceCell::new(),
             django_names: std::cell::OnceCell::new(),
             spring_names: std::cell::OnceCell::new(),
             rails_constraint_locals: std::cell::OnceCell::new(),
@@ -1222,6 +1245,7 @@ impl<'a> Context<'a> {
                 .find(|annotation| {
                     let name = self.annotation_name(**annotation);
                     name.rsplit('.').next() == Some(route_name)
+                        && (route_name != "RequestMapping" || self.is_spring_annotation(name))
                 })
                 .and_then(|annotation| self.annotation_value(*annotation, route_keys)),
         });
@@ -1302,6 +1326,38 @@ impl<'a> Context<'a> {
         }))
     }
 
+    /// The names that an `export { name }` clause of this file exports with no alias.
+    fn next_own_exports(&self) -> &std::collections::HashSet<&'a str> {
+        self.next_own_exports.get_or_init(|| {
+            let root = self.parsed.root_node();
+            let mut names = std::collections::HashSet::new();
+            let mut cursor = root.walk();
+            for statement in root
+                .named_children(&mut cursor)
+                .filter(|node| node.kind() == "export_statement")
+                .filter(|node| node.child_by_field_name("source").is_none())
+            {
+                let mut inner = statement.walk();
+                for clause in statement
+                    .named_children(&mut inner)
+                    .filter(|node| node.kind() == "export_clause")
+                {
+                    let mut specifiers = clause.walk();
+                    for specifier in clause
+                        .named_children(&mut specifiers)
+                        .filter(|node| node.kind() == "export_specifier")
+                        .filter(|node| node.child_by_field_name("alias").is_none())
+                    {
+                        if let Some(name) = specifier.child_by_field_name("name") {
+                            names.insert(self.text(name));
+                        }
+                    }
+                }
+            }
+            names
+        })
+    }
+
     /// Tells if an import of `django` binds the name in this Python file. A binding of the name
     /// at the level of the module, as an assignment or a `def`, is no proof. A local variable of
     /// a function does not change the name at the level of the module.
@@ -1377,25 +1433,60 @@ impl<'a> Context<'a> {
         if globals.aspnet_namespace {
             return true;
         }
-        let text = self.text(receiver);
-        has_aspnet_type(text, &globals.aliases) || self.aspnet_names().contains(leading_name(text))
+        has_aspnet_type(self.text(receiver), &globals.aliases)
+            || self
+                .csharp_root_name(receiver)
+                .is_some_and(|name| self.aspnet_names().contains(name))
     }
 
-    /// The `global using` directives of the repository. They apply to each file of a project.
+    /// The `global using` directives of the project of this file. The compiler applies them to
+    /// each file of the project and to no other project.
     fn csharp_globals(&self) -> &CsharpGlobals {
-        self.all_parsed.shared().csharp_globals.get_or_init(|| {
-            let mut globals = CsharpGlobals::default();
-            for (position, file) in self.all.iter().enumerate() {
-                if file.language != Language::CSharp {
-                    continue;
+        static NONE: std::sync::LazyLock<CsharpGlobals> =
+            std::sync::LazyLock::new(CsharpGlobals::default);
+        self.all_parsed
+            .shared()
+            .csharp_globals
+            .get_or_init(|| {
+                let mut projects: std::collections::HashMap<Option<String>, CsharpGlobals> =
+                    std::collections::HashMap::new();
+                for (position, file) in self.all.iter().enumerate() {
+                    if file.language != Language::CSharp {
+                        continue;
+                    }
+                    let globals = projects.entry(file.csharp_project.clone()).or_default();
+                    let Some(parsed) = self.all_parsed.transient_tree(position) else {
+                        continue;
+                    };
+                    read_csharp_globals(parsed.root_node(), &parsed.source, globals);
                 }
-                let Some(parsed) = self.all_parsed.transient_tree(position) else {
-                    continue;
-                };
-                read_csharp_globals(parsed.root_node(), &parsed.source, &mut globals);
+                projects
+            })
+            .get(&self.file.csharp_project)
+            .unwrap_or(&NONE)
+    }
+
+    /// The first name of a chain of member accesses and calls: `app` of `app.MapGroup("/x")`, and
+    /// `app` of `this . app.Map()`.
+    fn csharp_root_name(&self, node: Node<'_>) -> Option<&'a str> {
+        const CHAIN_LIMIT: usize = 256;
+        let mut current = node;
+        let mut member = None;
+        for _ in 0..CHAIN_LIMIT {
+            match current.kind() {
+                "identifier" => return Some(self.text(current)),
+                "this" | "this_expression" => return member,
+                "invocation_expression" => current = current.child_by_field_name("function")?,
+                "member_access_expression" => {
+                    member = current
+                        .child_by_field_name("name")
+                        .map(|name| self.text(name));
+                    current = current.child_by_field_name("expression")?;
+                }
+                _ => return None,
             }
-            globals
-        })
+        }
+        None
     }
 
     /// One walk in source order, so `var app = builder.Build()` finds the earlier `builder`.
@@ -1428,12 +1519,13 @@ impl<'a> Context<'a> {
                                     .named_child(
                                         declarator.named_child_count().saturating_sub(1) as u32
                                     )
-                                    .filter(|value| *value != name)
-                                    .map(|value| self.text(value));
+                                    .filter(|value| *value != name);
                             if declared_type
                                 || value.is_some_and(|value| {
-                                    has_aspnet_type(value, aliases)
-                                        || names.contains(leading_name(value))
+                                    has_aspnet_type(self.text(value), aliases)
+                                        || self
+                                            .csharp_root_name(value)
+                                            .is_some_and(|root| names.contains(root))
                                 })
                             {
                                 names.insert(self.text(name));
@@ -1976,6 +2068,7 @@ impl<'a> Context<'a> {
             // `export { handler as GET }` exports the alias and not the local name.
             let exports_own_name = symbol.exported != crate::index::model::Exported::NotExported
                 && (aliases.is_empty()
+                    || self.next_own_exports().contains(symbol.name.as_str())
                     || self.source[..symbol.range.start_byte]
                         .trim_ascii_end()
                         .ends_with(b"export"));
@@ -2590,11 +2683,7 @@ impl<'a> Context<'a> {
         else {
             return;
         };
-        if self
-            .go_covered_patterns()
-            .contains(&(method.clone(), path.clone()))
-            || self.go_in_dead_branch(node)
-        {
+        if self.go_covered_patterns().contains(&node.id()) || self.go_in_dead_branch(node) {
             return;
         }
         let wrapped = self.go_handler(*handler, go_routes::HandlerKind::Http);
