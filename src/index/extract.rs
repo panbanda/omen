@@ -2600,6 +2600,52 @@ mod tests {
         });
     }
 
+    /// A Ruby class whose `class << self` has `size` nested blocks, each with an
+    /// `attr_reader`.
+    fn ruby_accessors_in_nested_blocks(size: usize) -> String {
+        format!(
+            "class A\nclass << self\n{}{}end\nend\n",
+            (0..size)
+                .map(|level| format!("run do\nattr_reader :a{level}\n"))
+                .collect::<String>(),
+            "end\n".repeat(size)
+        )
+    }
+
+    #[test]
+    fn test_ruby_accessors_in_nested_blocks_are_methods_of_the_type() {
+        let source = ruby_accessors_in_nested_blocks(3);
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Ruby,
+                std::path::Path::new("a.rb"),
+            )
+            .unwrap();
+        let symbols = super::extract_file(&parsed, "a.rb");
+        let accessors: Vec<(&str, Option<super::GeneratedFor>)> = symbols
+            .symbols
+            .iter()
+            .zip(&symbols.link_facts)
+            .filter(|(symbol, _)| symbol.name.starts_with('a'))
+            .map(|(symbol, facts)| (symbol.name.as_str(), facts.generated))
+            .collect();
+        let owner = Some(super::GeneratedFor::Type);
+        assert_eq!(accessors, [("a0", owner), ("a1", owner), ("a2", owner)]);
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_ruby_accessors_in_nested_blocks_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("ruby accessors", 5_000, |size| {
+            extract_time(
+                Language::Ruby,
+                "a.rb",
+                ruby_accessors_in_nested_blocks(size),
+            )
+        });
+    }
+
     /// A Ruby class whose `class << self` has `size` nested blocks, each with a
     /// method.
     fn ruby_methods_in_nested_blocks(size: usize) -> String {
