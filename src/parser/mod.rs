@@ -797,6 +797,21 @@ mod tests {
     }
 
     #[test]
+    fn test_a_directive_name_that_is_not_utf8_makes_the_template_abstain() {
+        let mut content = b"<template><input v-".to_vec();
+        content.extend_from_slice(&[0xff; 100]);
+        content.extend_from_slice(
+            b"=\"value\"></template>\n<script setup lang=\"ts\">\nconst value = 1;\n</script>\n",
+        );
+        let result = Parser::new()
+            .parse(&content, Language::TypeScript, Path::new("App.vue"))
+            .unwrap();
+        let component = result.component.as_ref().unwrap();
+        assert!(component.abstention.is_some());
+        assert!(!result.root_node().has_error());
+    }
+
+    #[test]
     fn test_a_custom_directive_uses_a_binding_of_the_script() {
         for script in [
             "import { vFocus } from './focus';",
