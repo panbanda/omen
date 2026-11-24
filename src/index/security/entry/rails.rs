@@ -4164,7 +4164,11 @@ impl NameState {
 }
 
 impl Drop for Link {
+    /// Releases the older links in a loop. The default drop calls itself for each link, and a
+    /// long chain can overflow the stack of the thread. A jump keeps an older link, thus the
+    /// jumps are released first: an older link is then free when this is its last owner.
     fn drop(&mut self) {
+        self.jump.get_mut().clear();
         let mut next = self.older.take();
         while let Some(node) = next {
             match Arc::try_unwrap(node) {
