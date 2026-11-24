@@ -1360,9 +1360,11 @@ mod tests {
         let (found, elapsed) = entries_lean(Language::Python, &[("main.py", &source)]);
         assert_eq!(found.len(), usize::from(with_route));
         if let Some(entry) = found.first() {
-            assert_eq!(entry.guards.len(), count);
+            assert_eq!(entry.guards.len(), count.min(super::super::MAX_GUARDS));
             assert_eq!(entry.guards[0], format!("d{}", count - 1));
-            assert_eq!(entry.guards[count - 1], "d0");
+            if count <= super::super::MAX_GUARDS {
+                assert_eq!(entry.guards[count - 1], "d0");
+            }
         }
         elapsed
     }

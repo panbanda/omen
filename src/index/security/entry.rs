@@ -11,6 +11,7 @@
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::rc::Rc;
 use tree_sitter::Node;
 
 use super::spec::syntax_of;
@@ -26,6 +27,8 @@ mod go_routes;
 mod go_wrappers;
 mod persistent;
 mod rails;
+#[cfg(test)]
+mod route_review_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -133,6 +136,8 @@ pub enum GuardsUnknownReason {
     /// A middleware argument is not a name that omen can read, or a call around a Go handler is
     /// not a conversion and not a middleware that omen reads.
     UnreadMiddleware,
+    /// The entry point has more guards than `MAX_GUARDS`. The list has the first ones.
+    TooManyGuards,
     /// The framework has a place for guards that omen does not read, such as the middleware of
     /// the application.
     LayerNotRead,
@@ -160,10 +165,15 @@ impl GuardsUnknownReason {
             Self::WildcardImport => "wildcard_import",
             Self::ConditionalMiddleware => "conditional_middleware",
             Self::UnreadMiddleware => "unread_middleware",
+            Self::TooManyGuards => "too_many_guards",
             Self::LayerNotRead => "layer_not_read",
         }
     }
 }
+
+/// The largest number of guards that one entry point lists. A source of guards keeps one more,
+/// so `detect` can tell that the list is longer.
+pub(super) const MAX_GUARDS: usize = 256;
 
 /// The first of two reasons in the order of [`GuardsUnknownReason`].
 fn first_reason(
@@ -376,6 +386,8 @@ pub struct EntryShared {
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
     go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
     go_packages: std::sync::OnceLock<go_routes::GoPackages>,
+    /// Tells if the Rust files of the repository import rocket, and if they import actix-web.
+    rust_web: std::sync::OnceLock<[bool; 2]>,
     ecma: ecma::Shared,
 }
 
@@ -760,6 +772,48 @@ fn binds_to_marker(node: Node<'_>, source: &[u8], name: &str, markers: &[&str]) 
     false
 }
 
+/// Tells if the start of a C# expression or type names a type or a call of ASP.NET. Only the start
+/// counts, so a long nested value costs a constant amount.
+fn has_aspnet_marker(text: &str) -> bool {
+    const MARKERS: [&str; 5] = [
+        "WebApplication",
+        "IEndpointRouteBuilder",
+        "RouteGroupBuilder",
+        "IApplicationBuilder",
+        "MapGroup",
+    ];
+    let head = &text[..text.floor_char_boundary(256)];
+    MARKERS.iter().any(|marker| head.contains(marker))
+}
+
+/// The first identifier of an expression, as `app` of `app.MapGroup("/x")`.
+fn leading_name(text: &str) -> &str {
+    let end = text
+        .find(|character: char| !character.is_alphanumeric() && character != '_')
+        .unwrap_or(text.len());
+    &text[..end]
+}
+
+/// Tells if a Rust file has `extern crate name` at its top level.
+fn declares_extern_crate(root: Node<'_>, source: &[u8], name: &str) -> bool {
+    let mut cursor = root.walk();
+    let found = root
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "extern_crate_declaration")
+        .filter_map(|child| child.child_by_field_name("name"))
+        .any(|crate_name| syntax::text(crate_name, source) == name);
+    found
+}
+
+/// Tells if an import path is the module, or a path below it.
+fn module_is_or_is_under(path: &str, module: &str) -> bool {
+    let path = path.replace(['/', '\\', ':'], ".");
+    path == module
+        || path
+            .strip_prefix(module)
+            .is_some_and(|rest| rest.starts_with('.'))
+}
+
 /// The local bindings of a Go file, by name.
 type GoLocals = std::collections::HashMap<String, (Vec<usize>, Vec<usize>)>;
 
@@ -814,7 +868,28 @@ struct Context<'a> {
     guard_gap: std::cell::Cell<Option<GuardsUnknownReason>>,
     /// Tells for the text of the receiver of a Python route decorator if it is a framework value.
     python_receivers: std::cell::RefCell<std::collections::HashMap<&'a str, bool>>,
+    /// What each local of a Rails routes file holds.
+    rails_constraint_locals:
+        std::cell::OnceCell<std::collections::HashMap<&'a str, rails::ConstraintLocal>>,
+    /// The C# names with a type or a value of ASP.NET.
+    aspnet_names: std::cell::OnceCell<std::collections::HashSet<&'a str>>,
+    /// The names that the imports of a Go file give to `net/http`.
+    go_http_names: std::cell::OnceCell<Vec<String>>,
+    /// The answer of `imports` for each module that a reader asked about.
+    imported_modules: std::cell::RefCell<std::collections::HashMap<String, bool>>,
+    /// The answer of `mentions` for each word that a reader asked about.
+    mentioned_words: std::cell::RefCell<std::collections::HashMap<String, bool>>,
+    /// The guards and the route of each Java or C# class, by the id of the class node.
+    class_annotations: std::cell::RefCell<std::collections::HashMap<usize, Rc<ClassAnnotations>>>,
     ecma: ecma::State,
+}
+
+/// What the annotations of a Java or C# class give to each of its methods.
+struct ClassAnnotations {
+    /// The guards, at most one more than `MAX_GUARDS`.
+    guards: Vec<String>,
+    /// The path of the route annotation of the class.
+    route: Option<String>,
 }
 
 struct Draft {
@@ -867,6 +942,12 @@ impl<'a> Context<'a> {
             python_scopes: std::cell::OnceCell::new(),
             guard_gap: std::cell::Cell::new(None),
             python_receivers: std::cell::RefCell::new(std::collections::HashMap::new()),
+            rails_constraint_locals: std::cell::OnceCell::new(),
+            aspnet_names: std::cell::OnceCell::new(),
+            go_http_names: std::cell::OnceCell::new(),
+            imported_modules: std::cell::RefCell::new(std::collections::HashMap::new()),
+            mentioned_words: std::cell::RefCell::new(std::collections::HashMap::new()),
+            class_annotations: std::cell::RefCell::new(std::collections::HashMap::new()),
             ecma: ecma::State::default(),
         }
     }
@@ -902,14 +983,211 @@ impl<'a> Context<'a> {
     }
 
     fn imports(&self, module: &str) -> bool {
-        self.file.imports.iter().any(|binding| {
-            let path = binding.module_path.replace(['/', '\\', ':'], ".");
-            path == module || path.starts_with(&format!("{module}."))
-        })
+        if let Some(known) = self.imported_modules.borrow().get(module) {
+            return *known;
+        }
+        let found = self
+            .file
+            .imports
+            .iter()
+            .any(|binding| module_is_or_is_under(&binding.module_path, module));
+        self.imported_modules
+            .borrow_mut()
+            .insert(module.to_string(), found);
+        found
     }
 
     fn mentions(&self, word: &str) -> bool {
-        self.imports(word) || self.text(self.parsed.root_node()).contains(word)
+        if let Some(known) = self.mentioned_words.borrow().get(word) {
+            return *known;
+        }
+        let found = self.imports(word) || self.text(self.parsed.root_node()).contains(word);
+        self.mentioned_words
+            .borrow_mut()
+            .insert(word.to_string(), found);
+        found
+    }
+
+    /// The guards and the route of a class. The result is kept for the class, so a method does
+    /// not read the annotations of its class again.
+    fn class_annotations_of(
+        &self,
+        class: Node<'_>,
+        guard_names: &[&str],
+        route_name: &str,
+        route_keys: &[&str],
+    ) -> Rc<ClassAnnotations> {
+        if let Some(known) = self.class_annotations.borrow().get(&class.id()) {
+            return Rc::clone(known);
+        }
+        let annotations = self.annotations_of(class);
+        let found = Rc::new(ClassAnnotations {
+            guards: annotations
+                .iter()
+                .map(|annotation| self.annotation_name(*annotation))
+                .filter(|name| guard_names.contains(name))
+                .take(MAX_GUARDS + 1)
+                .map(str::to_string)
+                .collect(),
+            route: annotations
+                .iter()
+                .find(|annotation| self.annotation_name(**annotation) == route_name)
+                .and_then(|annotation| self.annotation_value(*annotation, route_keys)),
+        });
+        self.class_annotations
+            .borrow_mut()
+            .insert(class.id(), Rc::clone(&found));
+        found
+    }
+
+    /// The guards of a class, and then the guards of a method, up to one more than the limit.
+    fn guards_with_method(
+        &self,
+        class: Option<&ClassAnnotations>,
+        annotations: &[Node<'_>],
+        guard_names: &[&str],
+    ) -> Vec<String> {
+        class
+            .into_iter()
+            .flat_map(|class| class.guards.iter().cloned())
+            .chain(
+                annotations
+                    .iter()
+                    .map(|annotation| self.annotation_name(*annotation))
+                    .filter(|name| guard_names.contains(name))
+                    .map(str::to_string),
+            )
+            .take(MAX_GUARDS + 1)
+            .collect()
+    }
+
+    /// The framework of a Rust verb attribute. A binding of the verb in the file decides. If the
+    /// file has no binding, an import of one framework in the file decides, or else an import of
+    /// one framework in the repository, as `#[macro_use] extern crate rocket` of a crate root
+    /// gives. Another crate can define a macro with the name of a verb.
+    fn rust_verb_framework(&self, verb: &str) -> Option<&'static str> {
+        const FRAMEWORKS: [(&str, &str); 2] = [("rocket", "rocket"), ("actix_web", "actix")];
+        // A function and a macro can have one name, as `axum::routing::get` and `actix_web::get`.
+        let mut bindings = self
+            .file
+            .imports
+            .iter()
+            .filter(|binding| {
+                binding.local_name.as_deref() == Some(verb)
+                    && binding.kind != crate::index::model::ImportKind::Wildcard
+            })
+            .peekable();
+        if bindings.peek().is_some() {
+            return bindings.find_map(|binding| {
+                FRAMEWORKS
+                    .iter()
+                    .find(|(module, _)| module_is_or_is_under(&binding.module_path, module))
+                    .map(|(_, framework)| *framework)
+            });
+        }
+        let only = |present: [bool; 2]| match present {
+            [true, false] => Some(FRAMEWORKS[0].1),
+            [false, true] => Some(FRAMEWORKS[1].1),
+            _ => None,
+        };
+        let here = [self.imports(FRAMEWORKS[0].0), self.imports(FRAMEWORKS[1].0)];
+        if here != [false, false] {
+            return only(here);
+        }
+        only(*self.all_parsed.shared().rust_web.get_or_init(|| {
+            FRAMEWORKS.map(|(module, _)| {
+                self.all.iter().enumerate().any(|(position, file)| {
+                    file.language == Language::Rust
+                        && (file
+                            .imports
+                            .iter()
+                            .any(|binding| module_is_or_is_under(&binding.module_path, module))
+                            || self.all_parsed.tree(position).is_some_and(|parsed| {
+                                declares_extern_crate(parsed.root_node(), &parsed.source, module)
+                            }))
+                })
+            })
+        }))
+    }
+
+    /// Tells if an import of the module binds the name in this Python file. A wildcard import of
+    /// the module binds it unless the file defines the name.
+    fn python_name_is_from(&self, name: &str, module: &str) -> bool {
+        let mut wildcard = false;
+        for binding in &self.file.imports {
+            if !module_is_or_is_under(&binding.module_path, module) {
+                if binding.local_name.as_deref() == Some(name) {
+                    return false;
+                }
+                continue;
+            }
+            if binding.local_name.as_deref() == Some(name) {
+                return true;
+            }
+            wildcard |= binding.kind == crate::index::model::ImportKind::Wildcard;
+        }
+        wildcard && !self.callables_here().contains_key(name)
+    }
+
+    /// Tells if the receiver of a C# `Map` call is an ASP.NET value: the file uses a namespace of
+    /// ASP.NET, or the receiver has a type or a value of ASP.NET. A project with implicit usings
+    /// has no `using` line, so the type or the value is the proof there.
+    fn is_aspnet_receiver(&self, receiver: Node<'_>) -> bool {
+        if self.imports("Microsoft.AspNetCore") {
+            return true;
+        }
+        let text = self.text(receiver);
+        has_aspnet_marker(text) || self.aspnet_names().contains(leading_name(text))
+    }
+
+    /// One walk in source order, so `var app = builder.Build()` finds the earlier `builder`.
+    fn aspnet_names(&self) -> &std::collections::HashSet<&'a str> {
+        self.aspnet_names.get_or_init(|| {
+            let mut names = std::collections::HashSet::new();
+            let mut pending = vec![self.parsed.root_node()];
+            while let Some(node) = pending.pop() {
+                let declared_type = node
+                    .child_by_field_name("type")
+                    .is_some_and(|kind| has_aspnet_marker(self.text(kind)));
+                match node.kind() {
+                    "parameter" if declared_type => {
+                        if let Some(name) = node.child_by_field_name("name") {
+                            names.insert(self.text(name));
+                        }
+                    }
+                    "variable_declaration" => {
+                        let mut cursor = node.walk();
+                        for declarator in node
+                            .named_children(&mut cursor)
+                            .filter(|child| child.kind() == "variable_declarator")
+                        {
+                            let Some(name) = declarator.child_by_field_name("name") else {
+                                continue;
+                            };
+                            let value =
+                                declarator
+                                    .named_child(
+                                        declarator.named_child_count().saturating_sub(1) as u32
+                                    )
+                                    .filter(|value| *value != name)
+                                    .map(|value| self.text(value));
+                            if declared_type
+                                || value.is_some_and(|value| {
+                                    has_aspnet_marker(value) || names.contains(leading_name(value))
+                                })
+                            {
+                                names.insert(self.text(name));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                let mut cursor = node.walk();
+                let children: Vec<_> = node.named_children(&mut cursor).collect();
+                pending.extend(children.into_iter().rev());
+            }
+            names
+        })
     }
 
     /// Tells if the receiver of a registration is a framework object. A receiver is a
@@ -1124,7 +1402,7 @@ impl<'a> Context<'a> {
         self.convention_entries(&mut drafts);
         let mut entries: Vec<EntryPoint> = drafts
             .into_iter()
-            .map(|draft| {
+            .map(|mut draft| {
                 let method = draft
                     .route
                     .as_ref()
@@ -1146,7 +1424,22 @@ impl<'a> Context<'a> {
                             || guard == go_routes::UNNAMED_FUNCTION_GUARD
                     })
                     .then_some(GuardsUnknownReason::UnreadMiddleware);
-                let unknown = first_reason(draft.unknown, first_reason(placeholder, layer));
+                // A list that ends with a placeholder at the limit already tells that it has
+                // more guards.
+                let ends_at_limit = draft.guards.len() == MAX_GUARDS + 1
+                    && draft
+                        .guards
+                        .last()
+                        .is_some_and(|guard| guard == go_routes::UNREAD_GUARD);
+                let too_many = (draft.guards.len() > MAX_GUARDS && !ends_at_limit)
+                    .then_some(GuardsUnknownReason::TooManyGuards);
+                if too_many.is_some() {
+                    draft.guards.truncate(MAX_GUARDS);
+                }
+                let unknown = first_reason(
+                    draft.unknown,
+                    first_reason(placeholder, first_reason(too_many, layer)),
+                );
                 EntryPoint {
                     key: format!(
                         "{}:{}:{}:{}{}",
@@ -1423,6 +1716,7 @@ impl<'a> Context<'a> {
             let verb = symbol.name.as_str();
             if symbol.kind == SymbolKind::Function
                 && symbol.container.is_none()
+                && symbol.exported != crate::index::model::Exported::NotExported
                 && matches!(
                     verb,
                     "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
@@ -1696,7 +1990,7 @@ impl<'a> Context<'a> {
         };
         if callee.kind() != "identifier"
             || !matches!(self.text(callee), "path" | "re_path" | "url")
-            || !self.imports("django")
+            || !self.python_name_is_from(self.text(callee), "django")
         {
             return;
         }
@@ -1820,25 +2114,21 @@ impl<'a> Context<'a> {
         };
         let symbol = self.symbol_at(name_node);
         let annotations = self.annotations_of(node);
-        let class = Self::enclosing(node, "class_declaration");
-        let class_annotations = class
-            .map(|class| self.annotations_of(class))
-            .unwrap_or_default();
-        let guards: Vec<String> = class_annotations
-            .iter()
-            .chain(&annotations)
-            .map(|annotation| self.annotation_name(*annotation))
-            .filter(|name| JAVA_GUARDS.contains(name))
-            .map(str::to_string)
-            .collect();
-        let prefix = class_annotations
-            .iter()
-            .find(|annotation| self.annotation_name(**annotation) == "RequestMapping")
-            .and_then(|annotation| self.annotation_value(*annotation, &["value", "path"]))
+        let class = Self::enclosing(node, "class_declaration").map(|class| {
+            self.class_annotations_of(class, &JAVA_GUARDS, "RequestMapping", &["value", "path"])
+        });
+        let guards = self.guards_with_method(class.as_deref(), &annotations, &JAVA_GUARDS);
+        let prefix = class
+            .as_ref()
+            .and_then(|class| class.route.clone())
             .unwrap_or_default();
         for annotation in &annotations {
             let name = self.annotation_name(*annotation);
-            if let Some(method) = self.spring_method(*annotation, name) {
+            let spring_method = self.spring_method(*annotation, name).filter(|_| {
+                self.imports("org.springframework")
+                    || self.text(*annotation).contains("org.springframework")
+            });
+            if let Some(method) = spring_method {
                 let path = self
                     .annotation_value(*annotation, &["value", "path"])
                     .unwrap_or_default();
@@ -1901,9 +2191,8 @@ impl<'a> Context<'a> {
         let action = self.text(name_node);
         let attributes = self.annotations_of(node);
         let class = Self::enclosing(node, "class_declaration");
-        let class_attributes = class
-            .map(|class| self.annotations_of(class))
-            .unwrap_or_default();
+        let class_facts =
+            class.map(|class| self.class_annotations_of(class, &CSHARP_GUARDS, "Route", &[]));
         let controller = class
             .and_then(|class| class.child_by_field_name("name"))
             .map(|name| {
@@ -1916,19 +2205,12 @@ impl<'a> Context<'a> {
             path.replace("[controller]", &controller)
                 .replace("[action]", &action.to_lowercase())
         };
-        let prefix = class_attributes
-            .iter()
-            .find(|attribute| self.annotation_name(**attribute) == "Route")
-            .and_then(|attribute| self.annotation_value(*attribute, &[]))
+        let prefix = class_facts
+            .as_ref()
+            .and_then(|class| class.route.clone())
             .map(&expand)
             .unwrap_or_default();
-        let guards: Vec<String> = class_attributes
-            .iter()
-            .chain(&attributes)
-            .map(|attribute| self.annotation_name(*attribute))
-            .filter(|name| CSHARP_GUARDS.contains(name))
-            .map(str::to_string)
-            .collect();
+        let guards = self.guards_with_method(class_facts.as_deref(), &attributes, &CSHARP_GUARDS);
         let symbol = self.symbol_at(name_node);
         for attribute in &attributes {
             let method = match self.annotation_name(*attribute) {
@@ -1980,6 +2262,12 @@ impl<'a> Context<'a> {
             return;
         };
         if arguments.len() < 2 || !self.is_string(*path) {
+            return;
+        }
+        let Some(receiver) = function.child_by_field_name("expression") else {
+            return;
+        };
+        if !self.is_aspnet_receiver(receiver) {
             return;
         }
         out.push(Draft {
@@ -2128,10 +2416,8 @@ impl<'a> Context<'a> {
             let Some(path) = rest.split('"').nth(1).filter(|path| path.starts_with('/')) else {
                 continue;
             };
-            let framework = if self.imports("rocket") {
-                "rocket"
-            } else {
-                "actix"
+            let Some(framework) = self.rust_verb_framework(verb) else {
+                continue;
             };
             out.push(Draft {
                 range,
@@ -2152,7 +2438,9 @@ impl<'a> Context<'a> {
     /// `http.NewServeMux()`. A name that a local variable hides is not the package.
     fn is_go_http_receiver(&self, receiver: Node<'_>) -> bool {
         let text = self.text(receiver);
-        let names = go_routes::net_http_names(self.file);
+        let names = self
+            .go_http_names
+            .get_or_init(|| go_routes::net_http_names(self.file));
         if names.iter().any(|name| name == text) {
             return !self.is_go_shadowed(receiver);
         }
@@ -3112,7 +3400,7 @@ pub(super) mod tests {
 
     #[test]
     fn a_spring_mapping_joins_the_class_path_and_has_its_guards() {
-        let source = "@RestController\n@RequestMapping(\"/api\")\npublic class UserController {\n    @PreAuthorize(\"hasRole('ADMIN')\")\n    @GetMapping(\"/users/{id}\")\n    public String show(@PathVariable String id) {\n        return id;\n    }\n}\n";
+        let source = "import org.springframework.web.bind.annotation.*;\n\n@RestController\n@RequestMapping(\"/api\")\npublic class UserController {\n    @PreAuthorize(\"hasRole('ADMIN')\")\n    @GetMapping(\"/users/{id}\")\n    public String show(@PathVariable String id) {\n        return id;\n    }\n}\n";
         let found = entries(Language::Java, &[("UserController.java", source)]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].framework, "spring");
@@ -5362,6 +5650,7 @@ func routes() {
 	mux.HandleFunc("/x/{a...}", list)
 	mux.HandleFunc("/x/{$}", show)
 	mux.HandleFunc("/x/{a}", show)
+	mux.HandleFunc("/x/{b}/{c...}", show)
 	mux.HandleFunc("/y/{a...}", list)
 	mux.HandleFunc("/y/{$}", show)
 }
@@ -7021,7 +7310,7 @@ func routes() {
 
     #[test]
     fn rust_axum_routes_actix_attributes_main_and_exports_are_entries() {
-        let source = "use axum::{routing::get, Router};\n\nasync fn list() {}\n\npub fn app() -> Router {\n    Router::new().route(\"/items/{id}\", get(list))\n}\n\n#[get(\"/ping\")]\nasync fn ping() {}\n\n#[no_mangle]\npub extern \"C\" fn exported() {}\n\nfn main() {}\n";
+        let source = "use actix_web::get;\nuse axum::{routing::post, Router};\n\nasync fn list() {}\n\npub fn app() -> Router {\n    Router::new().route(\"/items/{id}\", post(list))\n}\n\n#[get(\"/ping\")]\nasync fn ping() {}\n\n#[no_mangle]\npub extern \"C\" fn exported() {}\n\nfn main() {}\n";
         let found = entries(Language::Rust, &[("main.rs", source)]);
         let summary: Vec<(&str, EntryKind)> = found
             .iter()
@@ -7036,7 +7325,7 @@ func routes() {
                 ("rust", EntryKind::CliMain)
             ]
         );
-        assert_eq!(found[0].route, route("GET", "/items/{id}", &["id"]));
+        assert_eq!(found[0].route, route("POST", "/items/{id}", &["id"]));
         assert_eq!(found[1].route, route("GET", "/ping", &[]));
     }
 
@@ -7893,7 +8182,7 @@ func routes() {
             .iter()
             .find(|entry| entry.route.as_ref().unwrap().path_text() == "/u")
             .unwrap();
-        assert_eq!(users.guards.len(), 2 * opening_count);
+        assert_eq!(users.guards.len(), (2 * opening_count).min(MAX_GUARDS));
         elapsed
     }
 
@@ -8019,7 +8308,7 @@ func routes() {
         ];
         let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].guards.len(), depth);
+        assert_eq!(found[0].guards.len(), depth.min(MAX_GUARDS));
         elapsed
     }
 
@@ -8490,7 +8779,7 @@ func routes() {
         };
         assert_eq!(by_path("/a"), (false, Vec::new()));
         assert_eq!(by_path("/b"), (true, strings(&["auth"])));
-        assert_eq!(by_path("/c"), (false, strings(&["auth"])));
+        assert_eq!(by_path("/c"), (true, strings(&["auth"])));
         assert_eq!(by_path("/d"), (false, Vec::new()));
     }
 
@@ -9017,7 +9306,11 @@ func routes() {
         ];
         let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), 1);
-        let expected: Vec<String> = (0..count).rev().map(|n| format!("g{n}")).collect();
+        let expected: Vec<String> = (0..count)
+            .rev()
+            .take(MAX_GUARDS)
+            .map(|n| format!("g{n}"))
+            .collect();
         assert_eq!(found[0].guards, expected);
         elapsed
     }
@@ -9326,7 +9619,7 @@ func routes() {
                 let (found, elapsed) = entries_lean(Language::Ruby, &files);
                 assert_eq!(found.len(), 1);
                 if kind == "unique" || kind == "plain" {
-                    assert_eq!(found[0].guards.len(), depth);
+                    assert_eq!(found[0].guards.len(), depth.min(MAX_GUARDS));
                 }
                 elapsed
             }
@@ -9931,11 +10224,10 @@ func routes() {
         ];
         let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), 3);
-        let expected = if shape == 2 { 0 } else { size };
+        let expected = if shape == 2 { 0 } else { size.min(MAX_GUARDS) };
         assert!(found.iter().all(|entry| entry.guards.len() == expected));
-        assert!(found
-            .iter()
-            .all(|entry| entry.guards_complete == (shape != 0)));
+        let complete = shape != 0 && (shape == 2 || size <= MAX_GUARDS);
+        assert!(found.iter().all(|entry| entry.guards_complete == complete));
         elapsed
     }
 

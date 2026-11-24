@@ -632,6 +632,9 @@ struct Link {
 enum Step<'t> {
     Read(Node<'t>),
     LeaveBlock,
+    /// The byte range of a part of the code that can run or not run.
+    EnterBranch((usize, usize)),
+    LeaveBranch,
 }
 
 #[derive(Clone)]
@@ -655,6 +658,12 @@ struct Router {
     external: bool,
     /// The prefixes of the router in the function that made it, from a summary.
     base: Vec<String>,
+    /// The innermost branch at the place that made the router.
+    created_in: Option<(usize, usize)>,
+    /// The position of the first guard that a call in another branch added.
+    conditional_from: usize,
+    /// A call in another branch added a guard that runs before the lookup of the route.
+    pre_conditional: bool,
 }
 
 #[derive(Clone)]
@@ -677,6 +686,8 @@ struct Record {
     guards: Vec<String>,
     /// A call around the handler can add a guard that omen does not read.
     unread_wrapper: bool,
+    /// The innermost branch of the registration.
+    branch: Option<(usize, usize)>,
 }
 
 /// The router that a pure function returns.
@@ -739,9 +750,10 @@ impl<'a> Context<'a> {
         )
     }
 
-    /// The patterns of the file with a final `{name...}` that have a sibling `{$}` and a sibling
-    /// `{name}` at the same prefix. Together the siblings can take each request of the pattern,
-    /// so the pattern gives no entry. Omen ignores the methods and the hosts here.
+    /// The patterns of the file with a final `{name...}` that have siblings at the same prefix for
+    /// each number of remaining segments: `{$}` for none, `{name}` for one, and `{name}/{rest...}`
+    /// for two or more. Together the siblings take each request of the pattern, so the pattern
+    /// gives no entry. Omen ignores the methods and the hosts here.
     pub(super) fn go_covered_patterns(&self) -> &HashSet<String> {
         self.go_covered.get_or_init(|| {
             let mut paths: HashSet<String> = HashSet::new();
@@ -793,6 +805,15 @@ impl<'a> Context<'a> {
                 .filter(|(_, tail)| is_single(tail))
                 .map(|(head, _)| head)
                 .collect();
+            let is_multi = |segment: &str| segment.starts_with('{') && segment.ends_with("...}");
+            let deep: HashSet<&str> = paths
+                .iter()
+                .filter_map(|other| other.rsplit_once('/'))
+                .filter(|(_, tail)| is_multi(tail))
+                .filter_map(|(head, _)| head.rsplit_once('/'))
+                .filter(|(_, middle)| is_single(middle))
+                .map(|(prefix, _)| prefix)
+                .collect();
             paths
                 .iter()
                 .filter(|path| {
@@ -802,6 +823,7 @@ impl<'a> Context<'a> {
                     last.starts_with('{')
                         && last.ends_with("...}")
                         && singles.contains(prefix)
+                        && deep.contains(prefix)
                         && paths.contains(&format!("{prefix}/{{$}}"))
                 })
                 .cloned()
@@ -2744,6 +2766,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             records: Vec::new(),
             scopes: Scopes::new(),
             consumed: HashSet::new(),
+            branches: Vec::new(),
             route_calls: HashMap::new(),
             functions: HashMap::new(),
             walked: HashSet::new(),
@@ -2787,6 +2810,8 @@ struct Routes<'c, 'a, 't> {
     records: Vec<Record>,
     scopes: Scopes,
     consumed: HashSet<usize>,
+    /// The byte ranges of the branches around the current node, from outer to inner.
+    branches: Vec<(usize, usize)>,
     /// The router that a call of `Route` made, by the node of the call.
     route_calls: HashMap<usize, usize>,
     functions: HashMap<String, Node<'t>>,
@@ -2924,6 +2949,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 Step::LeaveBlock => {
                     self.scopes.pop();
                 }
+                Step::EnterBranch(range) => self.branches.push(range),
+                Step::LeaveBranch => {
+                    self.branches.pop();
+                }
             }
         }
     }
@@ -2936,6 +2965,12 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 stack.push(Step::Read(child));
             }
         }
+    }
+
+    fn push_branch(node: Node<'t>, stack: &mut Vec<Step<'t>>) {
+        stack.push(Step::LeaveBranch);
+        stack.push(Step::Read(node));
+        stack.push(Step::EnterBranch((node.start_byte(), node.end_byte())));
     }
 
     fn visit_one(&mut self, node: Node<'t>, stack: &mut Vec<Step<'t>>) {
@@ -2959,7 +2994,28 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     Some(false) => node.child_by_field_name("consequence"),
                     None => None,
                 };
-                Self::push_children(node, dead, stack);
+                let arms = [
+                    node.child_by_field_name("consequence"),
+                    node.child_by_field_name("alternative"),
+                ];
+                let mut cursor = node.walk();
+                let children: Vec<Node<'t>> = node.named_children(&mut cursor).collect();
+                for child in children.into_iter().rev() {
+                    if Some(child) == dead {
+                        continue;
+                    }
+                    if value.is_none() && arms.contains(&Some(child)) {
+                        Self::push_branch(child, stack);
+                    } else {
+                        stack.push(Step::Read(child));
+                    }
+                }
+                return;
+            }
+            "expression_case" | "default_case" | "type_case" | "communication_case" => {
+                stack.push(Step::LeaveBranch);
+                Self::push_children(node, None, stack);
+                stack.push(Step::EnterBranch((node.start_byte(), node.end_byte())));
                 return;
             }
             "for_statement" => {
@@ -2967,12 +3023,22 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 let dead = node
                     .named_child(0)
                     .is_some_and(|first| self.constant_condition(first) == Some(false));
-                Self::push_children(node, body.filter(|_| dead), stack);
+                let mut cursor = node.walk();
+                let children: Vec<Node<'t>> = node.named_children(&mut cursor).collect();
+                for child in children.into_iter().rev() {
+                    if Some(child) != body {
+                        stack.push(Step::Read(child));
+                    } else if !dead {
+                        Self::push_branch(child, stack);
+                    }
+                }
                 return;
             }
             "func_literal" => {
                 if !self.consumed.contains(&node.id()) {
+                    self.branches.push((node.start_byte(), node.end_byte()));
                     self.closure(node, None);
+                    self.branches.pop();
                 }
                 return;
             }
@@ -3009,7 +3075,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     /// Reads the body of a function in a scope of its own, one time. `declared` is the name
     /// of the function. A pure function that returns a router it made gets a summary.
     fn walk_declared(&mut self, node: Node<'t>, declared: Option<&str>) {
-        on_grown_stack(|| self.read_declared(node, declared))
+        let branches = std::mem::take(&mut self.branches);
+        on_grown_stack(|| self.read_declared(node, declared));
+        self.branches = branches;
     }
 
     fn read_declared(&mut self, node: Node<'t>, declared: Option<&str>) {
@@ -3500,6 +3568,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             owner: self.current_owner(),
             external: false,
             base: Vec::new(),
+            created_in: self.branches.last().copied(),
+            conditional_from: usize::MAX,
+            pre_conditional: false,
         });
         let id = self.routers.len() - 1;
         self.tree.push(id);
@@ -3530,6 +3601,9 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             owner: self.current_owner(),
             external: false,
             base: Vec::new(),
+            created_in: self.branches.last().copied(),
+            conditional_from: usize::MAX,
+            pre_conditional: false,
         });
         let id = self.routers.len() - 1;
         self.tree.push(id);
@@ -3887,6 +3961,19 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         }
         let guards = self.guard_names(arguments);
         self.touch(router);
+        if !guards.is_empty() && self.branches.last().copied() != self.routers[router].created_in {
+            let added_at = self.routers[router].guards.len();
+            let target = &mut self.routers[router];
+            if before_routing {
+                target.pre_conditional = true;
+            } else {
+                target.conditional_from = target.conditional_from.min(added_at);
+            }
+            // A summary of the function cannot tell a caller that the guard is conditional.
+            if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
+                frame.pure = false;
+            }
+        }
         if before_routing {
             self.routers[router].pre.extend(guards);
         } else {
@@ -4338,7 +4425,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     handler = arguments.first().copied();
                 }
                 "Methods" => {
-                    unreadable |= arguments.is_empty();
+                    // gorilla/mux gives an empty list of methods that no request matches.
+                    broken |= arguments.is_empty();
                     let names: Vec<String> = arguments
                         .iter()
                         .filter_map(|argument| self.string_argument(*argument))
@@ -4687,6 +4775,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 path: path.to_string(),
                 guards: guards.clone(),
                 unread_wrapper,
+                branch: self.branches.last().copied(),
             });
         }
     }
@@ -4710,6 +4799,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             path: String::new(),
             guards: Vec::new(),
             unread_wrapper: false,
+            branch: self.branches.last().copied(),
         });
     }
 
@@ -4755,17 +4845,17 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             let link = &self.routers[child].links[0];
             let above = &self.routers[parent];
             let above_limit = (!above.retroactive).then_some(link.parent_len);
-            guards.extend(above.pre.iter().cloned());
+            extend_capped(&mut guards, above.pre.iter());
             let count = Self::visible_guards(above, above_limit);
-            guards.extend(above.guards[..count].iter().cloned());
+            extend_capped(&mut guards, above.guards[..count].iter());
             if !link.prefix.is_empty() {
                 prefixes.push(link.prefix.clone());
             }
         }
         let router = &self.routers[id];
-        guards.extend(router.pre.iter().cloned());
+        extend_capped(&mut guards, router.pre.iter());
         let count = Self::visible_guards(router, limit);
-        guards.extend(router.guards[..count].iter().cloned());
+        extend_capped(&mut guards, router.guards[..count].iter());
         Some(Lineage { prefixes, guards })
     }
 
@@ -4797,7 +4887,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     .try_fold(PrefixState::default(), |state, part| {
                         router.framework.extend(&state, part)
                     }),
-                guards: None,
+                guards: Rc::default(),
+                conditional: false,
                 dead: false,
             },
             [link] => {
@@ -4807,14 +4898,25 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 };
                 let above_limit = (!above.retroactive).then_some(link.parent_len);
                 let count = Self::visible_guards(above, above_limit);
-                let mut own = above.pre.clone();
-                own.extend(above.guards[..count].iter().cloned());
+                let guards = if parent.guards.len() >= GUARD_CAPACITY
+                    || (above.pre.is_empty() && count == 0)
+                {
+                    Rc::clone(&parent.guards)
+                } else {
+                    let mut guards = parent.guards.to_vec();
+                    extend_capped(&mut guards, above.pre.iter());
+                    extend_capped(&mut guards, above.guards[..count].iter());
+                    Rc::new(guards)
+                };
                 Up {
                     state: parent
                         .state
                         .as_ref()
                         .and_then(|state| router.framework.extend(state, &link.prefix)),
-                    guards: push_chain(&parent.guards, own),
+                    guards,
+                    conditional: parent.conditional
+                        || above.pre_conditional
+                        || count > above.conditional_from,
                     dead: parent.dead || above.partial,
                 }
             }
@@ -5015,11 +5117,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             if unreadable {
                 forced.insert(drafts.len() - 1);
             }
-            let mut guards = flatten_chain(&up.guards);
-            guards.extend(router.pre.iter().cloned());
+            let mut guards = up.guards.to_vec();
+            extend_capped(&mut guards, router.pre.iter());
             let count = Self::visible_guards(router, Some(record.limit));
-            guards.extend(router.guards[..count].iter().cloned());
-            guards.extend(record.guards.iter().cloned());
+            extend_capped(&mut guards, router.guards[..count].iter());
+            extend_capped(&mut guards, record.guards.iter());
+            let conditional =
+                up.conditional || router.pre_conditional || count > router.conditional_from;
             let duplicate = match framework {
                 Framework::Chi => {
                     Duplicate::Chi(tree_of[record.router], chi_tree_key(&record.path))
@@ -5042,9 +5146,13 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 basis: EntryBasis::Registered,
                 variant: None,
                 inline_handler: None,
-                unknown: record
-                    .unread_wrapper
-                    .then_some(GuardsUnknownReason::UnreadMiddleware),
+                unknown: if conditional {
+                    Some(GuardsUnknownReason::ConditionalMiddleware)
+                } else {
+                    record
+                        .unread_wrapper
+                        .then_some(GuardsUnknownReason::UnreadMiddleware)
+                },
             };
             let last = drafts.len() - 1;
             drafts[last] = Some((draft, duplicate));
@@ -5096,12 +5204,14 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     }
 
     /// Tells for each record if a later registration replaces it. chi and echo keep the last
-    /// registration of a method and a path. gin and `net/http` panic on a second registration,
-    /// so the walk does not read such a program. `mux_order` handles gorilla/mux.
+    /// registration of a method and a path. A registration in a branch replaces only the
+    /// registrations in that branch, because the code before it or in another branch can be the
+    /// code that ran. gin and `net/http` panic on a second registration, so the walk does not
+    /// read such a program. `mux_order` handles gorilla/mux.
     fn survivors(records: &[Record], drafts: &[Option<(Draft, Duplicate)>]) -> Vec<bool> {
         let mut kept = vec![true; drafts.len()];
-        let mut owners: HashMap<(usize, String), HashMap<String, usize>> = HashMap::new();
-        let mut last_echo: HashMap<(usize, String, String), usize> = HashMap::new();
+        let mut owners: HashMap<(usize, String), HashMap<String, Vec<usize>>> = HashMap::new();
+        let mut last_echo: HashMap<(usize, String, String), Vec<usize>> = HashMap::new();
         let mut echo_seen: HashMap<(usize, String), Vec<usize>> = HashMap::new();
         for (index, draft) in drafts.iter().enumerate() {
             let Some((_, duplicate)) = draft else {
@@ -5114,23 +5224,25 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     let owned = owners.entry((*tree, pattern.clone())).or_default();
                     if method == "ANY" {
                         for known in CHI_METHODS {
-                            owned.insert(known.to_string(), index);
+                            let live = owned.entry(known.to_string()).or_default();
+                            drop_replaced(records, live, index, |_| {});
+                            live.push(index);
                         }
                     } else {
-                        owned.insert(method, index);
+                        let live = owned.entry(method).or_default();
+                        drop_replaced(records, live, index, |_| {});
+                        live.push(index);
                     }
                 }
                 Duplicate::Echo(root, shape) => {
                     let seen = echo_seen.entry((*root, shape.clone())).or_default();
                     if method == UNREAD_METHOD {
-                        for earlier in seen.drain(..) {
-                            kept[earlier] = false;
-                        }
+                        drop_replaced(records, seen, index, |earlier| kept[earlier] = false);
                     }
                     seen.push(index);
-                    if let Some(earlier) = last_echo.insert((*root, method, shape.clone()), index) {
-                        kept[earlier] = false;
-                    }
+                    let live = last_echo.entry((*root, method, shape.clone())).or_default();
+                    drop_replaced(records, live, index, |earlier| kept[earlier] = false);
+                    live.push(index);
                 }
             }
         }
@@ -5139,18 +5251,54 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 let Some(owned) = owners.get(&(*tree, pattern.clone())) else {
                     continue;
                 };
+                let owns = |method: &str| {
+                    owned
+                        .get(method)
+                        .is_some_and(|live| live.binary_search(&index).is_ok())
+                };
                 let method = &records[index].method;
                 kept[index] = if method == "ANY" {
-                    CHI_METHODS
-                        .iter()
-                        .all(|known| owned.get(*known) == Some(&index))
+                    CHI_METHODS.iter().all(|known| owns(known))
                 } else {
-                    owned.get(method) == Some(&index)
+                    owns(method)
                 };
             }
         }
         kept
     }
+}
+
+/// Removes from the end of a list of earlier records each record that `later` replaces. Each
+/// record leaves a list one time, so the total cost is linear.
+fn drop_replaced(
+    records: &[Record],
+    live: &mut Vec<usize>,
+    later: usize,
+    mut dropped: impl FnMut(usize),
+) {
+    while let Some(&earlier) = live.last() {
+        if !replaces(&records[later], &records[earlier]) {
+            break;
+        }
+        live.pop();
+        dropped(earlier);
+    }
+}
+
+/// Tells if a later registration always runs after an earlier registration.
+fn replaces(later: &Record, earlier: &Record) -> bool {
+    later.branch.is_none_or(|(start, end)| {
+        start <= earlier.range.start_byte && earlier.range.end_byte <= end
+    })
+}
+
+/// The number of guards that a list keeps: the limit, and one more that shows that the list is
+/// longer than the limit.
+const GUARD_CAPACITY: usize = super::MAX_GUARDS + 1;
+
+fn extend_capped<'g>(list: &mut Vec<String>, items: impl Iterator<Item = &'g String>) {
+    let room = GUARD_CAPACITY.saturating_sub(list.len());
+    list.extend(items.take(room).cloned());
 }
 
 /// The method of a registration whose method omen cannot read. It stands for each method.
@@ -5289,16 +5437,14 @@ impl Drop for Piece {
     }
 }
 
-/// A list of strings that shares its start with the list of the router above.
-struct Chain {
-    items: Vec<String>,
-    parent: Option<Rc<Chain>>,
-}
-
 /// The prefixes and the guards that the routers above a router give.
 struct Up {
     state: Option<PrefixState>,
-    guards: Option<Rc<Chain>>,
+    /// The first guards, at most `GUARD_CAPACITY`. A router with no guards of its own shares the
+    /// list of the router above.
+    guards: Rc<Vec<String>>,
+    /// A guard of a router above can run or not run.
+    conditional: bool,
     /// A router above is not known, or a router has more than one place.
     dead: bool,
 }
@@ -5307,42 +5453,9 @@ impl Up {
     fn dead() -> Self {
         Self {
             state: None,
-            guards: None,
+            guards: Rc::default(),
+            conditional: false,
             dead: true,
-        }
-    }
-}
-
-fn push_chain(parent: &Option<Rc<Chain>>, items: Vec<String>) -> Option<Rc<Chain>> {
-    if items.is_empty() {
-        parent.clone()
-    } else {
-        Some(Rc::new(Chain {
-            items,
-            parent: parent.clone(),
-        }))
-    }
-}
-
-fn flatten_chain(chain: &Option<Rc<Chain>>) -> Vec<String> {
-    let mut segments = Vec::new();
-    let mut current = chain.as_ref();
-    while let Some(node) = current {
-        segments.push(&node.items);
-        current = node.parent.as_ref();
-    }
-    segments.into_iter().rev().flatten().cloned().collect()
-}
-
-/// A long list drops one node at a time, so a deep chain does not overflow the stack.
-impl Drop for Chain {
-    fn drop(&mut self) {
-        let mut next = self.parent.take();
-        while let Some(node) = next {
-            match Rc::try_unwrap(node) {
-                Ok(mut inner) => next = inner.parent.take(),
-                Err(_) => break,
-            }
         }
     }
 }
@@ -5520,6 +5633,8 @@ fn mux_order(
         for &index in indexes {
             let router = mapping[records[index].router];
             match readable(index) {
+                // A route in a branch can be absent, so it does not hide another route.
+                Some(_) if records[index].branch.is_some() => {}
                 Some((literal, kind, method)) => {
                     everything.insert(method, literal, kind);
                     by_router
@@ -5552,10 +5667,12 @@ fn mux_order(
             if others_unreadable > 0 || own_unreadable || cross > 0 || before > 0 {
                 kept[index] = false;
             }
-            earlier
-                .entry(router)
-                .or_default()
-                .insert(method, literal, kind);
+            if records[index].branch.is_none() {
+                earlier
+                    .entry(router)
+                    .or_default()
+                    .insert(method, literal, kind);
+            }
         }
     }
 }

@@ -65,7 +65,6 @@ const SINGULAR_ACTIONS: [(&str, &str, &str); 7] = [
     ("destroy", "DELETE", ""),
 ];
 
-/// Options of `resources` that do not change the paths or the controller.
 /// The options of a `scope` call, a `namespace` call, or a resource that omen does not model, and
 /// that can change a path, a controller, or the set of the routes of the block. Rails makes each
 /// other key a default or a requirement of the routes.
@@ -260,6 +259,16 @@ pub(super) struct ResourceContext {
     nested: Option<String>,
 }
 
+/// What a local variable of a routes file holds, for a `constraints` value that is its name.
+pub(super) enum ConstraintLocal {
+    /// A literal hash: it constrains the request and it is not a guard.
+    Hash,
+    /// An object that Rails asks if the request matches.
+    Object,
+    /// Two assignments, or a value that omen cannot read.
+    Unknown,
+}
+
 /// The value of a parameter of a loop over a literal list.
 #[derive(Clone)]
 pub(super) enum Value {
@@ -269,6 +278,15 @@ pub(super) enum Value {
 }
 
 impl Value {
+    /// The kind and the text. Ruby keeps a string key and a symbol key apart.
+    fn identity(&self) -> (u8, String) {
+        match self {
+            Self::Text(text) => (0, text.clone()),
+            Self::Symbol(text) => (1, text.clone()),
+            Self::Integer(number) => (2, number.to_string()),
+        }
+    }
+
     /// The text that an interpolation of the value gives.
     fn text(&self) -> String {
         match self {
@@ -293,7 +311,7 @@ pub(super) struct Constraints {
 
 impl Constraints {
     fn add(&mut self, text: String) {
-        if self.places.get(&text).is_none() {
+        if self.count <= super::MAX_GUARDS && self.places.get(&text).is_none() {
             self.places.insert(text, self.count);
             self.count += 1;
         }
@@ -347,6 +365,13 @@ impl Lexical {
     /// The modules after a `module` statement with the name. A name with a leading `::` starts at
     /// the top level.
     fn enter(&self, name: &str) -> Self {
+        // `rails_constant` does not read a deeper chain, so its text is not built.
+        if self.depth >= LEXICAL_DEPTH_LIMIT {
+            return Self {
+                levels: self.levels.clone(),
+                depth: self.depth + 1,
+            };
+        }
         let name = name.trim();
         let dotted = name.trim_start_matches("::").replace("::", ".");
         let identity = match self.levels.last() {
@@ -1304,6 +1329,7 @@ impl<'a> Context<'a> {
         let mut cursor = receiver.walk();
         let items: Vec<Node<'_>> = receiver.named_children(&mut cursor).collect();
         let mut rows: Vec<Vec<Value>> = Vec::with_capacity(items.len());
+        let mut key_rows: HashMap<(u8, String), usize> = HashMap::new();
         for (place, item) in items.into_iter().enumerate() {
             let row = if is_hash {
                 if item.kind() != "pair" {
@@ -1312,6 +1338,16 @@ impl<'a> Context<'a> {
                 let key = self.rails_value(item.child_by_field_name("key")?, &outer.bindings)?;
                 let value =
                     self.rails_value(item.child_by_field_name("value")?, &outer.bindings)?;
+                // A key that the literal repeats keeps its first place and its last value.
+                match key_rows.entry(key.identity()) {
+                    std::collections::hash_map::Entry::Occupied(known) => {
+                        rows[*known.get()] = vec![key, value];
+                        continue;
+                    }
+                    std::collections::hash_map::Entry::Vacant(free) => {
+                        free.insert(rows.len());
+                    }
+                }
                 vec![key, value]
             } else {
                 let value = self.rails_value(item, &outer.bindings)?;
@@ -1648,12 +1684,79 @@ impl<'a> Context<'a> {
         if is_lambda {
             return Some(format!("lambda:{}", value.start_position().row + 1));
         }
+        if value.kind() == "identifier" {
+            match self.rails_constraint_locals().get(self.text(value)) {
+                Some(ConstraintLocal::Hash) => return None,
+                Some(ConstraintLocal::Object) => {}
+                Some(ConstraintLocal::Unknown) | None => {
+                    return Some(super::go_routes::UNREAD_GUARD.to_string());
+                }
+            }
+        }
         Some(
             self.text(value)
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" "),
         )
+    }
+
+    /// What each local of the file holds, for a `constraints` value that is a name.
+    fn rails_constraint_locals(&self) -> &HashMap<&'a str, ConstraintLocal> {
+        self.rails_constraint_locals.get_or_init(|| {
+            let mut locals: HashMap<&'a str, ConstraintLocal> = HashMap::new();
+            let mut stack = vec![self.parsed.root_node()];
+            while let Some(node) = stack.pop() {
+                let mut cursor = node.walk();
+                stack.extend(node.named_children(&mut cursor));
+                if !matches!(node.kind(), "assignment" | "operator_assignment") {
+                    continue;
+                }
+                let Some(left) = node
+                    .child_by_field_name("left")
+                    .filter(|left| left.kind() == "identifier")
+                else {
+                    continue;
+                };
+                let held = match node.child_by_field_name("right") {
+                    Some(right) if node.kind() == "assignment" => self.constraint_local(right),
+                    _ => ConstraintLocal::Unknown,
+                };
+                locals
+                    .entry(self.text(left))
+                    .and_modify(|known| *known = ConstraintLocal::Unknown)
+                    .or_insert(held);
+            }
+            locals
+        })
+    }
+
+    /// A literal hash, or a value that is an object: a constant, a lambda, or `Name.new`. The
+    /// result of another call can be a hash, so it is not known.
+    fn constraint_local(&self, value: Node<'_>) -> ConstraintLocal {
+        match value.kind() {
+            "hash" => ConstraintLocal::Hash,
+            "constant" | "scope_resolution" | "lambda" => ConstraintLocal::Object,
+            "call" => {
+                let method = value
+                    .child_by_field_name("method")
+                    .map(|name| self.text(name));
+                let receiver = value
+                    .child_by_field_name("receiver")
+                    .map(|node| node.kind());
+                let makes_object = method == Some("new")
+                    && matches!(receiver, Some("constant" | "scope_resolution"));
+                let is_lambda = receiver.is_none()
+                    && value.child_by_field_name("block").is_some()
+                    && matches!(method, Some("lambda" | "proc"));
+                if makes_object || is_lambda {
+                    ConstraintLocal::Object
+                } else {
+                    ConstraintLocal::Unknown
+                }
+            }
+            _ => ConstraintLocal::Unknown,
+        }
     }
 
     /// The guards that the constraints give to a route or to a `mount`: the constraints of the
@@ -2253,7 +2356,12 @@ impl<'a> Context<'a> {
                 };
                 let mut guards = constraints.clone();
                 guards.extend(handler_guards);
+                let capped = guards.len() > super::MAX_GUARDS;
                 super::keep_first(&mut guards);
+                let unknown = first_reason(
+                    unknown,
+                    capped.then_some(GuardsUnknownReason::TooManyGuards),
+                );
                 out.push(Draft {
                     range: Span::of(&node),
                     kind: EntryKind::HttpHandler,
@@ -2273,7 +2381,9 @@ impl<'a> Context<'a> {
     /// `get`, `post`, `put`, `patch`, `delete`, `match`, and `root`. Omen reads the options `to`,
     /// `controller`, `action`, `on`, `via` of `match`, and `format: false`. The options `as`,
     /// `constraints`, `defaults`, `anchor`, and a constraint with a regular expression do not
-    /// change the path or the controller. Any other option skips the route.
+    /// change the path or the controller. The options `path` and `internal`, and `via` of another
+    /// helper, skip the route. Rails makes each other key a default or a requirement of the route,
+    /// so omen keeps the route.
     fn rails_plain_route(&self, node: Node<'_>, name: &str, scope: &Scope, out: &mut Vec<Draft>) {
         let arguments = Self::arguments_of(node);
         let bindings = &scope.bindings;
@@ -2488,7 +2598,12 @@ impl<'a> Context<'a> {
         };
         let mut guards = constraints;
         guards.extend(handler_guards);
+        let capped = guards.len() > super::MAX_GUARDS;
         super::keep_first(&mut guards);
+        let unknown = first_reason(
+            unknown,
+            capped.then_some(GuardsUnknownReason::TooManyGuards),
+        );
         for method in methods {
             out.push(Draft {
                 range: Span::of(&node),
@@ -2997,23 +3112,29 @@ impl<'a> Context<'a> {
         if matches!(reach, Reach::Hidden) {
             return Action::Hidden;
         }
-        let visibility = self.rails_visibility(shared, identity);
         let symbol = (|| {
-            if !visibility.defines.contains(action) {
-                return None;
+            let owner = state.definer.get(&action.to_string())?;
+            let visibility = self.rails_visibility(shared, owner);
+            let candidates = shared.methods.get(owner)?.get(action)?;
+            let public: Vec<_> = candidates
+                .iter()
+                .filter(|(position, index)| {
+                    let symbol = &self.all[*position].symbols[*index];
+                    visibility
+                        .public
+                        .contains(&(*position, symbol.name_range.start_byte))
+                })
+                .collect();
+            // A subclass can make an inherited method public with `public :name`.
+            let chosen: Vec<_> = if public.is_empty() && owner != identity {
+                candidates.iter().collect()
+            } else {
+                public
+            };
+            match chosen.as_slice() {
+                [found] => Some(self.all[found.0].symbols[found.1].key.to_string()),
+                _ => None,
             }
-            let candidates = shared.methods.get(identity)?.get(action)?;
-            let mut public = candidates.iter().filter(|(position, index)| {
-                let symbol = &self.all[*position].symbols[*index];
-                visibility
-                    .public
-                    .contains(&(*position, symbol.name_range.start_byte))
-            });
-            let found = public.next()?;
-            public
-                .next()
-                .is_none()
-                .then(|| self.all[found.0].symbols[found.1].key.to_string())
         })();
         Action::Public(symbol)
     }
@@ -3032,6 +3153,7 @@ impl<'a> Context<'a> {
         let mut state = Arc::new(ActionState {
             floor: Reach::Public,
             map: PersistentMap::default(),
+            definer: PersistentMap::default(),
         });
         while let Some(Some(parent)) = shared.parents.get(&current) {
             if let Some(found) = shared.states.lock().get(parent) {
@@ -3047,19 +3169,23 @@ impl<'a> Context<'a> {
                 ActionState {
                     floor: Reach::Hidden,
                     map: PersistentMap::default(),
+                    definer: PersistentMap::default(),
                 }
             } else {
                 let reach = |public: bool| if public { Reach::Public } else { Reach::Hidden };
                 let mut map = state.map.clone();
+                let mut definer = state.definer.clone();
                 for (name, public) in &visibility.overrides {
                     map.insert(name.clone(), reach(*public));
                 }
                 for name in &visibility.defines {
                     map.insert(name.clone(), reach(visibility.public_names.contains(name)));
+                    definer.insert(name.clone(), class.clone());
                 }
                 ActionState {
                     floor: state.floor,
                     map,
+                    definer,
                 }
             };
             state = Arc::new(next);
@@ -3941,33 +4067,69 @@ enum Decision {
     Undecided,
 }
 
-/// The guards that an action gets when no `only:` or `except:` list names it.
-struct DefaultGuards {
-    slots: PersistentMap<String, Slot>,
-}
+/// The place of a guard in the order of Rails: the prepended guards first, the last one first,
+/// and then the other guards in the order of their callbacks.
+type GuardOrder = (
+    bool,
+    std::cmp::Reverse<(usize, usize)>,
+    (usize, usize),
+    String,
+);
 
-impl DefaultGuards {
-    fn names(&self) -> Vec<String> {
-        ordered_names(&self.slots)
+fn guard_order(name: &str, slot: Slot) -> GuardOrder {
+    let (index, place, prepended) = slot;
+    if prepended {
+        (
+            false,
+            std::cmp::Reverse((index, place)),
+            (0, 0),
+            name.to_string(),
+        )
+    } else {
+        (
+            true,
+            std::cmp::Reverse((0, 0)),
+            (index, place),
+            name.to_string(),
+        )
     }
 }
 
-/// The names of the guards in the order of Rails.
-fn ordered_names(slots: &PersistentMap<String, Slot>) -> Vec<String> {
-    let entries = slots.entries();
-    let mut ordered: Vec<(&str, Slot)> = entries
-        .iter()
-        .map(|(name, slot)| (name.as_str(), *slot))
-        .collect();
-    order_slots(&mut ordered);
-    ordered
-        .iter()
-        .map(|(name, _)| {
-            name.split_once(BLOCK_MARK)
-                .map_or(*name, |(text, _)| text)
-                .to_string()
-        })
-        .collect()
+/// The guards of an action by name, and in the order of Rails. A copy shares the structure, and
+/// the first guards can be read without a sort of the whole list.
+#[derive(Clone, Default)]
+struct GuardSlots {
+    slots: PersistentMap<String, Slot>,
+    order: PersistentMap<GuardOrder, String>,
+}
+
+impl GuardSlots {
+    fn insert(&mut self, name: String, slot: Slot) {
+        self.remove(&name);
+        let text = name
+            .split_once(BLOCK_MARK)
+            .map_or(name.as_str(), |(text, _)| text);
+        self.order
+            .insert(guard_order(&name, slot), text.to_string());
+        self.slots.insert(name, slot);
+    }
+
+    fn remove(&mut self, name: &String) {
+        if let Some(slot) = self.slots.get(name).copied() {
+            self.order.remove(&guard_order(name, slot));
+            self.slots.remove(name);
+        }
+    }
+
+    /// The first guards, and one more when the list is longer than the limit.
+    fn names(&self) -> Vec<String> {
+        self.order.first_values(super::MAX_GUARDS + 1)
+    }
+}
+
+/// The guards that an action gets when no `only:` or `except:` list names it.
+struct DefaultGuards {
+    slots: GuardSlots,
 }
 
 /// The callbacks of one class: the calls that omen reads, and the reason when a statement of
@@ -4217,7 +4379,7 @@ struct Program {
     macros: PersistentMap<String, Option<Arc<MacroBody>>>,
     default: std::sync::OnceLock<Arc<DefaultGuards>>,
     /// The guards of an action that a list names, as this layer has them, by action.
-    resolved: Mutex<HashMap<String, PersistentMap<String, Slot>>>,
+    resolved: Mutex<HashMap<String, GuardSlots>>,
 }
 
 impl Drop for Program {
@@ -4391,7 +4553,7 @@ impl Program {
             return Arc::clone(found);
         }
         let mut pending = vec![self];
-        let mut slots: PersistentMap<String, Slot> = PersistentMap::default();
+        let mut slots = GuardSlots::default();
         let mut layer = self.parent.as_deref();
         while let Some(above) = layer {
             if let Some(found) = above.default.get() {
@@ -4427,12 +4589,12 @@ impl Program {
         let key = action.to_string();
         let gap = first_reason(self.gap, self.action_gaps.get(&key).copied());
         if self.listed.get(&key).is_none() {
-            return (self.default_guards().names(), gap);
+            return (self.default_guards().slots.names(), gap);
         }
-        (ordered_names(&self.resolved(action)), gap)
+        (self.resolved(action).names(), gap)
     }
 
-    fn resolved(&self, action: &str) -> PersistentMap<String, Slot> {
+    fn resolved(&self, action: &str) -> GuardSlots {
         if let Some(found) = self.resolved.lock().get(action) {
             return found.clone();
         }
@@ -4470,7 +4632,7 @@ impl Program {
                     .insert(action.to_string(), slots.clone());
                 slots
             }
-            (None, None) => PersistentMap::default(),
+            (None, None) => GuardSlots::default(),
         };
         for layer in pending.iter().rev() {
             for name in layer.by_name.keys() {
@@ -4490,7 +4652,7 @@ impl Program {
 
     /// The guards of an action that a list names: the default guards, and the names of the callbacks
     /// that name the action, worked out again.
-    fn resolve_from_default(&self, action: &str) -> PersistentMap<String, Slot> {
+    fn resolve_from_default(&self, action: &str) -> GuardSlots {
         let mut slots = self.default_guards().slots.clone();
         let Some(listing) = self.listed.get(&action.to_string()) else {
             return slots;
@@ -4522,17 +4684,6 @@ impl Program {
     }
 }
 
-/// Puts the guards in the order of Rails: the prepended guards first, the last one first, and
-/// then the other guards in the order of their callbacks.
-fn order_slots(slots: &mut [(&str, Slot)]) {
-    slots.sort_by(|(_, left), (_, right)| match (left.2, right.2) {
-        (true, true) => (right.0, right.1).cmp(&(left.0, left.1)),
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        (false, false) => (left.0, left.1).cmp(&(right.0, right.1)),
-    });
-}
-
 /// A class identity and an action name.
 type ActionKey = (String, String);
 
@@ -4562,6 +4713,8 @@ enum UniqueClass {
 struct ActionState {
     floor: Reach,
     map: PersistentMap<String, Reach>,
+    /// The nearest class of the chain that defines each method.
+    definer: PersistentMap<String, String>,
 }
 
 /// Whether the nearest class that decides lets Rails run the action.

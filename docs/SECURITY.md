@@ -323,6 +323,7 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 | `wildcard_import` | FastAPI | The file has `from module import *`, which can bind a name again. |
 | `conditional_middleware` | Go router types | A layer method of a router, as `AfterRouting`, is called in a condition, a loop, or a function literal, or a function returns the router with different layers. |
 | `unread_middleware` | chi, echo, gin, gorilla/mux, `net/http`, Go router types, Express, Koa, Fastify | A middleware argument is not a name, or a spread of a Go slice that omen cannot read. For Go, its guard text is `<expression>` or `<function literal>`. Or a call around the handler is not a conversion, as `http.HandlerFunc(show)`, and not a middleware of the repository, as `middleware.Auth(cfg)(...)`. For Express, Koa, and Fastify, a middleware argument of the route call is a call, as `limit(5)`, or a function, and omen does not list it. The options object of a Fastify route is not a middleware. The handler and the known guards stay. |
+| `too_many_guards` | Each framework | The entry point has more than 256 guards. The list has the first 256 guards in the usual order. |
 | `layer_not_read` | See the next table | The framework has a place for guards that omen does not read. |
 
 Omen reads the full chain of the guards only for Rails, for FastAPI, and for the Go routers.
@@ -347,8 +348,9 @@ For each other HTTP framework, omen reads the guards that the route itself decla
 | Laravel | The `middleware(...)` calls of the route | A route group, the middleware of a controller, and the kernel |
 | Next | None | The `middleware` file |
 
-An entry point that is not an HTTP handler, such as `main` or a scheduled job, has no guard
-concept. Its list is empty and complete.
+Omen reads no guard layer for an entry point that is not an HTTP handler, such as `main` or a
+scheduled job. Its list is complete. It is empty, but a Spring scheduled job or message consumer
+lists the security annotations of its method and of its class.
 
 ## Rails routes
 
@@ -923,7 +925,8 @@ index, and the other commands, do not know the symbol.
   complete, with the reason `layer_not_read`.
 - A layer call in a condition, a loop, or a function literal gives its guards, and the
   guards are not complete, with the reason `conditional_middleware`.
-- A test file gives no route and no mount.
+- A test file gives no route and no mount of a repository router type. A route of chi, echo,
+  gin, gorilla/mux, or `net/http` in a test file gives an entry with `in_test: true`.
 - A router is a value that the import of the framework proves. It is a constructor
   call, a group or sub-router of a router, or a parameter that has a router type. A
   variable name alone does not prove a router.
