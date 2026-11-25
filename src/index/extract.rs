@@ -281,7 +281,15 @@ pub fn field_of_type(draft: &mut Draft<'_>, context: &Context<'_, '_>) -> bool {
 /// The names of a chain of member accesses: `a.b.c` gives `a`, `b`, `c`.
 /// `None` means that the text is a different expression.
 pub fn name_path(text: &str) -> Option<Vec<String>> {
-    let text = text.trim().replace("?.", ".").replace("->", ".");
+    let text = text.trim();
+    // The receiver of each call of a long chain is all of the chain before it. The check stops
+    // at the first character that no chain of names has, so that it does not copy the text.
+    let can_be_in_path =
+        |character: char| character.is_alphanumeric() || "_$@.?->".contains(character);
+    if !text.chars().all(can_be_in_path) {
+        return None;
+    }
+    let text = text.replace("?.", ".").replace("->", ".");
     let is_name = |name: &str| {
         let mut characters = name.chars();
         characters
@@ -2213,6 +2221,9 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let mut reference_facts = Vec::with_capacity(calls.len());
     let aliases = (parsed.language == Language::Bash)
         .then(|| crate::index::lang::bash::Aliases::of(parsed.root_node(), &parsed.source));
+    // The receiver of each call of a long chain is all of the chain before it, so a check of
+    // each receiver text reads the chain once for each call. The file is checked once instead.
+    let source_text = std::str::from_utf8(&parsed.source);
     for (call, range, owner, via_closure, receiver) in calls {
         let (start_byte, end_byte) = (range.start, range.end);
         let owner = position_of(owner);
@@ -2251,9 +2262,10 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 superseded: Vec::new(),
             },
         });
-        let receiver_text = receiver
-            .and_then(|(start, end)| parsed.source.get(start..end))
-            .and_then(|text| std::str::from_utf8(text).ok());
+        let receiver_text = receiver.and_then(|(start, end)| match source_text {
+            Ok(source_text) => source_text.get(start..end),
+            Err(_) => std::str::from_utf8(parsed.source.get(start..end)?).ok(),
+        });
         reference_facts.push(ReferenceFacts {
             start_byte,
             end_byte,
@@ -2439,6 +2451,21 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
 mod tests {
     use super::testing::rows;
     use crate::core::Language;
+
+    #[test]
+    fn test_name_path_reads_each_kind_of_member_access() {
+        let path = |text: &str| super::name_path(text);
+        let names = |names: &[&str]| Some(names.iter().map(|name| name.to_string()).collect());
+        assert_eq!(path(" a.b.c "), names(&["a", "b", "c"]));
+        assert_eq!(path("a?.b"), names(&["a", "b"]));
+        assert_eq!(path("$this->db"), names(&["$this", "db"]));
+        assert_eq!(path("@user.name"), names(&["@user", "name"]));
+        assert_eq!(path("q.Path(\"/x\").Methods"), None);
+        assert_eq!(path("a?->b"), None);
+        assert_eq!(path("a.1b"), None);
+        assert_eq!(path("a b"), None);
+        assert_eq!(path(""), None);
+    }
 
     /// A comment after a chain of names does not change the value.
     #[test]
@@ -2646,7 +2673,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_long_go_method_chain_is_extracted_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("go method chain", 5_000, |size| {
+        crate::index::timing::assert_scales_linearly("go method chain", 40_000, |size| {
             let source = format!(
                 "package main\n\nfunc more() {{\n\tq := mux.NewRouter()\n\tq.Path(\"/x\"){}\n}}\n",
                 ".Methods(\"GET\")".repeat(size)
