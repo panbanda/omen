@@ -1032,6 +1032,132 @@ mod tests {
         });
     }
 
+    fn function_names(language: Language, file: &str, source: &str) -> Vec<String> {
+        let parsed = Parser::new()
+            .parse(source.as_bytes(), language, Path::new(file))
+            .unwrap();
+        extract_functions(&parsed)
+            .into_iter()
+            .map(|function| function.name)
+            .collect()
+    }
+
+    /// Each C++ function definition gives a name, whatever the kind of its declarator.
+    /// The name is the name that the index gives the same definition.
+    #[test]
+    fn test_each_cpp_function_definition_has_a_name() {
+        let source = r#"
+namespace A { struct B { void m(); }; }
+void A::B::m() {}
+
+class C {
+ public:
+  C() {}
+  ~C() {}
+  int operator+(int k) { return k; }
+  operator bool() const { return true; }
+  int& reference() { return a; }
+  int* pointer();
+  template <typename T> T member_template(T v) { return v; }
+  int a;
+};
+
+int* C::pointer() { return &a; }
+C::~C() {}
+
+struct S { int f() { return 1; } };
+
+template <typename T> T free_template(T v) { return v; }
+template <> int free_template<int>(int v) { return v; }
+int& free_reference(int& r) { return r; }
+const char** free_pointer_pointer() { return 0; }
+"#;
+        assert_eq!(
+            function_names(Language::Cpp, "a.cpp", source),
+            [
+                "m",
+                "C",
+                "~C",
+                "operator+",
+                "operator bool",
+                "reference",
+                "member_template",
+                "pointer",
+                "~C",
+                "f",
+                "free_template",
+                "free_template",
+                "free_reference",
+                "free_pointer_pointer",
+            ]
+        );
+    }
+
+    /// Where the index has a definition at the start line of a function, the two names are equal.
+    #[test]
+    fn test_cpp_function_names_are_the_names_of_the_index() {
+        let source = r#"
+namespace A { struct B { void m(); }; }
+void A::B::m() {}
+class C {
+ public:
+  C() {}
+  ~C() {}
+  int operator+(int k) { return k; }
+  int& reference() { return a; }
+  int* pointer();
+  int a;
+};
+int* C::pointer() { return &a; }
+C::~C() {}
+struct S { int f() { return 1; } };
+int& free_reference(int& r) { return r; }
+"#;
+        let parsed = Parser::new()
+            .parse(source.as_bytes(), Language::Cpp, Path::new("a.cpp"))
+            .unwrap();
+        let index = crate::index::extract::extract_file(&parsed, "a.cpp");
+        let index_names: std::collections::HashMap<u32, &str> = index
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.body_range.is_some())
+            .map(|symbol| (symbol.range.start_line, symbol.name.as_str()))
+            .collect();
+        let pairs: Vec<(String, Option<&str>)> = extract_functions(&parsed)
+            .into_iter()
+            .map(|function| {
+                let index_name = index_names.get(&function.start_line).copied();
+                (function.name, index_name)
+            })
+            .collect();
+        assert_eq!(pairs.len(), 9, "{pairs:?}");
+        for (name, index_name) in &pairs {
+            assert_eq!(Some(name.as_str()), *index_name, "{pairs:?}");
+        }
+    }
+
+    /// The name of a C function is below pointer and parenthesized declarators.
+    #[test]
+    fn test_each_c_function_definition_has_a_name() {
+        let source = r#"
+int plain(void) { return 0; }
+char *pointer(void) { return 0; }
+int (parenthesized)(int v) { return v; }
+int (*returns_function_pointer(int v))(int) { return 0; }
+static int **double_pointer(void) { return 0; }
+"#;
+        assert_eq!(
+            function_names(Language::C, "a.c", source),
+            [
+                "plain",
+                "pointer",
+                "parenthesized",
+                "returns_function_pointer",
+                "double_pointer",
+            ]
+        );
+    }
+
     /// The function name is at the end of a chain of `DEPTH` pointer declarators.
     #[test]
     fn test_c_function_name_below_deeply_nested_pointers() {
