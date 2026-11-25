@@ -4093,7 +4093,7 @@ func main() {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_nested_groups_with_a_route_at_each_level_cost_linear_time() {
-        assert_scales_linearly("nested groups", 2_000, |depth| nested_groups(depth).1);
+        assert_scales_linearly("nested groups", 4_000, |depth| nested_groups(depth).1);
     }
 
     /// `depth` nested `chi` groups, each with a route. The time of the search.

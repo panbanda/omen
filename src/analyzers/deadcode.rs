@@ -2445,8 +2445,10 @@ pub struct ComponentNotAnalyzed {
 mod tests {
     use super::*;
 
-    /// The time of `collect_file_data` on `depth` nested TypeScript functions, each a symbol.
-    fn file_data_of_nested_functions_at(depth: usize) -> std::time::Duration {
+    /// The time of `collect_file_data` on `depth` nested TypeScript functions, each a symbol, run
+    /// `rounds` times. The key of each function names the functions around it, so the facts grow
+    /// with the square of the depth: the depth stays small, and the rounds give the time.
+    fn file_data_of_nested_functions_at(depth: usize, rounds: usize) -> std::time::Duration {
         let source = format!("{}{}\n", "function f() {".repeat(depth), "}".repeat(depth));
         let result = parser::Parser::new()
             .parse(
@@ -2457,20 +2459,19 @@ mod tests {
             .expect("parse");
         let facts = crate::index::extract::extract_file(&result, "a.ts");
         let started = crate::index::timing::Stopwatch::start();
-        let data = collect_file_data(&result, &facts);
-        let elapsed = started.elapsed();
-        assert_eq!(data.definitions.len(), depth);
-        elapsed
+        for _ in 0..rounds {
+            let data = collect_file_data(&result, &facts);
+            assert_eq!(data.definitions.len(), depth);
+        }
+        started.elapsed()
     }
 
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_definitions_of_nested_functions_are_read_in_linear_time() {
-        crate::index::timing::assert_scales_linearly(
-            "nested functions",
-            2_500,
-            file_data_of_nested_functions_at,
-        );
+        crate::index::timing::assert_scales_linearly("nested functions", 1_000, |depth| {
+            file_data_of_nested_functions_at(depth, 150)
+        });
     }
 
     /// The time of `extract_rust_function_attributes` on `depth` nested modules.
@@ -2510,7 +2511,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_the_uses_of_a_deep_expression_are_read_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("terms", 5_000, |size| {
+        crate::index::timing::assert_scales_linearly("terms", 320_000, |size| {
             let content = format!("function f(x) {{ return x{}; }}\n", " + x".repeat(size));
             let result = crate::parser::Parser::new()
                 .parse(
@@ -5483,7 +5484,7 @@ mod go_tests {
     /// The time of `go_interface_methods` for `size` types and `size`
     /// interfaces that all have the method `Close`. Type `i` has the second
     /// method of interface `i` only, thus it implements one interface.
-    fn interface_methods_found_at(size: usize) -> std::time::Duration {
+    fn interface_methods_found_at(size: usize, rounds: usize) -> std::time::Duration {
         let mut source = String::from("package shop\n");
         for position in 0..size {
             source.push_str(&format!(
@@ -5496,16 +5497,19 @@ mod go_tests {
         ];
         let (facts, _) = crate::index::imports::testing::index_with_manifests(&files);
         let started = crate::index::timing::Stopwatch::start();
-        let found = go_interface_methods(&facts);
-        let elapsed = started.elapsed();
-        assert_eq!(found.len(), size * 2);
-        elapsed
+        for _ in 0..rounds {
+            assert_eq!(go_interface_methods(&facts).len(), size * 2);
+        }
+        started.elapsed()
     }
 
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_interface_methods_of_many_types_are_found_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("types", 4_000, interface_methods_found_at);
+        // The search repeats, so that a size of little memory takes enough time.
+        crate::index::timing::assert_scales_linearly("types", 16_000, |size| {
+            interface_methods_found_at(size, 4)
+        });
     }
     use crate::config::Config;
     use crate::core::FileSet;

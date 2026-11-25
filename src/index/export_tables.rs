@@ -1036,9 +1036,7 @@ mod tests {
 #[cfg(test)]
 mod timing_tests {
     use super::*;
-    use crate::index::timing::{
-        assert_scales_linearly, assert_scales_linearly_above, on_one_thread, Stopwatch,
-    };
+    use crate::index::timing::{assert_scales_linearly, on_one_thread, Stopwatch};
 
     struct Graph(Vec<Member<'static, usize>>);
 
@@ -1182,6 +1180,16 @@ mod timing_tests {
         assert_eq!(overlapping(3).not_resolved, 0);
     }
 
+    /// The time of `rounds` builds of the case at `size`. A large build takes much memory, and the
+    /// faults of new pages count in the time of the thread. Builds at a small size reuse the
+    /// memory of the build before.
+    fn rounds_of(
+        rounds: usize,
+        case: impl Fn(usize) -> Run + Sync,
+    ) -> impl Fn(usize) -> std::time::Duration + Sync {
+        move |size| (0..rounds).map(|_| case(size).elapsed).sum()
+    }
+
     /// The writes and the work at `2 * size` are at most `2.5` times those at `size`.
     fn assert_counts_scale(label: &str, size: usize, case: impl Fn(usize) -> Run + Sync) {
         let small = on_one_thread(|| case(size));
@@ -1201,15 +1209,15 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_tables_of_a_chain_build_in_linear_time() {
-        assert_scales_linearly("chain", 200_000, |size| chain(size).elapsed);
+        assert_scales_linearly("chain", 50_000, rounds_of(4, chain));
         assert_counts_scale("chain", 200_000, chain);
-        assert_eq!(chain(200_000).work, 0);
+        assert_eq!(on_one_thread(|| chain(200_000)).work, 0);
     }
 
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_tables_of_a_wide_barrel_build_in_linear_time() {
-        assert_scales_linearly("wide barrel", 200_000, |size| wide(size).elapsed);
+        assert_scales_linearly("wide barrel", 50_000, rounds_of(6, wide));
         assert_counts_scale("wide barrel", 200_000, wide);
     }
 
@@ -1219,13 +1227,11 @@ mod timing_tests {
         // Each name is in the table of each barrel above it, thus the tables
         // hold `size * log2(size)` entries. From `2^17` to `2^18` the work
         // grows 2.1 times and the memory grows to 800 MB; the time grew 3
-        // times on CI. At this size the memory is small. The floor is low so
-        // that the check of the time still fails for a quadratic build.
+        // times on CI. The time check thus uses a small size, and repeats.
         let size = 1 << 15;
-        let floor = std::time::Duration::from_millis(40);
-        assert_scales_linearly_above("tree", size, floor, |size| tree(size).elapsed);
+        assert_scales_linearly("tree", 1 << 13, rounds_of(16, tree));
         assert_counts_scale("tree", size, tree);
-        assert_eq!(tree(2 * size).not_resolved, 0);
+        assert_eq!(on_one_thread(|| tree(2 * size)).not_resolved, 0);
     }
 
     /// The cap stops the dense case: its work grows as `n log n`, and some
@@ -1237,6 +1243,6 @@ mod timing_tests {
             overlapping(layers).elapsed
         });
         assert_counts_scale("overlapping barrels", 4_000, overlapping);
-        assert!(overlapping(4_000).not_resolved > 0);
+        assert!(on_one_thread(|| overlapping(4_000)).not_resolved > 0);
     }
 }

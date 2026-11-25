@@ -834,7 +834,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_page_of_the_functions_of_many_files_is_made_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("files", 40_000, |size| {
+        crate::index::timing::assert_scales_linearly("files", 160_000, |size| {
             let files: Vec<Value> = (0..size)
                 .map(|position| {
                     json!({"file": format!("f{position}.rs"),

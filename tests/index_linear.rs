@@ -366,6 +366,13 @@ fn same_name_build(file: &str, size: usize) -> Duration {
 #[ignore = "timing: run in release"]
 fn timing_same_name_definitions_are_linear() {
     for (file, _) in same_name_definitions(0) {
-        timing::assert_scales_linearly(file, 10_000, |size| same_name_build(file, size));
+        // The faster languages need more definitions to reach the floor of the check.
+        let start = match file {
+            "same.go" | "same.js" | "same.php" | "same.py" | "same.rs" | "same.ts" | "same.tsx" => {
+                40_000
+            }
+            _ => 20_000,
+        };
+        timing::assert_scales_linearly(file, start, |size| same_name_build(file, size));
     }
 }

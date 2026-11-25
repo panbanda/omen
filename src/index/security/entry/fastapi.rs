@@ -1413,11 +1413,16 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_a_chain_of_included_routers_resolves_in_linear_time() {
-        assert_scales_linearly("one route", 20_000, |count| {
-            a_chain_with_one_route_at(count, true)
+        // The chain stays at most 40,000 routers deep: a deeper chain overflows the stack of
+        // the run thread when its routers are released. The chain is made again for each
+        // repeat, so that the time is above the floor of the check.
+        assert_scales_linearly("one route", 10_000, |count| {
+            (0..2).map(|_| a_chain_with_one_route_at(count, true)).sum()
         });
-        assert_scales_linearly("no route", 20_000, |count| {
-            a_chain_with_one_route_at(count, false)
+        assert_scales_linearly("no route", 10_000, |count| {
+            (0..8)
+                .map(|_| a_chain_with_one_route_at(count, false))
+                .sum()
         });
     }
 

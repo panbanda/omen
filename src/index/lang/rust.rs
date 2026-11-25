@@ -1394,9 +1394,10 @@ mod tests {
 
     /// The keys of the items have the names of each module around them, so the time of this
     /// input grows with the square of the depth for each kind of item. The search for the
-    /// `cfg` attributes of a function must not add a factor of the depth to that: functions
-    /// must take about the time of structs. The runs of the two kinds alternate, so a change
-    /// in the speed of the machine changes both.
+    /// `cfg` attributes of a function must not add a factor of the depth to that, which at this
+    /// depth is a factor of about a thousand. A function has more facts than a struct, and on a
+    /// loaded runner functions took 2.3 times the time of structs, thus the limit is 4 times.
+    /// The runs of the two kinds alternate, so a change in the speed of the machine changes both.
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_functions_in_deep_modules_take_the_time_of_structs() {
@@ -1408,7 +1409,7 @@ mod tests {
             structs = structs.min(on_one_thread(|| deep_modules_at(depth, false)));
             functions = functions.min(on_one_thread(|| deep_modules_at(depth, true)));
         }
-        let allowed = structs.max(std::time::Duration::from_millis(100)) * 2;
+        let allowed = structs.max(std::time::Duration::from_millis(100)) * 4;
         assert!(
             functions < allowed,
             "structs {structs:?}, functions {functions:?} at {depth}"

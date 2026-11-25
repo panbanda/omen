@@ -305,6 +305,15 @@ mod tests {
 
     /// The sinks, and the time of the matcher alone.
     fn sinks_timed(language: Language, files: &[(&str, &str)]) -> (Vec<Sink>, std::time::Duration) {
+        sinks_timed_rounds(language, files, 1)
+    }
+
+    /// The sinks of the files, and the time of `rounds` searches for them after one index.
+    fn sinks_timed_rounds(
+        language: Language,
+        files: &[(&str, &str)],
+        rounds: usize,
+    ) -> (Vec<Sink>, std::time::Duration) {
         let parsed: Vec<ParseResult> = files
             .iter()
             .map(|(name, text)| {
@@ -337,12 +346,17 @@ mod tests {
             })
             .collect();
         let start = crate::index::timing::Stopwatch::start();
-        let found = find_sinks(&trees, &index);
+        let mut found = Vec::new();
+        for _ in 0..rounds {
+            found = find_sinks(&trees, &index);
+        }
         (found, start.elapsed())
     }
 
-    /// A function with `count` locals and a bare call of each local.
-    fn many_bare_calls_at(count: usize) -> std::time::Duration {
+    /// A function with `count` locals and a bare call of each local. The search runs `rounds`
+    /// times after one index: the index of many locals in one function takes much longer than
+    /// the search.
+    fn many_bare_calls_at(count: usize, rounds: usize) -> std::time::Duration {
         let mut source = String::from("export function run() {\n");
         for number in 0..count {
             source.push_str(&format!(
@@ -350,20 +364,23 @@ mod tests {
             ));
         }
         source.push_str("}\n");
-        let (found, elapsed) = sinks_timed(Language::TypeScript, &[("a.ts", &source)]);
+        let (found, elapsed) =
+            sinks_timed_rounds(Language::TypeScript, &[("a.ts", &source)], rounds);
         assert!(found.is_empty());
         elapsed
     }
 
     #[test]
     fn many_bare_calls_give_no_sink() {
-        many_bare_calls_at(20);
+        many_bare_calls_at(20, 1);
     }
 
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_bare_calls_of_locals_scale_linearly() {
-        crate::index::timing::assert_scales_linearly("bare calls", 20_000, many_bare_calls_at);
+        crate::index::timing::assert_scales_linearly("bare calls", 10_000, |count| {
+            many_bare_calls_at(count, 8)
+        });
     }
 
     fn found(language: Language, files: &[(&str, &str)]) -> Vec<Found> {

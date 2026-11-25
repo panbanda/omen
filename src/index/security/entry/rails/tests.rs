@@ -893,13 +893,16 @@ fn the_linear_cases_give_each_route() {
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_sibling_loops_resolve_in_linear_time() {
-    assert_scales_linearly("sibling loops", 4_000, sibling_loops_at);
+    // The large size stays under the limit of the work of the loops of one file.
+    assert_scales_linearly("sibling loops", 4_000, |size| {
+        (0..2).map(|_| sibling_loops_at(size)).sum()
+    });
 }
 
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_nested_loops_resolve_in_linear_time() {
-    assert_scales_linearly("nested loops", 400, nested_loops_at);
+    assert_scales_linearly("nested loops", 6_400, nested_loops_at);
 }
 
 #[test]
@@ -907,7 +910,7 @@ fn timing_nested_loops_resolve_in_linear_time() {
 fn timing_nested_constrained_scopes_resolve_in_linear_time() {
     assert_scales_linearly(
         "nested constrained scopes",
-        400,
+        12_800,
         nested_constrained_scopes_at,
     );
 }
@@ -915,7 +918,7 @@ fn timing_nested_constrained_scopes_resolve_in_linear_time() {
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_many_mounted_engines_resolve_in_linear_time() {
-    assert_scales_linearly("mounted engines", 500, many_mounted_engines_at);
+    assert_scales_linearly("mounted engines", 4_000, many_mounted_engines_at);
 }
 
 #[test]
@@ -1139,7 +1142,7 @@ fn a_chain_of_conditional_callbacks_for_other_actions_is_complete() {
 fn timing_a_chain_of_conditional_callbacks_resolves_in_linear_time() {
     assert_scales_linearly(
         "conditional callbacks",
-        2_000,
+        4_000,
         a_chain_of_conditional_callbacks_at,
     );
 }
@@ -1455,7 +1458,7 @@ fn a_chain_of_classes_that_call_a_class_method_of_the_first_class_resolves() {
 #[test]
 #[ignore = "timing: run in release"]
 fn timing_a_chain_of_macro_calls_resolves_in_linear_time() {
-    assert_scales_linearly("macro calls", 1_500, a_chain_of_macro_calls_at);
+    assert_scales_linearly("macro calls", 6_000, a_chain_of_macro_calls_at);
 }
 
 #[test]

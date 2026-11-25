@@ -1244,7 +1244,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_functions_in_one_file_are_measured_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("functions", 5_000, |size| {
+        crate::index::timing::assert_scales_linearly("functions", 20_000, |size| {
             let result = parse_many_functions(size);
             let started = crate::index::timing::Stopwatch::start();
             let file = analyze_parse_result(&result);
@@ -1257,7 +1257,7 @@ mod tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_the_nesting_of_a_file_with_many_functions_is_linear() {
-        crate::index::timing::assert_scales_linearly("functions", 5_000, |size| {
+        crate::index::timing::assert_scales_linearly("functions", 20_000, |size| {
             let result = parse_many_functions(size);
             let started = crate::index::timing::Stopwatch::start();
             let nesting = max_nesting_of_file(&result);
@@ -3025,7 +3025,7 @@ mod symbol_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_symbols_in_one_file_are_measured_in_linear_time() {
-        crate::index::timing::assert_scales_linearly("symbols", 5_000, |size| {
+        crate::index::timing::assert_scales_linearly("symbols", 40_000, |size| {
             let source: String = (0..size)
                 .map(|index| format!("function f{index}(x) {{ if (x) {{ g(); }} }}\n"))
                 .collect();
