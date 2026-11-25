@@ -1456,6 +1456,8 @@ enum Step<'t> {
     },
     EndFunction,
     LeaveScope,
+    EnterExitRegion,
+    LeaveExitRegion,
     PushGroup {
         router: usize,
         prefix: Option<String>,
@@ -1484,6 +1486,10 @@ struct Walker<'w, 'c, 'a> {
     layers: HashMap<usize, Vec<Guard>>,
     /// The depth of the scopes where each router is made.
     depths: HashMap<usize, usize>,
+    /// The open statement lists that an earlier statement can leave. See `Context::go_exit_nodes`.
+    exit_regions: usize,
+    /// The value of `exit_regions` where each router was made.
+    made_regions: HashMap<usize, usize>,
     deferred: Vec<Step<'a>>,
     depth: usize,
 }
@@ -1566,6 +1572,7 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                                     let router = self.graph.parameter(&key, position, router_type);
                                     // The body of the function is one scope below.
                                     self.depths.insert(router, self.scopes.len() + 1);
+                                    self.made_regions.insert(router, self.exit_regions);
                                     Value::Router(router)
                                 })
                         };
@@ -1589,6 +1596,8 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                 Step::LeaveScope => {
                     self.scopes.pop();
                 }
+                Step::EnterExitRegion => self.exit_regions += 1,
+                Step::LeaveExitRegion => self.exit_regions -= 1,
                 Step::PushGroup {
                     router,
                     prefix,
@@ -1624,6 +1633,22 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                 let mut children = named_children(node);
                 children.reverse();
                 stack.extend(children.into_iter().map(Step::Read));
+                return;
+            }
+            "statement_list" => {
+                let children = named_children(node);
+                let exits = self.context.go_exit_nodes();
+                let mut steps = Vec::with_capacity(children.len());
+                let mut opened = 0;
+                for (index, child) in children.iter().enumerate() {
+                    steps.push(Step::Read(*child));
+                    if index + 1 < children.len() && exits.contains(&child.id()) {
+                        steps.push(Step::EnterExitRegion);
+                        opened += 1;
+                    }
+                }
+                steps.extend((0..opened).map(|_| Step::LeaveExitRegion));
+                stack.extend(steps.into_iter().rev());
                 return;
             }
             "short_var_declaration" => self.binding(node, true),
@@ -2034,6 +2059,7 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
     fn made(&mut self, origin: Origin, router_type: usize) -> usize {
         let router = self.graph.add(origin, router_type);
         self.depths.insert(router, self.scopes.len());
+        self.made_regions.insert(router, self.exit_regions);
         router
     }
 
@@ -2302,7 +2328,12 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
             Shape::Middleware(layer) => {
                 let mut guards = self.guard_names(arguments.to_vec());
                 let made = self.depths.get(&router).copied().unwrap_or_default();
-                if self.scopes.len() > made {
+                // A framework layer guards the routes before it too, so an earlier statement
+                // that can leave the function makes it conditional. An ordered layer guards only
+                // the later routes, which run only when it runs.
+                let regions = self.made_regions.get(&router).copied().unwrap_or_default();
+                let skipped = *layer == Layer::Global && self.exit_regions > regions;
+                if self.scopes.len() > made || skipped {
                     guards.push(Guard::Conditional);
                 }
                 self.graph.note_spreads(&guards);
@@ -2599,6 +2630,8 @@ impl WrapperWalk<'_> {
             groups: HashMap::new(),
             layers: HashMap::new(),
             depths: HashMap::new(),
+            exit_regions: 0,
+            made_regions: HashMap::new(),
             deferred: Vec::new(),
             depth: 0,
         };
@@ -3844,6 +3877,42 @@ func reqSignIn(w http.ResponseWriter, r *http.Request) {}
     fn layer_states(body: &str) -> Vec<String> {
         let main = format!("{LAYER_HEADER}\n{body}");
         states(&[("main.go", &main), ("web/router.go", LAYER_ROUTER)])
+    }
+
+    #[test]
+    fn a_framework_layer_after_an_early_exit_is_conditional() {
+        let body = r#"
+func newRouter(skip bool) *web.Router {
+	m := web.NewRouter()
+	if skip {
+		return m
+	}
+	m.BeforeRouting(head)
+	m.AfterRouting(auth)
+	return m
+}
+
+func main() {
+	m := web.NewRouter()
+	m.Get("/early", Home)
+	if verbose {
+		return
+	}
+	m.BeforeRouting(head)
+	m.AfterRouting(auth)
+	m.Get("/late", Home)
+	n := newRouter(verbose)
+	n.Get("/n", Home)
+}
+"#;
+        assert_eq!(
+            layer_states(body),
+            [
+                "GET /early [head] conditional_middleware",
+                "GET /late [head,auth] conditional_middleware",
+                "GET /n [head] conditional_middleware",
+            ]
+        );
     }
 
     #[test]

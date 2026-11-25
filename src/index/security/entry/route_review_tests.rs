@@ -2251,3 +2251,174 @@ fn each_python_form_has_a_known_effect_on_a_django_import() {
         assert_eq!(found.is_empty(), rebinds, "{form}: {found:?}");
     }
 }
+
+// The seventh review: code that may not run.
+
+const ECHO: &str = "\t\"github.com/labstack/echo/v4\"";
+
+/// The guard of each route of the file, and if the list is complete.
+fn go_guards(imports: &str, body: &str) -> Vec<(String, Vec<String>, bool)> {
+    let source = go(imports, body);
+    let mut found: Vec<(String, Vec<String>, bool)> =
+        entries(Language::Go, &[("main.go", &source)])
+            .iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .map(|entry| (row(entry), entry.guards.clone(), entry.guards_complete))
+            .collect();
+    found.sort();
+    found
+}
+
+fn assert_all_conditional(imports: &str, body: &str) {
+    let found = go_guards(imports, body);
+    assert!(!found.is_empty(), "{body}");
+    for entry in only_rows(imports, body) {
+        assert_conditional_guard(&entry);
+    }
+}
+
+fn only_rows(imports: &str, body: &str) -> Vec<EntryPoint> {
+    let source = go(imports, body);
+    entries(Language::Go, &[("main.go", &source)])
+        .into_iter()
+        .filter(|entry| entry.kind == EntryKind::HttpHandler)
+        .collect()
+}
+
+const HELPER_BOOL: &str = "func helper() bool {\n\tr.Use(auth)\n\treturn true\n}";
+const HELPER: &str = "func helper() {\n\tr.Use(auth)\n}";
+
+#[test]
+fn a_call_that_may_not_be_evaluated_does_not_prove_a_guard() {
+    for body in [
+        format!("var r = chi.NewRouter()\n\nfunc main() {{\n\t_ = len(nil) > 0 && helper()\n\tr.Get(\"/x\", first)\n}}\n\n{HELPER_BOOL}"),
+        format!("var r = chi.NewRouter()\n\nfunc main() {{\n\tenabled := len(nil) == 0\n\tif enabled || helper() {{\n\t}}\n\tr.Get(\"/x\", first)\n}}\n\n{HELPER_BOOL}"),
+        format!("var r = chi.NewRouter()\n\nvar _ = len(nil) > 0 && helper()\n\nfunc main() {{\n\tr.Get(\"/x\", first)\n}}\n\n{HELPER_BOOL}"),
+        format!("var r = chi.NewRouter()\n\nfunc main() {{\n\tfor i := 0; i < 0 && helper(); i++ {{\n\t}}\n\tr.Get(\"/x\", first)\n}}\n\n{HELPER_BOOL}"),
+        format!("var r = chi.NewRouter()\n\nfunc main() {{\n\tfor i := 0; i < 0; helper() {{\n\t}}\n\tr.Get(\"/x\", first)\n}}\n\n{HELPER}"),
+        "var r = chi.NewRouter()\n\nfunc main() {\n\tfor i := 0; i < 0; r.Use(auth) {\n\t}\n\tr.Get(\"/x\", first)\n}".to_string(),
+    ] {
+        assert_all_conditional(CHI, &body);
+    }
+}
+
+#[test]
+fn an_early_exit_before_a_guard_makes_it_conditional() {
+    let cases = [
+        // `return` in the caller before the call.
+        format!("var r = chi.NewRouter()\n\nfunc main() {{\n\touter(len(nil) > 0)\n\tr.Get(\"/x\", first)\n}}\n\nfunc outer(skip bool) {{\n\tif skip {{\n\t\treturn\n\t}}\n\thelper()\n}}\n\n{HELPER}"),
+        // `return` in the helper before the guard.
+        "var r = chi.NewRouter()\n\nfunc main() {\n\thelper(len(nil) > 0)\n\tr.Get(\"/x\", first)\n}\n\nfunc helper(skip bool) {\n\tif skip {\n\t\treturn\n\t}\n\tr.Use(auth)\n}".to_string(),
+        // `goto` over the guard.
+        "var r = chi.NewRouter()\n\nfunc main() {\n\thelper(len(nil) > 0)\n\tr.Get(\"/x\", first)\n}\n\nfunc helper(skip bool) {\n\tif skip {\n\t\tgoto done\n\t}\n\tr.Use(auth)\ndone:\n}".to_string(),
+        "var r = chi.NewRouter()\n\nfunc main() {\n\thelper()\n\tr.Get(\"/x\", first)\n}\n\nfunc helper() {\n\tgoto end\n\tr.Use(auth)\nend:\n}".to_string(),
+        // A guard that no path reaches.
+        "var r = chi.NewRouter()\n\nfunc main() {\n\thelper()\n\tr.Get(\"/x\", first)\n}\n\nfunc helper() {\n\treturn\n\tr.Use(auth)\n}".to_string(),
+        // A recovered panic before the guard.
+        "var r = chi.NewRouter()\n\nfunc main() {\n\tsafe()\n\tr.Get(\"/x\", first)\n}\n\nfunc safe() {\n\tdefer func() { recover() }()\n\thelper()\n}\n\nfunc helper() {\n\tif len(nil) == 0 {\n\t\tpanic(\"x\")\n\t}\n\tr.Use(auth)\n}".to_string(),
+        // A call that can panic, in a repository that recovers.
+        "var r = chi.NewRouter()\n\nfunc main() {\n\tsafe()\n\tr.Get(\"/x\", first)\n}\n\nfunc safe() {\n\tdefer func() { recover() }()\n\thelper()\n}\n\nfunc check() {\n\tif len(nil) == 0 {\n\t\tpanic(\"x\")\n\t}\n}\n\nfunc helper() {\n\tcheck()\n\tr.Use(auth)\n}".to_string(),
+        // A loop with no end before the call.
+        format!("var r = chi.NewRouter()\n\nfunc main() {{\n\tgo func() {{ r.Get(\"/x\", first) }}()\n\tstart()\n}}\n\nfunc start() {{\n\tfor {{\n\t}}\n\thelper()\n}}\n\n{HELPER}"),
+        // An exit before the guard in the body of the route.
+        "var r = chi.NewRouter()\n\nfunc main() {\n\tif len(nil) == 0 {\n\t\treturn\n\t}\n\tr.Use(auth)\n\tother()\n}\n\nfunc other() {\n\tr.Get(\"/x\", first)\n}".to_string(),
+        // A factory that can return before the guard.
+        "func newRouter() *chi.Mux {\n\tr := chi.NewRouter()\n\tif len(nil) > 0 {\n\t\treturn r\n\t}\n\tr.Use(auth)\n\treturn r\n}\n\nfunc main() {\n\tr := newRouter()\n\tr.Get(\"/x\", first)\n}".to_string(),
+    ];
+    for body in &cases {
+        assert_all_conditional(CHI, body);
+    }
+    assert_all_conditional(
+        ECHO,
+        "var e = echo.New()\n\nfunc main() {\n\touter(len(nil) > 0)\n\te.GET(\"/x\", first)\n}\n\nfunc outer(skip bool) {\n\tif skip {\n\t\treturn\n\t}\n\te.Use(auth)\n}",
+    );
+    assert_all_conditional(
+        MUX,
+        "var r = mux.NewRouter()\n\nfunc main() {\n\touter(len(nil) > 0)\n\tr.HandleFunc(\"/x\", first)\n}\n\nfunc outer(skip bool) {\n\tif skip {\n\t\treturn\n\t}\n\tr.Use(auth)\n}",
+    );
+}
+
+#[test]
+fn a_route_after_a_guard_in_one_body_sees_the_guard_after_an_exit() {
+    let found = go_guards(
+        CHI,
+        "var r = chi.NewRouter()\n\nfunc main() {\n\tr.Get(\"/y\", first)\n\tif len(nil) == 0 {\n\t\treturn\n\t}\n\tr.Use(auth)\n\tr.Get(\"/x\", first)\n}",
+    );
+    assert_eq!(
+        found,
+        [
+            (
+                "chi GET /x first".to_string(),
+                vec!["auth".to_string()],
+                true
+            ),
+            (
+                "chi GET /y first".to_string(),
+                vec!["auth".to_string()],
+                false
+            ),
+        ]
+    );
+    for body in [
+        "func newRouter() *chi.Mux {\n\tr := chi.NewRouter()\n\tr.Use(auth)\n\treturn r\n}\n\nfunc main() {\n\tr := newRouter()\n\tr.Get(\"/x\", first)\n}",
+        "var r = chi.NewRouter()\n\nfunc main() {\n\touter()\n\tr.Get(\"/x\", first)\n}\n\nfunc outer() {\n\thelper()\n}\n\nfunc helper() {\n\tr.Use(auth)\n}",
+    ] {
+        let found = go_guards(CHI, body);
+        assert_eq!(found.len(), 1, "{body}");
+        assert!(found[0].2, "{body}");
+    }
+}
+
+#[test]
+fn each_python_pattern_capture_hides_a_django_import() {
+    for form in [
+        "match 1:\n    case [*path]:\n        pass\n",
+        "match 1:\n    case {**path}:\n        pass\n",
+        "match 1:\n    case object(__class__=path):\n        pass\n",
+        "match 1:\n    case 1 as path:\n        pass\n",
+        "match 1:\n    case [path] | [path, 1]:\n        pass\n",
+        "match 1:\n    case [1, path] | path:\n        pass\n",
+        "match 1:\n    case [1 as path]:\n        pass\n",
+        "match 1:\n    case object(x=[*path]):\n        pass\n",
+        "type path[T] = list[T]\n",
+        "match 1:\n    case {\"k\": path}:\n        pass\n",
+        "match 1:\n    case (path, other):\n        pass\n",
+        "type path = int\n",
+    ] {
+        let found = django_rows(form);
+        assert!(found.is_empty(), "{form}: {found:?}");
+    }
+    for form in [
+        "match 1:\n    case other.path:\n        pass\n",
+        "match 1:\n    case path.other:\n        pass\n",
+        "match 1:\n    case object(path=1):\n        pass\n",
+    ] {
+        assert_eq!(django_rows(form).len(), 1, "{form}");
+    }
+}
+
+#[test]
+fn a_factory_with_a_conditional_guard_gives_a_conditional_route() {
+    assert_all_conditional(
+        CHI,
+        "func newRouter() *chi.Mux {\n\tr := chi.NewRouter()\n\tif len(nil) > 0 {\n\t\tr.Use(auth)\n\t}\n\treturn r\n}\n\nfunc main() {\n\tr := newRouter()\n\tr.Get(\"/x\", first)\n}",
+    );
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_many_exits_and_a_long_chain_of_panics_cost_linear_time() {
+    assert_scales_linearly("exits and panics", 2_000, |size| {
+        let mut body = String::from("var r = chi.NewRouter()\n\n");
+        for function in 0..size {
+            writeln!(body, "func f{function}() {{\n\tf{}()\n}}\n", function + 1).unwrap();
+        }
+        writeln!(body, "func f{size}() {{\n\tpanic(\"x\")\n}}\n").unwrap();
+        body.push_str("func main(c bool) {\n\tf0()\n");
+        for _ in 0..size {
+            body.push_str("\tif c {\n\t\treturn\n\t}\n\tr.Use(auth)\n\tr.Get(\"/x\", first)\n");
+        }
+        body.push('}');
+        search_time(Language::Go, "main.go", &go(CHI, &body))
+    });
+}

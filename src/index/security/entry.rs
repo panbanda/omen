@@ -1030,14 +1030,47 @@ fn read_python_scope<'t>(
                 targets.extend(node.child_by_field_name("left"));
             }
             "as_pattern" if !in_comprehension => {
-                targets.extend(node.child_by_field_name("alias"));
+                // The `as` of a case pattern has no field name. Its name is the last child.
+                let alias = node.child_by_field_name("alias").or_else(|| {
+                    let mut cursor = node.walk();
+                    node.named_children(&mut cursor)
+                        .last()
+                        .filter(|child| child.kind() == "identifier")
+                });
+                targets.extend(alias);
             }
-            "case_pattern" if !in_comprehension => targets.extend(
-                node.named_child(0)
-                    .filter(|_| node.named_child_count() == 1)
-                    .filter(|child| child.kind() == "dotted_name")
-                    .filter(|child| child.named_child_count() == 1),
-            ),
+            // A capture of a pattern is a name with no dot in the place of a pattern. The name
+            // of a class and the keyword of an attribute are not captures.
+            "case_pattern" if !in_comprehension && node.named_child_count() == 1 => {
+                targets.extend(
+                    node.named_child(0)
+                        .filter(|child| is_python_capture(*child)),
+                );
+            }
+            "union_pattern" if !in_comprehension => {
+                let mut cursor = node.walk();
+                targets.extend(
+                    node.named_children(&mut cursor)
+                        .filter(|child| is_python_capture(*child)),
+                );
+            }
+            "keyword_pattern" if !in_comprehension => {
+                targets.extend(
+                    node.named_child(1)
+                        .filter(|child| is_python_capture(*child)),
+                );
+            }
+            "splat_pattern" if !in_comprehension => targets.extend(node.named_child(0)),
+            "type_alias_statement" => {
+                let name = node
+                    .child_by_field_name("left")
+                    .and_then(|left| left.named_child(0))
+                    .and_then(|name| match name.kind() {
+                        "generic_type" => name.named_child(0),
+                        _ => Some(name),
+                    });
+                targets.extend(name);
+            }
             _ => {}
         }
         while let Some(target) = targets.pop() {
@@ -1077,6 +1110,10 @@ fn read_python_scope<'t>(
         );
     }
     (bound, globals)
+}
+
+fn is_python_capture(node: Node<'_>) -> bool {
+    node.kind() == "dotted_name" && node.named_child_count() == 1
 }
 
 /// The crates of the Rust frameworks with verb attributes, and the name of each framework.
@@ -1203,6 +1240,8 @@ struct Context<'a> {
     /// The local bindings of a Go file, by name: the starts of the bindings in order, and
     /// for each the highest end of a function that has a binding up to it.
     go_locals: std::sync::OnceLock<GoLocals>,
+    /// The nodes of a Go file after which the rest of their statement list may not run.
+    go_exits: std::sync::OnceLock<std::collections::HashSet<usize>>,
     /// The names of the variables that hold a `net/http` multiplexer, in a Go file.
     go_servemuxes: std::sync::OnceLock<std::collections::HashSet<String>>,
     /// The `net/http` patterns of a Go file that other patterns of the file can cover.
@@ -1293,6 +1332,7 @@ impl<'a> Context<'a> {
             symbol_starts: std::sync::OnceLock::new(),
             callables_here: std::sync::OnceLock::new(),
             go_locals: std::sync::OnceLock::new(),
+            go_exits: std::sync::OnceLock::new(),
             go_servemuxes: std::sync::OnceLock::new(),
             go_covered: std::sync::OnceLock::new(),
             go_dead: std::sync::OnceLock::new(),

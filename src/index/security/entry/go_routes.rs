@@ -707,6 +707,8 @@ struct Summary {
     framework: Framework,
     prefixes: Vec<String>,
     guards: Vec<String>,
+    /// The function adds a guard in a branch that does not run whenever the router exists.
+    conditional: bool,
 }
 
 struct Lineage {
@@ -729,6 +731,8 @@ struct Frame {
     wrapper_type: Option<String>,
     owner: usize,
     pure: bool,
+    /// A guard of the function is in a branch that does not run whenever its router exists.
+    conditional: bool,
     /// The routers that the function body made.
     created: Vec<usize>,
 }
@@ -917,6 +921,181 @@ impl<'a> Context<'a> {
 
     /// Tells if the node is in a branch that never runs: the body of `if false`, the `else`
     /// branch of `if true`, or the body of `for false`.
+    /// The nodes after which the rest of their statement list may not run. These are the
+    /// nodes that hold one of these: `return`; `goto`; a labelled `break` or `continue`; a
+    /// call of the builtin `panic`; a loop with no condition that no `break`, `return`, or
+    /// `goto` leaves; an empty `select`; a `defer` whose code calls the builtin `recover`; or a
+    /// call of a function or a method of the file that can end without a return. An unlabelled
+    /// `break` or `continue` counts only inside its loop, `switch`, or `select`. The code of a
+    /// closure, of a `go` statement, and of a `defer` statement does not count, except for the
+    /// `recover` of a `defer`. A method call counts when any method of the file with that name
+    /// can end without a return.
+    pub(super) fn go_exit_nodes(&self) -> &HashSet<usize> {
+        self.go_exits
+            .get_or_init(|| self.find_go_exits(self.parsed.root_node()))
+    }
+
+    fn find_go_exits<'n>(&self, root: Node<'n>) -> HashSet<usize> {
+        let declarations: Vec<Node<'n>> = named_nodes(root)
+            .into_iter()
+            .filter(|child| matches!(child.kind(), "function_declaration" | "method_declaration"))
+            .collect();
+        // The functions and the methods that can end without a return, by name. A call of
+        // one of them makes its caller one of them.
+        let key = |node: Node<'n>| -> Option<(bool, &'a str)> {
+            let name = node.child_by_field_name("name")?;
+            Some((node.kind() == "method_declaration", self.text(name)))
+        };
+        let mut callers: HashMap<(bool, &'a str), Vec<(bool, &'a str)>> = HashMap::new();
+        let mut pending: Vec<(bool, &'a str)> = Vec::new();
+        for declaration in &declarations {
+            let Some(own) = key(*declaration) else {
+                continue;
+            };
+            let mut flags = 0;
+            self.exit_flags(*declaration, &|_| false, &mut |node, node_flags, inside| {
+                if node == *declaration {
+                    flags = node_flags;
+                } else if !inside && node.kind() == "call_expression" {
+                    if let Some(callee) = self.callee_key(node) {
+                        callers.entry(callee).or_default().push(own);
+                    }
+                }
+            });
+            if flags & EXIT_ABORT != 0 {
+                pending.push(own);
+            }
+        }
+        let mut aborting: HashSet<(bool, &'a str)> = HashSet::new();
+        while let Some(own) = pending.pop() {
+            if aborting.insert(own) {
+                pending.extend(callers.get(&own).into_iter().flatten().copied());
+            }
+        }
+        let aborts = |call: Node<'n>| {
+            self.callee_key(call)
+                .is_some_and(|callee| aborting.contains(&callee))
+        };
+        let mut exits = HashSet::new();
+        self.exit_flags(root, &aborts, &mut |node, flags, _| {
+            if flags & EXIT_LEAVES != 0 {
+                exits.insert(node.id());
+            }
+        });
+        exits
+    }
+
+    /// The function (false) or the method (true) that a call names, if the file declares it.
+    fn callee_key<'n>(&self, call: Node<'n>) -> Option<(bool, &'a str)> {
+        let callee = call.child_by_field_name("function")?;
+        match callee.kind() {
+            "identifier" if !self.is_go_local(callee) => Some((false, self.text(callee))),
+            "selector_expression" => {
+                let field = callee.child_by_field_name("field")?;
+                Some((true, self.text(field)))
+            }
+            _ => None,
+        }
+    }
+
+    /// Gives `each` the exit flags of each node of the tree, in post order, with whether the
+    /// node is in a closure, a `go` statement, or a `defer` statement. A declaration gives
+    /// its flags to `each` but not to the file. `aborts` tells if a call can end without a
+    /// return. See `go_exit_nodes`.
+    fn exit_flags<'n>(
+        &self,
+        top: Node<'n>,
+        aborts: &dyn Fn(Node<'n>) -> bool,
+        each: &mut dyn FnMut(Node<'n>, u8, bool),
+    ) {
+        enum Visit<'n> {
+            Enter(Node<'n>, bool),
+            Leave(Node<'n>, bool, usize),
+        }
+        let mut stack = vec![Visit::Enter(top, false)];
+        let mut values: Vec<u8> = Vec::new();
+        while let Some(visit) = stack.pop() {
+            match visit {
+                Visit::Enter(node, inside) => {
+                    let children = named_nodes(node);
+                    stack.push(Visit::Leave(node, inside, children.len()));
+                    let inner = inside
+                        || matches!(
+                            node.kind(),
+                            "func_literal" | "go_statement" | "defer_statement"
+                        );
+                    stack.extend(children.into_iter().map(|child| Visit::Enter(child, inner)));
+                }
+                Visit::Leave(node, inside, count) => {
+                    let below = values
+                        .drain(values.len() - count..)
+                        .fold(0, |all, flags| all | flags);
+                    let builtin = |name: &str| {
+                        node.child_by_field_name("function").is_some_and(|callee| {
+                            callee.kind() == "identifier"
+                                && self.text(callee) == name
+                                && !self.is_go_shadowed(callee)
+                        })
+                    };
+                    let has_case = || {
+                        named_nodes(node).iter().any(|child| {
+                            matches!(child.kind(), "communication_case" | "default_case")
+                        })
+                    };
+                    let flags = match node.kind() {
+                        "return_statement" | "goto_statement" => below | EXIT_LEAVE,
+                        "break_statement" | "continue_statement"
+                            if node.named_child_count() > 0 =>
+                        {
+                            below | EXIT_LEAVE
+                        }
+                        "break_statement" => below | EXIT_BREAK,
+                        "continue_statement" => below | EXIT_CONTINUE,
+                        "call_expression" => {
+                            let mut flags = below;
+                            if builtin("panic") || aborts(node) {
+                                flags |= EXIT_ABORT;
+                            }
+                            if builtin("recover") {
+                                flags |= EXIT_RECOVER;
+                            }
+                            flags
+                        }
+                        "for_statement" => {
+                            let endless = node.named_child_count() == 1
+                                || node.named_child(0).is_some_and(|clause| {
+                                    clause.kind() == "for_clause"
+                                        && clause.child_by_field_name("condition").is_none()
+                                });
+                            let left = below & (EXIT_BREAK | EXIT_LEAVE) != 0;
+                            let flags = below & !(EXIT_BREAK | EXIT_CONTINUE);
+                            if endless && !left {
+                                flags | EXIT_ABORT
+                            } else {
+                                flags
+                            }
+                        }
+                        "expression_switch_statement" | "type_switch_statement" => {
+                            below & !EXIT_BREAK
+                        }
+                        "select_statement" if !has_case() => below | EXIT_ABORT,
+                        "select_statement" => below & !EXIT_BREAK,
+                        "defer_statement" if below & EXIT_RECOVER != 0 => EXIT_LEAVE,
+                        "func_literal" | "defer_statement" => below & EXIT_RECOVER,
+                        "go_statement" => 0,
+                        _ => below,
+                    };
+                    each(node, flags, inside);
+                    let given = match node.kind() {
+                        "function_declaration" | "method_declaration" => 0,
+                        _ => flags,
+                    };
+                    values.push(given);
+                }
+            }
+        }
+    }
+
     pub(super) fn go_in_dead_branch(&self, node: Node<'_>) -> bool {
         // One walk over the tree finds the branches that never run. A parent of a node costs
         // a walk down from the root, so the check does not climb to the parents.
@@ -3059,7 +3238,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
     /// or a method runs whenever the top of the body of its caller runs only when all of these
     /// are true: the function has one use in the repository, that use is a direct call in this
     /// file, the call is at the top of the body of the caller (in no branch, loop, closure,
-    /// `defer`, or `go`), and the same holds for the caller. A method call names a method of the
+    /// `defer`, `go`, right operand of `&&` or `||`, update of a `for` clause, or statement
+    /// after one that can leave its list), and the same holds for the caller. A method call names a method of the
     /// file only when the file has one method of that name. Each other branch is its own place.
     fn helper_anchors(&self, root: Node<'t>) -> Vec<BranchId> {
         #[derive(Clone, Copy, PartialEq)]
@@ -3276,6 +3456,37 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         stack.push(Step::EnterBranch((node.start_byte(), node.end_byte())));
     }
 
+    /// Pushes the children of a node, with `branched` in a branch of its own.
+    fn push_with_branch(node: Node<'t>, branched: Option<Node<'t>>, stack: &mut Vec<Step<'t>>) {
+        for child in Self::named_children(node).into_iter().rev() {
+            if Some(child) == branched {
+                Self::push_branch(child, stack);
+            } else {
+                stack.push(Step::Read(child));
+            }
+        }
+    }
+
+    /// Pushes the statements of a list. The statements after a statement that can leave the
+    /// list (see `Context::go_exit_nodes`) are in a branch that ends at the end of the list.
+    fn push_statements(&self, node: Node<'t>, stack: &mut Vec<Step<'t>>) {
+        let children = Self::named_children(node);
+        let mut steps = Vec::with_capacity(children.len());
+        let mut opened = 0;
+        for (index, child) in children.iter().enumerate() {
+            steps.push(Step::Read(*child));
+            if let Some(next) = children
+                .get(index + 1)
+                .filter(|_| self.context.go_exit_nodes().contains(&child.id()))
+            {
+                steps.push(Step::EnterBranch((next.start_byte(), node.end_byte())));
+                opened += 1;
+            }
+        }
+        steps.extend((0..opened).map(|_| Step::LeaveBranch));
+        stack.extend(steps.into_iter().rev());
+    }
+
     fn current_branch(&self) -> BranchId {
         self.branches.last().copied().unwrap_or(ALWAYS_RUNS)
     }
@@ -3344,6 +3555,23 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                         Self::push_branch(child, stack);
                     }
                 }
+                return;
+            }
+            // The right side of `&&` and `||` and the update of a loop may not run.
+            "binary_expression"
+                if node
+                    .child_by_field_name("operator")
+                    .is_some_and(|operator| matches!(self.text(operator), "&&" | "||")) =>
+            {
+                Self::push_with_branch(node, node.child_by_field_name("right"), stack);
+                return;
+            }
+            "statement_list" => {
+                self.push_statements(node, stack);
+                return;
+            }
+            "for_clause" => {
+                Self::push_with_branch(node, node.child_by_field_name("update"), stack);
                 return;
             }
             "func_literal" => {
@@ -3440,6 +3668,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             wrapper_type: None,
             owner,
             pure: true,
+            conditional: false,
             created: Vec::new(),
         });
         self.bind_parameters(node.child_by_field_name("parameters"), None);
@@ -3472,7 +3701,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                     && !frame.wrapped
                     && declared.is_some_and(|name| !self.cyclic.contains(name))
             })
-            .and_then(|router| self.summarize(router, owner));
+            .and_then(|router| self.summarize(router, owner, frame.conditional));
         if let (Some(name), Some(router), true) = (declared, only_router, summary.is_some()) {
             self.returned_of.insert(name.to_string(), router);
         }
@@ -3726,7 +3955,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         result
     }
 
-    fn summarize(&mut self, router: usize, owner: usize) -> Option<Summary> {
+    fn summarize(&mut self, router: usize, owner: usize, conditional: bool) -> Option<Summary> {
         if !self.made_by(router, owner) {
             return None;
         }
@@ -3735,6 +3964,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             framework: self.routers[router].framework,
             prefixes: place.prefixes,
             guards: place.guards,
+            conditional,
         })
     }
 
@@ -3752,6 +3982,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         let id = self.make_root(summary.framework);
         let router = &mut self.routers[id];
         router.guards = summary.guards;
+        if summary.conditional {
+            router.pre_conditional = true;
+            router.conditional_from = 0;
+        }
         router.mountable = summary.prefixes.is_empty();
         router.base = summary.prefixes;
         self.fresh_of.insert(id, name.to_string());
@@ -3776,6 +4010,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             wrapper_type: None,
             owner,
             pure: true,
+            conditional: false,
             created: Vec::new(),
         });
         let before = self.routers.len();
@@ -4320,10 +4555,10 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
                 }
             };
             let differs = in_body(branch) != in_body(self.routers[router].created_in);
-            // A summary of the function cannot tell a caller that the guard is conditional.
+            // The summary of the function tells each caller that the guard is conditional.
             if differs {
                 if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
-                    frame.pure = false;
+                    frame.conditional = true;
                 }
             }
         }
@@ -5216,10 +5451,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         Some(Lineage { prefixes, guards })
     }
 
-    /// The prefixes and the guards that the routers above a router give. Each router has
-    /// one result, which shares its list with the result of its parent.
     /// Tells if the branch is the top of a function body or the level of the package: no
-    /// condition of the body is around it.
+    /// condition, loop, closure, or earlier statement that can leave the body is around it.
     fn at_top(&self, branch: BranchId) -> bool {
         branch == ALWAYS_RUNS || self.helper_bodies.contains(&branch)
     }
@@ -5248,6 +5481,8 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             && router.guard_bodies != GuardBodies::One(body)
     }
 
+    /// The prefixes and the guards that the routers above a router give. Each router has
+    /// one result, which shares its list with the result of its parent.
     fn up_of(&self, id: usize, memo: &mut [Option<Up>]) {
         let mut path = Vec::new();
         let mut current = id;
@@ -6701,4 +6936,19 @@ fn precedence(entries: &[Option<(usize, Vec<String>)>], echo: bool, kept: &mut [
             }
         }
     }
+}
+
+/// A call that can end without a return: a panic, or a loop with no end.
+const EXIT_ABORT: u8 = 1;
+/// A `return`, a `goto`, a labelled `break` or `continue`, or a `defer` that can recover.
+const EXIT_LEAVE: u8 = 2;
+const EXIT_BREAK: u8 = 4;
+const EXIT_CONTINUE: u8 = 8;
+const EXIT_RECOVER: u8 = 16;
+/// The flags after which the rest of a statement list may not run.
+const EXIT_LEAVES: u8 = EXIT_ABORT | EXIT_LEAVE | EXIT_BREAK | EXIT_CONTINUE;
+
+fn named_nodes(node: Node<'_>) -> Vec<Node<'_>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).collect()
 }
