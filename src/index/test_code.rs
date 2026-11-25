@@ -2322,7 +2322,9 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_rust_tests_in_one_module_are_read_in_linear_time() {
-        assert_scales_linearly("tests", 20_000, |size| {
+        // A step from a node to its sibling in tree-sitter reads the children of the parent from
+        // the first child. The module is large, so that a step for each attribute fails the check.
+        assert_scales_linearly("tests", 320_000, |size| {
             let source: String = (0..size)
                 .map(|position| format!("#[test]\nfn check_{position}() {{}}\n"))
                 .collect();
