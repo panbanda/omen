@@ -6356,6 +6356,8 @@ func routes() {
         (found.len(), took)
     }
 
+    // The index of a long method chain, outside the measure, takes time that grows with the
+    // square of the chain (#641). The case thus starts small and repeats.
     go_timing!(
         scenario_method_chain,
         a_long_method_chain_costs_linear_time,
