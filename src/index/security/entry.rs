@@ -6363,7 +6363,8 @@ func routes() {
         1_250,
         40_000,
         |_| 0,
-        start = 40_000
+        start = 5_000,
+        repeat = 3
     );
 
     #[test]
