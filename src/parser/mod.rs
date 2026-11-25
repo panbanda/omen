@@ -590,14 +590,26 @@ fn extract_c_function_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Optio
         let mut pending = vec![decl];
         while let Some(decl) = pending.pop() {
             match decl.kind() {
-                "identifier" => {
+                // A method in a class body has a `field_identifier`. The index gives
+                // these names too, so the two reports name a function the same way.
+                "identifier" | "field_identifier" | "destructor_name" | "operator_name" => {
                     if let Ok(name) = decl.utf8_text(source) {
                         return Some(name.to_string());
                     }
                 }
+                // `A::B::m` and `free<int>` are named by their last name.
+                "qualified_identifier" | "template_function" => {
+                    pending.extend(decl.child_by_field_name("name"));
+                }
+                // `operator bool()` has the type in place of a name.
+                "operator_cast" => {
+                    let target = decl.child_by_field_name("type")?.utf8_text(source).ok()?;
+                    return Some(format!("operator {target}"));
+                }
                 "function_declarator"
                 | "pointer_declarator"
                 | "reference_declarator"
+                | "parenthesized_declarator"
                 | "abstract_declarator" => {
                     // Try the named `declarator` field first, then each named child
                     if let Some(inner) = decl.child_by_field_name("declarator") {
