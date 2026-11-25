@@ -119,6 +119,7 @@ fn unknown_instance_variable(name: String) -> LocalName {
         element: false,
         result_index: None,
         visible: None,
+        constant: false,
     }
 }
 
@@ -479,6 +480,7 @@ impl LanguageSpec for Ruby {
                     element: false,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
         }

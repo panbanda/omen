@@ -342,6 +342,7 @@ impl CallSyntax {
                     element: false,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
         }
@@ -547,6 +548,8 @@ pub struct LocalName {
     /// The bytes where the name is visible: from its declaration to the end
     /// of the enclosing block. Only a C++ namespace alias has this range.
     pub visible: Option<std::ops::Range<usize>>,
+    /// The declaration gives the name one value only, as ECMAScript `const` does.
+    pub constant: bool,
 }
 
 /// The type without the marks that make a value optional: a `:` before a

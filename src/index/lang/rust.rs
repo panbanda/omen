@@ -385,6 +385,7 @@ impl LanguageSpec for Rust {
                     element: true,
                     result_index: None,
                     visible: None,
+                    constant: false,
                 });
             }
             return;
@@ -417,6 +418,7 @@ impl LanguageSpec for Rust {
                     element: false,
                     result_index: Some(index),
                     visible: None,
+                    constant: false,
                 });
             }
         }
