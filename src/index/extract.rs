@@ -2641,6 +2641,20 @@ mod tests {
         });
     }
 
+    /// Each call of a chain has the chain before it as its receiver. The receiver text
+    /// is not a chain of names, and that must be found without a read of all of the text.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_long_go_method_chain_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go method chain", 5_000, |size| {
+            let source = format!(
+                "package main\n\nfunc more() {{\n\tq := mux.NewRouter()\n\tq.Path(\"/x\"){}\n}}\n",
+                ".Methods(\"GET\")".repeat(size)
+            );
+            extract_time(Language::Go, "main.go", source)
+        });
+    }
+
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_deeply_nested_go_closures_are_extracted_in_linear_time() {
