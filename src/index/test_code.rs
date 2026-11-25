@@ -113,7 +113,13 @@ pub struct MarkContext<'a, 'tree> {
     /// The callee roots that the walk found, by the id of the call. One search down a chain of
     /// calls gives the root of each call of the chain, so the walk reads each chain one time.
     pub callee_roots: &'a CalleeRoots<'tree>,
+    /// The ids of the parents whose Rust attributes the walk read. The walk reads all the
+    /// attributes of a parent at its first attribute, in one pass over the children.
+    pub attribute_parents: &'a AttributeParents,
 }
+
+/// The ids of the parents whose attributes the walk read.
+pub type AttributeParents = std::cell::RefCell<std::collections::HashSet<usize>>;
 
 /// The root of the callee of each call that the walk read, as `ecma_callee_root` gives it.
 pub type CalleeRoots<'tree> =
@@ -438,36 +444,26 @@ fn is_rust_comment(node: Node<'_>) -> bool {
     matches!(node.kind(), "line_comment" | "block_comment")
 }
 
-/// The outer attributes of one item, and the item to which they apply. The
-/// attribute must be the first of the run: an attribute and comments can
-/// follow it, and then the item. One scan of the run thus serves each
-/// attribute of the run, and the time is linear in the number of attributes.
-fn rust_attribute_run<'tree>(first: Node<'tree>) -> (Vec<Node<'tree>>, Option<Node<'tree>>) {
+/// Each run of outer attributes among the children of `parent`, and the item to which the run
+/// applies. Comments can be between the attributes of a run and the item. A run with no item
+/// after it applies to nothing.
+///
+/// One pass of a cursor reads the children. `Node::next_sibling` and `Node::prev_sibling` read
+/// the children of the parent from the first child, so a step from each attribute to its
+/// siblings takes time that grows with the square of the number of children.
+fn rust_attribute_runs<'tree>(parent: Node<'tree>) -> Vec<(Vec<Node<'tree>>, Node<'tree>)> {
+    let mut runs = Vec::new();
     let mut attributes = Vec::new();
-    let mut next = Some(first);
-    while let Some(node) = next {
-        match node.kind() {
-            "attribute_item" => attributes.push(node),
-            _ if is_rust_comment(node) => {}
-            _ => return (attributes, Some(node)),
+    let mut cursor = parent.walk();
+    for child in parent.children(&mut cursor) {
+        match child.kind() {
+            "attribute_item" => attributes.push(child),
+            _ if is_rust_comment(child) => {}
+            _ if attributes.is_empty() => {}
+            _ => runs.push((std::mem::take(&mut attributes), child)),
         }
-        next = node.next_sibling();
     }
-    (attributes, None)
-}
-
-/// An attribute before this one applies to the same item, with only comments
-/// between them. Each comment is before one attribute, thus all the calls
-/// together read each comment one time.
-fn follows_rust_attribute(attribute: Node<'_>) -> bool {
-    let mut previous = attribute.prev_sibling();
-    while let Some(node) = previous {
-        if !is_rust_comment(node) {
-            return node.kind() == "attribute_item";
-        }
-        previous = node.prev_sibling();
-    }
-    false
+    runs
 }
 
 fn rust_cfg_requires_test(path: &str, arguments: &str) -> bool {
@@ -491,14 +487,16 @@ fn rust_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestM
         }
         return;
     }
-    if follows_rust_attribute(node) {
-        return;
-    }
-    let (attributes, Some(target)) = rust_attribute_run(node) else {
+    let Some(parent) = context.ancestors.last().copied() else {
         return;
     };
-    for attribute in attributes {
-        rust_attribute_marks(attribute, target, context, out);
+    if !context.attribute_parents.borrow_mut().insert(parent.id()) {
+        return;
+    }
+    for (attributes, target) in rust_attribute_runs(parent) {
+        for attribute in attributes {
+            rust_attribute_marks(attribute, target, context, out);
+        }
     }
 }
 
@@ -1153,6 +1151,7 @@ fn marks_of_tree(root: Node<'_>, source: &[u8], language: Language) -> MarkTable
     let mut ancestors: Vec<Node<'_>> = Vec::new();
     let mut owners: Vec<Owner<'_>> = Vec::new();
     let callee_roots = CalleeRoots::default();
+    let attribute_parents = AttributeParents::default();
     let mut cursor = root.walk();
     loop {
         let node = cursor.node();
@@ -1164,6 +1163,7 @@ fn marks_of_tree(root: Node<'_>, source: &[u8], language: Language) -> MarkTable
                 owners: &owners,
                 in_test_file: false,
                 callee_roots: &callee_roots,
+                attribute_parents: &attribute_parents,
             };
             marks(node, &context, &mut found);
         }
