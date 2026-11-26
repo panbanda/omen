@@ -282,10 +282,8 @@ pub fn field_of_type(draft: &mut Draft<'_>, context: &Context<'_, '_>) -> bool {
 /// `None` means that the text is a different expression.
 pub fn name_path(text: &str) -> Option<Vec<String>> {
     let text = text.trim();
-    // The receiver of each call of a long chain is all of the chain before it. The check stops
-    // at the first character that no chain of names has, so that it does not copy the text.
-    let can_be_in_path =
-        |character: char| character.is_alphanumeric() || "_$@.?->".contains(character);
+    // The check stops at the first character that no chain of names has, so that it does not
+    // copy the text.
     if !text.chars().all(can_be_in_path) {
         return None;
     }
@@ -302,6 +300,77 @@ pub fn name_path(text: &str) -> Option<Vec<String>> {
         .iter()
         .all(|name| is_name(name))
         .then(|| names.into_iter().map(str::to_string).collect())
+}
+
+/// A character that a chain of member accesses can have, as `name_path` reads it.
+fn can_be_in_path(character: char) -> bool {
+    character.is_alphanumeric() || "_$@.?->".contains(character)
+}
+
+/// The texts of the receivers of the calls of one file. The receiver of each call of a long
+/// chain is all of the chain before it, so a read of each receiver text from its start takes
+/// time that grows with the square of the length of the chain. Here, the check of a receiver
+/// reads only the part after the text that the receivers with the same start have read.
+struct ReceiverTexts<'source> {
+    /// The parts of the source that are valid UTF-8, each with its first byte, in order.
+    chunks: Vec<(usize, &'source str)>,
+    /// All of the source is valid UTF-8.
+    valid: bool,
+    length: usize,
+    /// For each start of a receiver: the end of the text read from the start, and the first
+    /// byte of that text that has a character that no chain of names has and is not a space.
+    read: HashMap<usize, (usize, Option<usize>)>,
+}
+
+impl<'source> ReceiverTexts<'source> {
+    fn new(source: &'source [u8]) -> Self {
+        let mut chunks = Vec::new();
+        let mut start = 0;
+        let mut valid = true;
+        for chunk in source.utf8_chunks() {
+            chunks.push((start, chunk.valid()));
+            start += chunk.valid().len() + chunk.invalid().len();
+            valid &= chunk.invalid().is_empty();
+        }
+        Self {
+            chunks,
+            valid,
+            length: source.len(),
+            read: HashMap::new(),
+        }
+    }
+
+    /// The text of the bytes `start..end`, if they are valid UTF-8. A part of the source that is
+    /// not valid UTF-8 has no valid text in it, so valid text is in one valid part.
+    fn text(&self, start: usize, end: usize) -> Option<&'source str> {
+        if start == end && !self.valid {
+            return (end <= self.length).then_some("");
+        }
+        let position = self
+            .chunks
+            .partition_point(|(chunk_start, _)| *chunk_start <= start)
+            .checked_sub(1)?;
+        let (chunk_start, chunk) = self.chunks[position];
+        chunk.get(start - chunk_start..end.checked_sub(chunk_start)?)
+    }
+
+    /// `true` means that `name_path` gives `None` for `text`, the text of `start..end`. A
+    /// character that no chain of names has and that `trim` does not remove is in the text.
+    /// `false` means that `name_path` must read the text.
+    fn is_not_path(&mut self, start: usize, end: usize, text: &str) -> bool {
+        let (read_to, outside) = self.read.entry(start).or_insert((start, None));
+        if outside.is_none() && *read_to < end {
+            let unread = text.get(*read_to - start..).unwrap_or_default();
+            match unread
+                .char_indices()
+                .find(|(_, character)| !can_be_in_path(*character) && !character.is_whitespace())
+            {
+                Some((offset, _)) => *outside = Some(*read_to + offset),
+                None => *read_to = end,
+            }
+        }
+        outside.is_some_and(|byte| byte < end)
+    }
 }
 
 /// The names of the chain of member accesses that starts at the byte `start`
@@ -2221,9 +2290,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let mut reference_facts = Vec::with_capacity(calls.len());
     let aliases = (parsed.language == Language::Bash)
         .then(|| crate::index::lang::bash::Aliases::of(parsed.root_node(), &parsed.source));
-    // The receiver of each call of a long chain is all of the chain before it, so a check of
-    // each receiver text reads the chain once for each call. The file is checked once instead.
-    let source_text = std::str::from_utf8(&parsed.source);
+    let mut receiver_texts = ReceiverTexts::new(&parsed.source);
     for (call, range, owner, via_closure, receiver) in calls {
         let (start_byte, end_byte) = (range.start, range.end);
         let owner = position_of(owner);
@@ -2262,18 +2329,24 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 superseded: Vec::new(),
             },
         });
-        let receiver_text = receiver.and_then(|(start, end)| match source_text {
-            Ok(source_text) => source_text.get(start..end),
-            Err(_) => std::str::from_utf8(parsed.source.get(start..end)?).ok(),
-        });
+        let receiver_text = receiver.and_then(|(start, end)| receiver_texts.text(start, end));
+        let receiver_path = receiver
+            .zip(receiver_text)
+            .and_then(|((start, end), text)| {
+                let path = if receiver_texts.is_not_path(start, end, text) {
+                    None
+                } else {
+                    name_path(text)
+                };
+                path.or_else(|| indexed_path(text))
+            });
         reference_facts.push(ReferenceFacts {
             start_byte,
             end_byte,
             owner,
             arguments: call.arguments,
             receiver,
-            receiver_path: receiver_text
-                .and_then(|text| name_path(text).or_else(|| indexed_path(text))),
+            receiver_path,
             receiver_indexed: receiver_text.is_some_and(|text| indexed_path(text).is_some()),
             tried: parsed.source.get(end_byte) == Some(&b'?')
                 && parsed.source.get(end_byte + 1) != Some(&b'.'),
