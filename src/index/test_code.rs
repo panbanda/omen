@@ -1608,6 +1608,28 @@ impl Thing {
         );
     }
 
+    /// A node that the parser adds for a missing token has no width. A step from an attribute
+    /// to its next sibling skips such a node, so the node is not the item of the attribute.
+    #[test]
+    fn test_rust_attribute_before_a_missing_token_applies_to_nothing() {
+        let sources = [
+            "fn helper() {}\nimpl S {\n    #[cfg(test)]\n    // TODO: fix this hack\n",
+            "impl S {\n#[cfg(test)]\n",
+            "mod m {\n#[cfg(test)]\nfn a() {}\n#[cfg(test)]",
+            "mod m {\n#[cfg(test)]\n#[inline]\nfn a() {}\n#[cfg(test)]\n// c\n#[inline]",
+        ];
+        let found: Vec<Vec<Range<usize>>> = sources
+            .iter()
+            .map(|source| {
+                let parsed = Parser::new()
+                    .parse(source.as_bytes(), Language::Rust, Path::new("src/lib.rs"))
+                    .unwrap();
+                test_ranges_of_tree(parsed.root_node(), source.as_bytes(), Language::Rust)
+            })
+            .collect();
+        assert_eq!(found, [vec![], vec![], vec![21..30], vec![31..40]]);
+    }
+
     #[test]
     fn test_rust_inner_cfg_test_and_test_directories() {
         let inner = roles(
