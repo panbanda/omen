@@ -50,6 +50,12 @@ new behaviour, and the necessary change in a client.
 | A start line that no definition of the name has, in `symbol`, `impact`, `get_symbol`, `impact`, and `task_context` | The `not_found` error with `param` `name` and the near names. | The `not_found` error with `param` `start_line`. The suggestions are the definitions of the name: CLI choices have a `command` without `--start-line`, and MCP choices have `arguments` with the correct `start_line`. | Read `error.param`. |
 | A `static` C or C++ function and a declaration in a different file | One function. | Different functions. A bare name that agrees with both is ambiguous. | Send the key of one choice. |
 
+### The span of a Go function literal in a declaration of many names
+
+| Area | 5.1.0 | Now | Change in a client |
+|---|---|---|---|
+| A Go function literal that a declaration of more than one name binds, as in `f, g := func() {}, func(t *testing.T) {}` or `var f, g = ...` | The span started at the name. It contained the later names and the earlier literals, and the signature of `g` was `g := func() {}, func(t *testing.T)`. | The span is the literal alone. The signature of `g` is `func(t *testing.T)`, and `start_line` and the source are those of the literal. This changes `outline`, `symbol`, and each other output that gives the signature or the range of a symbol. A declaration of one name keeps the span from the name. The keys do not change. | Read the name from `name`, not from `signature`. |
+
 ## Removed in 5.0
 
 Omen 5.0 removed each item in this section. There is no alias and no shim.
