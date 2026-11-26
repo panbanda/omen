@@ -2610,8 +2610,16 @@ mod tests {
 
     /// The time of `extract_file` on `source`, without the parse.
     fn extract_time(language: Language, file: &'static str, source: String) -> std::time::Duration {
+        extract_bytes_time(language, file, source.as_bytes())
+    }
+
+    fn extract_bytes_time(
+        language: Language,
+        file: &'static str,
+        source: &[u8],
+    ) -> std::time::Duration {
         let parsed = crate::parser::Parser::new()
-            .parse(source.as_bytes(), language, std::path::Path::new(file))
+            .parse(source, language, std::path::Path::new(file))
             .unwrap();
         let started = crate::index::timing::Stopwatch::start();
         super::extract_file(&parsed, file);
@@ -2679,6 +2687,87 @@ mod tests {
                 ".Methods(\"GET\")".repeat(size)
             );
             extract_time(Language::Go, "main.go", source)
+        });
+    }
+
+    /// The receiver paths of the calls of `source`, each one time, in order.
+    fn receiver_paths(
+        language: Language,
+        file: &'static str,
+        source: &[u8],
+    ) -> Vec<Option<String>> {
+        let parsed = crate::parser::Parser::new()
+            .parse(source, language, std::path::Path::new(file))
+            .unwrap();
+        super::extract_file(&parsed, file)
+            .reference_facts
+            .iter()
+            .map(|facts| facts.receiver_path.as_ref().map(|path| path.join(".")))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn test_a_receiver_path_is_read_in_a_file_that_is_not_utf8() {
+        let source = b"package main\n\n// \xff\nfunc more() {\n\tq.a.b.f()\n\tq.a.g().h()\n}\n";
+        assert_eq!(
+            receiver_paths(Language::Go, "main.go", source),
+            [None, Some("q.a".to_string()), Some("q.a.b".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_the_receivers_of_a_chain_after_fields_have_a_path_only_before_the_first_call() {
+        let source = format!(
+            "package main\n\nfunc more() {{\n\tq{}{}\n}}\n",
+            ".a".repeat(3),
+            ".f()".repeat(3)
+        );
+        assert_eq!(
+            receiver_paths(Language::Go, "main.go", source.as_bytes()),
+            [None, Some("q.a.a.a".to_string())]
+        );
+    }
+
+    /// The receiver of each call is the receiver of the call before it and that call. Once
+    /// one receiver is not a chain of names, no longer receiver can be one.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_go_method_chain_after_many_fields_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go chain after fields", 10_000, |size| {
+            let source = format!(
+                "package main\n\nfunc more() {{\n\tq{}{}\n}}\n",
+                ".a".repeat(size),
+                ".f()".repeat(size)
+            );
+            extract_time(Language::Go, "main.go", source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_php_method_chain_after_many_properties_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "php chain after properties",
+            10_000,
+            |size| {
+                let source = format!("<?php\n$q{}{};\n", "->a".repeat(size), "->f()".repeat(size));
+                extract_time(Language::Php, "a.php", source)
+            },
+        );
+    }
+
+    /// A file that is not valid UTF-8 must not make the check of each receiver read the
+    /// receiver again.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_go_method_chain_in_a_file_that_is_not_utf8_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go chain not utf8", 80_000, |size| {
+            let mut source = b"package main\n\n// \xff\nfunc more() {\n\tq".to_vec();
+            source.extend(".f()".repeat(size).bytes());
+            source.extend(b"\n}\n");
+            extract_bytes_time(Language::Go, "main.go", &source)
         });
     }
 
