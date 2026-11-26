@@ -471,7 +471,7 @@ impl LanguageSpec for Python {
 
     /// Python has no visibility syntax. A name that starts with `_` is private
     /// by convention, and a literal `__all__` lists the public names of a module.
-    fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+    fn exported<'tree>(&self, draft: &Draft<'tree>, context: &Context<'_, 'tree>) -> Exported {
         let dunder = draft.name.starts_with("__") && draft.name.ends_with("__");
         let private = draft.name.starts_with('_') && !dunder;
         if context.in_function() {

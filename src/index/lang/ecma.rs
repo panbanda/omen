@@ -455,7 +455,11 @@ fn object_exported<'tree>(object: Node<'tree>, context: &Context<'_, 'tree>) -> 
 }
 
 /// The import bindings of one statement or one `require` call. See `Ecma::imports`.
-fn imports_of(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+fn imports_of<'tree>(
+    node: Node<'tree>,
+    context: &Context<'_, 'tree>,
+    out: &mut Vec<ImportBinding>,
+) {
     let text = |node: Node<'_>| context.text(node);
     let literal = |string: Node<'_>| {
         text(string)
@@ -864,7 +868,12 @@ impl LanguageSpec for Ecma {
     /// The imported name `default` is the default export, and `*` is the module.
     /// `require('path')` with a literal path is an import. An `export` statement
     /// with a source is a re-export.
-    fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+    fn imports<'tree>(
+        &self,
+        node: Node<'tree>,
+        context: &Context<'_, 'tree>,
+        out: &mut Vec<ImportBinding>,
+    ) {
         let first = out.len();
         imports_of(node, context, out);
         mark_type_only(node, context, &mut out[first..]);
@@ -1025,7 +1034,7 @@ impl LanguageSpec for Ecma {
         true
     }
 
-    fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+    fn exported<'tree>(&self, draft: &Draft<'tree>, context: &Context<'_, 'tree>) -> Exported {
         if context.in_function() {
             return Exported::NotExported;
         }

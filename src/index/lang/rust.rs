@@ -208,7 +208,7 @@ fn implementation_id(block: Node<'_>, context: &Context<'_, '_>) -> usize {
 }
 
 /// The `cfg` attributes of a function and of the items that contain it.
-fn condition(node: Node<'_>, context: &Context<'_, '_>) -> Option<Condition> {
+fn condition<'tree>(node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Condition> {
     let mut attributes = Vec::new();
     let mut implementation = None;
     let scopes = context.scopes.iter().map(|scope| scope.node);
@@ -610,7 +610,7 @@ impl LanguageSpec for Rust {
         true
     }
 
-    fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+    fn exported<'tree>(&self, draft: &Draft<'tree>, context: &Context<'_, 'tree>) -> Exported {
         if context.in_function() {
             return Exported::NotExported;
         }

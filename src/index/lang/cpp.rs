@@ -188,7 +188,11 @@ fn exported_if(condition: bool) -> Exported {
     }
 }
 
-fn collect_base_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<String>) {
+fn collect_base_names<'tree>(
+    node: Node<'tree>,
+    context: &Context<'_, 'tree>,
+    out: &mut Vec<String>,
+) {
     // A stack in place of recursion, in the order of a recursive walk.
     let mut cursor = node.walk();
     let mut pending: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
@@ -821,7 +825,7 @@ impl LanguageSpec for Cpp {
         true
     }
 
-    fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+    fn exported<'tree>(&self, draft: &Draft<'tree>, context: &Context<'_, 'tree>) -> Exported {
         let anonymous_namespace = context.scopes.iter().any(|scope| {
             scope.role == ScopeRole::Namespace && scope.exported == Exported::NotExported
         });
