@@ -930,11 +930,24 @@ impl<'a> Context<'a> {
     /// method call counts when any method of the file with that name can end without a
     /// return.
     pub(super) fn go_exit_nodes(&self) -> &HashSet<usize> {
+        &self.go_exits_of_file().nodes
+    }
+
+    /// Tells if a panic at the position can be recovered while the code around it goes on:
+    /// the position is after a `defer` that can recover (see `go_exit_nodes`) in its function,
+    /// or in a function or a method of the file that a call after such a `defer` reaches.
+    pub(super) fn is_go_recovered(&self, position: usize) -> bool {
+        let regions = &self.go_exits_of_file().recovered;
+        let index = regions.partition_point(|(start, _)| *start <= position);
+        index > 0 && regions[index - 1].1 > position
+    }
+
+    fn go_exits_of_file(&self) -> &GoExits {
         self.go_exits
             .get_or_init(|| self.find_go_exits(self.parsed.root_node()))
     }
 
-    fn find_go_exits<'n>(&self, root: Node<'n>) -> HashSet<usize> {
+    fn find_go_exits<'n>(&self, root: Node<'n>) -> GoExits {
         let declarations: Vec<Node<'n>> = named_nodes(root)
             .into_iter()
             .filter(|child| matches!(child.kind(), "function_declaration" | "method_declaration"))
@@ -946,11 +959,17 @@ impl<'a> Context<'a> {
             Some((node.kind() == "method_declaration", self.text(name)))
         };
         let mut callers: HashMap<(bool, &'a str), Vec<(bool, &'a str)>> = HashMap::new();
+        let mut callees: HashMap<(bool, &'a str), Vec<(bool, &'a str)>> = HashMap::new();
+        let mut bodies: HashMap<(bool, &'a str), Vec<(usize, usize)>> = HashMap::new();
         let mut pending: Vec<(bool, &'a str)> = Vec::new();
         for declaration in &declarations {
             let Some(own) = key(*declaration) else {
                 continue;
             };
+            bodies
+                .entry(own)
+                .or_default()
+                .push((declaration.start_byte(), declaration.end_byte()));
             let mut flags = 0;
             self.exit_flags(*declaration, &|_| false, &mut |node, node_flags, inside| {
                 if node == *declaration {
@@ -958,6 +977,7 @@ impl<'a> Context<'a> {
                 } else if !inside && node.kind() == "call_expression" {
                     if let Some(callee) = self.callee_key(node) {
                         callers.entry(callee).or_default().push(own);
+                        callees.entry(own).or_default().push(callee);
                     }
                 }
             });
@@ -976,12 +996,93 @@ impl<'a> Context<'a> {
                 .is_some_and(|callee| aborting.contains(&callee))
         };
         let mut exits = HashSet::new();
+        let mut defers = HashSet::new();
         self.exit_flags(root, &aborts, &mut |node, flags, _| {
             if flags & EXIT_LEAVES != 0 {
                 exits.insert(node.id());
             }
+            if node.kind() == "defer_statement" && flags & EXIT_LEAVE != 0 {
+                defers.insert(node.id());
+            }
         });
-        exits
+        let (mut recovered, seeds) = self.recovering_regions(root, &defers);
+        let mut reached: HashSet<(bool, &'a str)> = HashSet::new();
+        let mut pending = seeds;
+        while let Some(callee) = pending.pop() {
+            if reached.insert(callee) {
+                pending.extend(callees.get(&callee).into_iter().flatten().copied());
+            }
+        }
+        for callee in &reached {
+            recovered.extend(bodies.get(callee).into_iter().flatten().copied());
+        }
+        recovered.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(recovered.len());
+        for (start, end) in recovered {
+            match merged.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+        GoExits {
+            nodes: exits,
+            recovered: merged,
+        }
+    }
+
+    /// The code after each `defer` of `defers` up to the end of its function, and the calls in
+    /// that code. A function literal there is in the region too. The code of a `go` statement
+    /// and of a `defer` statement is not, because a panic there does not reach the function.
+    fn recovering_regions<'n>(
+        &self,
+        root: Node<'n>,
+        defers: &HashSet<usize>,
+    ) -> (Vec<(usize, usize)>, Vec<CalleeKey<'a>>) {
+        enum Walk<'n> {
+            Enter(Node<'n>),
+            Leave(Node<'n>),
+        }
+        // For each function around the node: whether a recovering `defer` came before, and
+        // the end of the function.
+        let mut frames: Vec<(bool, usize)> = vec![(false, root.end_byte())];
+        let mut regions = Vec::new();
+        let mut seeds = Vec::new();
+        let mut stack = vec![Walk::Enter(root)];
+        while let Some(step) = stack.pop() {
+            match step {
+                Walk::Enter(node) => {
+                    let recovering = frames.last().is_some_and(|frame| frame.0);
+                    match node.kind() {
+                        "function_declaration"
+                        | "method_declaration"
+                        | "go_statement"
+                        | "defer_statement" => {
+                            frames.push((false, node.end_byte()));
+                            stack.push(Walk::Leave(node));
+                        }
+                        "func_literal" => {
+                            frames.push((recovering, node.end_byte()));
+                            stack.push(Walk::Leave(node));
+                        }
+                        "call_expression" if recovering => seeds.extend(self.callee_key(node)),
+                        _ => {}
+                    }
+                    let mut children = named_nodes(node);
+                    children.reverse();
+                    stack.extend(children.into_iter().map(Walk::Enter));
+                }
+                Walk::Leave(node) => {
+                    frames.pop();
+                    if defers.contains(&node.id()) {
+                        if let Some(frame) = frames.last_mut().filter(|frame| !frame.0) {
+                            frame.0 = true;
+                            regions.push((node.end_byte(), frame.1));
+                        }
+                    }
+                }
+            }
+        }
+        (regions, seeds)
     }
 
     /// The function (false) or the method (true) that a call names, if the file declares it.
@@ -1087,10 +1188,11 @@ impl<'a> Context<'a> {
                                 .named_child(0)
                                 .and_then(|call| call.child_by_field_name("function"))
                                 .is_some_and(|callee| callee.kind() == "func_literal");
+                            // A `defer` in a deferred literal can recover too.
                             if literal && below & EXIT_RECOVER == 0 {
                                 0
                             } else {
-                                EXIT_LEAVE
+                                EXIT_LEAVE | EXIT_RECOVER
                             }
                         }
                         "func_literal" => below & EXIT_RECOVER,
@@ -3235,10 +3337,14 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             let router = &mut self.routers[site.router];
             router.guard_bodies.add(bodies[site.branch]);
             let place = anchors[site.branch];
-            if place == anchors[router.created_in] {
+            if site.recovered {
+                // No route sees the guard surely, so no place gives relief.
+                router.conditional_place = GuardBodies::Several;
+            } else if place == anchors[router.created_in] {
                 continue;
+            } else {
+                router.conditional_place.add(Some(place));
             }
-            router.conditional_place.add(Some(place));
             if site.before_routing {
                 router.pre_conditional = true;
             } else {
@@ -4564,11 +4670,15 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
         if !guards.is_empty() {
             let branch = self.current_branch();
             let added_at = self.routers[router].guards.len();
+            let recovered = arguments
+                .first()
+                .is_some_and(|argument| self.context.is_go_recovered(argument.start_byte()));
             self.guard_sites.push(GuardSite {
                 router,
                 added_at,
                 before_routing,
                 branch,
+                recovered,
             });
             // The body of a helper counts as the code that always runs here: a summary is for
             // one call of the function.
@@ -4581,7 +4691,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             };
             let differs = in_body(branch) != in_body(self.routers[router].created_in);
             // The summary of the function tells each caller that the guard is conditional.
-            if differs {
+            if differs || recovered {
                 if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.function) {
                     frame.conditional = true;
                 }
@@ -6008,6 +6118,8 @@ struct GuardSite {
     added_at: usize,
     before_routing: bool,
     branch: BranchId,
+    /// A recovered panic can skip the call after a route ran. See `Context::is_go_recovered`.
+    recovered: bool,
 }
 
 /// The branches of a file, each with a link to the branch around it.
@@ -6976,4 +7088,14 @@ const EXIT_LEAVES: u8 = EXIT_ABORT | EXIT_LEAVE | EXIT_BREAK | EXIT_CONTINUE;
 fn named_nodes(node: Node<'_>) -> Vec<Node<'_>> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor).collect()
+}
+
+/// A function (false) or a method (true) of a Go file, by name.
+type CalleeKey<'a> = (bool, &'a str);
+
+/// The exit facts of a Go file. See `Context::go_exit_nodes` and `Context::is_go_recovered`.
+pub(super) struct GoExits {
+    nodes: HashSet<usize>,
+    /// Sorted ranges of bytes that do not overlap.
+    recovered: Vec<(usize, usize)>,
 }

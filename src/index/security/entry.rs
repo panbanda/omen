@@ -1241,7 +1241,7 @@ struct Context<'a> {
     /// for each the highest end of a function that has a binding up to it.
     go_locals: std::sync::OnceLock<GoLocals>,
     /// The nodes of a Go file after which the rest of their statement list may not run.
-    go_exits: std::sync::OnceLock<std::collections::HashSet<usize>>,
+    go_exits: std::sync::OnceLock<go_routes::GoExits>,
     /// The names of the variables that hold a `net/http` multiplexer, in a Go file.
     go_servemuxes: std::sync::OnceLock<std::collections::HashSet<String>>,
     /// The `net/http` patterns of a Go file that other patterns of the file can cover.

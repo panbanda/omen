@@ -2333,7 +2333,11 @@ impl<'w, 'c, 'a> Walker<'w, 'c, 'a> {
                 // the later routes, which run only when it runs.
                 let regions = self.made_regions.get(&router).copied().unwrap_or_default();
                 let skipped = *layer == Layer::Global && self.exit_regions > regions;
-                if self.scopes.len() > made || skipped {
+                // After a `defer` that can recover, a panic can skip the layer after a route ran.
+                let recovered = arguments
+                    .first()
+                    .is_some_and(|argument| self.context.is_go_recovered(argument.start_byte()));
+                if self.scopes.len() > made || skipped || recovered {
                     guards.push(Guard::Conditional);
                 }
                 self.graph.note_spreads(&guards);
@@ -3883,15 +3887,38 @@ func reqSignIn(w http.ResponseWriter, r *http.Request) {}
     fn a_framework_layer_after_an_exit_before_the_router_is_made_is_complete() {
         let body = r#"
 func main() {
-	defer rec()
+	if verbose {
+		return
+	}
 	m := web.NewRouter()
 	m.Get("/early", Home)
 	m.BeforeRouting(head)
 }
-
-func rec() { recover() }
 "#;
         assert_eq!(layer_states(body), ["GET /early [head] complete"]);
+    }
+
+    #[test]
+    fn each_layer_after_a_defer_that_can_recover_is_conditional() {
+        let body = r#"
+func rec() { recover() }
+
+func main() {
+	defer rec()
+	m := web.NewRouter()
+	m.Get("/early", Home)
+	m.BeforeRouting(head)
+	m.AfterRouting(auth)
+	m.Get("/late", Home)
+}
+"#;
+        assert_eq!(
+            layer_states(body),
+            [
+                "GET /early [head] conditional_middleware",
+                "GET /late [head,auth] conditional_middleware",
+            ]
+        );
     }
 
     #[test]

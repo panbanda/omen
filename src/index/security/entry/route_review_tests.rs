@@ -2465,10 +2465,65 @@ fn a_defer_that_is_not_a_literal_without_recover_can_recover() {
 fn an_exit_before_the_router_is_made_does_not_make_its_guard_conditional() {
     for body in [
         "func main() {\n\tif len(nil) == 0 {\n\t\treturn\n\t}\n\tr := chi.NewRouter()\n\tr.Use(auth)\n\tr.Get(\"/x\", first)\n}",
-        "func rec() { recover() }\n\nfunc main() {\n\tdefer rec()\n\tr := chi.NewRouter()\n\tr.Use(auth)\n\tr.Get(\"/x\", first)\n}",
+        "func main() {\n\tif len(nil) == 0 {\n\t\tpanic(\"x\")\n\t}\n\tr := chi.NewRouter()\n\tr.Use(auth)\n\tr.Get(\"/x\", first)\n}",
     ] {
         let found = go_guards(CHI, body);
         assert_eq!(found.len(), 1, "{body}");
         assert!(found[0].2, "{body}: {found:?}");
     }
+}
+
+// The ninth review: a defer that can recover a panic of a library call.
+
+const RECOVER_DEFERS: [&str; 2] = ["defer rec()", "defer func() { recover() }()"];
+
+fn with_regexp(imports: &str) -> String {
+    format!("{imports}\n\t\"regexp\"")
+}
+
+#[test]
+fn each_guard_after_a_defer_that_can_recover_is_conditional() {
+    let prelude = "var pattern = \"(\"\n\nfunc rec() { recover() }";
+    let mut cases: Vec<(&str, String)> = Vec::new();
+    for defer in RECOVER_DEFERS {
+        cases.extend([
+            (ECHO, format!("{prelude}\n\nvar e = echo.New()\n\nfunc routes() {{\n\t{defer}\n\te.GET(\"/x\", first)\n\tregexp.MustCompile(pattern)\n\te.Use(auth)\n}}\n\nfunc main() {{\n\troutes()\n}}")),
+            (MUX, format!("{prelude}\n\nvar r = mux.NewRouter()\n\nfunc routes() {{\n\t{defer}\n\tr.HandleFunc(\"/x\", first)\n\tregexp.MustCompile(pattern)\n\tr.Use(auth)\n}}\n\nfunc main() {{\n\troutes()\n}}")),
+            (ECHO, format!("{prelude}\n\nfunc serve() {{\n\t{defer}\n\te := echo.New()\n\te.GET(\"/x\", first)\n\tgo e.Start(\":1\")\n\tregexp.MustCompile(pattern)\n\te.Use(auth)\n}}\n\nfunc main() {{\n\tserve()\n}}")),
+            (CHI, format!("{prelude}\n\nfunc newAPI() (r *chi.Mux) {{\n\t{defer}\n\tr = chi.NewRouter()\n\tregexp.MustCompile(pattern)\n\tr.Use(auth)\n\treturn r\n}}\n\nfunc main() {{\n\ta := newAPI()\n\ta.Get(\"/x\", first)\n}}")),
+            (CHI, format!("{prelude}\n\nfunc main() {{\n\t{defer}\n\tr := chi.NewRouter()\n\tregexp.MustCompile(pattern)\n\tr.Use(auth)\n\tr.Get(\"/x\", first)\n}}")),
+            (CHI, format!("{prelude}\n\nvar r = chi.NewRouter()\n\nfunc main() {{\n\tsafe()\n}}\n\nfunc safe() {{\n\t{defer}\n\thelper()\n}}\n\nfunc helper() {{\n\tr.Get(\"/x\", first)\n\tregexp.MustCompile(pattern)\n\tr.Use(auth)\n}}")),
+        ]);
+    }
+    // A literal that defers a function that recovers.
+    cases.push((CHI, format!("{prelude}\n\nvar r = chi.NewRouter()\n\nfunc main() {{\n\tsafe()\n\tr.Get(\"/x\", first)\n}}\n\nfunc safe() {{\n\tdefer func() {{\n\t\tdefer func() {{ recover() }}()\n\t}}()\n\thelper()\n}}\n\nfunc helper() {{\n\tregexp.MustCompile(pattern)\n\tr.Use(auth)\n}}")));
+    for (imports, body) in &cases {
+        assert_all_conditional(&with_regexp(imports), body);
+    }
+    // A defer after the guard does not change it.
+    let found = go_guards(
+        &with_regexp(CHI),
+        "var pattern = \"(\"\n\nfunc rec() { recover() }\n\nvar r = chi.NewRouter()\n\nfunc main() {\n\thelper()\n\tr.Get(\"/x\", first)\n\tregexp.MustCompile(pattern)\n}\n\nfunc helper() {\n\tr.Use(auth)\n\tdefer rec()\n}",
+    );
+    assert_eq!(found.len(), 1);
+    assert!(found[0].2, "{found:?}");
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_many_recovering_defers_and_a_long_chain_of_calls_cost_linear_time() {
+    assert_scales_linearly("recovering defers", 2_000, |size| {
+        let mut body = String::from("var r = chi.NewRouter()\n\nfunc rec() { recover() }\n\n");
+        for function in 0..size {
+            writeln!(
+                body,
+                "func f{function}() {{\n\tdefer rec()\n\tr.Use(auth)\n\tf{}()\n}}\n",
+                function + 1
+            )
+            .unwrap();
+        }
+        writeln!(body, "func f{size}() {{\n\tr.Get(\"/x\", first)\n}}\n").unwrap();
+        body.push_str("func main() {\n\tf0()\n}");
+        search_time(Language::Go, "main.go", &go(CHI, &body))
+    });
 }
