@@ -2600,6 +2600,61 @@ mod tests {
         });
     }
 
+    /// A Go function that binds `size` names to function literals in one short
+    /// declaration, and a `var` specification that does the same at the top level.
+    fn go_function_literals_in_one_declaration(size: usize) -> String {
+        let names = |prefix: &str| {
+            (0..size)
+                .map(|position| format!("{prefix}{position}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let literals = vec!["func() {}"; size].join(", ");
+        format!(
+            "package p\n\nvar {} = {literals}\n\nfunc F() {{\n\t{} := {literals}\n\t_, _ = a0, b0\n}}\n",
+            names("b"),
+            names("a")
+        )
+    }
+
+    #[test]
+    fn test_each_go_function_literal_of_a_declaration_has_the_name_at_its_position() {
+        let source = go_function_literals_in_one_declaration(3)
+            .replace("a1 :=", "_ :=")
+            .replace(", a1,", ", _,");
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Go,
+                std::path::Path::new("p.go"),
+            )
+            .unwrap();
+        let symbols = super::extract_file(&parsed, "p.go");
+        let mut names: Vec<&str> = symbols
+            .symbols
+            .iter()
+            .map(|symbol| symbol.name.as_str())
+            .filter(|name| name.starts_with(['a', 'b']))
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["a0", "a2", "b0", "b1", "b2"]);
+    }
+
+    /// The name of a function literal is the name at the position of the literal.
+    /// The position must not come from a search of the values, and the name must
+    /// not come from `Node::named_child`, which reads the children from the first.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_go_function_literals_in_one_declaration_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go function literals", 2_000, |size| {
+            extract_time(
+                Language::Go,
+                "p.go",
+                go_function_literals_in_one_declaration(size),
+            )
+        });
+    }
+
     /// A Ruby class whose `class << self` has `size` nested blocks, each with a
     /// method.
     fn ruby_methods_in_nested_blocks(size: usize) -> String {
