@@ -75,6 +75,9 @@ const TEXT_ID_MEMO: u8 = 1;
 /// extraction.
 const IMPLEMENTATION_MEMO: u8 = 2;
 
+/// The number of the children of a token tree in the memo of the extraction.
+const TOKENS_MEMO: u8 = 3;
+
 /// The types that hold the object of a method and give its methods.
 const SELF_WRAPPERS: [&str; 2] = ["Arc", "Rc"];
 
@@ -437,20 +440,24 @@ impl LanguageSpec for Rust {
         if next != Some(&b'(') {
             return None;
         }
-        context
+        let tree = context
             .parent(node)
             .filter(|parent| parent.kind() == TOKEN_TREE)?;
         if !EVALUATING_MACROS.contains(&enclosing_macro(node, context)?.as_str()) {
             return None;
         }
-        let arguments = node.next_sibling()?;
-        let opens = context.source.get(arguments.start_byte()) == Some(&b'(');
-        if arguments.kind() != TOKEN_TREE || !opens {
+        let tokens = tokens_of(tree, context);
+        let position = *tokens.positions.get(&node.id())?;
+        let (is_tree, start, _) = *tokens.children.get(position + 1)?;
+        let opens = context.source.get(start) == Some(&b'(');
+        if !is_tree || !opens {
             return None;
         }
-        let qualified = node
-            .prev_sibling()
-            .is_some_and(|before| [".", "::", ":"].contains(&context.text(before).as_str()));
+        let qualified = position
+            .checked_sub(1)
+            .and_then(|before| tokens.children.get(before))
+            .and_then(|&(_, start, end)| context.source.get(start..end))
+            .is_some_and(|before| [&b"."[..], b"::", b":"].contains(&before));
         (!qualified).then_some(Call {
             callee: Callee {
                 target: None,
@@ -679,16 +686,52 @@ const EVALUATING_MACROS: &[&str] = &[
 ];
 
 /// The name of the macro that has the tokens that contain `node`.
-fn enclosing_macro(node: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
-    let mut current = node.parent()?;
+fn enclosing_macro<'tree>(node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<String> {
+    let mut current = context.parent(node)?;
     while current.kind() == TOKEN_TREE {
-        current = current.parent()?;
+        current = context.parent(current)?;
     }
     if current.kind() != "macro_invocation" {
         return None;
     }
     let name = context.text(current.child_by_field_name("macro")?);
     Some(last_segment(&name))
+}
+
+/// For each child of a token tree: whether it is a token tree, and its byte range. The position
+/// of each child is by the ID of the child.
+struct Tokens {
+    positions: HashMap<usize, usize>,
+    children: Vec<(bool, usize, usize)>,
+}
+
+/// The children of the token tree `tree`, read one time. `Node::next_sibling` and
+/// `Node::prev_sibling` read the children of the parent from the first child, so a step from
+/// each name of a long token tree to its siblings takes time that grows with the square of the
+/// number of tokens.
+fn tokens_of(tree: Node<'_>, context: &Context<'_, '_>) -> Rc<Tokens> {
+    let key = (tree.id(), TOKENS_MEMO);
+    if let Some(found) = context.memo.borrow().get(&key) {
+        if let Ok(found) = Rc::clone(found).downcast::<Tokens>() {
+            return found;
+        }
+    }
+    let mut tokens = Tokens {
+        positions: HashMap::new(),
+        children: Vec::new(),
+    };
+    let mut cursor = tree.walk();
+    for child in tree.children(&mut cursor) {
+        tokens.positions.insert(child.id(), tokens.children.len());
+        tokens.children.push((
+            child.kind() == TOKEN_TREE,
+            child.start_byte(),
+            child.end_byte(),
+        ));
+    }
+    let tokens = Rc::new(tokens);
+    context.memo.borrow_mut().insert(key, tokens.clone());
+    tokens
 }
 
 fn joined(prefix: &str, path: &str) -> String {
