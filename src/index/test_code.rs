@@ -444,9 +444,14 @@ fn is_rust_comment(node: Node<'_>) -> bool {
     matches!(node.kind(), "line_comment" | "block_comment")
 }
 
-/// Each run of outer attributes among the children of `parent`, and the item to which the run
-/// applies. Comments can be between the attributes of a run and the item. A run with no item
-/// after it applies to nothing.
+/// Each run of outer attributes among the children of `parent`, and the target to which the
+/// run applies: the next child that is not a comment. The target is usually an item, but it can
+/// be a token such as `}`. Comments can be between the attributes of a run and the target. A
+/// run with no target after it applies to nothing.
+///
+/// A child that ends at or before the end of the last attribute or comment of the run, such as a
+/// node with no width that the parser adds for a missing token, is not a target and does not end
+/// the run. `Node::next_sibling` and `Node::prev_sibling` skip such a child too.
 ///
 /// One pass of a cursor reads the children. `Node::next_sibling` and `Node::prev_sibling` read
 /// the children of the parent from the first child, so a step from each attribute to its
@@ -454,12 +459,16 @@ fn is_rust_comment(node: Node<'_>) -> bool {
 fn rust_attribute_runs<'tree>(parent: Node<'tree>) -> Vec<(Vec<Node<'tree>>, Node<'tree>)> {
     let mut runs = Vec::new();
     let mut attributes = Vec::new();
+    let mut run_end = 0;
     let mut cursor = parent.walk();
     for child in parent.children(&mut cursor) {
         match child.kind() {
-            "attribute_item" => attributes.push(child),
-            _ if is_rust_comment(child) => {}
-            _ if attributes.is_empty() => {}
+            "attribute_item" => {
+                attributes.push(child);
+                run_end = child.end_byte();
+            }
+            _ if is_rust_comment(child) => run_end = run_end.max(child.end_byte()),
+            _ if attributes.is_empty() || child.end_byte() <= run_end => {}
             _ => runs.push((std::mem::take(&mut attributes), child)),
         }
     }
