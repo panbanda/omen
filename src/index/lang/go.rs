@@ -257,22 +257,7 @@ impl LanguageSpec for Go {
             .parent(node)
             .filter(|list| list.kind() == EXPRESSION_LIST)?;
         let position = *value_positions(values, context).get(&node.id())?;
-        let declaration = context.parent(values)?;
-        let names = match declaration.kind() {
-            SHORT_VAR_DECLARATION => {
-                let left = declaration.child_by_field_name("left")?;
-                context.memoized_nodes((left.id(), NAMES_MEMO), || {
-                    left.named_children(&mut left.walk()).collect()
-                })
-            }
-            VAR_SPEC => context.memoized_nodes((declaration.id(), NAMES_MEMO), || {
-                declaration
-                    .children_by_field_name("name", &mut declaration.walk())
-                    .collect()
-            }),
-            _ => return None,
-        };
-        let name = *names.get(position)?;
+        let name = *declared_names(values, context)?.get(position)?;
         (name.kind() == IDENTIFIER && context.text(name) != "_").then_some(name)
     }
 
@@ -316,7 +301,18 @@ impl LanguageSpec for Go {
                     }
                 }
             }
-            FUNCTION_LITERAL => draft.span = Span::between(&draft.name_node, &draft.node),
+            // A span from the name would contain the other names of the declaration, and the
+            // literals before this one.
+            FUNCTION_LITERAL => {
+                let alone = context
+                    .parent(draft.node)
+                    .filter(|values| values.kind() == EXPRESSION_LIST)
+                    .and_then(|values| declared_names(values, context))
+                    .is_some_and(|names| names.len() > 1);
+                if !alone {
+                    draft.span = Span::between(&draft.name_node, &draft.node);
+                }
+            }
             _ => {}
         }
         true
@@ -330,6 +326,28 @@ impl LanguageSpec for Go {
         } else {
             Exported::NotExported
         }
+    }
+}
+
+/// The names of the declaration whose values are the expression list `values`, in order.
+fn declared_names<'tree>(
+    values: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Option<Rc<[Node<'tree>]>> {
+    let declaration = context.parent(values)?;
+    match declaration.kind() {
+        SHORT_VAR_DECLARATION => {
+            let left = declaration.child_by_field_name("left")?;
+            Some(context.memoized_nodes((left.id(), NAMES_MEMO), || {
+                left.named_children(&mut left.walk()).collect()
+            }))
+        }
+        VAR_SPEC => Some(context.memoized_nodes((declaration.id(), NAMES_MEMO), || {
+            declaration
+                .children_by_field_name("name", &mut declaration.walk())
+                .collect()
+        })),
+        _ => None,
     }
 }
 
