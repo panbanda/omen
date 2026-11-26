@@ -7136,6 +7136,36 @@ func routes() {
         });
     }
 
+    /// One Rocket handler after `count` line comments. The attributes of a function can have
+    /// comments before and between them, so the search for them goes back over each comment.
+    fn a_rocket_handler_after_many_comments_at(count: usize) -> Search {
+        let mut source = String::from("use rocket::get;\n\n");
+        for position in 0..count {
+            source.push_str(&format!("// line {position}\n"));
+        }
+        source.push_str("#[get(\"/p\")]\n// the handler\n#[inline]\npub fn handler() {}\n");
+        let (found, took) = entries_lean(Language::Rust, &[("src/main.rs", &source)]);
+        assert!(found
+            .iter()
+            .all(|entry| entry.kind == EntryKind::HttpHandler));
+        (found.len(), took)
+    }
+
+    #[test]
+    fn a_rocket_handler_after_many_comments_is_an_entry() {
+        assert_eq!(a_rocket_handler_after_many_comments_at(20).0, 1);
+    }
+
+    /// A step from a node to its previous sibling reads the children of the parent from the
+    /// first child, so the search for the attributes must not step back through the siblings.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_rocket_handler_after_many_comments_is_read_in_linear_time() {
+        assert_scales_linearly("comments before a handler", 20_000, |count| {
+            a_rocket_handler_after_many_comments_at(count).1
+        });
+    }
+
     #[test]
     fn an_axum_handler_path_is_not_resolved_by_its_last_name_alone() {
         let files = [
