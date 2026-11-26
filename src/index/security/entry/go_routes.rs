@@ -919,17 +919,16 @@ impl<'a> Context<'a> {
         })
     }
 
-    /// Tells if the node is in a branch that never runs: the body of `if false`, the `else`
-    /// branch of `if true`, or the body of `for false`.
     /// The nodes after which the rest of their statement list may not run. These are the
     /// nodes that hold one of these: `return`; `goto`; a labelled `break` or `continue`; a
     /// call of the builtin `panic`; a loop with no condition that no `break`, `return`, or
-    /// `goto` leaves; an empty `select`; a `defer` whose code calls the builtin `recover`; or a
-    /// call of a function or a method of the file that can end without a return. An unlabelled
+    /// `goto` leaves; an empty `select`; a `defer` that can recover; or a call of a function
+    /// or a method of the file that can end without a return. Each `defer` can recover, but
+    /// a `defer` of a function literal with no call of the builtin `recover`. An unlabelled
     /// `break` or `continue` counts only inside its loop, `switch`, or `select`. The code of a
-    /// closure, of a `go` statement, and of a `defer` statement does not count, except for the
-    /// `recover` of a `defer`. A method call counts when any method of the file with that name
-    /// can end without a return.
+    /// closure, of a `go` statement, and of a `defer` statement does not count otherwise. A
+    /// method call counts when any method of the file with that name can end without a
+    /// return.
     pub(super) fn go_exit_nodes(&self) -> &HashSet<usize> {
         self.go_exits
             .get_or_init(|| self.find_go_exits(self.parsed.root_node()))
@@ -1080,8 +1079,21 @@ impl<'a> Context<'a> {
                         }
                         "select_statement" if !has_case() => below | EXIT_ABORT,
                         "select_statement" => below & !EXIT_BREAK,
-                        "defer_statement" if below & EXIT_RECOVER != 0 => EXIT_LEAVE,
-                        "func_literal" | "defer_statement" => below & EXIT_RECOVER,
+                        // Only a function literal with no call of `recover` surely does not
+                        // recover. A named function, a method, a variable, or a function of
+                        // another package can.
+                        "defer_statement" => {
+                            let literal = node
+                                .named_child(0)
+                                .and_then(|call| call.child_by_field_name("function"))
+                                .is_some_and(|callee| callee.kind() == "func_literal");
+                            if literal && below & EXIT_RECOVER == 0 {
+                                0
+                            } else {
+                                EXIT_LEAVE
+                            }
+                        }
+                        "func_literal" => below & EXIT_RECOVER,
                         "go_statement" => 0,
                         _ => below,
                     };
@@ -1096,6 +1108,8 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Tells if the node is in a branch that never runs: the body of `if false`, the `else`
+    /// branch of `if true`, or the body of `for false`.
     pub(super) fn go_in_dead_branch(&self, node: Node<'_>) -> bool {
         // One walk over the tree finds the branches that never run. A parent of a node costs
         // a walk down from the root, so the check does not climb to the parents.
@@ -3960,11 +3974,22 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             return None;
         }
         let place = self.place_now(router, None)?;
+        // A router from the summary of another factory keeps the conditional guards of it.
+        let mut inherited = false;
+        let mut current = router;
+        loop {
+            let above = &self.routers[current];
+            inherited |= above.pre_conditional || above.conditional_from != usize::MAX;
+            match above.links.as_slice() {
+                [link] => current = link.parent,
+                _ => break,
+            }
+        }
         Some(Summary {
             framework: self.routers[router].framework,
             prefixes: place.prefixes,
             guards: place.guards,
-            conditional,
+            conditional: conditional || inherited,
         })
     }
 

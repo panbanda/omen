@@ -321,7 +321,7 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 | `unreadable_include` | FastAPI | The file includes the router two times, in a condition, after the route, or in a loop of routers. |
 | `unreadable_dependency` | FastAPI | A dependency is not a name, or the `dependencies` value is not a literal list. Or the file uses the `dependencies` attribute of an object, as `router.dependencies.clear()`, which can change the dependencies that a later route gets. |
 | `wildcard_import` | FastAPI | The file has `from module import *`, which can bind a name again. |
-| `conditional_middleware` | chi, echo, gin, gorilla/mux, Go router types | chi, echo, gin, gorilla/mux: a `Use` or an echo `Pre` call is at a place that does not surely run whenever its router exists: an arm of an `if`, a case of a `switch` or a `select`, a loop body, the update statement of a `for` clause, the right operand of `&&` or `||`, a function literal, `defer`, or `go`, a place after an earlier statement of its list that can leave the list, or the body of a function or a method whose top does not surely run with the router. A function that returns a router with such middleware gives the reason to the routes of each caller. See the rule after the next table. Go router types: a layer method, as `AfterRouting`, is called in a condition, a loop, or a function literal; a framework layer, as `BeforeRouting`, comes after an earlier statement of its function that can leave the function; or a function returns the router with different layers. |
+| `conditional_middleware` | chi, echo, gin, gorilla/mux, Go router types | chi, echo, gin, gorilla/mux: a `Use` or an echo `Pre` call is at a place that does not surely run whenever its router exists: an arm of an `if`, a case of a `switch` or a `select`, a loop body, the update statement of a `for` clause, the right operand of `&&` or `||`, a function literal, `defer`, or `go`, a place after an earlier statement of its list that can leave the list when the router exists before that statement, or the body of a function or a method whose top does not surely run with the router. A function that returns a router with such middleware gives the reason to the routes of each caller. See the rule after the next table. Go router types: a layer method, as `AfterRouting`, is called in a condition, a loop, or a function literal; a framework layer, as `BeforeRouting`, comes after a statement that can leave the function and that runs after the router is made; or a function returns the router with different layers. |
 | `unread_middleware` | chi, echo, gin, gorilla/mux, `net/http`, Go router types, Express, Koa, Fastify | A middleware argument is not a name, or a spread of a Go slice that omen cannot read. For Go, its guard text is `<expression>` or `<function literal>`. Or a call around the handler is not a conversion, as `http.HandlerFunc(show)`, and not a middleware of the repository, as `middleware.Auth(cfg)(...)`. For Express, Koa, and Fastify, a middleware argument of the route call is a call, as `limit(5)`, or a function, and omen does not list it. The options object of a Fastify route is not a middleware. The handler and the known guards stay. |
 | `too_many_guards` | Each framework | The entry point has more than 256 guards. The list has the first 256 guards in the usual order. |
 | `layer_not_read` | See the next table | The framework has a place for guards that omen does not read. |
@@ -375,15 +375,18 @@ with the level of the package, when all of these are true:
   statement of a `for` clause, no right operand of `&&` or `||`, and no function literal,
   `defer`, or `go`. The left operand, the condition of an `if` or a `for`, and the initial
   statement of a `for` clause surely run.
-- No earlier statement of each statement list around it can leave the list. A statement can
-  leave its list when it holds one of these: `return`; `goto`; a labelled `break` or
+- No earlier statement of a statement list around it can leave the list, unless the router is
+  made after that statement in the same list. A statement can leave its list when it holds one
+  of these: `return`; `goto`; a labelled `break` or
   `continue`; an unlabelled `break` or `continue` inside its loop, `switch`, or `select`; a call
   of the builtin `panic`; a loop with no condition that no `break`, `return`, or `goto` leaves;
-  an empty `select`; a `defer` whose code calls the builtin `recover`; or a call of a function or
-  a method of the file that can end without a return, because it holds one of these ends or
-  calls such a function. The code of a function literal, of a `go` statement, and of a `defer`
-  statement does not count, except for the `recover` of a `defer`. A method call counts when any
-  method of the file with that name can end without a return.
+  an empty `select`; a `defer` that can recover; or a call of a function or a method of the file
+  that can end without a return, because it holds one of these ends or calls such a function.
+  Each `defer` can recover, except a `defer` of a function literal with no call of the builtin
+  `recover`. Omen does not resolve the target of a `defer`, so a deferred function, method,
+  variable, or function of another package counts, as `defer mu.Unlock()` does. Otherwise the
+  code of a function literal, of a `go` statement, and of a `defer` statement does not count. A
+  method call counts when any method of the file with that name can end without a return.
 
 The top of the body of a function or a method surely runs with the router only when the function
 has one use in the repository, the use is a direct call in the same file, the call is at a place
@@ -397,9 +400,10 @@ and adds middleware to it at a place that does not surely run with the router gi
 only to later routes, middleware from another function also gives `conditional_middleware`,
 because the order of two functions is not known.
 
-Omen does not read a panic in a function of another file or of a library. Such a panic skips the
-rest of a body only when a deferred `recover` catches it. Omen sees a `defer` with `recover` of
-the same file, but not one of another file.
+Omen does not read whether a function of another file or of a library can panic. Such a panic
+skips the rest of a body only when a deferred function recovers it, and each `defer` that can
+recover counts as a statement that can leave its list. Omen does not read a `defer` in a caller of
+another file.
 
 Omen trusts the order of two registrations only when both are in one function body, or both are
 at the level of the package. The walk reads a function where the file declares it, not where a
@@ -985,9 +989,9 @@ index, and the other commands, do not know the symbol.
   complete, with the reason `layer_not_read`.
 - A layer call in a condition, a loop, or a function literal gives its guards, and the
   guards are not complete, with the reason `conditional_middleware`. A framework layer, as
-  `BeforeRouting`, also guards the routes before it, so a framework layer after an earlier
-  statement of its function that can leave the function (see the chi rule above) gives the
-  same reason to each route of the router.
+  `BeforeRouting`, also guards the routes before it. A framework layer after a statement of its
+  function that can leave the function (see the chi rule above), when that statement runs after
+  the router is made, gives the same reason to each route of the router.
 - A test file gives no route and no mount of a repository router type. A route of chi, echo,
   gin, gorilla/mux, or `net/http` in a test file gives an entry with `in_test: true`.
 - A router is a value that the import of the framework proves. It is a constructor

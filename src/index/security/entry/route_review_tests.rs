@@ -2422,3 +2422,53 @@ fn timing_many_exits_and_a_long_chain_of_panics_cost_linear_time() {
         search_time(Language::Go, "main.go", &go(CHI, &body))
     });
 }
+
+// The eighth review.
+
+#[test]
+fn a_conditional_guard_of_a_nested_factory_stays_conditional() {
+    let inner = "var c = len(os.Args) > 5\n\nfunc logs(next http.Handler) http.Handler { return next }\n\nfunc inner() *chi.Mux {\n\tr := chi.NewRouter()\n\tif c {\n\t\treturn r\n\t}\n\tr.Use(auth)\n\treturn r\n}";
+    let two = format!("{inner}\n\nfunc outer() *chi.Mux {{\n\tr := inner()\n\tr.Use(logs)\n\treturn r\n}}\n\nfunc main() {{\n\ta := outer()\n\ta.Get(\"/n\", first)\n}}");
+    let three = format!("{inner}\n\nfunc middle() *chi.Mux {{\n\tr := inner()\n\treturn r\n}}\n\nfunc outer() *chi.Mux {{\n\tr := middle()\n\tr.Use(logs)\n\treturn r\n}}\n\nfunc main() {{\n\ta := outer()\n\ta.Get(\"/n\", first)\n}}");
+    let imports = format!("{CHI}\n\t\"os\"");
+    for body in [two, three] {
+        let found = only_rows(&imports, &body);
+        assert_eq!(found.len(), 1, "{body}");
+        assert_eq!(found[0].guards, ["auth", "logs"]);
+        assert_eq!(
+            found[0].guards_unknown_reason,
+            Some(GuardsUnknownReason::ConditionalMiddleware),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_defer_that_is_not_a_literal_without_recover_can_recover() {
+    let helper = "func helper() {\n\tr.Use(auth)\n}";
+    for defer in ["defer rec()", "defer g.rec()", "defer recLiteral()"] {
+        let body = format!("var r = chi.NewRouter()\n\ntype G struct{{}}\n\nvar g G\n\nfunc rec() {{ recover() }}\n\nfunc (G) rec() {{ recover() }}\n\nvar recLiteral = func() {{ recover() }}\n\nfunc main() {{\n\tsafe()\n\tr.Get(\"/x\", first)\n}}\n\nfunc safe() {{\n\t{defer}\n\thelper()\n}}\n\n{helper}");
+        assert_all_conditional(CHI, &body);
+    }
+    // A literal that calls a function that calls `recover` does not recover.
+    for literal in ["func() { println() }", "func() { rec() }"] {
+        let found = go_guards(
+            CHI,
+            &format!("var r = chi.NewRouter()\n\nfunc rec() {{ recover() }}\n\nfunc main() {{\n\tsafe()\n\tr.Get(\"/x\", first)\n}}\n\nfunc safe() {{\n\tdefer {literal}()\n\thelper()\n}}\n\nfunc helper() {{\n\tr.Use(auth)\n}}"),
+        );
+        assert_eq!(found.len(), 1);
+        assert!(found[0].2, "{literal}: {found:?}");
+    }
+}
+
+#[test]
+fn an_exit_before_the_router_is_made_does_not_make_its_guard_conditional() {
+    for body in [
+        "func main() {\n\tif len(nil) == 0 {\n\t\treturn\n\t}\n\tr := chi.NewRouter()\n\tr.Use(auth)\n\tr.Get(\"/x\", first)\n}",
+        "func rec() { recover() }\n\nfunc main() {\n\tdefer rec()\n\tr := chi.NewRouter()\n\tr.Use(auth)\n\tr.Get(\"/x\", first)\n}",
+    ] {
+        let found = go_guards(CHI, body);
+        assert_eq!(found.len(), 1, "{body}");
+        assert!(found[0].2, "{body}: {found:?}");
+    }
+}

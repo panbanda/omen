@@ -3880,6 +3880,39 @@ func reqSignIn(w http.ResponseWriter, r *http.Request) {}
     }
 
     #[test]
+    fn a_framework_layer_after_an_exit_before_the_router_is_made_is_complete() {
+        let body = r#"
+func main() {
+	defer rec()
+	m := web.NewRouter()
+	m.Get("/early", Home)
+	m.BeforeRouting(head)
+}
+
+func rec() { recover() }
+"#;
+        assert_eq!(layer_states(body), ["GET /early [head] complete"]);
+    }
+
+    #[test]
+    fn a_framework_layer_after_a_defer_that_can_recover_is_conditional() {
+        let body = r#"
+func rec() { recover() }
+
+func main() {
+	m := web.NewRouter()
+	m.Get("/early", Home)
+	defer rec()
+	m.BeforeRouting(head)
+}
+"#;
+        assert_eq!(
+            layer_states(body),
+            ["GET /early [head] conditional_middleware"]
+        );
+    }
+
+    #[test]
     fn a_framework_layer_after_an_early_exit_is_conditional() {
         let body = r#"
 func newRouter(skip bool) *web.Router {
