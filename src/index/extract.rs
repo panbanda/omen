@@ -2672,6 +2672,47 @@ mod tests {
         assert_eq!(names, ["a0", "a2", "b0", "b1", "b2"]);
     }
 
+    /// The span of a function literal that a declaration of one name binds starts at the name.
+    /// When the declaration binds more names, the span is the literal alone: a span from the
+    /// name would contain the other names and the other literals.
+    #[test]
+    fn test_the_span_of_a_go_function_literal_contains_no_other_name() {
+        let source = "package p\n\nvar b0, b1, b2 = func() {}, func(x int) {}, func() {}\n\nvar c0, c1 = func() {},\n\tfunc(z int) {}\n\nfunc F() {\n\tf := func(y string) {}\n\ta0, a1 := func() {}, func(w int) {}\n\t_, _, _ = f, a0, a1\n}\n";
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Go,
+                std::path::Path::new("p.go"),
+            )
+            .unwrap();
+        let symbols = super::extract_file(&parsed, "p.go");
+        let found: Vec<(&str, &str, u32)> = symbols
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.name != "F")
+            .map(|symbol| {
+                (
+                    symbol.name.as_str(),
+                    symbol.signature.as_str(),
+                    symbol.range.start_line,
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("b0", "func()", 3),
+                ("b1", "func(x int)", 3),
+                ("b2", "func()", 3),
+                ("c0", "func()", 5),
+                ("c1", "func(z int)", 6),
+                ("f", "f := func(y string)", 9),
+                ("a0", "func()", 10),
+                ("a1", "func(w int)", 10),
+            ]
+        );
+    }
+
     /// The name of a function literal is the name at the position of the literal.
     /// The position must not come from a search of the values, and the name must
     /// not come from `Node::named_child`, which reads the children from the first.
