@@ -1636,7 +1636,13 @@ impl Thing {
                 test_ranges_of_tree(parsed.root_node(), source.as_bytes(), Language::Rust)
             })
             .collect();
-        assert_eq!(found, [vec![], vec![], vec![21..30], vec![31..40]]);
+        let expected: [Vec<Range<usize>>; 4] = [
+            Vec::new(),
+            Vec::new(),
+            std::iter::once(21..30).collect(),
+            std::iter::once(31..40).collect(),
+        ];
+        assert_eq!(found, expected);
     }
 
     #[test]
