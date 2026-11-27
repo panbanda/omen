@@ -149,7 +149,7 @@ const PYTHON_TYPES: &[&str] = &[
 ];
 
 /// The predeclared functions of Go, and the predeclared types, whose call is a conversion.
-const GO_BUILTINS: &[&str] = &[
+pub(crate) const GO_BUILTINS: &[&str] = &[
     "any",
     "append",
     "bool",

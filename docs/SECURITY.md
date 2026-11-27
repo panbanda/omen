@@ -321,7 +321,7 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 | `unreadable_include` | FastAPI | The file includes the router two times, in a condition, after the route, or in a loop of routers. |
 | `unreadable_dependency` | FastAPI | A dependency is not a name, or the `dependencies` value is not a literal list. Or the file uses the `dependencies` attribute of an object, as `router.dependencies.clear()`, which can change the dependencies that a later route gets. |
 | `wildcard_import` | FastAPI | The file has `from module import *`, which can bind a name again. |
-| `conditional_middleware` | chi, echo, gin, gorilla/mux, Go router types | chi, echo, gin, gorilla/mux: a `Use` or an echo `Pre` call is at a place that does not surely run whenever its router exists: an arm of an `if`, a case of a `switch` or a `select`, a loop body, the update statement of a `for` clause, the right operand of `&&` or `||`, a function literal, `defer`, or `go`, a place after an earlier statement of its list that can leave the list when the router exists before that statement, a place after a `defer` that can recover in its function body, or in a function, method, or package variable of the file that the code after such a `defer` names (for each route of the router), or the body of a function or a method whose top does not surely run with the router. A function that returns a router with such middleware gives the reason to the routes of each caller. See the rule after the next table. Go router types: a layer method, as `AfterRouting`, is called in a condition, a loop, or a function literal; a framework layer, as `BeforeRouting`, comes after a statement that can leave the function and that runs after the router is made; or a function returns the router with different layers. |
+| `conditional_middleware` | chi, echo, gin, gorilla/mux, Go router types | chi, echo, gin, gorilla/mux: a `Use` or an echo `Pre` call is at a place that does not surely run whenever its router exists: an arm of an `if`, a case of a `switch` or a `select`, a loop body, the update statement of a `for` clause, the right operand of `&&` or `||`, a function literal, `defer`, or `go`, a place after an earlier statement of its list that can leave the list when the router exists before that statement, a place after a `defer` that can recover in its function body, or in a function, method, or package variable of the file that the code after such a `defer` names, or in each one of the file when that code calls through a value (for each route of the router), or the body of a function or a method whose top does not surely run with the router. A function that returns a router with such middleware gives the reason to the routes of each caller. See the rule after the next table. Go router types: a layer method, as `AfterRouting`, is called in a condition, a loop, or a function literal; a framework layer, as `BeforeRouting`, comes after a statement that can leave the function and that runs after the router is made; or a function returns the router with different layers. |
 | `unread_middleware` | chi, echo, gin, gorilla/mux, `net/http`, Go router types, Express, Koa, Fastify | A middleware argument is not a name, or a spread of a Go slice that omen cannot read. For Go, its guard text is `<expression>` or `<function literal>`. Or a call around the handler is not a conversion, as `http.HandlerFunc(show)`, and not a middleware of the repository, as `middleware.Auth(cfg)(...)`. For Express, Koa, and Fastify, a middleware argument of the route call is a call, as `limit(5)`, or a function, and omen does not list it. The options object of a Fastify route is not a middleware. The handler and the known guards stay. |
 | `too_many_guards` | Each framework | The entry point has more than 256 guards. The list has the first 256 guards in the usual order. |
 | `layer_not_read` | See the next table | The framework has a place for guards that omen does not read. |
@@ -413,13 +413,28 @@ conditional in the same way.
 
 The code after the `defer` is the rest of its function body, with each function literal and each
 later `defer` in it: Go runs a later `defer` first, and the earlier `defer` can recover its
-panic. The code of a `go` statement is not, because it runs in another goroutine. Omen does not
-track values. The reached code also has each function, method, and package variable of the file
-that reached code names, at any place: in a call, as a function value (`f := inner`), as an
-argument (`each(inner)`), in a function literal, or in the value of a package variable that
-reached code names (`var hook = inner`). A field name, as in `t.inner`, names each method of the
-file with that name. A function that reached code names is reached in all its body. Omen does
-not read a `defer` in a caller of another file.
+panic. The code of a `go` statement is not, because it runs in another goroutine. The reached
+code also has each function, method, and package variable of the file that reached code names,
+at any place: in a call, as a function value (`f := inner`), as an argument (`each(inner)`), in
+a function literal, or in the value of a package variable that reached code names
+(`var hook = inner`, also in a group `var ( ... )`). A field name, as in `t.inner`, names each
+method of the file with that name. A function that reached code names is reached in all its
+body. Omen does not read a `defer` in a caller of another file.
+
+Omen does not track values. Thus a call through a value in the reached code makes each function,
+method, and package variable of the file reached, and each guard of the file is
+`conditional_middleware`. A call is through a value when its function is one of these:
+
+- a name that is not a function of the file, a Go builtin, or a type: a local variable, a
+  parameter, a package variable, or a function of another file;
+- a selector `x.y`, where `y` is the name of a field, or of an embedded field, of a struct type
+  of the file;
+- each other form, as a call result (`f()()`), an index (`table[key]()`), a type assertion, or a
+  parenthesized expression that is not a name (`(*p)()`).
+
+A call of a function of the file, a builtin, a conversion to a type, and a function literal keeps
+the reach of the names above. So does a selector `x.y` where `y` is not such a field name, as a
+package function (`strings.TrimSpace`) or a method.
 
 Omen trusts the order of two registrations only when both are in one function body, or both are
 at the level of the package. The walk reads a function where the file declares it, not where a

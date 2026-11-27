@@ -998,19 +998,31 @@ impl<'a> Context<'a> {
                 defers.insert(node.id());
             }
         });
-        let (references, spans) = self.go_references(root);
-        let names: HashSet<RefKey<'a>> = spans.keys().copied().collect();
-        let reference = |node: Node<'n>| self.reference_key(node, &names);
+        let reach = self.go_references(root);
+        let reference = |node: Node<'n>| self.reference_key(node, &reach.names);
         let (mut recovered, seeds) = self.recovering_regions(root, &defers, &reference);
         let mut reached: HashSet<RefKey<'a>> = HashSet::new();
+        let mut visited = vec![false; reach.found.len()];
         let mut pending = seeds;
         while let Some(name) = pending.pop() {
-            if reached.insert(name) {
-                pending.extend(references.get(&name).into_iter().flatten().copied());
+            if !reached.insert(name) {
+                continue;
+            }
+            for owner in reach.owners.get(&name).into_iter().flatten() {
+                if !std::mem::replace(&mut visited[*owner], true) {
+                    pending.extend(reach.found[*owner].iter().copied());
+                }
             }
         }
-        for name in &reached {
-            recovered.extend(spans.get(name).into_iter().flatten().copied());
+        // Omen does not track values, so a call through a value can run each function of the
+        // file.
+        let spans = &reach.names.spans;
+        if reached.contains(&REF_UNKNOWN) {
+            recovered.extend(spans.values().flatten().copied());
+        } else {
+            for name in &reached {
+                recovered.extend(spans.get(name).into_iter().flatten().copied());
+            }
         }
         recovered.sort_unstable();
         let mut merged: Vec<(usize, usize)> = Vec::with_capacity(recovered.len());
@@ -1084,16 +1096,47 @@ impl<'a> Context<'a> {
     /// The functions, the methods, and the package variables of the file, by name, with the
     /// names of the file that the code of each mentions, and the place of each declaration. The
     /// code of a `go` statement does not count. See `reference_key`.
-    fn go_references<'n>(&self, root: Node<'n>) -> (References<'a>, Spans<'a>) {
+    fn go_references<'n>(&self, root: Node<'n>) -> Reach<'a> {
         let mut spans: HashMap<RefKey<'a>, Vec<(usize, usize)>> = HashMap::new();
-        let mut owners: Vec<(Vec<RefKey<'a>>, Node<'n>)> = Vec::new();
+        let mut owners: HashMap<RefKey<'a>, Vec<usize>> = HashMap::new();
+        let mut declarations: Vec<Node<'n>> = Vec::new();
+        let mut fields = HashSet::new();
+        let mut types = HashSet::new();
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            match node.kind() {
+                "type_spec" | "type_alias" => {
+                    types.extend(node.child_by_field_name("name").map(|name| self.text(name)));
+                }
+                "field_declaration" => {
+                    let mut cursor = node.walk();
+                    let named: Vec<Node<'n>> =
+                        node.children_by_field_name("name", &mut cursor).collect();
+                    fields.extend(named.iter().map(|name| self.text(*name)));
+                    // The name of an embedded field is the name of its type.
+                    let mut parts: Vec<Node<'n>> = node
+                        .child_by_field_name("type")
+                        .into_iter()
+                        .filter(|_| named.is_empty())
+                        .collect();
+                    while let Some(part) = parts.pop() {
+                        if part.kind() == "type_identifier" {
+                            fields.insert(self.text(part));
+                            break;
+                        }
+                        parts.extend(named_nodes(part).into_iter().rev());
+                    }
+                }
+                _ => {}
+            }
+            pending.extend(named_nodes(node));
+        }
         for child in named_nodes(root) {
             let own = match child.kind() {
                 "function_declaration" => vec![(REF_FUNCTION, child)],
                 "method_declaration" => vec![(REF_METHOD, child)],
-                "var_declaration" => named_nodes(child)
+                "var_declaration" => go_var_specs(child)
                     .into_iter()
-                    .filter(|spec| spec.kind() == "var_spec")
                     .map(|spec| (REF_VARIABLE, spec))
                     .collect(),
                 _ => continue,
@@ -1115,42 +1158,79 @@ impl<'a> Context<'a> {
                         .entry(*key)
                         .or_default()
                         .push((node.start_byte(), node.end_byte()));
+                    owners.entry(*key).or_default().push(declarations.len());
                 }
-                owners.push((keys, node));
+                declarations.push(node);
             }
         }
-        let names: HashSet<RefKey<'a>> = spans.keys().copied().collect();
-        let mut references: HashMap<RefKey<'a>, Vec<RefKey<'a>>> = HashMap::new();
-        for (keys, node) in owners {
-            let mut found = Vec::new();
-            let mut pending = vec![node];
-            while let Some(current) = pending.pop() {
-                if current.kind() == "go_statement" {
-                    continue;
+        let names = Names {
+            spans,
+            fields,
+            types,
+        };
+        let found = declarations
+            .into_iter()
+            .map(|declaration| {
+                let mut found = Vec::new();
+                let mut pending = vec![declaration];
+                while let Some(current) = pending.pop() {
+                    if current.kind() == "go_statement" {
+                        continue;
+                    }
+                    found.extend(self.reference_key(current, &names));
+                    pending.extend(named_nodes(current));
                 }
-                found.extend(self.reference_key(current, &names));
-                pending.extend(named_nodes(current));
-            }
-            for key in keys {
-                references
-                    .entry(key)
-                    .or_default()
-                    .extend(found.iter().copied());
-            }
+                found
+            })
+            .collect();
+        Reach {
+            names,
+            owners,
+            found,
         }
-        (references, spans)
     }
 
     /// The function, the method, or the package variable of the file that a name mentions.
-    /// A field name mentions each method of the file with that name, as `t.inner` does.
-    fn reference_key<'n>(&self, node: Node<'n>, names: &HashSet<RefKey<'a>>) -> Option<RefKey<'a>> {
+    /// A field name mentions each method of the file with that name, as `t.inner` does. A
+    /// call through a value gives `REF_UNKNOWN`: a call of a name that is not a function of
+    /// the file, a builtin, or a type; a call `x.y()` where `y` is a field name of a struct
+    /// type of the file; and a call of each other form, such as `f()()`, `table[key]()`, and
+    /// `(*p)()`.
+    fn reference_key<'n>(&self, node: Node<'n>, names: &Names<'a>) -> Option<RefKey<'a>> {
         let text = self.text(node);
+        let known = |key: &RefKey<'a>| names.spans.contains_key(key);
         match node.kind() {
             "identifier" if !self.is_go_local(node) => [REF_FUNCTION, REF_VARIABLE]
                 .into_iter()
                 .map(|kind| (kind, text))
-                .find(|key| names.contains(key)),
-            "field_identifier" => Some((REF_METHOD, text)).filter(|key| names.contains(key)),
+                .find(known),
+            "field_identifier" => Some((REF_METHOD, text)).filter(known),
+            "call_expression" => {
+                let mut callee = node.child_by_field_name("function")?;
+                while callee.kind() == "parenthesized_expression" {
+                    match named_nodes(callee).as_slice() {
+                        [inner] => callee = *inner,
+                        _ => return Some(REF_UNKNOWN),
+                    }
+                }
+                let through_value = match callee.kind() {
+                    "identifier" => {
+                        let name = self.text(callee);
+                        self.is_go_local(callee)
+                            || !(known(&(REF_FUNCTION, name))
+                                || names.types.contains(name)
+                                || crate::index::resolve::external::GO_BUILTINS.contains(&name))
+                    }
+                    "selector_expression" => callee
+                        .child_by_field_name("field")
+                        .is_some_and(|field| names.fields.contains(self.text(field))),
+                    "func_literal" | "type_identifier" | "generic_type" | "qualified_type"
+                    | "array_type" | "slice_type" | "map_type" | "pointer_type"
+                    | "function_type" | "channel_type" | "interface_type" | "struct_type" => false,
+                    _ => true,
+                };
+                through_value.then_some(REF_UNKNOWN)
+            }
             _ => None,
         }
     }
@@ -3584,7 +3664,7 @@ impl<'c, 'a, 't> Routes<'c, 'a, 't> {
             .into_iter()
             .filter(|child| child.kind() == "var_declaration")
         {
-            for spec in Self::named_children(declaration) {
+            for spec in go_var_specs(declaration) {
                 let mut cursor = spec.walk();
                 for name in spec.children_by_field_name("name", &mut cursor) {
                     globals.insert(self.text(name).to_string());
@@ -7160,15 +7240,45 @@ fn named_nodes(node: Node<'_>) -> Vec<Node<'_>> {
     node.named_children(&mut cursor).collect()
 }
 
+/// The specs of a `var` declaration. A group `var ( ... )` puts its specs in a
+/// `var_spec_list`.
+fn go_var_specs(declaration: Node<'_>) -> Vec<Node<'_>> {
+    named_nodes(declaration)
+        .into_iter()
+        .flat_map(|child| match child.kind() {
+            "var_spec_list" => named_nodes(child),
+            _ => vec![child],
+        })
+        .filter(|spec| spec.kind() == "var_spec")
+        .collect()
+}
+
 /// A function, a method, or a package variable of a Go file, by kind and name.
 type RefKey<'a> = (u8, &'a str);
 const REF_FUNCTION: u8 = 0;
 const REF_METHOD: u8 = 1;
 const REF_VARIABLE: u8 = 2;
-/// For each name, the names that its code mentions.
-type References<'a> = HashMap<RefKey<'a>, Vec<RefKey<'a>>>;
-/// For each name, the places of its declarations.
-type Spans<'a> = HashMap<RefKey<'a>, Vec<(usize, usize)>>;
+/// A call through a value: a call whose function omen does not know. See
+/// `Context::reference_key`.
+const REF_UNKNOWN: RefKey<'static> = (3, "");
+
+/// The names of a Go file that a reach after a recovering `defer` reads.
+struct Names<'a> {
+    /// For each function, method, and package variable, the places of its declarations.
+    spans: HashMap<RefKey<'a>, Vec<(usize, usize)>>,
+    /// The field names of each struct type of the file.
+    fields: HashSet<&'a str>,
+    /// The type names of the file. A call of a type is a conversion.
+    types: HashSet<&'a str>,
+}
+
+/// The declarations of a Go file and the names that the code of each mentions. One spec can
+/// declare many names, so each name gives the index of its declarations in `found`.
+struct Reach<'a> {
+    names: Names<'a>,
+    owners: HashMap<RefKey<'a>, Vec<usize>>,
+    found: Vec<Vec<RefKey<'a>>>,
+}
 
 /// The exit facts of a Go file. See `Context::go_exit_nodes` and `Context::is_go_recovered`.
 pub(super) struct GoExits {
