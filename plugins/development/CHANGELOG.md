@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.1.0](https://github.com/panbanda/omen/compare/omen-skills-v5.0.0...omen-skills-v5.1.0) (2026-11-27)
+
+
+### Features
+
+* **diff:** give the change set in JSON and through MCP ([#576](https://github.com/panbanda/omen/issues/576)) ([39d125f](https://github.com/panbanda/omen/commit/39d125ffb6b113414c1dd9ce9b8b6ca6447dcab6))
+
+
+### Bug Fixes
+
+* **symbol:** refuse an ambiguous name in symbol and impact ([#584](https://github.com/panbanda/omen/issues/584)) ([104eaa9](https://github.com/panbanda/omen/commit/104eaa9356018e7989d7148a74fc1a5a64e7b328))
+
 ## [5.0.0](https://github.com/panbanda/omen/compare/omen-skills-v4.2.1...omen-skills-v5.0.0) (2026-11-16)
 
 
