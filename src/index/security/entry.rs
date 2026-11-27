@@ -3586,6 +3586,17 @@ pub(super) mod tests {
         files: &[(&str, &str)],
         resolve: bool,
     ) -> (Vec<EntryPoint>, std::time::Duration) {
+        entries_timed_repeated(language, files, resolve, 1)
+    }
+
+    /// Like `entries_timed`, with the time of `repeats` searches on one index. The index is
+    /// built one time, outside the time.
+    pub(super) fn entries_timed_repeated(
+        language: Language,
+        files: &[(&str, &str)],
+        resolve: bool,
+        repeats: usize,
+    ) -> (Vec<EntryPoint>, std::time::Duration) {
         let mut files = files.to_vec();
         files.sort_by_key(|(name, _)| *name);
         let files = files.as_slice();
@@ -3608,7 +3619,10 @@ pub(super) mod tests {
             resolve_references(&mut index);
         }
         let started = crate::index::timing::Stopwatch::start();
-        let found = find_entry_points(&parsed, &index);
+        let mut found = find_entry_points(&parsed, &index);
+        for _ in 1..repeats {
+            found = find_entry_points(&parsed, &index);
+        }
         (found, started.elapsed())
     }
 

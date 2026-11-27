@@ -959,17 +959,11 @@ impl<'a> Context<'a> {
             Some((node.kind() == "method_declaration", self.text(name)))
         };
         let mut callers: HashMap<(bool, &'a str), Vec<(bool, &'a str)>> = HashMap::new();
-        let mut callees: HashMap<(bool, &'a str), Vec<(bool, &'a str)>> = HashMap::new();
-        let mut bodies: HashMap<(bool, &'a str), Vec<(usize, usize)>> = HashMap::new();
         let mut pending: Vec<(bool, &'a str)> = Vec::new();
         for declaration in &declarations {
             let Some(own) = key(*declaration) else {
                 continue;
             };
-            bodies
-                .entry(own)
-                .or_default()
-                .push((declaration.start_byte(), declaration.end_byte()));
             let mut flags = 0;
             self.exit_flags(*declaration, &|_| false, &mut |node, node_flags, inside| {
                 if node == *declaration {
@@ -977,7 +971,6 @@ impl<'a> Context<'a> {
                 } else if !inside && node.kind() == "call_expression" {
                     if let Some(callee) = self.callee_key(node) {
                         callers.entry(callee).or_default().push(own);
-                        callees.entry(own).or_default().push(callee);
                     }
                 }
             });
@@ -1005,16 +998,19 @@ impl<'a> Context<'a> {
                 defers.insert(node.id());
             }
         });
-        let (mut recovered, seeds) = self.recovering_regions(root, &defers);
-        let mut reached: HashSet<(bool, &'a str)> = HashSet::new();
+        let (references, spans) = self.go_references(root);
+        let names: HashSet<RefKey<'a>> = spans.keys().copied().collect();
+        let reference = |node: Node<'n>| self.reference_key(node, &names);
+        let (mut recovered, seeds) = self.recovering_regions(root, &defers, &reference);
+        let mut reached: HashSet<RefKey<'a>> = HashSet::new();
         let mut pending = seeds;
-        while let Some(callee) = pending.pop() {
-            if reached.insert(callee) {
-                pending.extend(callees.get(&callee).into_iter().flatten().copied());
+        while let Some(name) = pending.pop() {
+            if reached.insert(name) {
+                pending.extend(references.get(&name).into_iter().flatten().copied());
             }
         }
-        for callee in &reached {
-            recovered.extend(bodies.get(callee).into_iter().flatten().copied());
+        for name in &reached {
+            recovered.extend(spans.get(name).into_iter().flatten().copied());
         }
         recovered.sort_unstable();
         let mut merged: Vec<(usize, usize)> = Vec::with_capacity(recovered.len());
@@ -1030,14 +1026,17 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// The code after each `defer` of `defers` up to the end of its function, and the calls in
-    /// that code. A function literal there is in the region too. The code of a `go` statement
-    /// and of a `defer` statement is not, because a panic there does not reach the function.
+    /// The code after each `defer` of `defers` up to the end of its function, and the names of
+    /// the file that this code mentions (see `reference_key`). A function literal and a later
+    /// `defer` there are in the region too: Go runs a later `defer` first, so the earlier
+    /// `defer` can recover its panic. The code of a `go` statement is not, because it runs in
+    /// another goroutine.
     fn recovering_regions<'n>(
         &self,
         root: Node<'n>,
         defers: &HashSet<usize>,
-    ) -> (Vec<(usize, usize)>, Vec<CalleeKey<'a>>) {
+        reference: &dyn Fn(Node<'n>) -> Option<RefKey<'a>>,
+    ) -> (Vec<(usize, usize)>, Vec<RefKey<'a>>) {
         enum Walk<'n> {
             Enter(Node<'n>),
             Leave(Node<'n>),
@@ -1053,18 +1052,15 @@ impl<'a> Context<'a> {
                 Walk::Enter(node) => {
                     let recovering = frames.last().is_some_and(|frame| frame.0);
                     match node.kind() {
-                        "function_declaration"
-                        | "method_declaration"
-                        | "go_statement"
-                        | "defer_statement" => {
+                        "function_declaration" | "method_declaration" | "go_statement" => {
                             frames.push((false, node.end_byte()));
                             stack.push(Walk::Leave(node));
                         }
-                        "func_literal" => {
+                        "func_literal" | "defer_statement" => {
                             frames.push((recovering, node.end_byte()));
                             stack.push(Walk::Leave(node));
                         }
-                        "call_expression" if recovering => seeds.extend(self.callee_key(node)),
+                        _ if recovering => seeds.extend(reference(node)),
                         _ => {}
                     }
                     let mut children = named_nodes(node);
@@ -1083,6 +1079,80 @@ impl<'a> Context<'a> {
             }
         }
         (regions, seeds)
+    }
+
+    /// The functions, the methods, and the package variables of the file, by name, with the
+    /// names of the file that the code of each mentions, and the place of each declaration. The
+    /// code of a `go` statement does not count. See `reference_key`.
+    fn go_references<'n>(&self, root: Node<'n>) -> (References<'a>, Spans<'a>) {
+        let mut spans: HashMap<RefKey<'a>, Vec<(usize, usize)>> = HashMap::new();
+        let mut owners: Vec<(Vec<RefKey<'a>>, Node<'n>)> = Vec::new();
+        for child in named_nodes(root) {
+            let own = match child.kind() {
+                "function_declaration" => vec![(REF_FUNCTION, child)],
+                "method_declaration" => vec![(REF_METHOD, child)],
+                "var_declaration" => named_nodes(child)
+                    .into_iter()
+                    .filter(|spec| spec.kind() == "var_spec")
+                    .map(|spec| (REF_VARIABLE, spec))
+                    .collect(),
+                _ => continue,
+            };
+            for (kind, node) in own {
+                let keys: Vec<RefKey<'a>> = if kind == REF_VARIABLE {
+                    let mut cursor = node.walk();
+                    node.children_by_field_name("name", &mut cursor)
+                        .map(|name| (kind, self.text(name)))
+                        .collect()
+                } else {
+                    node.child_by_field_name("name")
+                        .map(|name| (kind, self.text(name)))
+                        .into_iter()
+                        .collect()
+                };
+                for key in &keys {
+                    spans
+                        .entry(*key)
+                        .or_default()
+                        .push((node.start_byte(), node.end_byte()));
+                }
+                owners.push((keys, node));
+            }
+        }
+        let names: HashSet<RefKey<'a>> = spans.keys().copied().collect();
+        let mut references: HashMap<RefKey<'a>, Vec<RefKey<'a>>> = HashMap::new();
+        for (keys, node) in owners {
+            let mut found = Vec::new();
+            let mut pending = vec![node];
+            while let Some(current) = pending.pop() {
+                if current.kind() == "go_statement" {
+                    continue;
+                }
+                found.extend(self.reference_key(current, &names));
+                pending.extend(named_nodes(current));
+            }
+            for key in keys {
+                references
+                    .entry(key)
+                    .or_default()
+                    .extend(found.iter().copied());
+            }
+        }
+        (references, spans)
+    }
+
+    /// The function, the method, or the package variable of the file that a name mentions.
+    /// A field name mentions each method of the file with that name, as `t.inner` does.
+    fn reference_key<'n>(&self, node: Node<'n>, names: &HashSet<RefKey<'a>>) -> Option<RefKey<'a>> {
+        let text = self.text(node);
+        match node.kind() {
+            "identifier" if !self.is_go_local(node) => [REF_FUNCTION, REF_VARIABLE]
+                .into_iter()
+                .map(|kind| (kind, text))
+                .find(|key| names.contains(key)),
+            "field_identifier" => Some((REF_METHOD, text)).filter(|key| names.contains(key)),
+            _ => None,
+        }
     }
 
     /// The function (false) or the method (true) that a call names, if the file declares it.
@@ -7090,8 +7160,15 @@ fn named_nodes(node: Node<'_>) -> Vec<Node<'_>> {
     node.named_children(&mut cursor).collect()
 }
 
-/// A function (false) or a method (true) of a Go file, by name.
-type CalleeKey<'a> = (bool, &'a str);
+/// A function, a method, or a package variable of a Go file, by kind and name.
+type RefKey<'a> = (u8, &'a str);
+const REF_FUNCTION: u8 = 0;
+const REF_METHOD: u8 = 1;
+const REF_VARIABLE: u8 = 2;
+/// For each name, the names that its code mentions.
+type References<'a> = HashMap<RefKey<'a>, Vec<RefKey<'a>>>;
+/// For each name, the places of its declarations.
+type Spans<'a> = HashMap<RefKey<'a>, Vec<(usize, usize)>>;
 
 /// The exit facts of a Go file. See `Context::go_exit_nodes` and `Context::is_go_recovered`.
 pub(super) struct GoExits {
