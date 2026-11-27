@@ -11,6 +11,7 @@
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::rc::Rc;
 use tree_sitter::Node;
 
 use super::spec::syntax_of;
@@ -26,6 +27,8 @@ mod go_routes;
 mod go_wrappers;
 mod persistent;
 mod rails;
+#[cfg(test)]
+mod route_review_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -133,6 +136,8 @@ pub enum GuardsUnknownReason {
     /// A middleware argument is not a name that omen can read, or a call around a Go handler is
     /// not a conversion and not a middleware that omen reads.
     UnreadMiddleware,
+    /// The entry point has more guards than `MAX_GUARDS`. The list has the first ones.
+    TooManyGuards,
     /// The framework has a place for guards that omen does not read, such as the middleware of
     /// the application.
     LayerNotRead,
@@ -160,10 +165,15 @@ impl GuardsUnknownReason {
             Self::WildcardImport => "wildcard_import",
             Self::ConditionalMiddleware => "conditional_middleware",
             Self::UnreadMiddleware => "unread_middleware",
+            Self::TooManyGuards => "too_many_guards",
             Self::LayerNotRead => "layer_not_read",
         }
     }
 }
+
+/// The largest number of guards that one entry point lists. A source of guards keeps one more,
+/// so `detect` can tell that the list is longer.
+pub(super) const MAX_GUARDS: usize = 256;
 
 /// The first of two reasons in the order of [`GuardsUnknownReason`].
 fn first_reason(
@@ -376,6 +386,18 @@ pub struct EntryShared {
     callables: std::sync::OnceLock<std::collections::HashMap<String, Vec<(usize, usize)>>>,
     go_callables: std::sync::OnceLock<go_routes::PackageCallables>,
     go_packages: std::sync::OnceLock<go_routes::GoPackages>,
+    /// The names of the top-level Java types of each directory.
+    java_package_types:
+        std::sync::OnceLock<std::collections::HashMap<String, std::collections::HashSet<String>>>,
+    /// The number of Go uses of each key in the repository, and if a use has more than one
+    /// candidate.
+    go_use_counts: std::sync::OnceLock<std::collections::HashMap<String, (usize, bool)>>,
+    /// Tells if the Rust files of the repository import rocket, and if they import actix-web.
+    rust_web: std::sync::OnceLock<[bool; 2]>,
+    /// The framework of each verb that an import of a Rust file binds.
+    rust_verbs: std::sync::OnceLock<RustVerbs>,
+    /// The `global using` directives of the C# files, by project.
+    csharp_globals: std::sync::OnceLock<std::collections::HashMap<Option<String>, CsharpGlobals>>,
     ecma: ecma::Shared,
 }
 
@@ -760,6 +782,428 @@ fn binds_to_marker(node: Node<'_>, source: &[u8], name: &str, markers: &[&str]) 
     false
 }
 
+/// The names of the types and of the call that prove an ASP.NET value.
+const ASPNET_TYPES: [&str; 5] = [
+    "WebApplication",
+    "IEndpointRouteBuilder",
+    "RouteGroupBuilder",
+    "IApplicationBuilder",
+    "MapGroup",
+];
+
+/// Tells if the start of a C# expression or type has a whole name of ASP.NET, or an alias of one.
+/// Only the start counts, so a long nested value costs a constant amount.
+fn has_aspnet_type(text: &str, aliases: &std::collections::HashSet<String>) -> bool {
+    text[..text.floor_char_boundary(256)]
+        .split(|character: char| !character.is_alphanumeric() && character != '_')
+        .any(|word| ASPNET_TYPES.contains(&word) || aliases.contains(word))
+}
+
+/// What the `global using` directives of a repository give.
+#[derive(Default)]
+pub struct CsharpGlobals {
+    /// A directive names a namespace of ASP.NET.
+    aspnet_namespace: bool,
+    /// The aliases of an ASP.NET type.
+    aliases: std::collections::HashSet<String>,
+}
+
+fn read_csharp_globals(root: Node<'_>, source: &[u8], globals: &mut CsharpGlobals) {
+    let mut cursor = root.walk();
+    for directive in root
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "using_directive")
+    {
+        let mut inner = directive.walk();
+        let is_global = directive
+            .children(&mut inner)
+            .any(|child| child.kind() == "global");
+        if !is_global {
+            continue;
+        }
+        let alias = directive.child_by_field_name("name");
+        let mut inner = directive.walk();
+        let Some(path) = directive
+            .named_children(&mut inner)
+            .find(|child| Some(*child) != alias && child.kind() != "global")
+        else {
+            continue;
+        };
+        let path: String = syntax::text(path, source).split_whitespace().collect();
+        let path = path.strip_prefix("global::").unwrap_or(&path);
+        let in_aspnet = module_is_or_is_under(path, "Microsoft.AspNetCore");
+        match alias {
+            Some(alias) if in_aspnet => {
+                globals
+                    .aliases
+                    .insert(syntax::text(alias, source).to_string());
+            }
+            Some(_) => {}
+            None => globals.aspnet_namespace |= in_aspnet,
+        }
+    }
+}
+
+/// The names that a Python file binds to `django`, and the names that hide them.
+#[derive(Default)]
+struct DjangoNames<'f> {
+    imported: std::collections::HashSet<&'f str>,
+    other: std::collections::HashSet<&'f str>,
+    rebound: std::collections::HashSet<String>,
+    wildcard: bool,
+}
+
+/// The names of the Spring annotations that a Java file imports, and the names that hide a
+/// wildcard import.
+#[derive(Default)]
+struct SpringNames<'f> {
+    imported: std::collections::HashSet<&'f str>,
+    hidden: std::collections::HashSet<&'f str>,
+    wildcard: bool,
+    /// The bodies in which each member type of the file is in scope.
+    members: std::collections::HashMap<String, Scopes>,
+}
+
+/// Byte ranges, sorted by start, with the highest end up to each range.
+#[derive(Default)]
+struct Scopes {
+    starts: Vec<usize>,
+    highest_ends: Vec<usize>,
+}
+
+impl Scopes {
+    fn contains(&self, at: usize) -> bool {
+        let before = self.starts.partition_point(|start| *start <= at);
+        before > 0 && self.highest_ends[before - 1] > at
+    }
+}
+
+/// The member types of each class body of a Java file, with the body in which each is in scope.
+fn java_member_types(root: Node<'_>, source: &[u8]) -> std::collections::HashMap<String, Scopes> {
+    const TYPES: [&str; 5] = [
+        "class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "record_declaration",
+        "annotation_type_declaration",
+    ];
+    let mut ranges: std::collections::HashMap<String, Vec<(usize, usize)>> =
+        std::collections::HashMap::new();
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        let mut cursor = node.walk();
+        let children: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+        if matches!(
+            node.kind(),
+            "class_body" | "interface_body" | "enum_body" | "annotation_type_body"
+        ) {
+            let mut members = children.clone();
+            for child in children
+                .iter()
+                .filter(|child| child.kind() == "enum_body_declarations")
+            {
+                let mut inner = child.walk();
+                members.extend(child.named_children(&mut inner));
+            }
+            for member in members
+                .iter()
+                .filter(|member| TYPES.contains(&member.kind()))
+            {
+                if let Some(name) = member.child_by_field_name("name") {
+                    ranges
+                        .entry(syntax::text(name, source).to_string())
+                        .or_default()
+                        .push((node.start_byte(), node.end_byte()));
+                }
+            }
+        }
+        pending.extend(children);
+    }
+    ranges
+        .into_iter()
+        .map(|(name, mut list)| {
+            list.sort_unstable();
+            let mut highest = 0;
+            let highest_ends = list
+                .iter()
+                .map(|(_, end)| {
+                    highest = highest.max(*end);
+                    highest
+                })
+                .collect();
+            let starts = list.into_iter().map(|(start, _)| start).collect();
+            (
+                name,
+                Scopes {
+                    starts,
+                    highest_ends,
+                },
+            )
+        })
+        .collect()
+}
+
+/// The names that a Python module binds, other than by its own imports. A function, a class body,
+/// and the body of a lambda have their own scopes. A binding in such a scope counts only when the scope
+/// declares the name `global`. A `global` statement alone binds nothing.
+fn python_module_bindings(root: Node<'_>, source: &[u8]) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    let mut scopes = vec![(root, true)];
+    while let Some((scope, is_module)) = scopes.pop() {
+        let (bound, globals) = read_python_scope(scope, is_module, source, &mut scopes);
+        if is_module {
+            names.extend(bound);
+        } else {
+            names.extend(bound.into_iter().filter(|name| globals.contains(name)));
+        }
+    }
+    names
+}
+
+/// The names that one Python scope binds and the names that it declares `global`. The scopes
+/// inside it go to `scopes`. A comprehension has its own loop variables, but a walrus in it binds
+/// in the scope that contains the comprehension.
+fn read_python_scope<'t>(
+    scope: Node<'t>,
+    is_module: bool,
+    source: &[u8],
+    scopes: &mut Vec<(Node<'t>, bool)>,
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+) {
+    let mut bound = std::collections::HashSet::new();
+    let mut globals = std::collections::HashSet::new();
+    let mut pending: Vec<(Node<'t>, bool)> = Vec::new();
+    let mut cursor = scope.walk();
+    pending.extend(
+        scope
+            .named_children(&mut cursor)
+            .map(|child| (child, false)),
+    );
+    while let Some((node, in_comprehension)) = pending.pop() {
+        let mut targets: Vec<Node<'t>> = Vec::new();
+        let mut body = None;
+        match node.kind() {
+            "global_statement" => {
+                let mut cursor = node.walk();
+                for name in node
+                    .named_children(&mut cursor)
+                    .filter(|child| child.kind() == "identifier")
+                {
+                    globals.insert(syntax::text(name, source).to_string());
+                }
+                continue;
+            }
+            // The defaults of a lambda are read in this scope. Only the body has a scope of its
+            // own.
+            "lambda" => {
+                body = node.child_by_field_name("body");
+                if let Some(body) = body {
+                    scopes.push((body, false));
+                }
+            }
+            "function_definition" | "class_definition" => {
+                targets.extend(node.child_by_field_name("name"));
+                body = node.child_by_field_name("body");
+                if let Some(body) = body {
+                    scopes.push((body, false));
+                }
+            }
+            "named_expression" => targets.extend(node.child_by_field_name("name")),
+            "import_statement" | "import_from_statement" if !is_module => {
+                let mut cursor = node.walk();
+                for name in node.children_by_field_name("name", &mut cursor) {
+                    let target = if name.kind() == "aliased_import" {
+                        name.child_by_field_name("alias")
+                    } else {
+                        name.named_child(0)
+                    };
+                    targets.extend(target);
+                }
+            }
+            // An annotation with no value, as `path: object`, binds nothing.
+            "assignment" if !in_comprehension && node.child_by_field_name("right").is_some() => {
+                targets.extend(node.child_by_field_name("left"));
+            }
+            "augmented_assignment" | "for_statement" if !in_comprehension => {
+                targets.extend(node.child_by_field_name("left"));
+            }
+            "as_pattern" if !in_comprehension => {
+                // The `as` of a case pattern has no field name. Its name is the last child.
+                let alias = node.child_by_field_name("alias").or_else(|| {
+                    let mut cursor = node.walk();
+                    node.named_children(&mut cursor)
+                        .last()
+                        .filter(|child| child.kind() == "identifier")
+                });
+                targets.extend(alias);
+            }
+            // A capture of a pattern is a name with no dot in the place of a pattern. The name
+            // of a class and the keyword of an attribute are not captures.
+            "case_pattern" if !in_comprehension && node.named_child_count() == 1 => {
+                targets.extend(
+                    node.named_child(0)
+                        .filter(|child| is_python_capture(*child)),
+                );
+            }
+            "union_pattern" if !in_comprehension => {
+                let mut cursor = node.walk();
+                targets.extend(
+                    node.named_children(&mut cursor)
+                        .filter(|child| is_python_capture(*child)),
+                );
+            }
+            "keyword_pattern" if !in_comprehension => {
+                targets.extend(
+                    node.named_child(1)
+                        .filter(|child| is_python_capture(*child)),
+                );
+            }
+            "splat_pattern" if !in_comprehension => targets.extend(node.named_child(0)),
+            "type_alias_statement" => {
+                let name = node
+                    .child_by_field_name("left")
+                    .and_then(|left| left.named_child(0))
+                    .and_then(|name| match name.kind() {
+                        "generic_type" => name.named_child(0),
+                        _ => Some(name),
+                    });
+                targets.extend(name);
+            }
+            _ => {}
+        }
+        while let Some(target) = targets.pop() {
+            match target.kind() {
+                "identifier" => {
+                    bound.insert(syntax::text(target, source).to_string());
+                }
+                "pattern_list"
+                | "tuple_pattern"
+                | "list_pattern"
+                | "list_splat_pattern"
+                | "as_pattern_target"
+                | "dotted_name"
+                | "tuple"
+                | "list"
+                | "parenthesized_expression"
+                | "list_splat" => {
+                    let mut cursor = target.walk();
+                    targets.extend(target.named_children(&mut cursor));
+                }
+                _ => {}
+            }
+        }
+        let inner = in_comprehension
+            || matches!(
+                node.kind(),
+                "list_comprehension"
+                    | "set_comprehension"
+                    | "dictionary_comprehension"
+                    | "generator_expression"
+            );
+        let mut cursor = node.walk();
+        pending.extend(
+            node.named_children(&mut cursor)
+                .filter(|child| Some(*child) != body)
+                .map(|child| (child, inner)),
+        );
+    }
+    (bound, globals)
+}
+
+fn is_python_capture(node: Node<'_>) -> bool {
+    node.kind() == "dotted_name" && node.named_child_count() == 1
+}
+
+/// The crates of the Rust frameworks with verb attributes, and the name of each framework.
+const RUST_WEB_FRAMEWORKS: [(&str, &str); 2] = [("rocket", "rocket"), ("actix_web", "actix")];
+
+/// The longest chain of `pub use` that omen follows to the crate of a verb.
+const RUST_RE_EXPORT_LIMIT: usize = 32;
+
+/// For each Rust file and each verb that an import binds by name, the framework of the verb. `None`
+/// is a binding that does not lead to a framework. A function and a macro can have one name, as
+/// `axum::routing::get` and `actix_web::get`, so a binding that leads to a framework wins.
+type RustVerbs =
+    std::collections::HashMap<String, std::collections::HashMap<String, Option<&'static str>>>;
+
+fn rust_verb_bindings(files: &[FileSymbols]) -> RustVerbs {
+    use crate::index::model::{ImportBinding, ImportKind, ImportTarget};
+    let mut by_name: std::collections::HashMap<(&str, &str), Vec<&ImportBinding>> =
+        std::collections::HashMap::new();
+    for file in files.iter().filter(|file| file.language == Language::Rust) {
+        for binding in &file.imports {
+            if binding.kind == ImportKind::Wildcard {
+                continue;
+            }
+            if let Some(local) = binding.local_name.as_deref() {
+                by_name
+                    .entry((file.file.as_str(), local))
+                    .or_default()
+                    .push(binding);
+            }
+        }
+    }
+    let framework_of = |start: &ImportBinding| -> Option<&'static str> {
+        let mut current = start;
+        for _ in 0..RUST_RE_EXPORT_LIMIT {
+            if let Some((_, framework)) = RUST_WEB_FRAMEWORKS
+                .iter()
+                .find(|(module, _)| module_is_or_is_under(&current.module_path, module))
+            {
+                return Some(framework);
+            }
+            let target = match &current.target_file {
+                ImportTarget::Resolved(file) => file.as_str(),
+                ImportTarget::Package(files) => match files.as_slice() {
+                    [file] => file.as_str(),
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            let name = current.imported_name.as_deref()?;
+            match by_name.get(&(target, name))?.as_slice() {
+                [next] => current = next,
+                _ => return None,
+            }
+        }
+        None
+    };
+    let mut verbs = RustVerbs::new();
+    for ((file, local), bindings) in &by_name {
+        if !HTTP_VERBS.contains(local) {
+            continue;
+        }
+        let framework = bindings.iter().find_map(|binding| framework_of(binding));
+        verbs
+            .entry((*file).to_string())
+            .or_default()
+            .insert((*local).to_string(), framework);
+    }
+    verbs
+}
+
+/// Tells if a Rust file has `extern crate name` at its top level.
+fn declares_extern_crate(root: Node<'_>, source: &[u8], name: &str) -> bool {
+    let mut cursor = root.walk();
+    let found = root
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "extern_crate_declaration")
+        .filter_map(|child| child.child_by_field_name("name"))
+        .any(|crate_name| syntax::text(crate_name, source) == name);
+    found
+}
+
+/// Tells if an import path is the module, or a path below it.
+fn module_is_or_is_under(path: &str, module: &str) -> bool {
+    let path = path.replace(['/', '\\', ':'], ".");
+    path == module
+        || path
+            .strip_prefix(module)
+            .is_some_and(|rest| rest.starts_with('.'))
+}
+
 /// The local bindings of a Go file, by name.
 type GoLocals = std::collections::HashMap<String, (Vec<usize>, Vec<usize>)>;
 
@@ -796,10 +1240,12 @@ struct Context<'a> {
     /// The local bindings of a Go file, by name: the starts of the bindings in order, and
     /// for each the highest end of a function that has a binding up to it.
     go_locals: std::sync::OnceLock<GoLocals>,
+    /// The nodes of a Go file after which the rest of their statement list may not run.
+    go_exits: std::sync::OnceLock<go_routes::GoExits>,
     /// The names of the variables that hold a `net/http` multiplexer, in a Go file.
     go_servemuxes: std::sync::OnceLock<std::collections::HashSet<String>>,
     /// The `net/http` patterns of a Go file that other patterns of the file can cover.
-    go_covered: std::sync::OnceLock<std::collections::HashSet<String>>,
+    go_covered: std::sync::OnceLock<std::collections::HashSet<usize>>,
     /// The start and the highest end of the branches of a Go file that never run, by start.
     go_dead: std::sync::OnceLock<(Vec<usize>, Vec<usize>)>,
     /// The names that the package of a Go file declares at the top level.
@@ -814,7 +1260,34 @@ struct Context<'a> {
     guard_gap: std::cell::Cell<Option<GuardsUnknownReason>>,
     /// Tells for the text of the receiver of a Python route decorator if it is a framework value.
     python_receivers: std::cell::RefCell<std::collections::HashMap<&'a str, bool>>,
+    /// The names that an `export { name }` clause of this file exports.
+    next_own_exports: std::cell::OnceCell<std::collections::HashSet<&'a str>>,
+    /// The names that the imports of a Python file give to `django`.
+    django_names: std::cell::OnceCell<DjangoNames<'a>>,
+    /// The Spring annotations that a Java file imports.
+    spring_names: std::cell::OnceCell<SpringNames<'a>>,
+    /// What each local of a Rails routes file holds.
+    rails_constraint_locals:
+        std::cell::OnceCell<std::collections::HashMap<&'a str, rails::ConstraintLocal>>,
+    /// The C# names with a type or a value of ASP.NET.
+    aspnet_names: std::cell::OnceCell<std::collections::HashSet<&'a str>>,
+    /// The names that the imports of a Go file give to `net/http`.
+    go_http_names: std::cell::OnceCell<Vec<String>>,
+    /// The answer of `imports` for each module that a reader asked about.
+    imported_modules: std::cell::RefCell<std::collections::HashMap<String, bool>>,
+    /// The answer of `mentions` for each word that a reader asked about.
+    mentioned_words: std::cell::RefCell<std::collections::HashMap<String, bool>>,
+    /// The guards and the route of each Java or C# class, by the id of the class node.
+    class_annotations: std::cell::RefCell<std::collections::HashMap<usize, Rc<ClassAnnotations>>>,
     ecma: ecma::State,
+}
+
+/// What the annotations of a Java or C# class give to each of its methods.
+struct ClassAnnotations {
+    /// The guards, at most one more than `MAX_GUARDS`.
+    guards: Vec<String>,
+    /// The path of the route annotation of the class.
+    route: Option<String>,
 }
 
 struct Draft {
@@ -859,6 +1332,7 @@ impl<'a> Context<'a> {
             symbol_starts: std::sync::OnceLock::new(),
             callables_here: std::sync::OnceLock::new(),
             go_locals: std::sync::OnceLock::new(),
+            go_exits: std::sync::OnceLock::new(),
             go_servemuxes: std::sync::OnceLock::new(),
             go_covered: std::sync::OnceLock::new(),
             go_dead: std::sync::OnceLock::new(),
@@ -867,6 +1341,15 @@ impl<'a> Context<'a> {
             python_scopes: std::cell::OnceCell::new(),
             guard_gap: std::cell::Cell::new(None),
             python_receivers: std::cell::RefCell::new(std::collections::HashMap::new()),
+            next_own_exports: std::cell::OnceCell::new(),
+            django_names: std::cell::OnceCell::new(),
+            spring_names: std::cell::OnceCell::new(),
+            rails_constraint_locals: std::cell::OnceCell::new(),
+            aspnet_names: std::cell::OnceCell::new(),
+            go_http_names: std::cell::OnceCell::new(),
+            imported_modules: std::cell::RefCell::new(std::collections::HashMap::new()),
+            mentioned_words: std::cell::RefCell::new(std::collections::HashMap::new()),
+            class_annotations: std::cell::RefCell::new(std::collections::HashMap::new()),
             ecma: ecma::State::default(),
         }
     }
@@ -902,14 +1385,401 @@ impl<'a> Context<'a> {
     }
 
     fn imports(&self, module: &str) -> bool {
-        self.file.imports.iter().any(|binding| {
-            let path = binding.module_path.replace(['/', '\\', ':'], ".");
-            path == module || path.starts_with(&format!("{module}."))
-        })
+        if let Some(known) = self.imported_modules.borrow().get(module) {
+            return *known;
+        }
+        let found = self
+            .file
+            .imports
+            .iter()
+            .any(|binding| module_is_or_is_under(&binding.module_path, module));
+        self.imported_modules
+            .borrow_mut()
+            .insert(module.to_string(), found);
+        found
     }
 
     fn mentions(&self, word: &str) -> bool {
-        self.imports(word) || self.text(self.parsed.root_node()).contains(word)
+        if let Some(known) = self.mentioned_words.borrow().get(word) {
+            return *known;
+        }
+        let found = self.imports(word) || self.text(self.parsed.root_node()).contains(word);
+        self.mentioned_words
+            .borrow_mut()
+            .insert(word.to_string(), found);
+        found
+    }
+
+    /// The guards and the route of a class. The result is kept for the class, so a method does
+    /// not read the annotations of its class again.
+    fn class_annotations_of(
+        &self,
+        class: Node<'_>,
+        guard_names: &[&str],
+        route_name: &str,
+        route_keys: &[&str],
+    ) -> Rc<ClassAnnotations> {
+        if let Some(known) = self.class_annotations.borrow().get(&class.id()) {
+            return Rc::clone(known);
+        }
+        let annotations = self.annotations_of(class);
+        let found = Rc::new(ClassAnnotations {
+            guards: annotations
+                .iter()
+                .map(|annotation| self.annotation_name(*annotation))
+                .filter(|name| guard_names.contains(name))
+                .take(MAX_GUARDS + 1)
+                .map(str::to_string)
+                .collect(),
+            route: annotations
+                .iter()
+                .find(|annotation| {
+                    let name = self.annotation_name(**annotation);
+                    name.rsplit('.').next() == Some(route_name)
+                        && (route_name != "RequestMapping"
+                            || self.is_spring_annotation(name, annotation.start_byte()))
+                })
+                .and_then(|annotation| self.annotation_value(*annotation, route_keys)),
+        });
+        self.class_annotations
+            .borrow_mut()
+            .insert(class.id(), Rc::clone(&found));
+        found
+    }
+
+    /// The guards of a class, and then the guards of a method, up to one more than the limit.
+    fn guards_with_method(
+        &self,
+        class: Option<&ClassAnnotations>,
+        annotations: &[Node<'_>],
+        guard_names: &[&str],
+    ) -> Vec<String> {
+        class
+            .into_iter()
+            .flat_map(|class| class.guards.iter().cloned())
+            .chain(
+                annotations
+                    .iter()
+                    .map(|annotation| self.annotation_name(*annotation))
+                    .filter(|name| guard_names.contains(name))
+                    .map(str::to_string),
+            )
+            .take(MAX_GUARDS + 1)
+            .collect()
+    }
+
+    /// The framework of a Rust verb attribute. A binding of the verb in the file decides. If the
+    /// file has no binding, an import of one framework in the file decides, or else an import of
+    /// one framework in the repository, as `#[macro_use] extern crate rocket` of a crate root
+    /// gives. Another crate can define a macro with the name of a verb.
+    fn rust_verb_framework(&self, verb: &str) -> Option<&'static str> {
+        let shared = self.all_parsed.shared();
+        let bound = shared
+            .rust_verbs
+            .get_or_init(|| rust_verb_bindings(self.all));
+        if let Some(framework) = bound
+            .get(self.file.file.as_str())
+            .and_then(|verbs| verbs.get(verb))
+        {
+            return *framework;
+        }
+        let only = |present: [bool; 2]| match present {
+            [true, false] => Some(RUST_WEB_FRAMEWORKS[0].1),
+            [false, true] => Some(RUST_WEB_FRAMEWORKS[1].1),
+            _ => None,
+        };
+        let here = [
+            self.imports(RUST_WEB_FRAMEWORKS[0].0),
+            self.imports(RUST_WEB_FRAMEWORKS[1].0),
+        ];
+        if here != [false, false] {
+            return only(here);
+        }
+        only(*shared.rust_web.get_or_init(|| {
+            RUST_WEB_FRAMEWORKS.map(|(module, _)| {
+                self.all.iter().enumerate().any(|(position, file)| {
+                    file.language == Language::Rust
+                        && (file
+                            .imports
+                            .iter()
+                            .any(|binding| module_is_or_is_under(&binding.module_path, module))
+                            || self
+                                .all_parsed
+                                .transient_tree(position)
+                                .is_some_and(|parsed| {
+                                    declares_extern_crate(
+                                        parsed.root_node(),
+                                        &parsed.source,
+                                        module,
+                                    )
+                                }))
+                })
+            })
+        }))
+    }
+
+    /// The names that an `export { name }` clause of this file exports with no alias.
+    fn next_own_exports(&self) -> &std::collections::HashSet<&'a str> {
+        self.next_own_exports.get_or_init(|| {
+            let root = self.parsed.root_node();
+            let mut names = std::collections::HashSet::new();
+            let mut cursor = root.walk();
+            for statement in root
+                .named_children(&mut cursor)
+                .filter(|node| node.kind() == "export_statement")
+                .filter(|node| node.child_by_field_name("source").is_none())
+            {
+                let mut inner = statement.walk();
+                for clause in statement
+                    .named_children(&mut inner)
+                    .filter(|node| node.kind() == "export_clause")
+                {
+                    let mut specifiers = clause.walk();
+                    for specifier in clause
+                        .named_children(&mut specifiers)
+                        .filter(|node| node.kind() == "export_specifier")
+                        .filter(|node| node.child_by_field_name("alias").is_none())
+                    {
+                        if let Some(name) = specifier.child_by_field_name("name") {
+                            names.insert(self.text(name));
+                        }
+                    }
+                }
+            }
+            names
+        })
+    }
+
+    /// Tells if an import of `django` binds the name in this Python file. A binding of the name
+    /// at the level of the module, as an assignment or a `def`, is no proof. A local variable of
+    /// a function does not change the name at the level of the module.
+    fn is_django_name(&self, name: &str) -> bool {
+        let names = self.django_names.get_or_init(|| {
+            use crate::index::model::ImportKind;
+            let mut names = DjangoNames::default();
+            for binding in &self.file.imports {
+                let from_django = module_is_or_is_under(&binding.module_path, "django");
+                names.wildcard |= from_django && binding.kind == ImportKind::Wildcard;
+                if let Some(local) = binding.local_name.as_deref() {
+                    if from_django {
+                        names.imported.insert(local);
+                    } else {
+                        names.other.insert(local);
+                    }
+                }
+            }
+            names.rebound = python_module_bindings(self.parsed.root_node(), self.source);
+            names
+        });
+        if names.other.contains(name) || names.rebound.contains(name) {
+            return false;
+        }
+        names.imported.contains(name) || names.wildcard
+    }
+
+    /// Tells if a Java annotation at the byte `at` is the Spring annotation of that name: by its
+    /// full name, by an import of that annotation, or by the wildcard import of its package. The
+    /// scope rules of Java decide which type a simple name means. A member type of the class
+    /// around the annotation, or of a class around that class, hides each import. A top-level
+    /// type of the file or of its package, and a single-type import from another package, hide a
+    /// wildcard import. A type in an unrelated class, a method, and a field hide nothing.
+    fn is_spring_annotation(&self, name: &str, at: usize) -> bool {
+        const PACKAGE: &str = "org.springframework.web.bind.annotation";
+        if let Some((qualifier, _)) = name.rsplit_once('.') {
+            return qualifier == PACKAGE;
+        }
+        let names = self.spring_names.get_or_init(|| {
+            use crate::index::model::ImportKind;
+            let mut names = SpringNames::default();
+            for binding in &self.file.imports {
+                match (binding.kind, binding.local_name.as_deref()) {
+                    (ImportKind::Wildcard, _) => names.wildcard |= binding.module_path == PACKAGE,
+                    (_, Some(local)) => {
+                        let exact = binding
+                            .module_path
+                            .strip_suffix(local)
+                            .and_then(|path| path.strip_suffix('.'))
+                            == Some(PACKAGE);
+                        if exact {
+                            names.imported.insert(local);
+                        } else {
+                            names.hidden.insert(local);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            names.members = java_member_types(self.parsed.root_node(), self.source);
+            names
+        });
+        if names
+            .members
+            .get(name)
+            .is_some_and(|scopes| scopes.contains(at))
+        {
+            return false;
+        }
+        if names.imported.contains(name) {
+            return true;
+        }
+        names.wildcard && !names.hidden.contains(name) && !self.java_package_types().contains(name)
+    }
+
+    /// The names of the top-level types of the files in the directory of this file. Omen reads
+    /// a directory as one package.
+    fn java_package_types(&self) -> &std::collections::HashSet<String> {
+        static NONE: std::sync::LazyLock<std::collections::HashSet<String>> =
+            std::sync::LazyLock::new(std::collections::HashSet::new);
+        let directory = |path: &str| {
+            path.rsplit_once('/')
+                .map_or("", |(parent, _)| parent)
+                .to_string()
+        };
+        self.all_parsed
+            .shared()
+            .java_package_types
+            .get_or_init(|| {
+                let mut types: std::collections::HashMap<
+                    String,
+                    std::collections::HashSet<String>,
+                > = std::collections::HashMap::new();
+                for file in self
+                    .all
+                    .iter()
+                    .filter(|file| file.language == Language::Java)
+                {
+                    let names = types.entry(directory(&file.file)).or_default();
+                    names.extend(
+                        file.symbols
+                            .iter()
+                            .filter(|symbol| symbol.kind.is_type() && symbol.container.is_none())
+                            .map(|symbol| symbol.name.clone()),
+                    );
+                }
+                types
+            })
+            .get(&directory(&self.file.file))
+            .unwrap_or(&NONE)
+    }
+
+    /// Tells if the receiver of a C# `Map` call is an ASP.NET value: the file uses a namespace of
+    /// ASP.NET, or the receiver has a type or a value of ASP.NET. A project with implicit usings
+    /// has no `using` line, so the type or the value is the proof there.
+    fn is_aspnet_receiver(&self, receiver: Node<'_>) -> bool {
+        if self.imports("Microsoft.AspNetCore") {
+            return true;
+        }
+        let globals = self.csharp_globals();
+        if globals.aspnet_namespace {
+            return true;
+        }
+        has_aspnet_type(self.text(receiver), &globals.aliases)
+            || self
+                .csharp_root_name(receiver)
+                .is_some_and(|name| self.aspnet_names().contains(name))
+    }
+
+    /// The `global using` directives of the project of this file. The compiler applies them to
+    /// each file of the project and to no other project.
+    fn csharp_globals(&self) -> &CsharpGlobals {
+        static NONE: std::sync::LazyLock<CsharpGlobals> =
+            std::sync::LazyLock::new(CsharpGlobals::default);
+        self.all_parsed
+            .shared()
+            .csharp_globals
+            .get_or_init(|| {
+                let mut projects: std::collections::HashMap<Option<String>, CsharpGlobals> =
+                    std::collections::HashMap::new();
+                for (position, file) in self.all.iter().enumerate() {
+                    if file.language != Language::CSharp {
+                        continue;
+                    }
+                    let globals = projects.entry(file.csharp_project.clone()).or_default();
+                    let Some(parsed) = self.all_parsed.transient_tree(position) else {
+                        continue;
+                    };
+                    read_csharp_globals(parsed.root_node(), &parsed.source, globals);
+                }
+                projects
+            })
+            .get(&self.file.csharp_project)
+            .unwrap_or(&NONE)
+    }
+
+    /// The first name of a chain of member accesses and calls: `app` of `app.MapGroup("/x")`, and
+    /// `app` of `this . app.Map()`.
+    fn csharp_root_name(&self, node: Node<'_>) -> Option<&'a str> {
+        const CHAIN_LIMIT: usize = 256;
+        let mut current = node;
+        let mut member = None;
+        for _ in 0..CHAIN_LIMIT {
+            match current.kind() {
+                "identifier" => return Some(self.text(current)),
+                "this" | "this_expression" => return member,
+                "invocation_expression" => current = current.child_by_field_name("function")?,
+                "member_access_expression" => {
+                    member = current
+                        .child_by_field_name("name")
+                        .map(|name| self.text(name));
+                    current = current.child_by_field_name("expression")?;
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// One walk in source order, so `var app = builder.Build()` finds the earlier `builder`.
+    fn aspnet_names(&self) -> &std::collections::HashSet<&'a str> {
+        self.aspnet_names.get_or_init(|| {
+            let aliases = &self.csharp_globals().aliases;
+            let mut names = std::collections::HashSet::new();
+            let mut pending = vec![self.parsed.root_node()];
+            while let Some(node) = pending.pop() {
+                let declared_type = node
+                    .child_by_field_name("type")
+                    .is_some_and(|kind| has_aspnet_type(self.text(kind), aliases));
+                match node.kind() {
+                    "parameter" | "property_declaration" if declared_type => {
+                        if let Some(name) = node.child_by_field_name("name") {
+                            names.insert(self.text(name));
+                        }
+                    }
+                    "variable_declaration" => {
+                        let mut cursor = node.walk();
+                        for declarator in node
+                            .named_children(&mut cursor)
+                            .filter(|child| child.kind() == "variable_declarator")
+                        {
+                            let Some(name) = declarator.child_by_field_name("name") else {
+                                continue;
+                            };
+                            let value =
+                                declarator
+                                    .named_child(
+                                        declarator.named_child_count().saturating_sub(1) as u32
+                                    )
+                                    .filter(|value| *value != name);
+                            if declared_type
+                                || value.is_some_and(|value| {
+                                    has_aspnet_type(self.text(value), aliases)
+                                        || self
+                                            .csharp_root_name(value)
+                                            .is_some_and(|root| names.contains(root))
+                                })
+                            {
+                                names.insert(self.text(name));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                let mut cursor = node.walk();
+                let children: Vec<_> = node.named_children(&mut cursor).collect();
+                pending.extend(children.into_iter().rev());
+            }
+            names
+        })
     }
 
     /// Tells if the receiver of a registration is a framework object. A receiver is a
@@ -1124,7 +1994,7 @@ impl<'a> Context<'a> {
         self.convention_entries(&mut drafts);
         let mut entries: Vec<EntryPoint> = drafts
             .into_iter()
-            .map(|draft| {
+            .map(|mut draft| {
                 let method = draft
                     .route
                     .as_ref()
@@ -1138,6 +2008,9 @@ impl<'a> Context<'a> {
                 let layer = (draft.kind == EntryKind::HttpHandler
                     && FRAMEWORKS_WITH_UNREAD_LAYERS.contains(&draft.framework))
                 .then_some(GuardsUnknownReason::LayerNotRead);
+                let too_many =
+                    (draft.guards.len() > MAX_GUARDS).then_some(GuardsUnknownReason::TooManyGuards);
+                draft.guards.truncate(MAX_GUARDS);
                 let placeholder = draft
                     .guards
                     .iter()
@@ -1146,7 +2019,10 @@ impl<'a> Context<'a> {
                             || guard == go_routes::UNNAMED_FUNCTION_GUARD
                     })
                     .then_some(GuardsUnknownReason::UnreadMiddleware);
-                let unknown = first_reason(draft.unknown, first_reason(placeholder, layer));
+                let unknown = first_reason(
+                    draft.unknown,
+                    first_reason(placeholder, first_reason(too_many, layer)),
+                );
                 EntryPoint {
                     key: format!(
                         "{}:{}:{}:{}{}",
@@ -1419,14 +2295,31 @@ impl<'a> Context<'a> {
             })
             .collect();
         let path = join_path("", &segments.join("/"));
-        for symbol in &self.file.symbols {
-            let verb = symbol.name.as_str();
-            if symbol.kind == SymbolKind::Function
-                && symbol.container.is_none()
-                && matches!(
-                    verb,
-                    "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
-                )
+        const VERBS: [&str; 7] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+        for (position, symbol) in self.file.symbols.iter().enumerate() {
+            if symbol.kind != SymbolKind::Function || symbol.container.is_some() {
+                continue;
+            }
+            let aliases = self
+                .file
+                .link_facts
+                .get(position)
+                .map_or(&[][..], |facts| facts.export_aliases.as_slice());
+            // `export { handler as GET }` exports the alias and not the local name.
+            let exports_own_name = symbol.exported != crate::index::model::Exported::NotExported
+                && (aliases.is_empty()
+                    || self.next_own_exports().contains(symbol.name.as_str())
+                    || self.source[..symbol.range.start_byte]
+                        .trim_ascii_end()
+                        .ends_with(b"export"));
+            let exported_names: Vec<&str> = exports_own_name
+                .then_some(symbol.name.as_str())
+                .into_iter()
+                .chain(aliases.iter().map(String::as_str))
+                .collect();
+            for verb in exported_names
+                .into_iter()
+                .filter(|name| VERBS.contains(name))
             {
                 out.push(Draft {
                     range: symbol.range,
@@ -1696,7 +2589,7 @@ impl<'a> Context<'a> {
         };
         if callee.kind() != "identifier"
             || !matches!(self.text(callee), "path" | "re_path" | "url")
-            || !self.imports("django")
+            || !self.is_django_name(self.text(callee))
         {
             return;
         }
@@ -1820,25 +2713,20 @@ impl<'a> Context<'a> {
         };
         let symbol = self.symbol_at(name_node);
         let annotations = self.annotations_of(node);
-        let class = Self::enclosing(node, "class_declaration");
-        let class_annotations = class
-            .map(|class| self.annotations_of(class))
-            .unwrap_or_default();
-        let guards: Vec<String> = class_annotations
-            .iter()
-            .chain(&annotations)
-            .map(|annotation| self.annotation_name(*annotation))
-            .filter(|name| JAVA_GUARDS.contains(name))
-            .map(str::to_string)
-            .collect();
-        let prefix = class_annotations
-            .iter()
-            .find(|annotation| self.annotation_name(**annotation) == "RequestMapping")
-            .and_then(|annotation| self.annotation_value(*annotation, &["value", "path"]))
+        let class = Self::enclosing(node, "class_declaration").map(|class| {
+            self.class_annotations_of(class, &JAVA_GUARDS, "RequestMapping", &["value", "path"])
+        });
+        let guards = self.guards_with_method(class.as_deref(), &annotations, &JAVA_GUARDS);
+        let prefix = class
+            .as_ref()
+            .and_then(|class| class.route.clone())
             .unwrap_or_default();
         for annotation in &annotations {
             let name = self.annotation_name(*annotation);
-            if let Some(method) = self.spring_method(*annotation, name) {
+            let spring_method = self
+                .spring_method(*annotation, name.rsplit('.').next().unwrap_or(name))
+                .filter(|_| self.is_spring_annotation(name, annotation.start_byte()));
+            if let Some(method) = spring_method {
                 let path = self
                     .annotation_value(*annotation, &["value", "path"])
                     .unwrap_or_default();
@@ -1901,9 +2789,8 @@ impl<'a> Context<'a> {
         let action = self.text(name_node);
         let attributes = self.annotations_of(node);
         let class = Self::enclosing(node, "class_declaration");
-        let class_attributes = class
-            .map(|class| self.annotations_of(class))
-            .unwrap_or_default();
+        let class_facts =
+            class.map(|class| self.class_annotations_of(class, &CSHARP_GUARDS, "Route", &[]));
         let controller = class
             .and_then(|class| class.child_by_field_name("name"))
             .map(|name| {
@@ -1916,19 +2803,12 @@ impl<'a> Context<'a> {
             path.replace("[controller]", &controller)
                 .replace("[action]", &action.to_lowercase())
         };
-        let prefix = class_attributes
-            .iter()
-            .find(|attribute| self.annotation_name(**attribute) == "Route")
-            .and_then(|attribute| self.annotation_value(*attribute, &[]))
+        let prefix = class_facts
+            .as_ref()
+            .and_then(|class| class.route.clone())
             .map(&expand)
             .unwrap_or_default();
-        let guards: Vec<String> = class_attributes
-            .iter()
-            .chain(&attributes)
-            .map(|attribute| self.annotation_name(*attribute))
-            .filter(|name| CSHARP_GUARDS.contains(name))
-            .map(str::to_string)
-            .collect();
+        let guards = self.guards_with_method(class_facts.as_deref(), &attributes, &CSHARP_GUARDS);
         let symbol = self.symbol_at(name_node);
         for attribute in &attributes {
             let method = match self.annotation_name(*attribute) {
@@ -1980,6 +2860,12 @@ impl<'a> Context<'a> {
             return;
         };
         if arguments.len() < 2 || !self.is_string(*path) {
+            return;
+        }
+        let Some(receiver) = function.child_by_field_name("expression") else {
+            return;
+        };
+        if !self.is_aspnet_receiver(receiver) {
             return;
         }
         out.push(Draft {
@@ -2037,7 +2923,7 @@ impl<'a> Context<'a> {
         else {
             return;
         };
-        if self.go_covered_patterns().contains(&path) || self.go_in_dead_branch(node) {
+        if self.go_covered_patterns().contains(&node.id()) || self.go_in_dead_branch(node) {
             return;
         }
         let wrapped = self.go_handler(*handler, go_routes::HandlerKind::Http);
@@ -2128,10 +3014,8 @@ impl<'a> Context<'a> {
             let Some(path) = rest.split('"').nth(1).filter(|path| path.starts_with('/')) else {
                 continue;
             };
-            let framework = if self.imports("rocket") {
-                "rocket"
-            } else {
-                "actix"
+            let Some(framework) = self.rust_verb_framework(verb) else {
+                continue;
             };
             out.push(Draft {
                 range,
@@ -2152,7 +3036,9 @@ impl<'a> Context<'a> {
     /// `http.NewServeMux()`. A name that a local variable hides is not the package.
     fn is_go_http_receiver(&self, receiver: Node<'_>) -> bool {
         let text = self.text(receiver);
-        let names = go_routes::net_http_names(self.file);
+        let names = self
+            .go_http_names
+            .get_or_init(|| go_routes::net_http_names(self.file));
         if names.iter().any(|name| name == text) {
             return !self.is_go_shadowed(receiver);
         }
@@ -2700,6 +3586,17 @@ pub(super) mod tests {
         files: &[(&str, &str)],
         resolve: bool,
     ) -> (Vec<EntryPoint>, std::time::Duration) {
+        entries_timed_repeated(language, files, resolve, 1)
+    }
+
+    /// Like `entries_timed`, with the time of `repeats` searches on one index. The index is
+    /// built one time, outside the time.
+    pub(super) fn entries_timed_repeated(
+        language: Language,
+        files: &[(&str, &str)],
+        resolve: bool,
+        repeats: usize,
+    ) -> (Vec<EntryPoint>, std::time::Duration) {
         let mut files = files.to_vec();
         files.sort_by_key(|(name, _)| *name);
         let files = files.as_slice();
@@ -2722,7 +3619,10 @@ pub(super) mod tests {
             resolve_references(&mut index);
         }
         let started = crate::index::timing::Stopwatch::start();
-        let found = find_entry_points(&parsed, &index);
+        let mut found = find_entry_points(&parsed, &index);
+        for _ in 1..repeats {
+            found = find_entry_points(&parsed, &index);
+        }
         (found, started.elapsed())
     }
 
@@ -3112,7 +4012,7 @@ pub(super) mod tests {
 
     #[test]
     fn a_spring_mapping_joins_the_class_path_and_has_its_guards() {
-        let source = "@RestController\n@RequestMapping(\"/api\")\npublic class UserController {\n    @PreAuthorize(\"hasRole('ADMIN')\")\n    @GetMapping(\"/users/{id}\")\n    public String show(@PathVariable String id) {\n        return id;\n    }\n}\n";
+        let source = "import org.springframework.web.bind.annotation.*;\n\n@RestController\n@RequestMapping(\"/api\")\npublic class UserController {\n    @PreAuthorize(\"hasRole('ADMIN')\")\n    @GetMapping(\"/users/{id}\")\n    public String show(@PathVariable String id) {\n        return id;\n    }\n}\n";
         let found = entries(Language::Java, &[("UserController.java", source)]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].framework, "spring");
@@ -5362,6 +6262,7 @@ func routes() {
 	mux.HandleFunc("/x/{a...}", list)
 	mux.HandleFunc("/x/{$}", show)
 	mux.HandleFunc("/x/{a}", show)
+	mux.HandleFunc("/x/{b}/{c...}", show)
 	mux.HandleFunc("/y/{a...}", list)
 	mux.HandleFunc("/y/{$}", show)
 }
@@ -5410,7 +6311,7 @@ func routes() {
     }
 
     #[test]
-    fn a_caller_that_registers_on_the_result_of_a_factory_shares_one_order_with_it() {
+    fn a_caller_that_registers_on_the_result_of_a_factory_has_no_known_order_with_it() {
         let chi = go_source(
             &[CHI],
             r#"func newAPI() *chi.Mux { r := chi.NewRouter(); r.Get("/x", show); return r }
@@ -5422,8 +6323,12 @@ func main() {
 }
 "#,
         );
-        // chi keeps the last registration of a key, and the registrations of both are in order.
-        assert_eq!(go_routes(&[("main.go", &chi)]), ["chi GET /x [] list"]);
+        // chi keeps the last registration of a key. The walk reads `newAPI` where the file
+        // declares it, and the order of two bodies is not known, so both routes stay.
+        assert_eq!(
+            go_routes(&[("main.go", &chi)]),
+            ["chi GET /x [] show", "chi GET /x [] list"]
+        );
         let api = go_source(
             &[CHI],
             "func newAPI() *chi.Mux { r := chi.NewRouter(); r.Get(\"/x\", show); return r }\n",
@@ -5447,10 +6352,11 @@ func main() {
 }
 "#,
         );
-        // gorilla/mux takes the first route that matches.
+        // gorilla/mux takes the first route that matches, and the order of two bodies is not
+        // known.
         assert_eq!(
             go_routes(&[("main.go", &mux)]),
-            ["gorilla/mux ANY /x [] show"]
+            ["gorilla/mux ANY /x [] show", "gorilla/mux ANY /x [] list"]
         );
         let echo = go_source(
             &[ECHO],
@@ -5466,6 +6372,7 @@ func main() {
         assert_eq!(
             go_routes(&[("main.go", &echo)]),
             [
+                "echo GET /x [] show",
                 "echo GET /keep [] show",
                 "echo GET /x [] list",
                 "echo GET /other [] list"
@@ -7021,7 +7928,7 @@ func routes() {
 
     #[test]
     fn rust_axum_routes_actix_attributes_main_and_exports_are_entries() {
-        let source = "use axum::{routing::get, Router};\n\nasync fn list() {}\n\npub fn app() -> Router {\n    Router::new().route(\"/items/{id}\", get(list))\n}\n\n#[get(\"/ping\")]\nasync fn ping() {}\n\n#[no_mangle]\npub extern \"C\" fn exported() {}\n\nfn main() {}\n";
+        let source = "use actix_web::get;\nuse axum::{routing::post, Router};\n\nasync fn list() {}\n\npub fn app() -> Router {\n    Router::new().route(\"/items/{id}\", post(list))\n}\n\n#[get(\"/ping\")]\nasync fn ping() {}\n\n#[no_mangle]\npub extern \"C\" fn exported() {}\n\nfn main() {}\n";
         let found = entries(Language::Rust, &[("main.rs", source)]);
         let summary: Vec<(&str, EntryKind)> = found
             .iter()
@@ -7036,7 +7943,7 @@ func routes() {
                 ("rust", EntryKind::CliMain)
             ]
         );
-        assert_eq!(found[0].route, route("GET", "/items/{id}", &["id"]));
+        assert_eq!(found[0].route, route("POST", "/items/{id}", &["id"]));
         assert_eq!(found[1].route, route("GET", "/ping", &[]));
     }
 
@@ -7893,7 +8800,7 @@ func routes() {
             .iter()
             .find(|entry| entry.route.as_ref().unwrap().path_text() == "/u")
             .unwrap();
-        assert_eq!(users.guards.len(), 2 * opening_count);
+        assert_eq!(users.guards.len(), (2 * opening_count).min(MAX_GUARDS));
         elapsed
     }
 
@@ -8019,7 +8926,7 @@ func routes() {
         ];
         let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].guards.len(), depth);
+        assert_eq!(found[0].guards.len(), depth.min(MAX_GUARDS));
         elapsed
     }
 
@@ -8490,7 +9397,7 @@ func routes() {
         };
         assert_eq!(by_path("/a"), (false, Vec::new()));
         assert_eq!(by_path("/b"), (true, strings(&["auth"])));
-        assert_eq!(by_path("/c"), (false, strings(&["auth"])));
+        assert_eq!(by_path("/c"), (true, strings(&["auth"])));
         assert_eq!(by_path("/d"), (false, Vec::new()));
     }
 
@@ -9017,7 +9924,11 @@ func routes() {
         ];
         let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), 1);
-        let expected: Vec<String> = (0..count).rev().map(|n| format!("g{n}")).collect();
+        let expected: Vec<String> = (0..count)
+            .rev()
+            .take(MAX_GUARDS)
+            .map(|n| format!("g{n}"))
+            .collect();
         assert_eq!(found[0].guards, expected);
         elapsed
     }
@@ -9326,7 +10237,7 @@ func routes() {
                 let (found, elapsed) = entries_lean(Language::Ruby, &files);
                 assert_eq!(found.len(), 1);
                 if kind == "unique" || kind == "plain" {
-                    assert_eq!(found[0].guards.len(), depth);
+                    assert_eq!(found[0].guards.len(), depth.min(MAX_GUARDS));
                 }
                 elapsed
             }
@@ -9931,11 +10842,10 @@ func routes() {
         ];
         let (found, elapsed) = entries_lean(Language::Ruby, &files);
         assert_eq!(found.len(), 3);
-        let expected = if shape == 2 { 0 } else { size };
+        let expected = if shape == 2 { 0 } else { size.min(MAX_GUARDS) };
         assert!(found.iter().all(|entry| entry.guards.len() == expected));
-        assert!(found
-            .iter()
-            .all(|entry| entry.guards_complete == (shape != 0)));
+        let complete = shape != 0 && (shape == 2 || size <= MAX_GUARDS);
+        assert!(found.iter().all(|entry| entry.guards_complete == complete));
         elapsed
     }
 

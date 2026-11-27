@@ -197,6 +197,26 @@ impl<K: Ord + Clone, V: Clone> PersistentMap<K, V> {
         self.walk(|node| (node.key.clone(), node.value.clone()))
     }
 
+    /// The first values in the order of the keys. The cost does not depend on the size of the
+    /// map beyond its height.
+    pub(super) fn first_values(&self, limit: usize) -> Vec<V> {
+        let mut out = Vec::with_capacity(limit.min(16));
+        let mut stack: Vec<&Node<K, V>> = Vec::new();
+        let mut node = self.root.as_deref();
+        while out.len() < limit {
+            while let Some(current) = node {
+                stack.push(current);
+                node = current.left.as_deref();
+            }
+            let Some(current) = stack.pop() else {
+                break;
+            };
+            out.push(current.value.clone());
+            node = current.right.as_deref();
+        }
+        out
+    }
+
     /// The values in the order of the keys.
     #[cfg(test)]
     pub(super) fn values(&self) -> Vec<V> {
@@ -257,6 +277,17 @@ mod tests {
         assert_eq!(map.values().len(), KEYS / 2);
         assert!(map.height() <= limit(KEYS / 2), "{}", map.height());
         assert!(started.elapsed().as_secs() < 30);
+    }
+
+    #[test]
+    fn first_values_stop_at_the_limit_in_key_order() {
+        let mut map: PersistentMap<u32, u32> = PersistentMap::default();
+        for key in [5, 1, 4, 2, 3] {
+            map.insert(key, key * 10);
+        }
+        assert_eq!(map.first_values(3), [10, 20, 30]);
+        assert_eq!(map.first_values(9), [10, 20, 30, 40, 50]);
+        assert!(map.first_values(0).is_empty());
     }
 
     #[test]

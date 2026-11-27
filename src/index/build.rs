@@ -1,7 +1,7 @@
 //! Builds the index of a set of files: the symbols, the import bindings, and
 //! the call sites, with their resolutions.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
@@ -215,6 +215,56 @@ fn read_manifests(
     discover_manifests(root, files, read, list).1
 }
 
+/// Gives each C# file the directory of its nearest `.csproj` file. The search lists each directory
+/// one time.
+fn assign_csharp_projects(
+    root: &Path,
+    files: &[PathBuf],
+    facts: &mut [FileSymbols],
+    list: ListDirectory<'_>,
+) {
+    let absolute = files.first().is_some_and(|file| file.is_absolute());
+    let in_form = |directory: &str| {
+        if absolute || directory.is_empty() {
+            root.join(directory)
+        } else {
+            PathBuf::from(directory)
+        }
+    };
+    let is_project = |directory: &str| {
+        list(&in_form(directory)).iter().any(|entry| {
+            entry
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("csproj"))
+        })
+    };
+    let mut nearest: HashMap<String, Option<String>> = HashMap::new();
+    for file in facts
+        .iter_mut()
+        .filter(|file| file.language == Language::CSharp)
+    {
+        let mut directory = file.file.rsplit_once('/').map_or("", |(parent, _)| parent);
+        let mut passed: Vec<&str> = Vec::new();
+        let project = loop {
+            if let Some(known) = nearest.get(directory) {
+                break known.clone();
+            }
+            passed.push(directory);
+            if is_project(directory) {
+                break Some(directory.to_string());
+            }
+            if directory.is_empty() {
+                break None;
+            }
+            directory = directory.rsplit_once('/').map_or("", |(parent, _)| parent);
+        };
+        for passed in passed {
+            nearest.insert(passed.to_string(), project.clone());
+        }
+        file.csharp_project = project;
+    }
+}
+
 /// The files of one directory of the file system, without the directories.
 pub fn list_directory(directory: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(directory) else {
@@ -256,6 +306,7 @@ impl CodeIndex {
         facts.sort_by(|left, right| left.file.cmp(&right.file));
         facts.dedup_by(|later, earlier| later.file == earlier.file);
         link_files(&mut facts);
+        assign_csharp_projects(root, files, &mut facts, list);
         let manifests = read_manifests(root, files, read, list);
         resolve_imports(&mut facts, &manifests);
         super::test_code::link_files(&mut facts);

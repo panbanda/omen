@@ -321,8 +321,9 @@ Do not conclude that an entry point is not authenticated when `guards_complete` 
 | `unreadable_include` | FastAPI | The file includes the router two times, in a condition, after the route, or in a loop of routers. |
 | `unreadable_dependency` | FastAPI | A dependency is not a name, or the `dependencies` value is not a literal list. Or the file uses the `dependencies` attribute of an object, as `router.dependencies.clear()`, which can change the dependencies that a later route gets. |
 | `wildcard_import` | FastAPI | The file has `from module import *`, which can bind a name again. |
-| `conditional_middleware` | Go router types | A layer method of a router, as `AfterRouting`, is called in a condition, a loop, or a function literal, or a function returns the router with different layers. |
+| `conditional_middleware` | chi, echo, gin, gorilla/mux, Go router types | chi, echo, gin, gorilla/mux: a `Use` or an echo `Pre` call is at a place that does not surely run whenever its router exists: an arm of an `if`, a case of a `switch` or a `select`, a loop body, the update statement of a `for` clause, the right operand of `&&` or `||`, a function literal, `defer`, or `go`, a place after an earlier statement of its list that can leave the list when the router exists before that statement, a place after a `defer` that can recover in its function body, or in a function, method, or package variable of the file that the code after such a `defer` names, or in each one of the file when that code calls through a value (for each route of the router), or the body of a function or a method whose top does not surely run with the router. A function that returns a router with such middleware gives the reason to the routes of each caller. See the rule after the next table. Go router types: a layer method, as `AfterRouting`, is called in a condition, a loop, or a function literal; a framework layer, as `BeforeRouting`, comes after a statement that can leave the function and that runs after the router is made; or a function returns the router with different layers. |
 | `unread_middleware` | chi, echo, gin, gorilla/mux, `net/http`, Go router types, Express, Koa, Fastify | A middleware argument is not a name, or a spread of a Go slice that omen cannot read. For Go, its guard text is `<expression>` or `<function literal>`. Or a call around the handler is not a conversion, as `http.HandlerFunc(show)`, and not a middleware of the repository, as `middleware.Auth(cfg)(...)`. For Express, Koa, and Fastify, a middleware argument of the route call is a call, as `limit(5)`, or a function, and omen does not list it. The options object of a Fastify route is not a middleware. The handler and the known guards stay. |
+| `too_many_guards` | Each framework | The entry point has more than 256 guards. The list has the first 256 guards in the usual order. |
 | `layer_not_read` | See the next table | The framework has a place for guards that omen does not read. |
 
 Omen reads the full chain of the guards only for Rails, for FastAPI, and for the Go routers.
@@ -347,8 +348,104 @@ For each other HTTP framework, omen reads the guards that the route itself decla
 | Laravel | The `middleware(...)` calls of the route | A route group, the middleware of a controller, and the kernel |
 | Next | None | The `middleware` file |
 
-An entry point that is not an HTTP handler, such as `main` or a scheduled job, has no guard
-concept. Its list is empty and complete.
+Omen reads no guard layer for an entry point that is not an HTTP handler, such as `main` or a
+scheduled job. Its list is complete. It is empty, but a Spring scheduled job or message consumer
+lists the security annotations of its method and of its class.
+
+### Proof of the framework
+
+Omen gives a route of these frameworks only when the file proves the framework:
+
+| Framework | Proof | Omen gives no entry for |
+| --- | --- | --- |
+| Next | The function has the export name of a verb, also as `export { handler as GET }` | A verb function with no export, and a re-export from another file |
+| ASP.NET minimal API | A `using` of `Microsoft.AspNetCore`, a `global using` of that namespace or an alias of a type in it in the same project, or a receiver with a whole ASP.NET type name, also through `this.` | A receiver of an unknown type in a project that has only implicit usings |
+| Actix, Rocket | An import of the verb from the crate, also through a chain of named `pub use` of at most 32 steps, or one framework that the file or the repository imports | A verb from another crate, a verb through a wildcard re-export, a chain of more than 32 steps, and a repository that imports both frameworks with no binding of the verb |
+| Django | An import of the name from `django`, or a wildcard import of `django` | A name that the module binds again, as an assignment, `def`, `class`, `for`, `with ... as`, `except ... as`, `import ... as`, a `match` capture (a name, a star or double star capture, a keyword value, an `as` name, or a name in an or-pattern), a `type` statement, or a binding of one of these forms in a function that declares the name `global` |
+| Spring | The full annotation name, an import of that annotation, or `org.springframework.web.bind.annotation.*` | Any other Spring import, and a type declaration in scope with the same name: a member type of the class or of a class around it hides each import, and a top-level type of the file or of its directory hides the wildcard import |
+
+The project of a C# file is the directory of its nearest `.csproj` file. A repository with no
+`.csproj` file is one project.
+
+For chi, echo, gin, and gorilla/mux, a `Use` or an echo `Pre` call is unconditional only when it
+surely runs whenever its router exists. A place surely runs with the top of its function body, or
+with the level of the package, when all of these are true:
+
+- It is in no arm of an `if`, no case of a `switch` or a `select`, no loop body, no update
+  statement of a `for` clause, no right operand of `&&` or `||`, and no function literal,
+  `defer`, or `go`. The left operand, the condition of an `if` or a `for`, and the initial
+  statement of a `for` clause surely run.
+- No earlier statement of a statement list around it can leave the list, unless the router is
+  made after that statement in the same list. This exception does not apply to a `defer` that
+  can recover (see the paragraph about a panic below). A statement can leave its list when it holds
+  one of these: `return`; `goto`; a labelled `break` or `continue`; an unlabelled `break` or `continue` inside its loop, `switch`, or `select`; a call
+  of the builtin `panic`; a loop with no condition that no `break`, `return`, or `goto` leaves;
+  an empty `select`; a `defer` that can recover; or a call of a function or a method of the file
+  that can end without a return, because it holds one of these ends or calls such a function.
+  Each `defer` can recover, except a `defer` of a function literal with no call of the builtin
+  `recover`. Omen does not resolve the target of a `defer`, so a deferred function, method,
+  variable, or function of another package counts, as `defer mu.Unlock()` does. Otherwise the
+  code of a function literal, of a `go` statement, and of a `defer` statement does not count. A
+  method call counts when any method of the file with that name can end without a return.
+
+The top of the body of a function or a method surely runs with the router only when the function
+has one use in the repository, the use is a direct call in the same file, the call is at a place
+that surely runs with the top of the body of its caller, and the same holds for the caller. A use
+counts as a call in `references` or as a function value in `function_references`. A method call
+`x.name()` names a method only when the file has one method of that name. In each other case the
+guards are `conditional_middleware`. A route that runs only where the middleware runs, as a route
+after the middleware in the same place, keeps a complete list, except after a `defer` that can
+recover. A function that returns a router
+and adds middleware to it at a place that does not surely run with the router gives
+`conditional_middleware` to the routes of each caller on the result. For gin, which adds middleware
+only to later routes, middleware from another function also gives `conditional_middleware`,
+because the order of two functions is not known.
+
+Omen does not read whether a function of another file or of a library can panic, as
+`regexp.MustCompile` can. Such a panic skips the rest of a body only when a deferred function
+recovers it. Thus this rule applies to each `defer` that can recover: each guard that a `Use` or
+an echo `Pre` call adds after the `defer` in the same function body is `conditional_middleware`.
+This holds for each route of the router, before and after the call, for each kind of router
+(also a router that adds middleware to all its routes, and a router that the function makes after
+the `defer`), for the summary of a factory, and for the code that the code after the `defer`
+reaches (see the next paragraph). For a Go router type, each layer after such a `defer` is
+conditional in the same way.
+
+The code after the `defer` is the rest of its function body, with each function literal and each
+later `defer` in it: Go runs a later `defer` first, and the earlier `defer` can recover its
+panic. The code of a `go` statement is not, because it runs in another goroutine. The reached
+code also has each function, method, and package variable of the file that reached code names,
+at any place: in a call, as a function value (`f := inner`), as an argument (`each(inner)`), in
+a function literal, or in the value of a package variable that reached code names
+(`var hook = inner`, also in a group `var ( ... )`). A field name, as in `t.inner`, names each
+method of the file with that name. A function that reached code names is reached in all its
+body. Omen does not read a `defer` in a caller of another file.
+
+Omen does not track values. Thus a call through a value in the reached code makes each function,
+method, and package variable of the file reached, and each guard of the file is
+`conditional_middleware`. A call is through a value when its function is one of these:
+
+- a name that is not a function of the file, a Go builtin, or a type: a local variable, a
+  parameter, a package variable, or a function of another file;
+- a selector `x.y`, where `y` is the name of a field, or of an embedded field, of a struct type
+  of the file;
+- each other form, as a call result (`f()()`), an index (`table[key]()`), a type assertion, or a
+  parenthesized expression that is not a name (`(*p)()`).
+
+A call of a function of the file, a builtin, a conversion to a type, and a function literal keeps
+the reach of the names above. So does a selector `x.y` where `y` is not such a field name, as a
+package function (`strings.TrimSpace`) or a method.
+
+Omen trusts the order of two registrations only when both are in one function body, or both are
+at the level of the package. The walk reads a function where the file declares it, not where a
+call runs it. Thus a chi or echo route does not replace, and a gorilla/mux route does not hide, a
+route of another function, and both stay. For `net/http`, the patterns of different functions do
+not cover each other. Omen reads each case of a `switch` as its own branch, also after
+`fallthrough`. Thus a route of the next case does not replace a route of the case before it, and
+both stay.
+
+Omen matches an ASP.NET controller attribute, as `[HttpGet]`, by its name. These attributes need
+no proof of the framework, so a class of the repository with the same name gives a route.
 
 ## Rails routes
 
@@ -890,8 +987,8 @@ index, and the other commands, do not know the symbol.
   cannot read, and its guards are not complete, with the reason `unresolved_router`.
   These limits keep the work for each route bounded: a group deeper than 256 groups, a
   chain of more than 256 mounts, and a prefix longer than 4096 bytes give the same
-  `<unresolved>` path. A list of more than 256 guards keeps its first 256 guards and the
-  placeholder `<expression>` in place of the others.
+  `<unresolved>` path. A list of more than 256 guards keeps its first 256 guards, and the
+  reason is `too_many_guards`.
 - Omen does not read the code of a method that changes the path. For example, Gitea removes
   a slash at the end of a pattern, so 16 paths of Gitea that end with a slash have that
   slash in the result of omen, but not in Gitea.
@@ -922,8 +1019,12 @@ index, and the other commands, do not know the symbol.
   of the routes inside the function. The routes of each caller of the function are not
   complete, with the reason `layer_not_read`.
 - A layer call in a condition, a loop, or a function literal gives its guards, and the
-  guards are not complete, with the reason `conditional_middleware`.
-- A test file gives no route and no mount.
+  guards are not complete, with the reason `conditional_middleware`. A framework layer, as
+  `BeforeRouting`, also guards the routes before it. A framework layer after a statement of its
+  function that can leave the function (see the chi rule above), when that statement runs after
+  the router is made, gives the same reason to each route of the router.
+- A test file gives no route and no mount of a repository router type. A route of chi, echo,
+  gin, gorilla/mux, or `net/http` in a test file gives an entry with `in_test: true`.
 - A router is a value that the import of the framework proves. It is a constructor
   call, a group or sub-router of a router, or a parameter that has a router type. A
   variable name alone does not prove a router.
@@ -957,6 +1058,16 @@ index, and the other commands, do not know the symbol.
   another file registers a route, omen cannot order the routes. Then the factory and the
   callers give no entry for them. A factory without routes of its own gives the entries of
   the caller. This rule holds only when the factory returns the router of the framework.
+- These factories give no entry, and omen does not mark the loss:
+  - A factory whose result a call mounts, as `root.Mount("/api", newAPI())`, also through a
+    variable. Its routes give no entry (issue #646).
+  - A chi factory that returns the result of `Route`, as `return r.Route("/sub", fn)`. The
+    routes of the callback and the routes that a caller registers on the result give no entry
+    (issue #651).
+  - A chain of nested factories at the depth limit of the walk, 1000 levels of evaluation.
+    Each factory of the chain uses one level. A chain of 999 factories still gives the entry,
+    and a chain of 1000 is the first that loses it.
+    The registration on the result gives no entry (issue #652).
 - A factory can return a literal that holds a router, as `&Server{Mux: router}`. The
   type of the literal can define a method that hides a method of the router. Thus each
   use of the result that is not serving is a use of the second kind.
