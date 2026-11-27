@@ -2527,3 +2527,53 @@ fn timing_many_recovering_defers_and_a_long_chain_of_calls_cost_linear_time() {
         search_time(Language::Go, "main.go", &go(CHI, &body))
     });
 }
+
+// The tenth review: the code that a call after a recovering defer can reach.
+
+#[test]
+fn each_reference_after_a_defer_that_can_recover_reaches_its_function() {
+    let inner =
+        "func inner() {\n\te.GET(\"/x\", first)\n\tregexp.MustCompile(pattern)\n\te.Use(auth)\n}";
+    let prelude = "var pattern = \"(\"\n\nfunc rec() { recover() }\n\nvar e = echo.New()\n\nfunc main() {\n\troutes()\n}";
+    for (routes, extra) in [
+        ("f := inner\n\tf()", inner.to_string()),
+        ("hook()", format!("var hook = inner\n\n{inner}")),
+        ("each(inner)", format!("func each(f func()) {{ f() }}\n\n{inner}")),
+        ("helper()", format!("func helper() {{\n\trun := func() {{ inner() }}\n\trun()\n}}\n\n{inner}")),
+        (
+            "var t T\n\tf := t.inner\n\tf()",
+            "type T struct{}\n\nfunc (T) inner() {\n\te.GET(\"/x\", first)\n\tregexp.MustCompile(pattern)\n\te.Use(auth)\n}".to_string(),
+        ),
+        // Go runs a later defer first, and the earlier defer recovers its panic.
+        ("defer inner()", inner.to_string()),
+    ] {
+        let body = format!("{prelude}\n\nfunc routes() {{\n\tdefer rec()\n\t{routes}\n}}\n\n{extra}");
+        assert_all_conditional(&with_regexp(ECHO), &body);
+    }
+    // A function that only a `go` statement reaches runs in another goroutine.
+    let found = go_guards(
+        &with_regexp(ECHO),
+        &format!("{prelude}\n\nfunc routes() {{\n\tdefer rec()\n\tgo inner()\n}}\n\n{inner}"),
+    );
+    assert_eq!(found.len(), 1);
+    assert!(found[0].2, "{found:?}");
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_a_long_chain_of_function_values_after_a_recovering_defer_costs_linear_time() {
+    assert_scales_linearly("function values", 2_000, |size| {
+        let mut body = String::from("var r = chi.NewRouter()\n\nfunc rec() { recover() }\n\n");
+        for function in 0..size {
+            writeln!(
+                body,
+                "var hook{function} = f{function}\n\nfunc f{function}() {{\n\tnext := hook{}\n\tnext()\n}}\n",
+                function + 1
+            )
+            .unwrap();
+        }
+        writeln!(body, "var hook{size} = f{size}\n\nfunc f{size}() {{\n\tr.Get(\"/x\", first)\n\tr.Use(auth)\n}}\n").unwrap();
+        body.push_str("func main() {\n\tdefer rec()\n\tf0()\n}");
+        search_time(Language::Go, "main.go", &go(CHI, &body))
+    });
+}
