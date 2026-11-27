@@ -2844,6 +2844,97 @@ mod tests {
         });
     }
 
+    /// The receiver path and the index mark of each call of `source`, each one time, in order.
+    fn indexed_receivers(
+        language: Language,
+        file: &'static str,
+        source: &str,
+    ) -> Vec<(Option<String>, bool)> {
+        let parsed = crate::parser::Parser::new()
+            .parse(source.as_bytes(), language, std::path::Path::new(file))
+            .unwrap();
+        super::extract_file(&parsed, file)
+            .reference_facts
+            .iter()
+            .map(|facts| {
+                (
+                    facts.receiver_path.as_ref().map(|path| path.join(".")),
+                    facts.receiver_indexed,
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn test_the_receivers_of_a_chain_of_indexed_calls_have_a_path_only_at_the_first_index() {
+        assert_eq!(
+            indexed_receivers(Language::JavaScript, "a.js", "q.a[0].f()[0].f()[0].f();\n"),
+            [(None, false), (Some("q.a".to_string()), true)]
+        );
+        assert_eq!(
+            indexed_receivers(
+                Language::JavaScript,
+                "a.js",
+                "q.a [0].f();\nq.\n  a.g();\nq\n  .b\n  .h();\n"
+            ),
+            [(None, false), (Some("q.a".to_string()), true)]
+        );
+    }
+
+    /// Each receiver ends with an index. The text before the last `[` of each receiver
+    /// starts with the long name, and that must be found without a read of all of it.
+    fn indexed_chain_time(
+        language: Language,
+        file: &'static str,
+        size: usize,
+    ) -> std::time::Duration {
+        let chain = format!("q{}{}", "a".repeat(size), "[0].f()".repeat(size));
+        let source = match language {
+            Language::Go => format!("package main\n\nfunc more() {{\n\t{chain}\n}}\n"),
+            Language::Python => format!("{chain}\n"),
+            _ => format!("{chain};\n"),
+        };
+        extract_time(language, file, source)
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_javascript_chain_of_indexed_calls_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("javascript indexed chain", 10_000, |size| {
+            indexed_chain_time(Language::JavaScript, "a.js", size)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_go_chain_of_indexed_calls_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go indexed chain", 10_000, |size| {
+            indexed_chain_time(Language::Go, "main.go", size)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_python_chain_of_indexed_calls_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("python indexed chain", 10_000, |size| {
+            indexed_chain_time(Language::Python, "a.py", size)
+        });
+    }
+
+    /// Each receiver has a line break after the long name. A receiver with a space in it is
+    /// not a chain of names, and that must be found without a read of each receiver to the
+    /// line break.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_ruby_chain_on_many_lines_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("ruby chain on lines", 20_000, |size| {
+            let source = format!("q{}{}\n", "a".repeat(size), "\n  .b".repeat(size));
+            extract_time(Language::Ruby, "a.rb", source)
+        });
+    }
+
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_deeply_nested_go_closures_are_extracted_in_linear_time() {
