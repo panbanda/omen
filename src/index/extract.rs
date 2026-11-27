@@ -1014,6 +1014,7 @@ struct Extractor<'a, 'tree> {
     /// The ancestors that have a kind of `test_code::owner_kinds`, the nearest last.
     test_owners: Vec<test_code::Owner<'tree>>,
     test_callee_roots: test_code::CalleeRoots<'tree>,
+    test_attribute_parents: test_code::AttributeParents,
     test_marks: Vec<TestMark>,
     in_test_file: bool,
 }
@@ -1292,6 +1293,7 @@ impl<'tree> Extractor<'_, 'tree> {
                     ancestors: &self.ancestors,
                     owners: &self.test_owners,
                     callee_roots: &self.test_callee_roots,
+                    attribute_parents: &self.test_attribute_parents,
                     in_test_file: self.in_test_file,
                 },
                 &mut self.test_marks,
@@ -2053,6 +2055,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         test_mark_kinds: test_code::mark_kinds(parsed.language),
         test_owners: Vec::new(),
         test_callee_roots: test_code::CalleeRoots::default(),
+        test_attribute_parents: test_code::AttributeParents::default(),
         test_marks: Vec::new(),
         in_test_file: test_code::is_test_path(file, parsed.language),
     };

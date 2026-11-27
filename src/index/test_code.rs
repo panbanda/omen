@@ -113,7 +113,13 @@ pub struct MarkContext<'a, 'tree> {
     /// The callee roots that the walk found, by the id of the call. One search down a chain of
     /// calls gives the root of each call of the chain, so the walk reads each chain one time.
     pub callee_roots: &'a CalleeRoots<'tree>,
+    /// The ids of the parents whose Rust attributes the walk read. The walk reads all the
+    /// attributes of a parent at its first attribute, in one pass over the children.
+    pub attribute_parents: &'a AttributeParents,
 }
+
+/// The ids of the parents whose attributes the walk read.
+pub type AttributeParents = std::cell::RefCell<std::collections::HashSet<usize>>;
 
 /// The root of the callee of each call that the walk read, as `ecma_callee_root` gives it.
 pub type CalleeRoots<'tree> =
@@ -438,36 +444,35 @@ fn is_rust_comment(node: Node<'_>) -> bool {
     matches!(node.kind(), "line_comment" | "block_comment")
 }
 
-/// The outer attributes of one item, and the item to which they apply. The
-/// attribute must be the first of the run: an attribute and comments can
-/// follow it, and then the item. One scan of the run thus serves each
-/// attribute of the run, and the time is linear in the number of attributes.
-fn rust_attribute_run<'tree>(first: Node<'tree>) -> (Vec<Node<'tree>>, Option<Node<'tree>>) {
+/// Each run of outer attributes among the children of `parent`, and the target to which the
+/// run applies: the next child that is not a comment. The target is usually an item, but it can
+/// be a token such as `}`. Comments can be between the attributes of a run and the target. A
+/// run with no target after it applies to nothing.
+///
+/// A child that ends at or before the end of the last attribute or comment of the run, such as a
+/// node with no width that the parser adds for a missing token, is not a target and does not end
+/// the run. `Node::next_sibling` and `Node::prev_sibling` skip such a child too.
+///
+/// One pass of a cursor reads the children. `Node::next_sibling` and `Node::prev_sibling` read
+/// the children of the parent from the first child, so a step from each attribute to its
+/// siblings takes time that grows with the square of the number of children.
+fn rust_attribute_runs<'tree>(parent: Node<'tree>) -> Vec<(Vec<Node<'tree>>, Node<'tree>)> {
+    let mut runs = Vec::new();
     let mut attributes = Vec::new();
-    let mut next = Some(first);
-    while let Some(node) = next {
-        match node.kind() {
-            "attribute_item" => attributes.push(node),
-            _ if is_rust_comment(node) => {}
-            _ => return (attributes, Some(node)),
+    let mut run_end = 0;
+    let mut cursor = parent.walk();
+    for child in parent.children(&mut cursor) {
+        match child.kind() {
+            "attribute_item" => {
+                attributes.push(child);
+                run_end = child.end_byte();
+            }
+            _ if is_rust_comment(child) => run_end = run_end.max(child.end_byte()),
+            _ if attributes.is_empty() || child.end_byte() <= run_end => {}
+            _ => runs.push((std::mem::take(&mut attributes), child)),
         }
-        next = node.next_sibling();
     }
-    (attributes, None)
-}
-
-/// An attribute before this one applies to the same item, with only comments
-/// between them. Each comment is before one attribute, thus all the calls
-/// together read each comment one time.
-fn follows_rust_attribute(attribute: Node<'_>) -> bool {
-    let mut previous = attribute.prev_sibling();
-    while let Some(node) = previous {
-        if !is_rust_comment(node) {
-            return node.kind() == "attribute_item";
-        }
-        previous = node.prev_sibling();
-    }
-    false
+    runs
 }
 
 fn rust_cfg_requires_test(path: &str, arguments: &str) -> bool {
@@ -491,14 +496,16 @@ fn rust_marks(node: Node<'_>, context: &MarkContext<'_, '_>, out: &mut Vec<TestM
         }
         return;
     }
-    if follows_rust_attribute(node) {
-        return;
-    }
-    let (attributes, Some(target)) = rust_attribute_run(node) else {
+    let Some(parent) = context.ancestors.last().copied() else {
         return;
     };
-    for attribute in attributes {
-        rust_attribute_marks(attribute, target, context, out);
+    if !context.attribute_parents.borrow_mut().insert(parent.id()) {
+        return;
+    }
+    for (attributes, target) in rust_attribute_runs(parent) {
+        for attribute in attributes {
+            rust_attribute_marks(attribute, target, context, out);
+        }
     }
 }
 
@@ -1153,6 +1160,7 @@ fn marks_of_tree(root: Node<'_>, source: &[u8], language: Language) -> MarkTable
     let mut ancestors: Vec<Node<'_>> = Vec::new();
     let mut owners: Vec<Owner<'_>> = Vec::new();
     let callee_roots = CalleeRoots::default();
+    let attribute_parents = AttributeParents::default();
     let mut cursor = root.walk();
     loop {
         let node = cursor.node();
@@ -1164,6 +1172,7 @@ fn marks_of_tree(root: Node<'_>, source: &[u8], language: Language) -> MarkTable
                 owners: &owners,
                 in_test_file: false,
                 callee_roots: &callee_roots,
+                attribute_parents: &attribute_parents,
             };
             marks(node, &context, &mut found);
         }
@@ -1606,6 +1615,34 @@ impl Thing {
                 ("method_for_tests", Support),
             ],
         );
+    }
+
+    /// A node that the parser adds for a missing token has no width. A step from an attribute
+    /// to its next sibling skips such a node, so the node is not the item of the attribute.
+    #[test]
+    fn test_rust_attribute_before_a_missing_token_applies_to_nothing() {
+        let sources = [
+            "fn helper() {}\nimpl S {\n    #[cfg(test)]\n    // TODO: fix this hack\n",
+            "impl S {\n#[cfg(test)]\n",
+            "mod m {\n#[cfg(test)]\nfn a() {}\n#[cfg(test)]",
+            "mod m {\n#[cfg(test)]\n#[inline]\nfn a() {}\n#[cfg(test)]\n// c\n#[inline]",
+        ];
+        let found: Vec<Vec<Range<usize>>> = sources
+            .iter()
+            .map(|source| {
+                let parsed = Parser::new()
+                    .parse(source.as_bytes(), Language::Rust, Path::new("src/lib.rs"))
+                    .unwrap();
+                test_ranges_of_tree(parsed.root_node(), source.as_bytes(), Language::Rust)
+            })
+            .collect();
+        let expected: [Vec<Range<usize>>; 4] = [
+            Vec::new(),
+            Vec::new(),
+            std::iter::once(21..30).collect(),
+            std::iter::once(31..40).collect(),
+        ];
+        assert_eq!(found, expected);
     }
 
     #[test]
@@ -2322,7 +2359,9 @@ mod timing_tests {
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_many_rust_tests_in_one_module_are_read_in_linear_time() {
-        assert_scales_linearly("tests", 20_000, |size| {
+        // A step from a node to its sibling in tree-sitter reads the children of the parent from
+        // the first child. The module is large, so that a step for each attribute fails the check.
+        assert_scales_linearly("tests", 320_000, |size| {
             let source: String = (0..size)
                 .map(|position| format!("#[test]\nfn check_{position}() {{}}\n"))
                 .collect();
