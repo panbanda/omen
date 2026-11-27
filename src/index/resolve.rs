@@ -3851,6 +3851,22 @@ impl<'a> Resolver<'a> {
                 outcome.candidates = vec![only];
             }
         }
+        // A call names the primary template. When the argument types do not
+        // select an explicit specialization, the specializations are not candidates.
+        if selects && outcome.status == Status::Ambiguous {
+            let primary: Vec<Id> = outcome
+                .candidates
+                .iter()
+                .copied()
+                .filter(|id| !self.facts(*id).specialization)
+                .collect();
+            if !primary.is_empty() && primary.len() < outcome.candidates.len() {
+                if primary.len() == 1 {
+                    outcome.status = Status::UniqueCandidate;
+                }
+                outcome.candidates = primary;
+            }
+        }
         if selects
             && outcome.status == Status::Ambiguous
             && self.are_condition_twins(&outcome.candidates)
