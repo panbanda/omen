@@ -2668,3 +2668,11 @@ fn timing_one_package_variable_spec_with_many_names_costs_linear_time() {
         search_time(Language::Go, "main.go", &go(CHI, &body))
     });
 }
+
+#[test]
+fn a_call_of_an_embedded_field_after_a_recovering_defer_reaches_the_file() {
+    assert_reached_through_a_value(
+        "type H func()\n\ntype S struct{ H }\n\nvar s S\n\nfunc init() {\n\ts.H = inner\n}",
+        "\tdefer rec()\n\ts.H()",
+    );
+}
