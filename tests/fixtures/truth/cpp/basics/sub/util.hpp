@@ -13,7 +13,7 @@ T largest(T a, T b) {
 }
 
 template <>
-inline int largest<int>(int a, int b) {
+inline const char* largest<const char*>(const char* a, const char* b) {
     return a < b ? b : a;
 }
 

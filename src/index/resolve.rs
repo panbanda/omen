@@ -4664,6 +4664,20 @@ mod tests {
         );
     }
 
+    /// A call names the primary template. The argument types can select an explicit
+    /// specialization. When they do not, the primary template is the candidate.
+    #[test]
+    fn test_a_call_of_a_function_template_with_a_specialization_cpp() {
+        let source = "template <typename T> T largest(T a, T b) { return a; }\ntemplate <> int largest<int>(int a, int b) { return b; }\ntemplate <> const char* largest<const char*>(const char* a, const char* b) { return b; }\n\nint run(double x) {\n    return largest(1, 2) + largest(x, x);\n}\n";
+        assert_eq!(
+            rows(&[("a.cpp", source)], "a.cpp"),
+            [
+                "6 run>largest UniqueCandidate SameFile [a.cpp#largest~2]",
+                "6 run>largest UniqueCandidate SameFile [a.cpp#largest]",
+            ]
+        );
+    }
+
     #[test]
     fn test_overload_selection_keeps_the_basis_cpp() {
         let source = "int parse(int value) { return value; }\nint parse(double value) { return 0; }\n\nint run() {\n    return parse(1);\n}\n";
