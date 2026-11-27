@@ -245,20 +245,22 @@ pub struct ReferenceFacts {
 /// The names of the value that an index expression reads: `c.items[i]`
 /// gives `c`, `items`. `None` means that the text is a different expression.
 fn indexed_path(text: &str) -> Option<Vec<String>> {
-    let text = text.trim().strip_suffix(']')?;
+    name_path(&text[..index_start(text)?])
+}
+
+/// The byte in `text` of the `[` that opens the index at the end of `text`. `None` means
+/// that `text` does not end with an index.
+fn index_start(text: &str) -> Option<usize> {
+    let text = text.trim_end().strip_suffix(']')?;
     let mut depth = 1usize;
-    let open = text
-        .char_indices()
-        .rev()
-        .find_map(|(position, character)| {
-            match character {
-                ']' => depth += 1,
-                '[' => depth -= 1,
-                _ => {}
-            }
-            (depth == 0).then_some(position)
-        })?;
-    name_path(&text[..open])
+    text.char_indices().rev().find_map(|(position, character)| {
+        match character {
+            ']' => depth += 1,
+            '[' => depth -= 1,
+            _ => {}
+        }
+        (depth == 0).then_some(position)
+    })
 }
 
 /// Makes a field that an assignment or a parameter in a method declares a
@@ -281,7 +283,13 @@ pub fn field_of_type(draft: &mut Draft<'_>, context: &Context<'_, '_>) -> bool {
 /// The names of a chain of member accesses: `a.b.c` gives `a`, `b`, `c`.
 /// `None` means that the text is a different expression.
 pub fn name_path(text: &str) -> Option<Vec<String>> {
-    let text = text.trim().replace("?.", ".").replace("->", ".");
+    let text = text.trim();
+    // The check stops at the first character that no chain of names has, so that it does not
+    // copy the text.
+    if !text.chars().all(can_be_in_path) {
+        return None;
+    }
+    let text = text.replace("?.", ".").replace("->", ".");
     let is_name = |name: &str| {
         let mut characters = name.chars();
         characters
@@ -294,6 +302,101 @@ pub fn name_path(text: &str) -> Option<Vec<String>> {
         .iter()
         .all(|name| is_name(name))
         .then(|| names.into_iter().map(str::to_string).collect())
+}
+
+/// A character that a chain of member accesses can have, as `name_path` reads it.
+fn can_be_in_path(character: char) -> bool {
+    character.is_alphanumeric() || "_$@.?->".contains(character)
+}
+
+/// The texts of the receivers of the calls of one file. The receiver of each call of a long
+/// chain is all of the chain before it, so a read of each receiver text from its start takes
+/// time that grows with the square of the length of the chain. Here, the check of a receiver
+/// reads only the part after the text that the receivers with the same start have read.
+struct ReceiverTexts<'source> {
+    /// The parts of the source that are valid UTF-8, each with its first byte, in order.
+    chunks: Vec<(usize, &'source str)>,
+    /// All of the source is valid UTF-8.
+    valid: bool,
+    length: usize,
+    /// For each start of a receiver: what the reads of the text from the start found.
+    read: HashMap<usize, ReceiverRead>,
+}
+
+/// What the reads of the text from one start of a receiver found.
+struct ReceiverRead {
+    /// The end of the text read.
+    end: usize,
+    /// The first byte of the text read that `trim` does not remove and that no chain of names
+    /// has: a character that is not a space and that no chain of names has, or a character
+    /// that is not a space after a space after a character that is not a space.
+    outside: Option<usize>,
+    /// The text read has a character that is not a space.
+    started: bool,
+    /// The text read has a space after a character that is not a space.
+    spaced: bool,
+}
+
+impl<'source> ReceiverTexts<'source> {
+    fn new(source: &'source [u8]) -> Self {
+        let mut chunks = Vec::new();
+        let mut start = 0;
+        let mut valid = true;
+        for chunk in source.utf8_chunks() {
+            chunks.push((start, chunk.valid()));
+            start += chunk.valid().len() + chunk.invalid().len();
+            valid &= chunk.invalid().is_empty();
+        }
+        Self {
+            chunks,
+            valid,
+            length: source.len(),
+            read: HashMap::new(),
+        }
+    }
+
+    /// The text of the bytes `start..end`, if they are valid UTF-8. A part of the source that is
+    /// not valid UTF-8 has no valid text in it, so valid text is in one valid part.
+    fn text(&self, start: usize, end: usize) -> Option<&'source str> {
+        if start == end && !self.valid {
+            return (end <= self.length).then_some("");
+        }
+        let position = self
+            .chunks
+            .partition_point(|(chunk_start, _)| *chunk_start <= start)
+            .checked_sub(1)?;
+        let (chunk_start, chunk) = self.chunks[position];
+        chunk.get(start - chunk_start..end.checked_sub(chunk_start)?)
+    }
+
+    /// `true` means that `name_path` gives `None` for `text`, the text of `start..end`. A
+    /// character that no chain of names has and that `trim` does not remove is in the text.
+    /// `false` means that `name_path` must read the text.
+    fn is_not_path(&mut self, start: usize, end: usize, text: &str) -> bool {
+        let read = self.read.entry(start).or_insert(ReceiverRead {
+            end: start,
+            outside: None,
+            started: false,
+            spaced: false,
+        });
+        if read.outside.is_none() && read.end < end {
+            let unread = text.get(read.end - start..).unwrap_or_default();
+            for (offset, character) in unread.char_indices() {
+                if character.is_whitespace() {
+                    read.spaced |= read.started;
+                } else if read.spaced || !can_be_in_path(character) {
+                    read.outside = Some(read.end + offset);
+                    break;
+                } else {
+                    read.started = true;
+                }
+            }
+            if read.outside.is_none() {
+                read.end = end;
+            }
+        }
+        read.outside.is_some_and(|byte| byte < end)
+    }
 }
 
 /// The names of the chain of member accesses that starts at the byte `start`
@@ -2216,6 +2319,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let mut reference_facts = Vec::with_capacity(calls.len());
     let aliases = (parsed.language == Language::Bash)
         .then(|| crate::index::lang::bash::Aliases::of(parsed.root_node(), &parsed.source));
+    let mut receiver_texts = ReceiverTexts::new(&parsed.source);
     for (call, range, owner, via_closure, receiver) in calls {
         let (start_byte, end_byte) = (range.start, range.end);
         let owner = position_of(owner);
@@ -2254,18 +2358,38 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 superseded: Vec::new(),
             },
         });
-        let receiver_text = receiver
-            .and_then(|(start, end)| parsed.source.get(start..end))
-            .and_then(|text| std::str::from_utf8(text).ok());
+        let receiver_text = receiver.and_then(|(start, end)| receiver_texts.text(start, end));
+        // A chain of names has no `]`, so the path of a receiver with an index is never the
+        // path of `name_path` of all of the receiver.
+        let mut receiver_indexed = false;
+        let receiver_path = receiver
+            .zip(receiver_text)
+            .and_then(|((start, end), text)| {
+                let path = if receiver_texts.is_not_path(start, end, text) {
+                    None
+                } else {
+                    name_path(text)
+                };
+                path.or_else(|| {
+                    let open = index_start(text)?;
+                    let before = &text[..open];
+                    let indexed = if receiver_texts.is_not_path(start, start + open, before) {
+                        None
+                    } else {
+                        name_path(before)
+                    };
+                    receiver_indexed = indexed.is_some();
+                    indexed
+                })
+            });
         reference_facts.push(ReferenceFacts {
             start_byte,
             end_byte,
             owner,
             arguments: call.arguments,
             receiver,
-            receiver_path: receiver_text
-                .and_then(|text| name_path(text).or_else(|| indexed_path(text))),
-            receiver_indexed: receiver_text.is_some_and(|text| indexed_path(text).is_some()),
+            receiver_path,
+            receiver_indexed,
             tried: parsed.source.get(end_byte) == Some(&b'?')
                 && parsed.source.get(end_byte + 1) != Some(&b'.'),
             arrow: receiver.is_some_and(|(_, end)| {
@@ -2443,6 +2567,21 @@ mod tests {
     use super::testing::rows;
     use crate::core::Language;
 
+    #[test]
+    fn test_name_path_reads_each_kind_of_member_access() {
+        let path = |text: &str| super::name_path(text);
+        let names = |names: &[&str]| Some(names.iter().map(|name| name.to_string()).collect());
+        assert_eq!(path(" a.b.c "), names(&["a", "b", "c"]));
+        assert_eq!(path("a?.b"), names(&["a", "b"]));
+        assert_eq!(path("$this->db"), names(&["$this", "db"]));
+        assert_eq!(path("@user.name"), names(&["@user", "name"]));
+        assert_eq!(path("q.Path(\"/x\").Methods"), None);
+        assert_eq!(path("a?->b"), None);
+        assert_eq!(path("a.1b"), None);
+        assert_eq!(path("a b"), None);
+        assert_eq!(path(""), None);
+    }
+
     /// A comment after a chain of names does not change the value.
     #[test]
     fn test_value_path_before_a_comment() {
@@ -2586,8 +2725,16 @@ mod tests {
 
     /// The time of `extract_file` on `source`, without the parse.
     fn extract_time(language: Language, file: &'static str, source: String) -> std::time::Duration {
+        extract_bytes_time(language, file, source.as_bytes())
+    }
+
+    fn extract_bytes_time(
+        language: Language,
+        file: &'static str,
+        source: &[u8],
+    ) -> std::time::Duration {
         let parsed = crate::parser::Parser::new()
-            .parse(source.as_bytes(), language, std::path::Path::new(file))
+            .parse(source, language, std::path::Path::new(file))
             .unwrap();
         let started = crate::index::timing::Stopwatch::start();
         super::extract_file(&parsed, file);
@@ -2641,6 +2788,192 @@ mod tests {
     fn timing_ruby_methods_in_nested_blocks_are_extracted_in_linear_time() {
         crate::index::timing::assert_scales_linearly("ruby methods", 5_000, |size| {
             extract_time(Language::Ruby, "a.rb", ruby_methods_in_nested_blocks(size))
+        });
+    }
+
+    /// Each call of a chain has the chain before it as its receiver. The receiver text
+    /// is not a chain of names, and that must be found without a read of all of the text.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_long_go_method_chain_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go method chain", 40_000, |size| {
+            let source = format!(
+                "package main\n\nfunc more() {{\n\tq := mux.NewRouter()\n\tq.Path(\"/x\"){}\n}}\n",
+                ".Methods(\"GET\")".repeat(size)
+            );
+            extract_time(Language::Go, "main.go", source)
+        });
+    }
+
+    /// The receiver paths of the calls of `source`, each one time, in order.
+    fn receiver_paths(
+        language: Language,
+        file: &'static str,
+        source: &[u8],
+    ) -> Vec<Option<String>> {
+        let parsed = crate::parser::Parser::new()
+            .parse(source, language, std::path::Path::new(file))
+            .unwrap();
+        super::extract_file(&parsed, file)
+            .reference_facts
+            .iter()
+            .map(|facts| facts.receiver_path.as_ref().map(|path| path.join(".")))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn test_a_receiver_path_is_read_in_a_file_that_is_not_utf8() {
+        let source = b"package main\n\n// \xff\nfunc more() {\n\tq.a.b.f()\n\tq.a.g().h()\n}\n";
+        assert_eq!(
+            receiver_paths(Language::Go, "main.go", source),
+            [None, Some("q.a".to_string()), Some("q.a.b".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_the_receivers_of_a_chain_after_fields_have_a_path_only_before_the_first_call() {
+        let source = format!(
+            "package main\n\nfunc more() {{\n\tq{}{}\n}}\n",
+            ".a".repeat(3),
+            ".f()".repeat(3)
+        );
+        assert_eq!(
+            receiver_paths(Language::Go, "main.go", source.as_bytes()),
+            [None, Some("q.a.a.a".to_string())]
+        );
+    }
+
+    /// The receiver of each call is the receiver of the call before it and that call. Once
+    /// one receiver is not a chain of names, no longer receiver can be one.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_go_method_chain_after_many_fields_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go chain after fields", 10_000, |size| {
+            let source = format!(
+                "package main\n\nfunc more() {{\n\tq{}{}\n}}\n",
+                ".a".repeat(size),
+                ".f()".repeat(size)
+            );
+            extract_time(Language::Go, "main.go", source)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_php_method_chain_after_many_properties_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly(
+            "php chain after properties",
+            10_000,
+            |size| {
+                let source = format!("<?php\n$q{}{};\n", "->a".repeat(size), "->f()".repeat(size));
+                extract_time(Language::Php, "a.php", source)
+            },
+        );
+    }
+
+    /// A file that is not valid UTF-8 must not make the check of each receiver read the
+    /// receiver again.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_go_method_chain_in_a_file_that_is_not_utf8_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go chain not utf8", 80_000, |size| {
+            let mut source = b"package main\n\n// \xff\nfunc more() {\n\tq".to_vec();
+            source.extend(".f()".repeat(size).bytes());
+            source.extend(b"\n}\n");
+            extract_bytes_time(Language::Go, "main.go", &source)
+        });
+    }
+
+    /// The receiver path and the index mark of each call of `source`, each one time, in order.
+    fn indexed_receivers(
+        language: Language,
+        file: &'static str,
+        source: &str,
+    ) -> Vec<(Option<String>, bool)> {
+        let parsed = crate::parser::Parser::new()
+            .parse(source.as_bytes(), language, std::path::Path::new(file))
+            .unwrap();
+        super::extract_file(&parsed, file)
+            .reference_facts
+            .iter()
+            .map(|facts| {
+                (
+                    facts.receiver_path.as_ref().map(|path| path.join(".")),
+                    facts.receiver_indexed,
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn test_the_receivers_of_a_chain_of_indexed_calls_have_a_path_only_at_the_first_index() {
+        assert_eq!(
+            indexed_receivers(Language::JavaScript, "a.js", "q.a[0].f()[0].f()[0].f();\n"),
+            [(None, false), (Some("q.a".to_string()), true)]
+        );
+        assert_eq!(
+            indexed_receivers(
+                Language::JavaScript,
+                "a.js",
+                "q.a [0].f();\nq.\n  a.g();\nq\n  .b\n  .h();\n"
+            ),
+            [(None, false), (Some("q.a".to_string()), true)]
+        );
+    }
+
+    /// Each receiver ends with an index. The text before the last `[` of each receiver
+    /// starts with the long name, and that must be found without a read of all of it.
+    fn indexed_chain_time(
+        language: Language,
+        file: &'static str,
+        size: usize,
+    ) -> std::time::Duration {
+        let chain = format!("q{}{}", "a".repeat(size), "[0].f()".repeat(size));
+        let source = match language {
+            Language::Go => format!("package main\n\nfunc more() {{\n\t{chain}\n}}\n"),
+            Language::Python => format!("{chain}\n"),
+            _ => format!("{chain};\n"),
+        };
+        extract_time(language, file, source)
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_javascript_chain_of_indexed_calls_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("javascript indexed chain", 10_000, |size| {
+            indexed_chain_time(Language::JavaScript, "a.js", size)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_go_chain_of_indexed_calls_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go indexed chain", 10_000, |size| {
+            indexed_chain_time(Language::Go, "main.go", size)
+        });
+    }
+
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_python_chain_of_indexed_calls_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("python indexed chain", 10_000, |size| {
+            indexed_chain_time(Language::Python, "a.py", size)
+        });
+    }
+
+    /// Each receiver has a line break after the long name. A receiver with a space in it is
+    /// not a chain of names, and that must be found without a read of each receiver to the
+    /// line break.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_ruby_chain_on_many_lines_is_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("ruby chain on lines", 20_000, |size| {
+            let source = format!("q{}{}\n", "a".repeat(size), "\n  .b".repeat(size));
+            extract_time(Language::Ruby, "a.rb", source)
         });
     }
 
