@@ -2580,3 +2580,91 @@ fn timing_a_long_chain_of_function_values_after_a_recovering_defer_costs_linear_
         search_time(Language::Go, "main.go", &go(CHI, &body))
     });
 }
+
+// The eleventh review: a call through a value after a recovering defer.
+
+const INNER: &str =
+    "func inner() {\n\te.GET(\"/x\", first)\n\tregexp.MustCompile(pattern)\n\te.Use(auth)\n}";
+
+/// Asserts that the guard of `inner` is conditional when `routes` runs `body` after a
+/// recovering defer, with `extra` declarations.
+fn assert_reached_through_a_value(extra: &str, body: &str) {
+    let source = format!("var pattern = \"(\"\n\nfunc rec() {{ recover() }}\n\nvar e = echo.New()\n\nfunc main() {{\n\troutes()\n}}\n\n{extra}\n\nfunc routes() {{\n{body}\n}}\n\n{INNER}");
+    assert_all_conditional(&with_regexp(ECHO), &source);
+}
+
+#[test]
+fn a_call_of_a_local_function_value_after_a_recovering_defer_reaches_the_file() {
+    assert_reached_through_a_value(
+        "",
+        "\tvar f func()\n\tf = func() {}\n\tf = inner\n\tdefer rec()\n\tf()",
+    );
+}
+
+#[test]
+fn a_call_of_a_package_variable_that_a_function_sets_reaches_the_file() {
+    assert_reached_through_a_value(
+        "var hook func()\n\nfunc setup() {\n\thook = inner\n}",
+        "\tsetup()\n\tdefer rec()\n\thook()",
+    );
+}
+
+#[test]
+fn a_call_of_a_package_variable_that_init_sets_reaches_the_file() {
+    assert_reached_through_a_value(
+        "var hook func()\n\nfunc init() { hook = inner }",
+        "\tdefer rec()\n\thook()",
+    );
+}
+
+#[test]
+fn a_call_of_a_struct_field_after_a_recovering_defer_reaches_the_file() {
+    assert_reached_through_a_value(
+        "type S struct{ f func() }\n\nvar s S\n\nfunc init() {\n\ts.f = inner\n}",
+        "\tdefer rec()\n\ts.f()",
+    );
+}
+
+#[test]
+fn a_package_variable_in_a_group_reaches_its_value() {
+    assert_reached_through_a_value("var (\n\thook = inner\n)", "\tdefer rec()\n\thook()");
+}
+
+#[test]
+fn a_chain_of_package_variables_in_a_group_reaches_its_value() {
+    assert_reached_through_a_value("var (\n\ta = inner\n\tb = a\n)", "\tdefer rec()\n\tb()");
+}
+
+#[test]
+fn a_package_router_in_a_group_that_a_function_sets_again_is_not_trusted() {
+    let body = "func reset() {\n\tr = chi.NewRouter()\n}\n\nfunc main() {\n\tr.Use(auth)\n\treset()\n\tr.Get(\"/x\", first)\n}";
+    let plain = go_guards(CHI, &format!("var r = chi.NewRouter()\n\n{body}"));
+    let grouped = go_guards(CHI, &format!("var (\n\tr = chi.NewRouter()\n)\n\n{body}"));
+    assert_eq!(grouped, plain);
+}
+
+#[test]
+fn a_call_of_a_known_function_or_a_package_keeps_the_reach_of_its_references() {
+    // `strings.TrimSpace` names a package, and `t.run` names no field, so the reach stays
+    // with the named functions, and `other` is not reached.
+    let source = "var pattern = \"(\"\n\nfunc rec() { recover() }\n\nvar e = echo.New()\n\ntype T struct{ name string }\n\nfunc (T) run() {}\n\nfunc main() {\n\troutes()\n\tother()\n}\n\nfunc routes() {\n\tdefer rec()\n\tvar t T\n\tt.run()\n\t_ = strings.TrimSpace(\"\")\n\t_ = len(pattern)\n\t_ = string(\"x\")\n}\n\nfunc other() {\n\te.Use(auth)\n\te.GET(\"/x\", first)\n}";
+    let found = go_guards(&format!("{}\n\t\"strings\"", with_regexp(ECHO)), source);
+    assert_eq!(found.len(), 1);
+    assert!(found[0].2, "{found:?}");
+}
+
+#[test]
+#[ignore = "timing: run in release"]
+fn timing_one_package_variable_spec_with_many_names_costs_linear_time() {
+    assert_scales_linearly("names of one spec", 4_000, |size| {
+        let names: Vec<String> = (0..size).map(|index| format!("v{index}")).collect();
+        let values: Vec<String> = (0..size).map(|index| format!("g{index}")).collect();
+        let mut body = String::from("var r = chi.NewRouter()\n\nfunc rec() { recover() }\n\n");
+        writeln!(body, "var {} = {}\n", names.join(", "), values.join(", ")).unwrap();
+        for index in 0..size {
+            writeln!(body, "func g{index}() {{ v{}() }}\n", (index + 1) % size).unwrap();
+        }
+        body.push_str("func main() {\n\tdefer rec()\n\tv0()\n\tinner()\n}\n\nfunc inner() {\n\tr.Get(\"/x\", first)\n\tr.Use(auth)\n}");
+        search_time(Language::Go, "main.go", &go(CHI, &body))
+    });
+}
