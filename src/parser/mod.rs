@@ -586,9 +586,10 @@ pub fn function_body_byte_range(node: &tree_sitter::Node<'_>) -> Option<(usize, 
 fn extract_c_function_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     fn recurse_declarator(decl: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
         // A stack in place of recursion, because a declarator can have any
-        // number of pointer levels.
-        let mut pending = vec![decl];
-        while let Some(decl) = pending.pop() {
+        // number of pointer levels. The flag tells that a function declarator
+        // contains the node.
+        let mut pending = vec![(decl, false)];
+        while let Some((decl, in_function)) = pending.pop() {
             match decl.kind() {
                 // A method in a class body has a `field_identifier`. The index gives
                 // these names too, so the two reports name a function the same way.
@@ -599,24 +600,30 @@ fn extract_c_function_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Optio
                 }
                 // `A::B::m` and `free<int>` are named by their last name.
                 "qualified_identifier" | "template_function" => {
-                    pending.extend(decl.child_by_field_name("name"));
+                    pending.extend(
+                        decl.child_by_field_name("name")
+                            .map(|name| (name, in_function)),
+                    );
                 }
-                // `operator bool()` has the type in place of a name.
-                "operator_cast" => {
-                    let target = decl.child_by_field_name("type")?.utf8_text(source).ok()?;
-                    return Some(format!("operator {target}"));
-                }
+                // `operator const int*()` has the type in place of a name.
+                "operator_cast" => return operator_cast_name(decl, source),
+                // Without a function declarator, as in a misparse of the macro
+                // call `if ISZERO(dn) {`, the name in the parentheses is not the
+                // name of a function.
+                "parenthesized_declarator" if !in_function => {}
                 "function_declarator"
                 | "pointer_declarator"
                 | "reference_declarator"
                 | "parenthesized_declarator"
                 | "abstract_declarator" => {
+                    let in_function = in_function || decl.kind() == "function_declarator";
                     // Try the named `declarator` field first, then each named child
                     if let Some(inner) = decl.child_by_field_name("declarator") {
-                        pending.push(inner);
+                        pending.push((inner, in_function));
                     } else {
                         let children: Vec<_> = decl.named_children(&mut decl.walk()).collect();
-                        pending.extend(children.into_iter().rev());
+                        pending
+                            .extend(children.into_iter().rev().map(|child| (child, in_function)));
                     }
                 }
                 _ => {}
@@ -630,6 +637,20 @@ fn extract_c_function_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Optio
         return recurse_declarator(decl, source);
     }
     None
+}
+
+/// The text of a conversion operator before its parameters, with each run of
+/// spaces as one space: `operator const int*() const` gives `operator const int*`.
+fn operator_cast_name(cast: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let mut declarator = cast.child_by_field_name("declarator")?;
+    let parameters = loop {
+        if let Some(parameters) = declarator.child_by_field_name("parameters") {
+            break parameters;
+        }
+        declarator = declarator.child_by_field_name("declarator")?;
+    };
+    let text = std::str::from_utf8(source.get(cast.start_byte()..parameters.start_byte())?).ok()?;
+    Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 fn find_child_by_field(node: &tree_sitter::Node<'_>, field: &str, source: &[u8]) -> Option<String> {
