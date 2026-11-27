@@ -1148,6 +1148,39 @@ int& free_reference(int& r) { return r; }
         }
     }
 
+    /// A parenthesized declarator names a function only inside a function declarator. Without
+    /// one, the definition is a misparse, for example of a macro call before a block, and the
+    /// name in the parentheses is an argument.
+    #[test]
+    fn test_a_c_misparse_with_a_parenthesized_name_is_not_named_after_the_argument() {
+        let misparse = "static void finish(int *dn) {\n  if (!dn) {\n    if ISZERO(dn) {\n      return;\n    }\n  }\n}\n";
+        assert_eq!(function_names(Language::C, "a.c", misparse), ["finish"]);
+        let pointer = "void (*signal2(int s, void (*handler)(int)))(int) { return 0; }\n";
+        assert_eq!(function_names(Language::C, "a.c", pointer), ["signal2"]);
+    }
+
+    /// The name of a conversion operator is its text before `(`, so that `operator const int*`
+    /// and `operator int` are two names.
+    #[test]
+    fn test_each_cpp_conversion_operator_has_its_full_type_in_its_name() {
+        let source = r#"
+struct S {
+  operator const int*() const { return 0; }
+  operator int() { return 0; }
+  operator   unsigned
+    long() { return 0; }
+};
+"#;
+        assert_eq!(
+            function_names(Language::Cpp, "a.cpp", source),
+            [
+                "operator const int*",
+                "operator int",
+                "operator unsigned long"
+            ]
+        );
+    }
+
     /// The name of a C function is below pointer and parenthesized declarators.
     #[test]
     fn test_each_c_function_definition_has_a_name() {
