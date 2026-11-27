@@ -101,7 +101,7 @@ impl LanguageSpec for Bash {
 
     /// Bash has one global table of functions. A script that sources a file
     /// can call each function in it, and also a function that a function defines.
-    fn exported(&self, _draft: &Draft<'_>, _context: &Context<'_, '_>) -> Exported {
+    fn exported<'tree>(&self, _draft: &Draft<'tree>, _context: &Context<'_, 'tree>) -> Exported {
         Exported::Exported
     }
 }

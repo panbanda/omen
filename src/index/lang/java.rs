@@ -462,7 +462,7 @@ impl LanguageSpec for Java {
 
     /// `public` exports a declaration when each type that contains it is exported.
     /// A member of an interface is public without the keyword.
-    fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+    fn exported<'tree>(&self, draft: &Draft<'tree>, context: &Context<'_, 'tree>) -> Exported {
         if context.in_function() {
             return Exported::NotExported;
         }

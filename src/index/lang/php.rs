@@ -508,7 +508,7 @@ impl LanguageSpec for Php {
 
     /// A method is public unless it is `private` or `protected`. PHP makes a
     /// function that a function defines a global function.
-    fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+    fn exported<'tree>(&self, draft: &Draft<'tree>, context: &Context<'_, 'tree>) -> Exported {
         let node = draft.node;
         if is_closure(node) {
             return Exported::NotExported;

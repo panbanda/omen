@@ -379,6 +379,11 @@ pub struct ReturnOwner<'tree> {
 /// many children once, and not for each child.
 pub type Memo = RefCell<HashMap<(usize, u8), Rc<dyn Any>>>;
 
+/// The nodes that a language reads once for a node and uses for many nodes, by node ID and a
+/// number that the language chooses. `Memo` cannot keep nodes, because its values live as long
+/// as the program.
+pub type NodeMemo<'tree> = RefCell<HashMap<(usize, u8), Rc<[Node<'tree>]>>>;
+
 pub struct Context<'a, 'tree> {
     /// The path of the file, as the keys have it.
     pub file: &'a str,
@@ -394,9 +399,24 @@ pub struct Context<'a, 'tree> {
     pub current: Option<(usize, Option<Node<'tree>>)>,
     /// The facts that a language reads once for a node and uses for many nodes.
     pub memo: &'a Memo,
+    pub node_memo: &'a NodeMemo<'tree>,
 }
 
 impl<'tree> Context<'_, 'tree> {
+    /// The nodes that `read` gives for `key`. `read` runs one time for each key.
+    pub fn memoized_nodes(
+        &self,
+        key: (usize, u8),
+        read: impl FnOnce() -> Vec<Node<'tree>>,
+    ) -> Rc<[Node<'tree>]> {
+        if let Some(found) = self.node_memo.borrow().get(&key) {
+            return Rc::clone(found);
+        }
+        let found: Rc<[Node<'tree>]> = read().into();
+        self.node_memo.borrow_mut().insert(key, Rc::clone(&found));
+        found
+    }
+
     /// The parent of `node`. The walk knows the parent of its current node
     /// and of each ancestor. For a different node, the tree searches from the
     /// root, which costs the depth of the node.
@@ -533,7 +553,7 @@ pub trait LanguageSpec: Sync {
         true
     }
 
-    fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported;
+    fn exported<'tree>(&self, draft: &Draft<'tree>, context: &Context<'_, 'tree>) -> Exported;
 
     /// Each node kind for which the walk calls `scope`.
     fn scope_kinds(&self) -> Vec<&'static str> {
@@ -560,7 +580,13 @@ pub trait LanguageSpec: Sync {
     }
 
     /// Adds the import bindings of one node to `out`.
-    fn imports(&self, _node: Node<'_>, _context: &Context<'_, '_>, _out: &mut Vec<ImportBinding>) {}
+    fn imports<'tree>(
+        &self,
+        _node: Node<'tree>,
+        _context: &Context<'_, 'tree>,
+        _out: &mut Vec<ImportBinding>,
+    ) {
+    }
 
     /// Each node kind for which the walk calls `module_name`.
     fn module_kinds(&self) -> Vec<&'static str> {
@@ -1010,6 +1036,7 @@ struct Extractor<'a, 'tree> {
     language: Language,
     members: Option<Recorder>,
     memo: Memo,
+    node_memo: NodeMemo<'tree>,
     test_mark_kinds: &'static [&'static str],
     /// The ancestors that have a kind of `test_code::owner_kinds`, the nearest last.
     test_owners: Vec<test_code::Owner<'tree>>,
@@ -1150,6 +1177,7 @@ impl<'tree> Extractor<'_, 'tree> {
             members: self.members.as_ref(),
             current: Some((node.id(), self.ancestors.last().copied())),
             memo: &self.memo,
+            node_memo: &self.node_memo,
         }
     }
 
@@ -1320,6 +1348,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 members: self.members.as_ref(),
                 current: Some((node.id(), self.ancestors.last().copied())),
                 memo: &self.memo,
+                node_memo: &self.node_memo,
             };
             if imports {
                 self.spec.imports(node, &context, &mut self.imports);
@@ -1340,6 +1369,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 members: self.members.as_ref(),
                 current: Some((node.id(), self.ancestors.last().copied())),
                 memo: &self.memo,
+                node_memo: &self.node_memo,
             };
             let owner = self.owner();
             // A definition in the decorator argument stays the owner.
@@ -1422,6 +1452,7 @@ impl<'tree> Extractor<'_, 'tree> {
                     members: self.members.as_ref(),
                     current: Some((node.id(), self.ancestors.last().copied())),
                     memo: &self.memo,
+                    node_memo: &self.node_memo,
                 },
             ),
         };
@@ -2052,6 +2083,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         language: parsed.language,
         members: Recorder::new(parsed.language),
         memo: Memo::default(),
+        node_memo: NodeMemo::default(),
         test_mark_kinds: test_code::mark_kinds(parsed.language),
         test_owners: Vec::new(),
         test_callee_roots: test_code::CalleeRoots::default(),
@@ -2600,6 +2632,102 @@ mod tests {
         crate::index::timing::assert_scales_linearly("arrow functions", 5_000, |size| {
             let source = format!("const f = {}1;\n", "() => ".repeat(size));
             extract_time(Language::TypeScript, "a.ts", source)
+        });
+    }
+
+    /// A Go function that binds `size` names to function literals in one short
+    /// declaration, and a `var` specification that does the same at the top level.
+    fn go_function_literals_in_one_declaration(size: usize) -> String {
+        let names = |prefix: &str| {
+            (0..size)
+                .map(|position| format!("{prefix}{position}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let literals = vec!["func() {}"; size].join(", ");
+        format!(
+            "package p\n\nvar {} = {literals}\n\nfunc F() {{\n\t{} := {literals}\n\t_, _ = a0, b0\n}}\n",
+            names("b"),
+            names("a")
+        )
+    }
+
+    #[test]
+    fn test_each_go_function_literal_of_a_declaration_has_the_name_at_its_position() {
+        let source = go_function_literals_in_one_declaration(3)
+            .replace("a1 :=", "_ :=")
+            .replace(", a1,", ", _,");
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Go,
+                std::path::Path::new("p.go"),
+            )
+            .unwrap();
+        let symbols = super::extract_file(&parsed, "p.go");
+        let mut names: Vec<&str> = symbols
+            .symbols
+            .iter()
+            .map(|symbol| symbol.name.as_str())
+            .filter(|name| name.starts_with(['a', 'b']))
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["a0", "a2", "b0", "b1", "b2"]);
+    }
+
+    /// The span of a function literal that a declaration of one name binds starts at the name.
+    /// When the declaration binds more names, the span is the literal alone: a span from the
+    /// name would contain the other names and the other literals.
+    #[test]
+    fn test_the_span_of_a_go_function_literal_contains_no_other_name() {
+        let source = "package p\n\nvar b0, b1, b2 = func() {}, func(x int) {}, func() {}\n\nvar c0, c1 = func() {},\n\tfunc(z int) {}\n\nfunc F() {\n\tf := func(y string) {}\n\ta0, a1 := func() {}, func(w int) {}\n\t_, _, _ = f, a0, a1\n}\n";
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Go,
+                std::path::Path::new("p.go"),
+            )
+            .unwrap();
+        let symbols = super::extract_file(&parsed, "p.go");
+        let found: Vec<(&str, &str, u32)> = symbols
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.name != "F")
+            .map(|symbol| {
+                (
+                    symbol.name.as_str(),
+                    symbol.signature.as_str(),
+                    symbol.range.start_line,
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("b0", "func()", 3),
+                ("b1", "func(x int)", 3),
+                ("b2", "func()", 3),
+                ("c0", "func()", 5),
+                ("c1", "func(z int)", 6),
+                ("f", "f := func(y string)", 9),
+                ("a0", "func()", 10),
+                ("a1", "func(w int)", 10),
+            ]
+        );
+    }
+
+    /// The name of a function literal is the name at the position of the literal.
+    /// The position must not come from a search of the values, and the name must
+    /// not come from `Node::named_child`, which reads the children from the first.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_go_function_literals_in_one_declaration_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("go function literals", 2_000, |size| {
+            extract_time(
+                Language::Go,
+                "p.go",
+                go_function_literals_in_one_declaration(size),
+            )
         });
     }
 

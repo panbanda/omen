@@ -1,5 +1,8 @@
 //! Go symbols.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use tree_sitter::Node;
 
 use crate::index::extract::{
@@ -19,6 +22,11 @@ use crate::index::calls::{CallSyntax, LocalName};
 const RANGE_CLAUSE: &str = "range_clause";
 const COMPOSITE_LITERAL: &str = "composite_literal";
 const UNARY_EXPRESSION: &str = "unary_expression";
+
+/// The number of the position of each value of an expression list in the memo of the extract.
+const POSITIONS_MEMO: u8 = 0;
+/// The number of the names of a declaration in the node memo of the extract.
+const NAMES_MEMO: u8 = 0;
 
 const CALL_SYNTAX: CallSyntax = CallSyntax {
     // `f[T](x)` with one argument has the syntax of a conversion to a
@@ -148,19 +156,16 @@ impl LanguageSpec for Go {
         ) else {
             return;
         };
-        for position in 0..left.named_child_count() {
-            let Some(name) = left.named_child(position as u32) else {
-                continue;
-            };
+        let names: Vec<Node<'_>> = left.named_children(&mut left.walk()).collect();
+        let values: Vec<Node<'_>> = right.named_children(&mut right.walk()).collect();
+        let paired = names.len() == values.len();
+        // `a, b := f()` gives each name one result of the call.
+        let call = (!paired && values.len() == 1).then(|| values[0]);
+        for (position, name) in names.into_iter().enumerate() {
             if name.kind() != IDENTIFIER {
                 continue;
             }
-            let paired = left.named_child_count() == right.named_child_count();
-            let value = paired.then(|| right.named_child(position as u32)).flatten();
-            // `a, b := f()` gives each name one result of the call.
-            let call = (!paired && right.named_child_count() == 1)
-                .then(|| right.named_child(0))
-                .flatten();
+            let value = paired.then(|| values[position]);
             out.push(LocalName {
                 name: context.text(name),
                 type_name: value.and_then(|value| literal_type(value, context)),
@@ -251,24 +256,8 @@ impl LanguageSpec for Go {
         let values = context
             .parent(node)
             .filter(|list| list.kind() == EXPRESSION_LIST)?;
-        let mut cursor = values.walk();
-        let position = values
-            .named_children(&mut cursor)
-            .position(|value| value == node)?;
-        let declaration = context.parent(values)?;
-        let name = match declaration.kind() {
-            SHORT_VAR_DECLARATION => declaration
-                .child_by_field_name("left")?
-                .named_child(position as u32),
-            VAR_SPEC => {
-                let mut cursor = declaration.walk();
-                let name = declaration
-                    .children_by_field_name("name", &mut cursor)
-                    .nth(position);
-                name
-            }
-            _ => None,
-        }?;
+        let position = *value_positions(values, context).get(&node.id())?;
+        let name = *declared_names(values, context)?.get(position)?;
         (name.kind() == IDENTIFIER && context.text(name) != "_").then_some(name)
     }
 
@@ -312,14 +301,25 @@ impl LanguageSpec for Go {
                     }
                 }
             }
-            FUNCTION_LITERAL => draft.span = Span::between(&draft.name_node, &draft.node),
+            // A span from the name would contain the other names of the declaration, and the
+            // literals before this one.
+            FUNCTION_LITERAL => {
+                let alone = context
+                    .parent(draft.node)
+                    .filter(|values| values.kind() == EXPRESSION_LIST)
+                    .and_then(|values| declared_names(values, context))
+                    .is_some_and(|names| names.len() > 1);
+                if !alone {
+                    draft.span = Span::between(&draft.name_node, &draft.node);
+                }
+            }
             _ => {}
         }
         true
     }
 
     /// Go exports a package-level name that starts with an upper-case letter.
-    fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+    fn exported<'tree>(&self, draft: &Draft<'tree>, context: &Context<'_, 'tree>) -> Exported {
         let upper_case = draft.name.chars().next().is_some_and(char::is_uppercase);
         if upper_case && !context.in_function() {
             Exported::Exported
@@ -327,6 +327,49 @@ impl LanguageSpec for Go {
             Exported::NotExported
         }
     }
+}
+
+/// The names of the declaration whose values are the expression list `values`, in order.
+fn declared_names<'tree>(
+    values: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Option<Rc<[Node<'tree>]>> {
+    let declaration = context.parent(values)?;
+    match declaration.kind() {
+        SHORT_VAR_DECLARATION => {
+            let left = declaration.child_by_field_name("left")?;
+            Some(context.memoized_nodes((left.id(), NAMES_MEMO), || {
+                left.named_children(&mut left.walk()).collect()
+            }))
+        }
+        VAR_SPEC => Some(context.memoized_nodes((declaration.id(), NAMES_MEMO), || {
+            declaration
+                .children_by_field_name("name", &mut declaration.walk())
+                .collect()
+        })),
+        _ => None,
+    }
+}
+
+/// The position of each value of the expression list `values`, by the ID of the value. A
+/// search of the values for each value would take time that grows with the square of the
+/// number of values.
+fn value_positions(values: Node<'_>, context: &Context<'_, '_>) -> Rc<HashMap<usize, usize>> {
+    let key = (values.id(), POSITIONS_MEMO);
+    if let Some(found) = context.memo.borrow().get(&key) {
+        if let Ok(found) = Rc::clone(found).downcast::<HashMap<usize, usize>>() {
+            return found;
+        }
+    }
+    let positions: Rc<HashMap<usize, usize>> = Rc::new(
+        values
+            .named_children(&mut values.walk())
+            .enumerate()
+            .map(|(position, value)| (value.id(), position))
+            .collect(),
+    );
+    context.memo.borrow_mut().insert(key, positions.clone());
+    positions
 }
 
 /// Gives each name of a `var` specification the value at its position, as a
@@ -342,19 +385,17 @@ fn var_values(
     let names: Vec<Node<'_>> = specification
         .children_by_field_name("name", &mut cursor)
         .collect();
-    let paired = names.len() == values.named_child_count();
+    let values: Vec<Node<'_>> = values.named_children(&mut values.walk()).collect();
+    let paired = names.len() == values.len();
+    // `var a, b = f()` gives each name one result of the call.
+    let call = (!paired && values.len() == 1).then(|| values[0]);
     let positions = names
         .iter()
         .enumerate()
         .filter(|(_, name)| name.kind() == IDENTIFIER)
         .map(|(position, _)| position);
     for (local, position) in locals.iter_mut().zip(positions) {
-        let value = paired
-            .then(|| values.named_child(position as u32))
-            .flatten();
-        let call = (!paired && values.named_child_count() == 1)
-            .then(|| values.named_child(0))
-            .flatten();
+        let value = paired.then(|| values[position]);
         local.value_start = value.or(call).map(|found| found.start_byte());
         local.result_index = call.map(|_| position);
         // `var name = Type{...}` has the type of the literal.

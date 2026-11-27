@@ -217,7 +217,7 @@ fn exported_if(condition: bool) -> Exported {
 
 /// A function has external linkage unless it is `static`. A type is a part of
 /// the interface only when a header defines it.
-pub(crate) fn exported(draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+pub(crate) fn exported<'tree>(draft: &Draft<'tree>, context: &Context<'_, 'tree>) -> Exported {
     if context.in_function() {
         return Exported::NotExported;
     }
@@ -292,7 +292,7 @@ impl LanguageSpec for C {
         refine(draft, context)
     }
 
-    fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+    fn exported<'tree>(&self, draft: &Draft<'tree>, context: &Context<'_, 'tree>) -> Exported {
         exported(draft, context)
     }
 }

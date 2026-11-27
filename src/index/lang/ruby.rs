@@ -79,7 +79,7 @@ const SINGLETON_MEMO: u8 = 2;
 /// Tells if the nearest class, module, or `class << self` around `node` is
 /// `class << self`. Each ancestor keeps the answer, thus many definitions in
 /// deeply nested blocks walk each block once.
-fn in_singleton_class(node: Node<'_>, context: &Context<'_, '_>) -> bool {
+fn in_singleton_class<'tree>(node: Node<'tree>, context: &Context<'_, 'tree>) -> bool {
     let mut unknown = Vec::new();
     let mut ancestor = context.parent(node);
     let found = loop {
@@ -658,7 +658,7 @@ impl LanguageSpec for Ruby {
     /// A method is public unless a visibility modifier changes it. Ruby makes a
     /// method that a method defines a method of the same object, thus a nested
     /// definition has the visibility of a definition at that level.
-    fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+    fn exported<'tree>(&self, draft: &Draft<'tree>, context: &Context<'_, 'tree>) -> Exported {
         let node = draft.node;
         if draft.generated.is_none() && [LAMBDA, CALL].contains(&node.kind()) {
             return Exported::NotExported;
