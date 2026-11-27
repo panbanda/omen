@@ -2644,6 +2644,21 @@ mod tests {
         });
     }
 
+    /// Each name in the tokens of a macro that evaluates its arguments is a possible call.
+    /// The check of the tokens next to each name must not read the tokens from the start.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_many_calls_in_the_tokens_of_one_rust_macro_are_extracted_in_linear_time() {
+        crate::index::timing::assert_scales_linearly("macro tokens", 256_000, |size| {
+            let calls: Vec<String> = (0..size).map(|position| format!("f({position})")).collect();
+            let source = format!(
+                "fn f(x: i32) -> i32 {{ x }}\n\npub fn t() {{\n    assert_eq!({}, 0);\n}}\n",
+                calls.join(" + ")
+            );
+            extract_time(Language::Rust, "src/lib.rs", source)
+        });
+    }
+
     #[test]
     #[ignore = "timing: run in release"]
     fn timing_deeply_nested_go_closures_are_extracted_in_linear_time() {
