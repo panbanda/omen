@@ -1214,15 +1214,21 @@ impl<'a> Context<'a> {
                 None,
                 rails::root_scope(),
                 false,
-                &mut |node, scope| self.visit(node, Some(scope), out),
+                &mut |node, scope| self.visit(node, Some(scope), &[], out),
             );
             return;
         }
         let mut stack: Vec<Node<'_>> = vec![root];
+        let mut attributes: std::collections::HashMap<usize, Vec<Node<'_>>> =
+            std::collections::HashMap::new();
         while let Some(node) = stack.pop() {
-            self.visit(node, None, out);
+            let before = attributes.remove(&node.id()).unwrap_or_default();
+            self.visit(node, None, &before, out);
             let mut cursor = node.walk();
             let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
+            if self.file.language == Language::Rust {
+                rust_attributes_of_functions(&children, &mut attributes);
+            }
             stack.extend(children.into_iter().rev());
         }
     }
@@ -1275,6 +1281,7 @@ impl<'a> Context<'a> {
         &self,
         node: Node<'_>,
         scope: Option<&std::rc::Rc<rails::Scope>>,
+        attributes: &[Node<'_>],
         out: &mut Vec<Draft>,
     ) {
         match self.file.language {
@@ -1285,7 +1292,7 @@ impl<'a> Context<'a> {
             Language::Java => self.java(node, out),
             Language::CSharp => self.csharp(node, out),
             Language::Go => self.go(node, out),
-            Language::Rust => self.rust(node, out),
+            Language::Rust => self.rust(node, attributes, out),
             Language::Php => self.php(node, out),
             Language::Ruby => self.ruby(node, scope, out),
             Language::C | Language::Cpp | Language::Bash => {}
@@ -2062,26 +2069,16 @@ impl<'a> Context<'a> {
         });
     }
 
-    fn rust(&self, node: Node<'_>, out: &mut Vec<Draft>) {
+    /// `attributes` are the attributes before `node`, the nearest first, when it is a function.
+    fn rust(&self, node: Node<'_>, attributes: &[Node<'_>], out: &mut Vec<Draft>) {
         match node.kind() {
-            "function_item" => self.rust_function(node, out),
+            "function_item" => self.rust_function(node, attributes, out),
             "call_expression" => self.rust_axum(node, out),
             _ => {}
         }
     }
 
-    fn rust_function(&self, node: Node<'_>, out: &mut Vec<Draft>) {
-        let mut attributes = Vec::new();
-        let mut previous = node.prev_sibling();
-        while let Some(sibling) = previous {
-            if sibling.kind() != "attribute_item" && !sibling.kind().contains("comment") {
-                break;
-            }
-            if sibling.kind() == "attribute_item" {
-                attributes.push(sibling);
-            }
-            previous = sibling.prev_sibling();
-        }
+    fn rust_function(&self, node: Node<'_>, attributes: &[Node<'_>], out: &mut Vec<Draft>) {
         let Some(name_node) = node.child_by_field_name("name") else {
             return;
         };
@@ -2339,6 +2336,29 @@ impl<'a> Context<'a> {
             .to_string();
         let method = self.string_of(items.get(1)?.named_child(0)?);
         Some((class, method))
+    }
+}
+
+/// Adds the attributes before each Rust function among `children`, the nearest first, by the ID
+/// of the function. The attributes are the run of attributes and comments directly before the
+/// function. One pass over the children of a parent finds them: a step back from each function
+/// with `Node::prev_sibling` reads the children of the parent from the first child.
+fn rust_attributes_of_functions<'tree>(
+    children: &[Node<'tree>],
+    out: &mut std::collections::HashMap<usize, Vec<Node<'tree>>>,
+) {
+    let mut run: Vec<Node<'tree>> = Vec::new();
+    for child in children {
+        match child.kind() {
+            "attribute_item" => run.push(*child),
+            kind if kind.contains("comment") => {}
+            kind => {
+                if kind == "function_item" && !run.is_empty() {
+                    out.insert(child.id(), run.iter().rev().copied().collect());
+                }
+                run.clear();
+            }
+        }
     }
 }
 
@@ -7133,6 +7153,48 @@ func routes() {
     fn timing_many_axum_handlers_of_one_name_with_module_paths_resolve_in_linear_time() {
         assert_scales_linearly("scoped axum handlers", 10_000, |count| {
             scoped_axum_handlers(count).1
+        });
+    }
+
+    /// One Rocket handler after `count` line comments, and the time of `rounds` searches. The
+    /// attributes of a function can have comments before and between them, so the search for
+    /// them goes back over each comment. The search repeats, because one search of the file
+    /// takes less time than the floor of the timing check.
+    fn a_rocket_handler_after_many_comments_at(count: usize, rounds: usize) -> Search {
+        let mut source = String::from("use rocket::get;\n\n");
+        for position in 0..count {
+            source.push_str(&format!("// line {position}\n"));
+        }
+        source.push_str("#[get(\"/p\")]\n// the handler\n#[inline]\npub fn handler() {}\n");
+        let parsed = vec![Parser::new()
+            .parse(source.as_bytes(), Language::Rust, Path::new("src/main.rs"))
+            .unwrap()];
+        let mut index = vec![extract_file(&parsed[0], "src/main.rs")];
+        link_files(&mut index);
+        let started = crate::index::timing::Stopwatch::start();
+        let mut found = Vec::new();
+        for _ in 0..rounds {
+            found = find_entry_points(&parsed, &index);
+        }
+        let took = started.elapsed();
+        assert!(found
+            .iter()
+            .all(|entry| entry.kind == EntryKind::HttpHandler));
+        (found.len(), took)
+    }
+
+    #[test]
+    fn a_rocket_handler_after_many_comments_is_an_entry() {
+        assert_eq!(a_rocket_handler_after_many_comments_at(20, 1).0, 1);
+    }
+
+    /// A step from a node to its previous sibling reads the children of the parent from the
+    /// first child, so the search for the attributes must not step back through the siblings.
+    #[test]
+    #[ignore = "timing: run in release"]
+    fn timing_a_rocket_handler_after_many_comments_is_read_in_linear_time() {
+        assert_scales_linearly("comments before a handler", 20_000, |count| {
+            a_rocket_handler_after_many_comments_at(count, 32).1
         });
     }
 
