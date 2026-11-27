@@ -586,25 +586,44 @@ pub fn function_body_byte_range(node: &tree_sitter::Node<'_>) -> Option<(usize, 
 fn extract_c_function_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     fn recurse_declarator(decl: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
         // A stack in place of recursion, because a declarator can have any
-        // number of pointer levels.
-        let mut pending = vec![decl];
-        while let Some(decl) = pending.pop() {
+        // number of pointer levels. The flag tells that a function declarator
+        // contains the node.
+        let mut pending = vec![(decl, false)];
+        while let Some((decl, in_function)) = pending.pop() {
             match decl.kind() {
-                "identifier" => {
+                // A method in a class body has a `field_identifier`. The index gives
+                // these names too, so the two reports name a function the same way.
+                "identifier" | "field_identifier" | "destructor_name" | "operator_name" => {
                     if let Ok(name) = decl.utf8_text(source) {
                         return Some(name.to_string());
                     }
                 }
+                // `A::B::m` and `free<int>` are named by their last name.
+                "qualified_identifier" | "template_function" => {
+                    pending.extend(
+                        decl.child_by_field_name("name")
+                            .map(|name| (name, in_function)),
+                    );
+                }
+                // `operator const int*()` has the type in place of a name.
+                "operator_cast" => return operator_cast_name(decl, source),
+                // Without a function declarator, as in a misparse of the macro
+                // call `if ISZERO(dn) {`, the name in the parentheses is not the
+                // name of a function.
+                "parenthesized_declarator" if !in_function => {}
                 "function_declarator"
                 | "pointer_declarator"
                 | "reference_declarator"
+                | "parenthesized_declarator"
                 | "abstract_declarator" => {
+                    let in_function = in_function || decl.kind() == "function_declarator";
                     // Try the named `declarator` field first, then each named child
                     if let Some(inner) = decl.child_by_field_name("declarator") {
-                        pending.push(inner);
+                        pending.push((inner, in_function));
                     } else {
                         let children: Vec<_> = decl.named_children(&mut decl.walk()).collect();
-                        pending.extend(children.into_iter().rev());
+                        pending
+                            .extend(children.into_iter().rev().map(|child| (child, in_function)));
                     }
                 }
                 _ => {}
@@ -618,6 +637,20 @@ fn extract_c_function_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Optio
         return recurse_declarator(decl, source);
     }
     None
+}
+
+/// The text of a conversion operator before its parameters, with each run of
+/// spaces as one space: `operator const int*() const` gives `operator const int*`.
+fn operator_cast_name(cast: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let mut declarator = cast.child_by_field_name("declarator")?;
+    let parameters = loop {
+        if let Some(parameters) = declarator.child_by_field_name("parameters") {
+            break parameters;
+        }
+        declarator = declarator.child_by_field_name("declarator")?;
+    };
+    let text = std::str::from_utf8(source.get(cast.start_byte()..parameters.start_byte())?).ok()?;
+    Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 fn find_child_by_field(node: &tree_sitter::Node<'_>, field: &str, source: &[u8]) -> Option<String> {
@@ -1030,6 +1063,165 @@ mod tests {
                 extract_functions(parsed);
             }
         });
+    }
+
+    fn function_names(language: Language, file: &str, source: &str) -> Vec<String> {
+        let parsed = Parser::new()
+            .parse(source.as_bytes(), language, Path::new(file))
+            .unwrap();
+        extract_functions(&parsed)
+            .into_iter()
+            .map(|function| function.name)
+            .collect()
+    }
+
+    /// Each C++ function definition gives a name, whatever the kind of its declarator.
+    /// The name is the name that the index gives the same definition.
+    #[test]
+    fn test_each_cpp_function_definition_has_a_name() {
+        let source = r#"
+namespace A { struct B { void m(); }; }
+void A::B::m() {}
+
+class C {
+ public:
+  C() {}
+  ~C() {}
+  int operator+(int k) { return k; }
+  operator bool() const { return true; }
+  int& reference() { return a; }
+  int* pointer();
+  template <typename T> T member_template(T v) { return v; }
+  int a;
+};
+
+int* C::pointer() { return &a; }
+C::~C() {}
+
+struct S { int f() { return 1; } };
+
+template <typename T> T free_template(T v) { return v; }
+template <> int free_template<int>(int v) { return v; }
+int& free_reference(int& r) { return r; }
+const char** free_pointer_pointer() { return 0; }
+"#;
+        assert_eq!(
+            function_names(Language::Cpp, "a.cpp", source),
+            [
+                "m",
+                "C",
+                "~C",
+                "operator+",
+                "operator bool",
+                "reference",
+                "member_template",
+                "pointer",
+                "~C",
+                "f",
+                "free_template",
+                "free_template",
+                "free_reference",
+                "free_pointer_pointer",
+            ]
+        );
+    }
+
+    /// Where the index has a definition at the start line of a function, the two names are equal.
+    #[test]
+    fn test_cpp_function_names_are_the_names_of_the_index() {
+        let source = r#"
+namespace A { struct B { void m(); }; }
+void A::B::m() {}
+class C {
+ public:
+  C() {}
+  ~C() {}
+  int operator+(int k) { return k; }
+  int& reference() { return a; }
+  int* pointer();
+  int a;
+};
+int* C::pointer() { return &a; }
+C::~C() {}
+struct S { int f() { return 1; } };
+int& free_reference(int& r) { return r; }
+"#;
+        let parsed = Parser::new()
+            .parse(source.as_bytes(), Language::Cpp, Path::new("a.cpp"))
+            .unwrap();
+        let index = crate::index::extract::extract_file(&parsed, "a.cpp");
+        let index_names: std::collections::HashMap<u32, &str> = index
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.body_range.is_some())
+            .map(|symbol| (symbol.range.start_line, symbol.name.as_str()))
+            .collect();
+        let pairs: Vec<(String, Option<&str>)> = extract_functions(&parsed)
+            .into_iter()
+            .map(|function| {
+                let index_name = index_names.get(&function.start_line).copied();
+                (function.name, index_name)
+            })
+            .collect();
+        assert_eq!(pairs.len(), 9, "{pairs:?}");
+        for (name, index_name) in &pairs {
+            assert_eq!(Some(name.as_str()), *index_name, "{pairs:?}");
+        }
+    }
+
+    /// A parenthesized declarator names a function only inside a function declarator. Without
+    /// one, the definition is a misparse, for example of a macro call before a block, and the
+    /// name in the parentheses is an argument.
+    #[test]
+    fn test_a_c_misparse_with_a_parenthesized_name_is_not_named_after_the_argument() {
+        let misparse = "static void finish(int *dn) {\n  if (!dn) {\n    if ISZERO(dn) {\n      return;\n    }\n  }\n}\n";
+        assert_eq!(function_names(Language::C, "a.c", misparse), ["finish"]);
+        let pointer = "void (*signal2(int s, void (*handler)(int)))(int) { return 0; }\n";
+        assert_eq!(function_names(Language::C, "a.c", pointer), ["signal2"]);
+    }
+
+    /// The name of a conversion operator is its text before `(`, so that `operator const int*`
+    /// and `operator int` are two names.
+    #[test]
+    fn test_each_cpp_conversion_operator_has_its_full_type_in_its_name() {
+        let source = r#"
+struct S {
+  operator const int*() const { return 0; }
+  operator int() { return 0; }
+  operator   unsigned
+    long() { return 0; }
+};
+"#;
+        assert_eq!(
+            function_names(Language::Cpp, "a.cpp", source),
+            [
+                "operator const int*",
+                "operator int",
+                "operator unsigned long"
+            ]
+        );
+    }
+
+    /// The name of a C function is below pointer and parenthesized declarators.
+    #[test]
+    fn test_each_c_function_definition_has_a_name() {
+        let source = r#"
+int plain(void) { return 0; }
+char *pointer(void) { return 0; }
+int (parenthesized)(int v) { return v; }
+int (*returns_function_pointer(int v))(int) { return 0; }
+static int **double_pointer(void) { return 0; }
+"#;
+        assert_eq!(
+            function_names(Language::C, "a.c", source),
+            [
+                "plain",
+                "pointer",
+                "parenthesized",
+                "returns_function_pointer",
+                "double_pointer",
+            ]
+        );
     }
 
     /// The function name is at the end of a chain of `DEPTH` pointer declarators.
