@@ -125,6 +125,9 @@ pub struct Draft<'tree> {
     pub function_value: bool,
     /// A C++ function in `extern "C"`. It has the linkage of a C function.
     pub c_linkage: bool,
+    /// A C++ explicit specialization of a function template, as
+    /// `template <> int f<int>(int)` is. A call names the primary template.
+    pub specialization: bool,
     /// A named type that owns methods although its kind is `TypeAlias`, as a
     /// Go defined type `type Count int` does.
     pub defined_type: bool,
@@ -189,6 +192,7 @@ pub struct LinkFacts {
     pub default_export: bool,
     pub function_value: bool,
     pub c_linkage: bool,
+    pub specialization: bool,
     pub defined_type: bool,
     pub prepends: Vec<String>,
     pub bases: Vec<String>,
@@ -1213,6 +1217,7 @@ impl<'tree> Extractor<'_, 'tree> {
             default_export: false,
             function_value: false,
             c_linkage: false,
+            specialization: false,
             defined_type: false,
             prepends: Vec::new(),
             bases: Vec::new(),
@@ -2197,6 +2202,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             default_export: draft.default_export,
             function_value: draft.function_value,
             c_linkage: draft.c_linkage,
+            specialization: draft.specialization,
             defined_type: draft.defined_type,
             prepends: draft.prepends,
             bases: draft.bases,

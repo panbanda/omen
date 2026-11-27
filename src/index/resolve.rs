@@ -3851,6 +3851,22 @@ impl<'a> Resolver<'a> {
                 outcome.candidates = vec![only];
             }
         }
+        // A call names the primary template. When the argument types do not
+        // select an explicit specialization, the specializations are not candidates.
+        if selects && outcome.status == Status::Ambiguous {
+            let primary: Vec<Id> = outcome
+                .candidates
+                .iter()
+                .copied()
+                .filter(|id| !self.facts(*id).specialization)
+                .collect();
+            if !primary.is_empty() && primary.len() < outcome.candidates.len() {
+                if primary.len() == 1 {
+                    outcome.status = Status::UniqueCandidate;
+                }
+                outcome.candidates = primary;
+            }
+        }
         if selects
             && outcome.status == Status::Ambiguous
             && self.are_condition_twins(&outcome.candidates)
@@ -4661,6 +4677,20 @@ mod tests {
         assert_eq!(
             rows(&[("Util.java", source)], "Util.java"),
             ["6 Util.run>parse UniqueCandidate EnclosingType [Util.java#Util.parse]"]
+        );
+    }
+
+    /// A call names the primary template. The argument types can select an explicit
+    /// specialization. When they do not, the primary template is the candidate.
+    #[test]
+    fn test_a_call_of_a_function_template_with_a_specialization_cpp() {
+        let source = "template <typename T> T largest(T a, T b) { return a; }\ntemplate <> int largest<int>(int a, int b) { return b; }\ntemplate <> const char* largest<const char*>(const char* a, const char* b) { return b; }\n\nint run(double x) {\n    return largest(1, 2) + largest(x, x);\n}\n";
+        assert_eq!(
+            rows(&[("a.cpp", source)], "a.cpp"),
+            [
+                "6 run>largest UniqueCandidate SameFile [a.cpp#largest~2]",
+                "6 run>largest UniqueCandidate SameFile [a.cpp#largest]",
+            ]
         );
     }
 

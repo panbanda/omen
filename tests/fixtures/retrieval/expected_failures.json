@@ -220,11 +220,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "cpp/n-times/hit@1",
-    "reason": "expected one of sub/util.cpp:twice:11, sub/util.hpp:twice:8 in the first 1, got sub/util.hpp:largest:11",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "csharp/c-record/hit@1",
     "reason": "expected one of Shapes/Shapes.cs:Size:101 in the first 1, got Shapes/Shapes.cs:Total:103",
     "tracking": "phase-4-search"

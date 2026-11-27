@@ -51,6 +51,8 @@ const FIELD_IDENTIFIER: &str = "field_identifier";
 const DESTRUCTOR_NAME: &str = "destructor_name";
 const OPERATOR_NAME: &str = "operator_name";
 const TEMPLATE_TYPE: &str = "template_type";
+const TEMPLATE_FUNCTION: &str = "template_function";
+const OPERATOR_CAST: &str = "operator_cast";
 const TEMPLATE_ARGUMENT_LIST: &str = "template_argument_list";
 const ACCESS_SPECIFIER: &str = "access_specifier";
 const FRIEND_DECLARATION: &str = "friend_declaration";
@@ -88,7 +90,54 @@ const FUNCTION_NAME_KINDS: &[&str] = &[
     DESTRUCTOR_NAME,
     OPERATOR_NAME,
     QUALIFIED_IDENTIFIER,
+    TEMPLATE_FUNCTION,
 ];
+
+/// The last name of a qualified name: `S::operator bool` gives the node of `operator bool`.
+fn last_name(mut name: Node<'_>) -> Node<'_> {
+    while name.kind() == QUALIFIED_IDENTIFIER {
+        match name.child_by_field_name("name") {
+            Some(inner) => name = inner,
+            None => break,
+        }
+    }
+    name
+}
+
+/// The parameters of a conversion operator: `operator const int*() const` has them in the
+/// function declarator below its pointer declarator.
+fn cast_parameters(cast: Node<'_>) -> Option<Node<'_>> {
+    let mut declarator = cast.child_by_field_name("declarator")?;
+    loop {
+        if let Some(parameters) = declarator.child_by_field_name("parameters") {
+            return Some(parameters);
+        }
+        declarator = declarator.child_by_field_name("declarator")?;
+    }
+}
+
+/// The name of a conversion operator: its text before the parameters, with each run of spaces
+/// as one space. `operator const int*() const` gives `operator const int*`. The name of the
+/// function in `complexity` is the same.
+fn cast_name(cast: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+    let parameters = cast_parameters(cast)?;
+    let text = std::str::from_utf8(
+        context
+            .source
+            .get(cast.start_byte()..parameters.start_byte())?,
+    )
+    .ok()?;
+    Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// The parameters of the function whose name is `name`.
+fn function_parameters(name: Node<'_>) -> Option<Node<'_>> {
+    let last = last_name(name);
+    if last.kind() == OPERATOR_CAST {
+        return cast_parameters(last);
+    }
+    name.parent()?.child_by_field_name("parameters")
+}
 
 fn is_function(node: Node<'_>) -> bool {
     [c::FUNCTION_DEFINITION, c::FUNCTION_DECLARATOR].contains(&node.kind())
@@ -726,6 +775,14 @@ impl LanguageSpec for Cpp {
                 return None;
             }
         }
+        // A conversion operator has no function declarator: the operator is the declarator.
+        let cast = (node.kind() == c::FUNCTION_DEFINITION)
+            .then(|| node.child_by_field_name("declarator"))
+            .flatten()
+            .filter(|declarator| last_name(*declarator).kind() == OPERATOR_CAST);
+        if cast.is_some() {
+            return cast;
+        }
         c::name_node(node, FUNCTION_NAME_KINDS, context)
     }
 
@@ -787,16 +844,19 @@ impl LanguageSpec for Cpp {
             return true;
         }
         draft.c_linkage = has_c_linkage(context);
-        draft.parameter_count = draft
-            .name_node
-            .parent()
-            .and_then(|declarator| declarator.child_by_field_name("parameters"))
-            .map(|parameters| parameter_count(parameters, context));
-        draft.parameter_types = draft
-            .name_node
-            .parent()
-            .and_then(|declarator| declarator.child_by_field_name("parameters"))
+        let parameters = function_parameters(draft.name_node);
+        draft.parameter_count = parameters.map(|parameters| parameter_count(parameters, context));
+        draft.parameter_types = parameters
             .map(|parameters| crate::index::extract::parameter_types(parameters, context.source));
+        // `free<int>` is named `free`, as `complexity` names it. A qualified name such as
+        // `Out<int>::g<char>` keeps its template arguments.
+        if draft.name_node.kind() == TEMPLATE_FUNCTION {
+            if let Some(name) = draft.name_node.child_by_field_name("name") {
+                draft.name_node = name;
+                draft.name = context.text(name);
+                draft.specialization = true;
+            }
+        }
         if draft.name_node.kind() == QUALIFIED_IDENTIFIER {
             // The definition is not in the body of its class or its namespace.
             // The kind is `Method` until `link` finds that the scope is a namespace.
@@ -816,6 +876,12 @@ impl LanguageSpec for Cpp {
         } else if let Some(scope) = context.container() {
             if scope.role == ScopeRole::Type && scope.name == draft.name {
                 draft.kind = SymbolKind::Constructor;
+            }
+        }
+        if draft.name_node.kind() == OPERATOR_CAST {
+            match cast_name(draft.name_node, context) {
+                Some(name) => draft.name = name,
+                None => return false,
             }
         }
         true
@@ -1010,6 +1076,74 @@ mod tests {
                 "Method go Local 3-3 not_exported",
             ]
         );
+    }
+
+    fn parameter_counts(source: &str) -> Vec<Option<usize>> {
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Cpp,
+                std::path::Path::new("file.cpp"),
+            )
+            .unwrap();
+        crate::index::extract::extract_file(&parsed, "file.cpp")
+            .link_facts
+            .iter()
+            .map(|facts| facts.parameter_count)
+            .collect()
+    }
+
+    /// An explicit specialization of a function template is a definition of its own. Its name is
+    /// the name of the template, as `complexity` gives it, without the template arguments.
+    #[test]
+    fn test_an_explicit_specialization_of_a_function_template_is_a_symbol() {
+        let source = "template <typename T> T free_template(T v) { return v; }\ntemplate <> int free_template<int>(int v) { return v + 1; }\n";
+        assert_eq!(
+            rows(Language::Cpp, source),
+            [
+                "Function free_template - 1-1 exported",
+                "Function free_template - 2-2 exported",
+            ]
+        );
+        assert_eq!(
+            symbols(Language::Cpp, source)[1].signature,
+            "int free_template<int>(int v)"
+        );
+        assert_eq!(parameter_counts(source), [Some(1), Some(1)]);
+    }
+
+    /// A conversion operator is named by its text before the parameters, with each run of spaces
+    /// as one space, as `complexity` gives it.
+    #[test]
+    fn test_a_conversion_operator_is_a_symbol_with_its_full_type() {
+        let source = "struct S {\n  operator int() { return 0; }\n  operator const int*() const { return 0; }\n  operator   unsigned\n    long() { return 0; }\n};\nS::operator bool() const { return true; }\n";
+        assert_eq!(
+            rows_in(Language::Cpp, "s.hpp", source),
+            [
+                "Struct S - 1-6 exported",
+                "Method operator int S 2-2 exported",
+                "Method operator const int* S 3-3 exported",
+                "Method operator unsigned long S 4-5 exported",
+                "Method operator bool S 7-7 unknown",
+            ]
+        );
+        assert_eq!(parameter_counts(source)[1..], [Some(0); 4]);
+    }
+
+    /// A specialization of a member template outside its class keeps its name with the template
+    /// arguments.
+    #[test]
+    fn test_a_qualified_specialization_of_a_member_template_keeps_its_name() {
+        let source = "template <typename T> struct Out { template <typename U> void g(); };\ntemplate <> template <> void Out<int>::g<char>() {}\n";
+        assert_eq!(
+            rows(Language::Cpp, source),
+            [
+                "Struct Out - 1-1 not_exported",
+                "Method g Out 1-1 not_exported",
+                "Method g<char> Out 2-2 unknown",
+            ]
+        );
+        assert_eq!(keys(Language::Cpp, source)[2], "file#Out.g<char>");
     }
 
     #[test]
