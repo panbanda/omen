@@ -1012,6 +1012,74 @@ mod tests {
         );
     }
 
+    fn parameter_counts(source: &str) -> Vec<Option<usize>> {
+        let parsed = crate::parser::Parser::new()
+            .parse(
+                source.as_bytes(),
+                Language::Cpp,
+                std::path::Path::new("file.cpp"),
+            )
+            .unwrap();
+        crate::index::extract::extract_file(&parsed, "file.cpp")
+            .link_facts
+            .iter()
+            .map(|facts| facts.parameter_count)
+            .collect()
+    }
+
+    /// An explicit specialization of a function template is a definition of its own. Its name is
+    /// the name of the template, as `complexity` gives it, without the template arguments.
+    #[test]
+    fn test_an_explicit_specialization_of_a_function_template_is_a_symbol() {
+        let source = "template <typename T> T free_template(T v) { return v; }\ntemplate <> int free_template<int>(int v) { return v + 1; }\n";
+        assert_eq!(
+            rows(Language::Cpp, source),
+            [
+                "Function free_template - 1-1 exported",
+                "Function free_template - 2-2 exported",
+            ]
+        );
+        assert_eq!(
+            symbols(Language::Cpp, source)[1].signature,
+            "int free_template<int>(int v)"
+        );
+        assert_eq!(parameter_counts(source), [Some(1), Some(1)]);
+    }
+
+    /// A conversion operator is named by its text before the parameters, with each run of spaces
+    /// as one space, as `complexity` gives it.
+    #[test]
+    fn test_a_conversion_operator_is_a_symbol_with_its_full_type() {
+        let source = "struct S {\n  operator int() { return 0; }\n  operator const int*() const { return 0; }\n  operator   unsigned\n    long() { return 0; }\n};\nS::operator bool() const { return true; }\n";
+        assert_eq!(
+            rows_in(Language::Cpp, "s.hpp", source),
+            [
+                "Struct S - 1-6 exported",
+                "Method operator int S 2-2 exported",
+                "Method operator const int* S 3-3 exported",
+                "Method operator unsigned long S 4-5 exported",
+                "Method operator bool S 7-7 unknown",
+            ]
+        );
+        assert_eq!(parameter_counts(source)[1..], [Some(0); 4]);
+    }
+
+    /// A specialization of a member template outside its class keeps its name with the template
+    /// arguments.
+    #[test]
+    fn test_a_qualified_specialization_of_a_member_template_keeps_its_name() {
+        let source = "template <typename T> struct Out { template <typename U> void g(); };\ntemplate <> template <> void Out<int>::g<char>() {}\n";
+        assert_eq!(
+            rows(Language::Cpp, source),
+            [
+                "Struct Out - 1-1 not_exported",
+                "Method g Out 1-1 not_exported",
+                "Method g<char> Out 2-2 unknown",
+            ]
+        );
+        assert_eq!(keys(Language::Cpp, source)[2], "file#Out.g<char>");
+    }
+
     #[test]
     fn test_types() {
         let source = "using Scale = double;\nenum class Unit {\n    Metre\n};\ntypedef int Old;\ntemplate <typename T>\nclass Box {\n    T value;\n};\n";
