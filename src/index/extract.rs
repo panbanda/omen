@@ -245,20 +245,22 @@ pub struct ReferenceFacts {
 /// The names of the value that an index expression reads: `c.items[i]`
 /// gives `c`, `items`. `None` means that the text is a different expression.
 fn indexed_path(text: &str) -> Option<Vec<String>> {
-    let text = text.trim().strip_suffix(']')?;
+    name_path(&text[..index_start(text)?])
+}
+
+/// The byte in `text` of the `[` that opens the index at the end of `text`. `None` means
+/// that `text` does not end with an index.
+fn index_start(text: &str) -> Option<usize> {
+    let text = text.trim_end().strip_suffix(']')?;
     let mut depth = 1usize;
-    let open = text
-        .char_indices()
-        .rev()
-        .find_map(|(position, character)| {
-            match character {
-                ']' => depth += 1,
-                '[' => depth -= 1,
-                _ => {}
-            }
-            (depth == 0).then_some(position)
-        })?;
-    name_path(&text[..open])
+    text.char_indices().rev().find_map(|(position, character)| {
+        match character {
+            ']' => depth += 1,
+            '[' => depth -= 1,
+            _ => {}
+        }
+        (depth == 0).then_some(position)
+    })
 }
 
 /// Makes a field that an assignment or a parameter in a method declares a
@@ -317,9 +319,22 @@ struct ReceiverTexts<'source> {
     /// All of the source is valid UTF-8.
     valid: bool,
     length: usize,
-    /// For each start of a receiver: the end of the text read from the start, and the first
-    /// byte of that text that has a character that no chain of names has and is not a space.
-    read: HashMap<usize, (usize, Option<usize>)>,
+    /// For each start of a receiver: what the reads of the text from the start found.
+    read: HashMap<usize, ReceiverRead>,
+}
+
+/// What the reads of the text from one start of a receiver found.
+struct ReceiverRead {
+    /// The end of the text read.
+    end: usize,
+    /// The first byte of the text read that `trim` does not remove and that no chain of names
+    /// has: a character that is not a space and that no chain of names has, or a character
+    /// that is not a space after a space after a character that is not a space.
+    outside: Option<usize>,
+    /// The text read has a character that is not a space.
+    started: bool,
+    /// The text read has a space after a character that is not a space.
+    spaced: bool,
 }
 
 impl<'source> ReceiverTexts<'source> {
@@ -358,18 +373,29 @@ impl<'source> ReceiverTexts<'source> {
     /// character that no chain of names has and that `trim` does not remove is in the text.
     /// `false` means that `name_path` must read the text.
     fn is_not_path(&mut self, start: usize, end: usize, text: &str) -> bool {
-        let (read_to, outside) = self.read.entry(start).or_insert((start, None));
-        if outside.is_none() && *read_to < end {
-            let unread = text.get(*read_to - start..).unwrap_or_default();
-            match unread
-                .char_indices()
-                .find(|(_, character)| !can_be_in_path(*character) && !character.is_whitespace())
-            {
-                Some((offset, _)) => *outside = Some(*read_to + offset),
-                None => *read_to = end,
+        let read = self.read.entry(start).or_insert(ReceiverRead {
+            end: start,
+            outside: None,
+            started: false,
+            spaced: false,
+        });
+        if read.outside.is_none() && read.end < end {
+            let unread = text.get(read.end - start..).unwrap_or_default();
+            for (offset, character) in unread.char_indices() {
+                if character.is_whitespace() {
+                    read.spaced |= read.started;
+                } else if read.spaced || !can_be_in_path(character) {
+                    read.outside = Some(read.end + offset);
+                    break;
+                } else {
+                    read.started = true;
+                }
+            }
+            if read.outside.is_none() {
+                read.end = end;
             }
         }
-        outside.is_some_and(|byte| byte < end)
+        read.outside.is_some_and(|byte| byte < end)
     }
 }
 
@@ -2330,6 +2356,9 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             },
         });
         let receiver_text = receiver.and_then(|(start, end)| receiver_texts.text(start, end));
+        // A chain of names has no `]`, so the path of a receiver with an index is never the
+        // path of `name_path` of all of the receiver.
+        let mut receiver_indexed = false;
         let receiver_path = receiver
             .zip(receiver_text)
             .and_then(|((start, end), text)| {
@@ -2338,7 +2367,17 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 } else {
                     name_path(text)
                 };
-                path.or_else(|| indexed_path(text))
+                path.or_else(|| {
+                    let open = index_start(text)?;
+                    let before = &text[..open];
+                    let indexed = if receiver_texts.is_not_path(start, start + open, before) {
+                        None
+                    } else {
+                        name_path(before)
+                    };
+                    receiver_indexed = indexed.is_some();
+                    indexed
+                })
             });
         reference_facts.push(ReferenceFacts {
             start_byte,
@@ -2347,7 +2386,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             arguments: call.arguments,
             receiver,
             receiver_path,
-            receiver_indexed: receiver_text.is_some_and(|text| indexed_path(text).is_some()),
+            receiver_indexed,
             tried: parsed.source.get(end_byte) == Some(&b'?')
                 && parsed.source.get(end_byte + 1) != Some(&b'.'),
             arrow: receiver.is_some_and(|(_, end)| {
